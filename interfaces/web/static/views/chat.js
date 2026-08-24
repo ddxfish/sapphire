@@ -144,7 +144,14 @@ export default {
                 if (bg !== null) applyBackground(bg);
                 if (motion !== null) setChatMotion(motion);
             }
-            if (s.llm_primary) loadSidebar();
+            if (s.llm_primary) {
+                // The badge itself — loadSidebar repaints dropdowns but never
+                // touches #send-btn, so a switch made elsewhere (her
+                // switch_model tool, another tab, a room-sidebar save) left
+                // the tint on the old provider (Krem 2026-08-23).
+                if (!foreign) updateSendButtonLLM(s.llm_primary, s.llm_model || '');
+                loadSidebar();
+            }
         });
 
         // Refresh sidebar scope dropdowns when scopes are created/deleted in

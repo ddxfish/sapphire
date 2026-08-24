@@ -234,11 +234,18 @@ def story_prompt(story, state, components, character=None, mode=None, local_ctx=
         ehit = resolve_piece(slug, "extras", extra, components)
         if ehit:
             parts.append(ehit[1])
+        else:
+            # Effects naming a piece that doesn't exist used to vanish with
+            # zero trace — the author stares at the preview wondering why
+            # the chest did nothing (Krem 2026-08-23).
+            logger.warning(f"[STORY] extras piece '{extra}' not found (story {slug}) — "
+                           f"checked story pool, engine, and global Extras pieces")
 
     for emotion in state["emotions"]:
         ehit = resolve_emotion_piece(slug, emotion, components)
         if ehit:
             parts.append(ehit[1])
         else:
-            logger.debug(f"[STORY] no piece for emotion '{emotion}' (story {slug})")
+            logger.warning(f"[STORY] emotions piece '{emotion}' not found (story {slug}) — "
+                           f"checked story pool, engine, and global Emotions pieces")
     return "\n\n".join(parts)

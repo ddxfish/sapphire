@@ -1,6 +1,6 @@
 {
   "plugin": "game-room",
-  "version": "0.22.2",
+  "version": "0.22.3",
   "files": {
     "app/game-room.css": "sha256:06d81f94ca9374ccd99c7e7b691cfd939108d8bc234f41fc2b0beefa14a35860",
     "app/index.js": "sha256:abe09b4eff0401e1e4e3db198268157227deedcf33ed3b656a82b64d349a4d69",
@@ -12,15 +12,15 @@
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:354dbb2500328caaae05238cae6593b39531803acaceb2910feeb694046b49a9",
-    "gameroom_story/render.py": "sha256:8f6e9a29114c17cc01ee6f1ded2575634a6f5a60ab02f0e50b0a2ef5ca5bfce8",
+    "gameroom_story/render.py": "sha256:753a98401feb592563f3d0401395eda5cb44e44a3eeec3dad2c3713d81d757db",
     "gameroom_story/rooms.py": "sha256:ed4ffcdc459f031e8c9b4231d0329487b8e885ef887cd617c25a950c3bb3ea72",
-    "gameroom_story/session.py": "sha256:d0bb282f8542787a425c59fac179a92bd3e6a36145caae20981480d5cb58d3a9",
+    "gameroom_story/session.py": "sha256:441a0467dd30e1af19346e214c125a2aca8f9c2e08533017ecaa0a81ee8c6bb3",
     "gameroom_story/state.py": "sha256:4fae1b282883929567898f49bb35c0fedf925f45cdd585b17bee2b60597d1b7a",
     "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/ghost.py": "sha256:43ca9d9a8312c447c63a80175b623c7498c4c4c5bdd25e338fcdfb70bd1ff0e8",
     "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
     "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
-    "plugin.json": "sha256:0616a099d704c7cbdc10c76f1f94621d895e8dbcc853252a2dc6544b783046b1",
+    "plugin.json": "sha256:31fb1824266278ab332446191a96c282b275f0b18816393b1d9d126bf9b3be28",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
     "routes/play.py": "sha256:e1b6e9803c74440d4a94f451ccfcf25bed0d35247b79a08177ec514b8807a284",
@@ -40,7 +40,7 @@
     "tests/test_chat_lifecycle_hooks.py": "sha256:bebf7787432754f920bed8220fdbce7da01c451571ef2fe832491a3faec187f2",
     "tests/test_fixwave_hunt.py": "sha256:a2264152e44a9e869d2ca2fcd7b63bb039170209575b9e16c87e7f077c928686",
     "tests/test_one_move_per_turn.py": "sha256:7f7e938a36b893a89137e03303ebb47a1ed6a67792012cb1ca24cb5146a68a80",
-    "tests/test_open_mansion.py": "sha256:e384958f9560a31d084d139343cfbe7fbeafac5c668b131448bbf0a6cf83a49f",
+    "tests/test_open_mansion.py": "sha256:8ba9b8373009e351b84d5fccfbdb4a6d59fb28b88804525a6f55df101fc1134d",
     "tests/test_save_paths.py": "sha256:9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "tests/test_seal_wait.py": "sha256:fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
     "tests/test_sealed_editor_grammar.py": "sha256:c63e18929859e883ed18b5a39ef37417de59968de410bb6b8fd733293c170bc1",
@@ -54,5 +54,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "alPmaDrKNkkCT8QDGPREnn0Z49IwIAMtwwuvNSNHXd4akASCR0ma8EArJiPmZE410V1ZBzsxVATZWKGV7J7JBQ=="
+  "signature": "rFda21EYzUX64YZ63iMeCcmwxXeKzhs+0XMg2aRGi7zvLb87lF7hZaICMpA3SJTZJkoICSUvp5vU8LJUZkVRAg=="
 }

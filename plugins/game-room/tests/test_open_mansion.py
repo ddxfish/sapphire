@@ -246,6 +246,18 @@ def test_clean_slots_defaults_and_hygiene(story):
     assert "unknown" not in vals and "combo" not in vals  # sealed excluded
 
 
+def test_clean_slots_cap_scales_with_rows():
+    # Long-text slots (rows>0 → textarea: scenario, goals) hold real prose —
+    # the flat 1000 cap silently amputated them at entry (Krem 2026-08-23).
+    s = {"meta": {"slots": [
+        {"key": "scenario", "rows": 6},
+        {"key": "name"},
+    ]}}
+    vals = session._clean_slots(s, {"scenario": "x" * 9000, "name": "y" * 9000})
+    assert len(vals["scenario"]) == 8000    # textarea slots: room to breathe
+    assert len(vals["name"]) == 1000        # one-liners keep the tight cap
+
+
 def test_apply_slots_substitutes_everywhere(story):
     session._apply_slots(story, {"relationship": "wife", "watchword": "ember"})
     assert story["meta"]["role"]["text"] == \

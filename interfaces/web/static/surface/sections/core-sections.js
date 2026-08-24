@@ -14,6 +14,7 @@
 // hooks are gs- classes scoped to the section element — no document ids.
 
 import { getInitData } from '/static/shared/init-data.js';
+import { updateSendButtonLLM } from '/static/features/scene.js';
 import {
     renderScopeDropdowns, fetchScopeData, populateScopeOptions, readScopeSettings,
 } from '/static/shared/scope-dropdowns.js';
@@ -30,7 +31,10 @@ export const brainSection = {
         return `
             <div class="sb-field">
                 <label>provider</label>
-                <select class="gs-llm-primary"><option value="auto">Auto</option></select>
+                <div class="sb-field-row">
+                    <select class="gs-llm-primary"><option value="auto">Auto</option></select>
+                    <button type="button" class="sb-btn-sm gs-goto-llm" title="Open in Settings &gt; LLM">&#x2197;</button>
+                </div>
             </div>
             <div class="sb-field gs-model-group" style="display:none">
                 <label>model</label>
@@ -93,12 +97,30 @@ export const brainSection = {
         };
         refreshModel(sel.value, ctx.settings.llm_model || '');
 
+        // Same-view jump to Settings > LLM — chat's provider row has this
+        // arrow (chat-mode.js sb-goto-view); the room sidebars get it here.
+        el.querySelector('.gs-goto-llm')?.addEventListener('click', () => {
+            window._settingsTab = 'llm';
+            import('/static/core/router.js').then(r => r.switchView('settings'));
+        });
+
+        // Repaint the send-button tint from the save the user just made —
+        // chat mode paints it in its own saveSettings (views/chat.js), but
+        // ctx.save is a bare PUT, so the room/story hosts otherwise leave
+        // the button on the previous provider's color (Krem 2026-08-23).
         sel.addEventListener('change', () => {
             refreshModel(sel.value, '');
             ctx.save({ llm_primary: sel.value, llm_model: '' });
+            updateSendButtonLLM(sel.value, '');
         });
-        modelSel.addEventListener('change', () => ctx.save({ llm_model: modelSel.value }));
-        customInput.addEventListener('change', () => ctx.save({ llm_model: customInput.value.trim() }));
+        modelSel.addEventListener('change', () => {
+            ctx.save({ llm_model: modelSel.value });
+            updateSendButtonLLM(sel.value, modelSel.value);
+        });
+        customInput.addEventListener('change', () => {
+            ctx.save({ llm_model: customInput.value.trim() });
+            updateSendButtonLLM(sel.value, customInput.value.trim());
+        });
     },
 };
 

@@ -717,7 +717,11 @@ def _clean_slots(story, slots):
         if decl["sealed"]:
             continue
         v = str((slots or {}).get(decl["key"], "")).strip() or decl["default"]
-        v = v.replace("{", "").replace("}", "")[:1000].strip()
+        # Long-text slots (rows>0 = textarea in the form: scenario, goals)
+        # hold real prose — the old flat 1000 silently amputated them at
+        # entry while the form accepted everything (Krem 2026-08-23).
+        cap = 8000 if decl.get("rows") else 1000
+        v = v.replace("{", "").replace("}", "")[:cap].strip()
         if v:
             out[decl["key"]] = v
     return out
