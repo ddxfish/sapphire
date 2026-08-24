@@ -1037,3 +1037,59 @@ def test_mid_run_scenario_swap_applies_slots(story, cfg_store, monkeypatch):
     assert entry["slots"]["relationship"] != "wife"
     assert st.get_user_layer("mad-manse", CHAT).get("scenario") == ""
     st.clear_active(CHAT)
+
+
+# ── Per-scenario DM guide (dm_guide as a slot) + scenario-save caps ─────────
+
+def test_dm_slot_owns_the_guide(cfg_store):
+    # Pack ships dm_guide as a {token} + a declared slot (2026-08-23): the
+    # Story-tab slot is the one editor — _apply_slots marks the meta and
+    # conduct_for ignores the stale storycfg override that would stomp it.
+    tale = {"meta": {"slug": "dm-slot-tale", "dm_guide": "{dm_style}",
+                     "slots": [{"key": "dm_style", "rows": 4,
+                                "default": "Default house style."}]},
+            "rooms": {}}
+    cfg_store.save("storycfg:dm-slot-tale", {"dm_guide": "Stale GM-tab edit."})
+    session._apply_slots(tale, {"dm_style": "Run it noir."})
+    assert tale["meta"]["dm_guide"] == "Run it noir."
+    assert session.conduct_for(tale)[1] == "Run it noir."
+
+
+def test_pack_gained_slot_backfills_default(story):
+    # Old playthrough: entry slots predate a new declaration — the declared
+    # default substitutes at load, no raw {token} reaches her prompt.
+    session._apply_slots(story, {})
+    assert "{relationship}" not in story["meta"]["premise"]
+    assert "as partner" in story["meta"]["premise"]
+
+
+def test_slotted_dm_guide_hidden_from_gm_tab(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    orig = rooms.load_story
+
+    def doctored(slug, raw=False):
+        d = orig(slug, raw=raw)
+        d["meta"]["dm_guide"] = "{dm_style}"
+        return d
+    monkeypatch.setattr(rooms, "load_story", doctored)
+    r = story_routes.get_story_settings("mad-manse")
+    keys = [f["key"] for f in r["schema"]]
+    assert "dm_guide" not in keys and "dm_guide" not in r["settings"]
+    assert "gm_universal" in keys        # the GM tab keeps the global layers
+
+
+def test_cap_scenario_slots_scales_with_rows(story, monkeypatch):
+    from routes import story_routes
+    orig = rooms.load_story
+
+    def doctored(slug, raw=False):
+        d = orig(slug, raw=raw)
+        d["meta"]["slots"] = [{"key": "scenario", "rows": 3}, {"key": "name"}]
+        return d
+    monkeypatch.setattr(rooms, "load_story", doctored)
+    capped = story_routes._cap_scenario_slots("mad-manse", {
+        "scenario": "x" * 9000, "name": "y" * 9000, "blank": "  "})
+    assert len(capped["scenario"]) == 8000    # textarea slots: real prose
+    assert len(capped["name"]) == 1200        # one-liners keep the tight cap
+    assert "blank" not in capped

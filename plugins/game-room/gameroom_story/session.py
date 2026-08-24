@@ -84,8 +84,15 @@ def conduct_for(story):
     universal = None
     if _as_bool(mine.get("use_universal"), True):
         universal = (uni.get("text") or "").strip() or UNIVERSAL_GM_DEFAULT
-    dm = (mine.get("dm_guide") or "").strip() \
-        or (story["meta"].get("dm_guide") or "").strip() or None
+    dm_meta = (story["meta"].get("dm_guide") or "").strip()
+    if story["meta"].get("_dm_slotted"):
+        # Slot-driven guide (pack ships dm_guide as a {token}): the Story-tab
+        # slot is the one editor — per-scenario, rides scenario save/load.
+        # The per-story storycfg override is ignored so a stale GM-tab edit
+        # can't shadow it (that row is hidden for these packs too).
+        dm = dm_meta or None
+    else:
+        dm = (mine.get("dm_guide") or "").strip() or dm_meta or None
     return universal, dm
 
 
@@ -675,6 +682,14 @@ def _apply_slots(story, slots):
     (_start substitutes before prompt-name derivation, so the costume's
     registered name comes from the RESOLVED role name). Title stays literal."""
     vals = {k: str(v) for k, v in (slots or {}).items() if str(v).strip()}
+    # Declared-but-missing slots fall back to their defaults HERE too, not
+    # just in _clean_slots at start — a pack that GAINS a slot after
+    # playthroughs exist (dm_style, 2026-08-23) must not leak a raw {token}
+    # into her prompt on old runs. Sealed slots stay with the seal machinery.
+    for decl in rooms.story_slots(story["meta"]):
+        if not decl["sealed"] and decl["default"]:
+            vals.setdefault(decl["key"],
+                            decl["default"].replace("{", "").replace("}", ""))
     if not vals:
         return
 
@@ -701,6 +716,11 @@ def _apply_slots(story, slots):
         meta["role"] = r
     for f in ("premise", "player_role", "dm_guide"):
         if isinstance(meta.get(f), str) and "{" in meta[f]:
+            if f == "dm_guide":
+                # The slot owns the guide now (per-scenario DM, 2026-08-23):
+                # conduct_for reads this marker and skips the storycfg
+                # override, which is raw text and would stomp the slot.
+                meta["_dm_slotted"] = True
             meta[f] = sub(meta[f])
     for rid in list(story["rooms"]):
         story["rooms"][rid] = walk(story["rooms"][rid])

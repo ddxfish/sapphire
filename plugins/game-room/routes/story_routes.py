@@ -182,10 +182,17 @@ def get_story_settings(slug, **_):
             'premise': (mine.get('premise') or '').strip() or (meta.get('premise') or ''),
             'player_role': (mine.get('player_role') or '').strip() or (meta.get('player_role') or ''),
         })
+    # Slot-driven DM guide (pack ships dm_guide as a {token}, 2026-08-23):
+    # the Story-tab slot is the one editor — this raw editor would just show
+    # the token and invite breakage (same rule as premise/role_text above),
+    # and conduct_for ignores the storycfg override for these packs anyway.
+    dm_slotted = has_slots and '{' in (meta.get('dm_guide') or '')
+    if not dm_slotted:
+        schema.append(
+            {'key': 'dm_guide', 'label': 'DM guide — this story only (the pack ships this default)',
+             'type': 'text', 'rows': 9, 'tab': dm_tab,
+             'default': meta.get('dm_guide') or ''})
     schema += [
-        {'key': 'dm_guide', 'label': 'DM guide — this story only (the pack ships this default)',
-         'type': 'text', 'rows': 9, 'tab': dm_tab,
-         'default': meta.get('dm_guide') or ''},
         {'key': 'use_universal', 'label': 'Use the shared GM style in this story',
          'type': 'checkbox', 'tab': gm_tab, 'default': True},
         {'key': 'gm_universal', 'label': 'GM style — shared by ALL stories',
@@ -196,8 +203,9 @@ def get_story_settings(slug, **_):
                   'the player\'s next message (all stories)',
          'type': 'checkbox', 'tab': gm_tab, 'default': True},
     ]
+    if not dm_slotted:
+        settings['dm_guide'] = (mine.get('dm_guide') or '').strip() or (meta.get('dm_guide') or '')
     settings.update({
-        'dm_guide': (mine.get('dm_guide') or '').strip() or (meta.get('dm_guide') or ''),
         'use_universal': sess._as_bool(mine.get('use_universal'), True),
         'gm_universal': (uni.get('text') or '').strip() or sess.UNIVERSAL_GM_DEFAULT,
         'one_move_per_turn': sess._as_bool(uni.get('one_move_per_turn'), True),
@@ -919,6 +927,22 @@ def delete_exit(body=None, **_):
 _PRESET_CAP = 50
 
 
+def _cap_scenario_slots(slug, slots):
+    """Per-slot caps for scenario save — long-text slots (rows>0: scenario,
+    goals, dm_style) hold real prose, so the old flat [:1200] silently
+    amputated exactly the values worth saving (found 2026-08-23, same class
+    as _clean_slots' flat cap). Mirrors _clean_slots: 8000 textarea / 1200
+    one-line. Soft on a load failure — falls back to the tight cap."""
+    from gameroom_story import rooms
+    try:
+        long_keys = {d['key'] for d in rooms.story_slots(
+            rooms.load_story(slug, raw=True)['meta']) if d.get('rows')}
+    except Exception:
+        long_keys = set()
+    return {str(k)[:60]: str(v)[:8000 if str(k) in long_keys else 1200]
+            for k, v in slots.items() if str(v).strip()}
+
+
 def set_scenario(slug, body=None, **_):
     """Save/delete one scenario — slots (from the form) + the playthrough's
     current ENVIRONMENT (user layer minus AI-placed objects; fork 2: hers
@@ -968,7 +992,7 @@ def set_scenario(slug, body=None, **_):
     if name not in cur and len(cur) >= _PRESET_CAP:
         return {'success': False, 'detail': f'Scenario cap reached ({_PRESET_CAP}).'}
     slots = body.get('slots') if isinstance(body.get('slots'), dict) else {}
-    slots = {str(k)[:60]: str(v)[:1200] for k, v in slots.items() if str(v).strip()}
+    slots = _cap_scenario_slots(slug, slots)
     # layer_lock across the read→save (2026-08-21 hunt, race R1 family):
     # the scenario-tag stamp is a whole-blob rewrite of the layer it read.
     with st.layer_lock:
