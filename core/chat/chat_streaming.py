@@ -395,7 +395,10 @@ class StreamingChat:
             # derived from the FILTERED list — a hallucinated call to a
             # fenced tool is refused like any unknown tool.
             try:
-                from core.hooks import hook_runner, HookEvent
+                # NO local import here: binding hook_runner OR HookEvent
+                # locally shadows the module-level names for the WHOLE
+                # function → UnboundLocal at the pre_chat fire above
+                # (both bitten and caught by --long, 2026-08-24).
                 _ev = HookEvent(chat_name=chat_name, tools=list(enabled_tools))
                 hook_runner.fire("tools_filter", _ev)
                 _kept = {t["function"]["name"] for t in (_ev.tools or [])
