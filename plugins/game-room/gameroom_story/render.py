@@ -65,6 +65,33 @@ def ghost_block(story, state, room):
         lines.append("Objects: " + " | ".join(objs))
 
     lines.append("Inventory: " + (", ".join(state["inventory"]) or "empty"))
+    # ── Cast sheet (character system, 2026-08-25) — mechanics band, never
+    # cut by the self-budget. One line per character: who plays them, worn
+    # gear, parts with live state (mechanical names — she acts on those),
+    # sheet fields (trust, gold, ...).
+    cast = state.get("cast") or {}
+    if cast:
+        lines.append("Cast (the player speaks only for theirs; I play the rest):")
+        for cid, c in cast.items():
+            who = ("the player's" if c.get("controlled_by") == "player"
+                   else "mine to play")
+            bits = []
+            worn = ", ".join(f"{i} ({sl})" for sl, i in (c.get("wearing") or {}).items())
+            if worn:
+                bits.append("wearing " + worn)
+            for pname, part in (c.get("parts") or {}).items():
+                if not isinstance(part, dict):
+                    continue
+                pst = ", ".join(f"{k}={v}" for k, v in (part.get("state") or {}).items())
+                seg = f"{cid}_{pname}" + (f" [{pst}]" if pst else "")
+                acts = ", ".join(sorted(part.get("interactions") or {}))
+                if acts:
+                    seg += f" (responds to: {acts})"
+                bits.append(seg)
+            for k, v in (c.get("fields") or {}).items():
+                bits.append(f"{k}: {v}")
+            lines.append(f"  {c.get('name', cid)} — {who}"
+                         + (": " + "; ".join(bits) if bits else ""))
     if state["emotions"]:
         lines.append("Mood pieces active: " + ", ".join(state["emotions"]))
     for k, v in state["flags"].items():

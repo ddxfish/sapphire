@@ -310,7 +310,21 @@ def initial_state():
         "ended": False,
         "seals": {}, "seal_skipped": [], "seal_holds": {}, "revealed": [],
         "shown": [],
+        "cast": {},
     }
+
+
+def _cast_member(state, cid):
+    """Cast record for events — stub-creates on first touch so a journal
+    that lost its join (hand-edited pack, pre-cast run) still folds clean
+    (forgiving fold, same spirit as the setdefaults below)."""
+    if not cid:
+        return None
+    cast = state.setdefault("cast", {})
+    if cid not in cast:
+        cast[cid] = {"name": cid, "desc": "", "controlled_by": "dm",
+                     "wearing": {}, "parts": {}, "fields": {}}
+    return cast[cid]
 
 
 def apply_event(state, ev):
@@ -412,6 +426,50 @@ def apply_event(state, ev):
         state.setdefault("shown", []).append(
             {"image": ev.get("image"), "caption": ev.get("caption") or "",
              "turn": ev.get("turn", 0)})
+    # ── Cast (character system, plan tmp/character-system-plan.md) ──────────
+    # Characters are EVENT-seeded (cast_join at start), never pack-read at
+    # replay — cast is mutable state and must fold pure.
+    elif kind == "cast_join":
+        cid = str(ev.get("id") or "").strip()
+        if cid:
+            state.setdefault("cast", {})[cid] = {
+                "name": ev.get("name") or cid,
+                "desc": ev.get("desc") or "",
+                "controlled_by": ev.get("controlled_by") or "dm",
+                "wearing": dict(ev.get("wearing") or {}),
+                "parts": {p: dict(spec) for p, spec
+                          in (ev.get("parts") or {}).items()
+                          if isinstance(spec, dict)},
+                "fields": dict(ev.get("fields") or {}),
+            }
+    elif kind in ("wore", "unwore"):
+        c = _cast_member(state, ev.get("char"))
+        slot = ev.get("slot")
+        if c is not None and slot:
+            prev = c["wearing"].pop(slot, None)
+            if prev and prev not in state["inventory"]:
+                state["inventory"].append(prev)   # switched gear → inventory (ruling C)
+            if kind == "wore" and ev.get("item"):
+                if ev["item"] in state["inventory"]:
+                    state["inventory"].remove(ev["item"])   # worn is worn, not carried (B)
+                c["wearing"][slot] = ev["item"]
+    elif kind == "part_set":
+        c = _cast_member(state, ev.get("char"))
+        if c is not None and ev.get("part") and ev.get("key"):
+            part = c["parts"].setdefault(ev["part"], {})
+            part.setdefault("state", {})[ev["key"]] = ev.get("value")
+    elif kind == "cast_set":
+        c = _cast_member(state, ev.get("char"))
+        if c is not None and ev.get("key"):
+            c["fields"][ev["key"]] = ev.get("value")
+    elif kind == "cast_adjust":
+        c = _cast_member(state, ev.get("char"))
+        if c is not None and ev.get("key"):
+            base = c["fields"].get(ev["key"]) or 0
+            try:
+                c["fields"][ev["key"]] = base + ev["delta"]
+            except (TypeError, KeyError):
+                c["fields"][ev["key"]] = ev.get("delta")
     elif kind == "ended":
         state["ended"] = True
     # room_created carries no direct state change beyond its companion

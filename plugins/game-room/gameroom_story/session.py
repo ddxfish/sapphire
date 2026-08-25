@@ -731,6 +731,8 @@ def _apply_slots(story, slots):
         story["rooms"][rid] = walk(story["rooms"][rid])
     if story.get("items"):
         story["items"] = walk(story["items"])
+    if meta.get("cast"):
+        meta["cast"] = walk(meta["cast"])   # cast names/descs take slots too
 
 
 def _clean_slots(story, slots):
@@ -750,6 +752,41 @@ def _clean_slots(story, slots):
         if v:
             out[decl["key"]] = v
     return out
+
+
+def _seed_cast(story):
+    """cast_join events for a new run (character system, plan
+    tmp/character-system-plan.md). Pack-declared meta['cast'] wins
+    (slot-substituted by _apply_slots); else two seeds from the proto-cast
+    that always existed — the role (hers) + player_role (theirs).
+    EVENT-seeded, never pack-read at replay: cast is mutable state and
+    must fold pure; a new run picks up pack changes, an old run keeps
+    the cast it journaled."""
+    meta = story["meta"]
+    declared = meta.get("cast")
+    events = []
+    if isinstance(declared, list) and declared:
+        for c in declared:
+            if not isinstance(c, dict) or not str(c.get("id") or "").strip():
+                logger.warning(f"[STORY] cast entry without id skipped: {c!r}")
+                continue
+            events.append({"event": "cast_join", "id": str(c["id"]).strip(),
+                           "name": c.get("name") or c["id"],
+                           "desc": c.get("desc") or "",
+                           "controlled_by": c.get("controlled_by") or "dm",
+                           "wearing": c.get("wearing") or {},
+                           "parts": c.get("parts") or {},
+                           "fields": c.get("fields") or {}})
+        return events
+    role = meta.get("role") or {}
+    rname = (role.get("name") or "").strip()
+    events.append({"event": "cast_join",
+                   "id": referee._key(rname) or "narrator",
+                   "name": rname or "the narrator", "controlled_by": "dm"})
+    events.append({"event": "cast_join", "id": "player", "name": "Player",
+                   "desc": str(meta.get("player_role") or "")[:300],
+                   "controlled_by": "player"})
+    return events
 
 
 def start(system, slug, character=None, mode=None, local=None, session=None,
@@ -892,6 +929,11 @@ def _start(system, slug, character, mode, local, session, slots=None):
     # Story-declared starting stats (HP, gold, ...) seed as replayable events
     for k, v in (story["meta"].get("initial_flags") or {}).items():
         events.append({"event": "state_set", "key": k, "value": v, "turn": 0})
+    # Cast joins ride the same turn-0 transaction, BEFORE on_enter — its
+    # effects may already touch parts/fields of a seeded character.
+    for ev in _seed_cast(story):
+        ev["turn"] = 0
+        events.append(ev)
     for ev in referee._effect_events(start_room.get("on_enter") or {}, st.initial_state()):
         ev["turn"] = 0
         events.append(ev)
@@ -1545,6 +1587,7 @@ def full_state(system, session=None):
         "emotions": state["emotions"],
         "extras": state.get("extras", []),
         "character": entry.get("character"),
+        "cast": state.get("cast") or {},
         "solved": state["solved"],
         "found": state["found"],
         "flags": state["flags"],

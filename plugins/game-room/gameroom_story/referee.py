@@ -8,7 +8,7 @@ import random
 
 logger = logging.getLogger(__name__)
 
-GENERIC_VERBS = ("move", "look", "search", "solve", "take")
+GENERIC_VERBS = ("move", "look", "search", "solve", "take", "wear", "remove")
 
 
 def _norm(s):
@@ -95,6 +95,67 @@ def answers_of(puzzle):
     return [_norm_answer(x) for x in sols if x]
 
 
+def _as_list(v):
+    """Effect specs that accept one dict or a list of dicts."""
+    if isinstance(v, dict):
+        return [v]
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
+def _check_wearing(spec, state):
+    """{"wearing": "spacesuit"} — anyone wears it, any slot. Dict form:
+    {"char": id, "item": name} pins the character; add "slot" to pin the
+    slot; {"char", "slot"} alone = that slot holds anything. Worn is worn —
+    `has:` never sees gear (Krem's B ruling 2026-08-25)."""
+    cast = state.get("cast") or {}
+    if isinstance(spec, str):
+        want = _key(spec)
+        return any(_key(i) == want for c in cast.values()
+                   for i in (c.get("wearing") or {}).values())
+    if not isinstance(spec, dict):
+        return False
+    chars = [cast.get(spec["char"])] if spec.get("char") else list(cast.values())
+    item, slot = spec.get("item"), spec.get("slot")
+    for c in chars:
+        if not c:
+            continue
+        w = c.get("wearing") or {}
+        if slot and item:
+            if _key(w.get(slot)) == _key(item):
+                return True
+        elif slot:
+            if w.get(slot):
+                return True
+        elif item:
+            if any(_key(i) == _key(item) for i in w.values()):
+                return True
+    return False
+
+
+def _check_part(spec, state):
+    """{"part": {"char","part","key","value"}} — value omitted = truthy."""
+    if not isinstance(spec, dict):
+        return False
+    c = (state.get("cast") or {}).get(spec.get("char")) or {}
+    part = (c.get("parts") or {}).get(spec.get("part")) or {}
+    val = (part.get("state") or {}).get(spec.get("key"))
+    return bool(val) if "value" not in spec else val == spec.get("value")
+
+
+def cast_part_objects(state):
+    """Parts as interactables (the unification, Krem 2026-08-24): a part is
+    an object that lives on a character instead of in a room. Funnel key is
+    '{char}_{part}' — _key matching forgives 'sapphire hands'. The whole
+    object machinery rides free: per-verb conditions, effects, seals, dice,
+    look. A top-level `condition` zork-lines the part like any object."""
+    out = {}
+    for cid, c in (state.get("cast") or {}).items():
+        for pname, part in (c.get("parts") or {}).items():
+            if isinstance(part, dict) and check_condition(part.get("condition"), state):
+                out[f"{cid}_{pname}"] = part
+    return out
+
+
 def check_condition(cond, state):
     """Edge/object condition: {"has": item} and/or {"flags": {k: expected}}
     (also accepts {"flag": name} as a truthy check, {"flag_gte": {k: n}}
@@ -135,6 +196,24 @@ def check_condition(cond, state):
         except (TypeError, ValueError):
             # author-typed junk threshold: gate stays closed, never crashes
             return False
+    # ── Cast conditions (character system, 2026-08-25) ──────────────────
+    if "wearing" in cond and not _check_wearing(cond["wearing"], state):
+        return False
+    if "part" in cond and not _check_part(cond["part"], state):
+        return False
+    cf = cond.get("cast_field")
+    if isinstance(cf, dict):
+        c = (state.get("cast") or {}).get(cf.get("char")) or {}
+        if (c.get("fields") or {}).get(cf.get("key")) != cf.get("value"):
+            return False
+    cg = cond.get("cast_gte")
+    if isinstance(cg, dict):
+        c = (state.get("cast") or {}).get(cg.get("char")) or {}
+        try:
+            if float((c.get("fields") or {}).get(cg.get("key")) or 0) < float(cg.get("n", 0)):
+                return False
+        except (TypeError, ValueError):
+            return False
     return True
 
 
@@ -157,6 +236,29 @@ def _effect_events(effects, state):
     xrem = effects.get("extras_remove") or []
     if xadd or xrem:
         events.append({"event": "extras", "add": xadd, "remove": xrem})
+    # ── Cast effects (character system, 2026-08-25): wear/unwear move gear
+    # between body and inventory (rulings B+C); part sets part state
+    # (held hands, gloved fingers); cast_set/cast_adjust are the sheet's
+    # set/adjust ({"cast_adjust": {"sapphire": {"trust": 1}}}).
+    for spec in _as_list(effects.get("wear")):
+        if spec.get("char") and spec.get("slot") and spec.get("item"):
+            events.append({"event": "wore", "char": spec["char"],
+                           "slot": spec["slot"], "item": spec["item"]})
+    for spec in _as_list(effects.get("unwear")):
+        if spec.get("char") and spec.get("slot"):
+            events.append({"event": "unwore", "char": spec["char"],
+                           "slot": spec["slot"]})
+    for spec in _as_list(effects.get("part")):
+        if spec.get("char") and spec.get("part") and spec.get("key"):
+            events.append({"event": "part_set", "char": spec["char"],
+                           "part": spec["part"], "key": spec["key"],
+                           "value": spec.get("value", True)})
+    for char, kv in (effects.get("cast_set") or {}).items():
+        for k, v in (kv.items() if isinstance(kv, dict) else []):
+            events.append({"event": "cast_set", "char": char, "key": k, "value": v})
+    for char, kv in (effects.get("cast_adjust") or {}).items():
+        for k, d in (kv.items() if isinstance(kv, dict) else []):
+            events.append({"event": "cast_adjust", "char": char, "key": k, "delta": d})
     # Teleport (Krem's wand, 2026-08-21): {"goto": room_id} moves the
     # player as part of any effect. Emits the moved event ONLY — the
     # destination's on_enter does not fire on a teleport (documented;
@@ -261,15 +363,20 @@ def _carried_objects(story, all_rooms, state):
     (2026-08-22) resolve from the story-level pool with home_room None —
     their seal/dice keys are room-independent by construction."""
     taken = {_key(t) for t in state.get("taken") or []}
+    # Worn is worn (Krem's B ruling 2026-08-25): gear on a body is not
+    # `has:`-carried, but it stays usable/inspectable — worn names resolve
+    # specs here so declared actions and look keep firing from the body.
+    pool = taken | {_key(i) for c in (state.get("cast") or {}).values()
+                    for i in (c.get("wearing") or {}).values()}
     out = {}
-    if not taken:
+    if not pool:
         return out
     for rm in (all_rooms or {}).values():
         for n, o in (rm.get("objects") or {}).items():
-            if _key(n) in taken and isinstance(o, dict) and n not in out:
+            if _key(n) in pool and isinstance(o, dict) and n not in out:
                 out[n] = (rm, o)
     for n, o in ((story or {}).get("items") or {}).items():
-        if _key(n) in taken and isinstance(o, dict) and n not in out:
+        if _key(n) in pool and isinstance(o, dict) and n not in out:
             out[n] = (None, o)
     return out
 
@@ -328,7 +435,8 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
 
     if verb == "look":
         if target_n and target_n not in ("room", "around", "here"):
-            _name, obj = _find(_visible_objects(room, state), target_n)
+            _name, obj = _find({**_visible_objects(room, state),
+                                **cast_part_objects(state)}, target_n)
             carried = False
             if not obj:
                 # Carried things (Krem 2026-08-21): a taken object left its
@@ -499,9 +607,12 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     # declare "aliases": ["drink","sip"] — forgiveness for near-verbs (the
     # guess-the-verb wound, Krem 2026-08-03). Canonical names only in
     # listings; aliases resolve silently and journal under the canon verb.
-    objs = _visible_objects(room, state)
+    parts = cast_part_objects(state)
+    objs = {**_visible_objects(room, state), **parts}
     obj_name, obj = _find(objs, target_n)
     home, carried = room, False
+    if obj is not None and obj_name in parts:
+        home = None          # parts travel with the body — room-free seal/dice keys
     if not obj:
         # Ring two (Krem 2026-08-21): carried objects — declared verbs,
         # dice, seals and effects all fire from the pocket, in any room.
@@ -616,6 +727,45 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
             events += _effect_events(spec, state)
             events += _take_rider(obj, canon, verb, carried, target_n)
             return events, spec.get("message", f"You {canon} the {target}."), True
+
+    # Dressing (character system, 2026-08-25): `wear` moves inventory gear
+    # onto a body (`wears` slot on the item spec names where); `remove`
+    # sends it back to the inventory (ruling C). answer = cast id; defaults
+    # to the player-controlled character — the player dresses themself, she
+    # dresses via answer or authored wear effects. Declared wear/remove
+    # interactions on an object win (the loop above already returned).
+    if _key(verb) in ("wear", "remove"):
+        if not target_n:
+            return [], f"{verb} needs a target item.", False
+        cast = state.get("cast") or {}
+        cid = _norm(answer) if answer and _norm(answer) in cast else next(
+            (i for i, c in cast.items() if c.get("controlled_by") == "player"),
+            next(iter(cast), None))
+        if not cid:
+            return [], "No cast records in this story — nothing tracked can dress.", False
+        cname = cast[cid].get("name", cid)
+        if _key(verb) == "remove":
+            w = cast[cid].get("wearing") or {}
+            slot = next((sl for sl, i in w.items()
+                         if _key(i) == _key(target_n) or _key(sl) == _key(target_n)), None)
+            if not slot:
+                return [], f"{cname} isn't wearing '{target}'.", False
+            return ([{"event": "unwore", "char": cid, "slot": slot}],
+                    f"{cname} removes the {w[slot]} — it goes to the inventory.", True)
+        inv_name = next((i for i in state.get("inventory") or []
+                         if _key(i) == _key(target_n)), None)
+        if not inv_name:
+            return [], f"'{target}' isn't in the inventory — only carried gear can be worn.", False
+        _n, ispec = _find(story.get("items") or {}, inv_name)
+        if not ispec:
+            _n, pair = _find(_carried_objects(story, all_rooms, state), inv_name)
+            ispec = pair[1] if pair else None
+        slot = (ispec or {}).get("wears")
+        if not slot:
+            return [], (f"Nothing tracked marks '{target}' wearable (no `wears` slot on "
+                        f"its item spec) — narrate freely; the tracked world won't change."), False
+        return ([{"event": "wore", "char": cid, "slot": slot, "item": inv_name}],
+                f"{cname} now wears the {inv_name} ({slot}).", True)
 
     # Takeable (Krem 2026-08-20): the object ITSELF moves into inventory and
     # leaves the room — the classic verb, journaled so replay stays pure.
