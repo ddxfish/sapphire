@@ -774,6 +774,8 @@ def _seed_cast(story):
                            "name": c.get("name") or c["id"],
                            "desc": c.get("desc") or "",
                            "controlled_by": c.get("controlled_by") or "dm",
+                           "image": c.get("image") or "",
+                           "badge": c.get("badge") or "",
                            "wearing": c.get("wearing") or {},
                            "parts": c.get("parts") or {},
                            "fields": c.get("fields") or {}})
@@ -782,9 +784,10 @@ def _seed_cast(story):
     rname = (role.get("name") or "").strip()
     events.append({"event": "cast_join",
                    "id": referee._key(rname) or "narrator",
-                   "name": rname or "the narrator", "controlled_by": "dm"})
+                   "name": rname or "the narrator", "controlled_by": "dm",
+                   "desc": str(role.get("text") or "")[:2000]})
     events.append({"event": "cast_join", "id": "player", "name": "Player",
-                   "desc": str(meta.get("player_role") or "")[:300],
+                   "desc": str(meta.get("player_role") or "")[:2000],
                    "controlled_by": "player"})
     return events
 
@@ -1587,7 +1590,30 @@ def full_state(system, session=None):
         "emotions": state["emotions"],
         "extras": state.get("extras", []),
         "character": entry.get("character"),
-        "cast": state.get("cast") or {},
+        # Player-facing cast (sidebar strip, 2026-08-25 — Krem: "was I
+        # supposed to know she had hands?"): same filter law as
+        # room_objects — desc/state/verbs, never messages/effects/
+        # conditions. Zork-gated parts stay engine-side.
+        "cast": {cid: {
+            "name": c.get("name") or cid,
+            "controlled_by": c.get("controlled_by") or "dm",
+            "desc": c.get("desc") or "",
+            # Portrait (Krem 2026-08-25, WoW-screen card): a filename in the
+            # pack's backdrops/ dir (or a store art name) — same lane, same
+            # exists-check as room art, so declared-before-painted is safe.
+            "image": _art_url(story, c.get("image")),
+            # Headshot badge (party-portrait chip in the People row)
+            "badge": _art_url(story, c.get("badge")),
+            "wearing": c.get("wearing") or {},
+            "fields": c.get("fields") or {},
+            "parts": {pn: {"desc": spec.get("desc") or "",
+                           "state": spec.get("state") or {},
+                           "verbs": _declared_verbs(f"{cid}_{pn}", spec, state)}
+                      for pn, spec in (c.get("parts") or {}).items()
+                      if isinstance(spec, dict)
+                      and referee.check_condition(spec.get("condition"), state)},
+        } for cid, c in (state.get("cast") or {}).items()
+          if isinstance(c, dict)},
         "solved": state["solved"],
         "found": state["found"],
         "flags": state["flags"],

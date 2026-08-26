@@ -903,6 +903,15 @@ function paintStatus(a) {
             ? 'the story left this blank for you — tap to write it'
             : 'sealed — tap to edit before she finds it')}">${open ? '✍' : '✉'} ${esc(pretty(x.s.object))}</span>`;
     }).join('');
+    // People (Krem 2026-08-25, party frames): square avatar tiles, 3 per
+    // row (33% width so a face never eats the sidebar's vertical budget),
+    // name below — WoW-party style. NPCs/vendors land here for free.
+    const people = Object.entries(a.cast || {}).map(([cid, c]) => {
+        const face = c.badge
+            ? `<img src="${esc(c.badge)}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block">`
+            : `<div style="width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:1.8em;background:var(--bg-tertiary,#2a2a33);border-radius:8px">\u{1F464}</div>`;
+        return `<div class="st-tap" data-person="${esc(cid)}" title="${esc((c.desc || '').slice(0, 140))}" style="cursor:pointer;text-align:center;min-width:0">${face}<div style="font-size:.78em;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(pretty(c.name || cid))}</div></div>`;
+    }).join('');
     const hints = a.player_hints || [];
     const shownIdx = _hintShown[a.room_id];
     const shown = (shownIdx != null && hints.length) ? hints[Math.min(shownIdx, hints.length - 1)] : null;
@@ -915,6 +924,7 @@ function paintStatus(a) {
         ${sect('\u{1F6AA}', 'Exits', exits)}
         ${sect('\u{1F4CD}', 'Here', objs)}
         ${sect('\u{1F392}', 'Carrying', carrying)}
+        ${people ? `<div class="st-scene-h">\u{1F465} People</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:4px 0">${people}</div>` : ''}
         ${stats.length ? `<div class="st-scene-exits">${esc(stats.join(' · '))}</div>` : ''}
         ${(a.blockers || []).length ? `<div class="st-scene-exits" style="color:var(--text-muted)">${a.blockers.map(b => {
             const i = b.indexOf(' — ');
@@ -948,6 +958,10 @@ function paintStatus(a) {
     box.querySelectorAll('[data-seal]').forEach(el => el.onclick = () => {
         const s = (a.seals || [])[+el.dataset.seal];
         if (s) sealModal(s);
+    });
+    box.querySelectorAll('[data-person]').forEach(el => el.onclick = () => {
+        const c = (a.cast || {})[el.dataset.person];
+        if (c) personCard(el.dataset.person, c, a);
     });
 }
 
@@ -1190,6 +1204,64 @@ function sceneCard(title, desc, actions) {
     wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
     wrap.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
         draftToComposer(actions[+b.dataset.act].draft);
+        wrap.remove();
+    });
+    document.body.appendChild(wrap);
+}
+
+// Character screen (Krem 2026-08-25, WoW-screen-lite): the People chip
+// opens this — portrait (cast `image`, URL-resolved server-side), who
+// plays them, worn gear, parts with tap-to-draft actions, sheet fields.
+// Wave 3 adds dressing controls HERE — this card is their future home.
+function personCard(cid, c, a) {
+    const esc = room.esc;
+    document.getElementById('st-card')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'st-card';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:10000';
+    const acts = [];   // flat index across every part's verb buttons
+    const worn = Object.entries(c.wearing || {}).map(([sl, it]) =>
+        `<span class="st-exit st-obj">\u{1F455} ${esc(pretty(it))} <span style="opacity:.6">(${esc(sl)})</span></span>`).join('');
+    const parts = Object.entries(c.parts || {}).map(([pn, p]) => {
+        const btns = (p.verbs || []).map(v => {
+            acts.push({ draft: draftVerb(v, `${cid}_${pn}`) });
+            return `<button type="button" class="btn-sm" data-act="${acts.length - 1}">${esc(v)}</button>`;
+        }).join('');
+        const pst = Object.entries(p.state || {}).map(([k, v]) => `${pretty(k)}: ${v}`).join(' \u00b7 ');
+        return `<div style="margin:4px 0"><b>\u270B ${esc(pretty(pn))}</b>${pst ? ` \u2014 ${esc(pst)}` : ''}${p.desc ? `<div style="opacity:.85;font-size:.9em">${esc(p.desc)}</div>` : ''}${btns ? `<div class="st-card-verbs">${btns}</div>` : ''}</div>`;
+    }).join('');
+    // Party inventory is SHARED (engine truth until per-char NPC pockets,
+    // Later wave A) — shown here honestly labeled, collapsed by default.
+    const carrying = ((a && a.inventory) || []).map(i =>
+        `<span class="st-exit st-obj">${esc(pretty(String(i)))}</span>`).join('');
+    const fields = Object.entries(c.fields || {}).map(([k, v]) => `${pretty(k)}: ${v}`).join(' \u00b7 ');
+    const sec = (label, body) => body
+        ? `<div style="font-weight:600;font-size:1.08em;margin:10px 0 3px">${label}</div><div style="padding:0 0 4px">${body}</div>` : '';
+    const titleFace = !c.image && c.badge
+        ? `<img src="${esc(c.badge)}" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;vertical-align:-10px;margin-right:6px">`
+        : (c.image ? '' : '\u{1F464} ');
+    // Go big or go home (Krem 2026-08-25): full-height portrait column on
+    // the left, scrollable info sidebar on the right; portraitless
+    // characters collapse to a single column. Wave 3's dressing controls
+    // land in this sidebar.
+    wrap.innerHTML = `
+        <div class="st-card" style="width:min(860px,94vw);max-width:min(860px,94vw);${c.image ? 'height:min(84vh,820px);' : 'max-height:84vh;'}position:relative;display:flex;gap:14px;padding:14px;overflow:hidden;text-align:left">
+            <button type="button" data-close title="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;color:inherit;font-size:1.15em;cursor:pointer;opacity:.65;z-index:1">\u2715</button>
+            ${c.image ? `<div style="flex:1.15;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden"><img src="${esc(c.image)}" alt="" style="height:100%;max-width:100%;object-fit:contain"></div>` : ''}
+            <div style="flex:1;min-width:0;overflow-y:auto;align-self:stretch">
+                <div class="st-card-title" style="margin-bottom:0;font-size:1.45em">${titleFace}${esc(pretty(c.name || cid))}</div>
+                <div class="st-card-note" style="text-align:left;margin:0 0 8px">${c.controlled_by === 'player' ? 'your character' : 'played by the storyteller'}</div>
+                ${sec('Bio', c.desc ? `<div style="white-space:pre-wrap">${esc(c.desc)}</div>` : '')}
+                ${sec('Wearing', worn)}
+                ${sec('Interact', parts)}
+                ${sec('Carrying (shared)', carrying)}
+                ${fields ? `<div style="margin-top:6px;opacity:.9">${esc(fields)}</div>` : ''}
+            </div>
+        </div>`;
+    wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
+    wrap.querySelector('[data-close]').onclick = () => wrap.remove();
+    wrap.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+        draftToComposer(acts[+b.dataset.act].draft);
         wrap.remove();
     });
     document.body.appendChild(wrap);

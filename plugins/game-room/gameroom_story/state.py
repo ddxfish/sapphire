@@ -323,6 +323,7 @@ def _cast_member(state, cid):
     cast = state.setdefault("cast", {})
     if cid not in cast:
         cast[cid] = {"name": cid, "desc": "", "controlled_by": "dm",
+                     "image": "", "badge": "",
                      "wearing": {}, "parts": {}, "fields": {}}
     return cast[cid]
 
@@ -436,6 +437,8 @@ def apply_event(state, ev):
                 "name": ev.get("name") or cid,
                 "desc": ev.get("desc") or "",
                 "controlled_by": ev.get("controlled_by") or "dm",
+                "image": ev.get("image") or "",
+                "badge": ev.get("badge") or "",
                 "wearing": dict(ev.get("wearing") or {}),
                 "parts": {p: dict(spec) for p, spec
                           in (ev.get("parts") or {}).items()
