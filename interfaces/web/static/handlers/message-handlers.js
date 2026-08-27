@@ -58,8 +58,16 @@ export async function handleEdit(idx) {
     const hist = await api.fetchHistory();
     const msg = hist[idx];
     const msgEl = document.querySelectorAll('#chat-container .message:not(.status):not(.error)')[idx];
-    
-    ui.enterEditMode(msgEl, idx, msg.timestamp);
+
+    // User bubbles carry `content` (the markdown you typed). Assistant turns
+    // carry `parts`; the server edits the LAST assistant message of the turn,
+    // so show the last content part — that's the text the save overwrites.
+    let text = msg.content || '';
+    if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
+        const last = msg.parts.filter(p => p.type === 'content').pop();
+        if (last) text = last.text || '';
+    }
+    ui.enterEditMode(msgEl, idx, msg.timestamp, text);
     
     document.getElementById('save-edit').onclick = async () => {
         const newText = document.getElementById('edit-textarea').value;

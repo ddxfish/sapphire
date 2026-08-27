@@ -741,39 +741,35 @@ export const extractProseText = (el) => {
     return Parsing.extractProseText(el);
 };
 
-export const extractEditableContent = (contentEl, timestamp) => {
-    const details = [...contentEl.querySelectorAll('details')];
-    const lastThink = details.filter(d => d.querySelector('summary').textContent.includes('Think')).pop();
-    
-    let text = '';
-    if (lastThink) text = `<think>${lastThink.querySelector('div')?.textContent || ''}</think>\n\n`;
-    text += [...contentEl.querySelectorAll('p')].map(p => p.textContent).join('\n\n');
-    return { text: text.trim(), timestamp };
-};
-
 // =============================================================================
 // EDIT MODE
 // =============================================================================
 
-export const enterEditMode = (msgEl, idx, timestamp) => {
+// `text` is the stored markdown source (caller pulls it from the history
+// payload). The textarea used to be filled by scraping the rendered DOM back
+// to text, which lost every markdown mark — `*stage directions*` came back
+// bare and single newlines vanished (`<br>` has empty textContent). Set via
+// .value, not innerHTML, so the message text is never parsed as markup.
+export const enterEditMode = (msgEl, idx, timestamp, text) => {
     const content = msgEl.querySelector('.message-content');
     const toolbar = msgEl.querySelector('.toolbar');
-    const { text } = extractEditableContent(content, timestamp);
     
     content.dataset.original = content.innerHTML;
     content.dataset.editTimestamp = timestamp;
     msgEl.dataset.editTimestamp = timestamp;
     
     content.innerHTML = `
-        <textarea id="edit-textarea" class="edit-textarea" rows="10">${text}</textarea>
+        <textarea id="edit-textarea" class="edit-textarea" rows="10"></textarea>
         <div class="edit-actions">
             <button id="save-edit" class="btn btn-primary" data-index="${idx}">Save</button>
             <button id="cancel-edit" class="btn btn-secondary">Cancel</button>
         </div>
     `;
+    const ta = document.getElementById('edit-textarea');
+    ta.value = text;
     toolbar.style.display = 'none';
     msgEl.classList.add('editing');
-    document.getElementById('edit-textarea').focus();
+    ta.focus();
 };
 
 export const exitEditMode = (msgEl, restore = true) => {

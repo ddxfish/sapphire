@@ -4623,7 +4623,15 @@ class ChatSessionManager:
         if role == 'user':
             for msg in self.current_chat.messages:
                 if msg.get('role') == 'user' and msg.get('timestamp') == timestamp:
-                    msg['content'] = new_content
+                    content = msg.get('content')
+                    if isinstance(content, list):
+                        # Multimodal message: swap the text, keep image/file
+                        # blocks. A bare string here used to drop the images.
+                        others = [b for b in content
+                                  if not (isinstance(b, dict) and b.get('type') == 'text')]
+                        msg['content'] = [{'type': 'text', 'text': new_content}] + others
+                    else:
+                        msg['content'] = new_content
                     self.current_chat._needs_full_resync = True  # in-place edit
                     self._save_current_chat()
                     logger.info(f"Edited user message at {timestamp}")
@@ -4648,7 +4656,16 @@ class ChatSessionManager:
                 if self.current_chat.messages[i].get('role') == 'assistant':
                     last_assistant_idx = i
             
-            self.current_chat.messages[last_assistant_idx]['content'] = new_content
+            # The editor shows thinking inline as <think>…</think> (the display
+            # reconstruction). Split it back out, or the old `thinking` field
+            # survives alongside the inline tag → double think block on render.
+            clean, thinking = _extract_thinking_from_content(new_content)
+            target = self.current_chat.messages[last_assistant_idx]
+            target['content'] = clean
+            if thinking:
+                target['thinking'] = thinking
+            else:
+                target.pop('thinking', None)
             self.current_chat._needs_full_resync = True  # in-place edit
             self._save_current_chat()
             logger.info(f"Edited assistant message at index {last_assistant_idx} (turn started at {start_idx})")
