@@ -4,7 +4,7 @@
   "short_display_name": "Game Room",
   "display_name": "Game Room",
   "description": "The Game Room host: Surface rooms, sealed-seat rails, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
-  "version": "0.30.1",
+  "version": "0.31.0",
   "emoji": "🎲",
   "author": "Krem & Claude",
   "default_enabled": true,

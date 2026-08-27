@@ -1619,6 +1619,22 @@ def full_state(system, session=None):
                 referee._carried_objects(story, story["rooms"], state), n)
             spec = pair[1] if pair else None
         return _art_url(story, (spec or {}).get("icon") or f"icon-{n}.webp")
+
+    def _layer_url(n):
+        # Wardrobe layers (2026-08-26): RGBA cut-outs the card stacks over
+        # the portrait. Explicit `layer` on the spec, else the CONVENTION
+        # `layer-<name>.png` beside the icons (same images-only lane).
+        _x, spec = referee._find(story.get("items") or {}, n)
+        if not spec:
+            _x, pair = referee._find(
+                referee._carried_objects(story, story["rooms"], state), n)
+            spec = pair[1] if pair else None
+        return _art_url(story, (spec or {}).get("layer") or f"layer-{n}.png")
+
+    _shown = (set(state["inventory"])
+              | {i for c in (state.get("cast") or {}).values()
+                 if isinstance(c, dict)
+                 for i in (c.get("wearing") or {}).values()})
     return {
         "story": story["meta"].get("title", story["meta"]["slug"]),
         "slug": story["meta"]["slug"],
@@ -1711,11 +1727,9 @@ def full_state(system, session=None):
                       if _wear_slot(n)},
         # {item: icon url} for everything in hand or on a body — pins,
         # popover rows and Carrying chips all draw from this one map.
-        "icons": {n: u for n in (set(state["inventory"])
-                                 | {i for c in (state.get("cast") or {}).values()
-                                    if isinstance(c, dict)
-                                    for i in (c.get("wearing") or {}).values()})
-                  for u in [_icon_url(n)] if u},
+        "icons": {n: u for n in _shown for u in [_icon_url(n)] if u},
+        # {item: layer url} — worn ones paint over the portrait in slot order.
+        "layers": {n: u for n in _shown for u in [_layer_url(n)] if u},
         "solved": state["solved"],
         "found": state["found"],
         "flags": state["flags"],

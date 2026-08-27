@@ -324,3 +324,23 @@ def test_overlay_cast_creates_missing_with_empty_wearing():
     session._overlay_cast(story, state)
     assert state["cast"]["p"]["name"] == "P"
     assert state["cast"]["p"]["wearing"] == {}   # never seeded at a read seam
+
+
+def test_full_state_layers_by_convention(monkeypatch):
+    # layer-<name>.png beside the icons → layers map; worn or carried alike,
+    # the card decides what paints. No file → no entry.
+    from gameroom_story import rooms
+    monkeypatch.setattr(rooms, "_story_roots",
+                        lambda: [Path(__file__).parent / "fixtures" / "stories"])
+    chat = "layers-chat"
+    st.set_active(chat, "mad-manse", None)
+    story = rooms.load_story("mad-manse")
+    assert st.append_many("mad-manse", chat, [
+        {"event": "started", "story": "mad-manse",
+         "room": story["meta"]["start"], "turn": 0},
+        {"event": "cast_join", "id": "hero", "name": "Hero", "turn": 0},
+        {"event": "wore", "char": "hero", "slot": "body", "item": "cloak", "turn": 0}])
+    full = session.full_state(None, session=chat)
+    assert full["cast"]["hero"]["wearing"] == {"body": "cloak"}
+    assert full["layers"]["cloak"].endswith("/backdrops/layer-cloak.png")
+    assert "locket" not in full["layers"]

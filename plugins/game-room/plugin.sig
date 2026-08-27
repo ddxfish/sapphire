@@ -1,27 +1,27 @@
 {
   "plugin": "game-room",
-  "version": "0.30.1",
+  "version": "0.31.0",
   "files": {
     "app/game-room.css": "sha256:06d81f94ca9374ccd99c7e7b691cfd939108d8bc234f41fc2b0beefa14a35860",
     "app/index.js": "sha256:abe09b4eff0401e1e4e3db198268157227deedcf33ed3b656a82b64d349a4d69",
     "app/prompt-preview.js": "sha256:e9152e125a03e8e3bbfecb558d76a0707f6fb3f6da4127c27bdee35d04193f69",
     "app/room.js": "sha256:17d369c524997d3eddf786a7452f9cae6bc68b20aae609b6c88ab326281c1974",
     "app/settings-modal.js": "sha256:6b4a012ed2de1cf50a62f37ec0006c98ac096a09a52308493948f0d440e49c54",
-    "app/story-room.js": "sha256:80a077176cc7c6c3cc889dadfd0ef1148398c47c7c6b2fc9cbd27de90ed77f4e",
+    "app/story-room.js": "sha256:8af3deed2c16c9668d8e431594d13491b0c1b7cbae0efc340edf97be5f21e9aa",
     "gameroom_core.py": "sha256:19a9c0e4b4fddf5d4fb1986c1e06241cf2048c74fb72a0457892a7656ee95eb6",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
     "gameroom_story/render.py": "sha256:a8a141142561dde035d3d219fa302def007dc04bb999c29dbdaf3ee3bf752388",
     "gameroom_story/rooms.py": "sha256:ed4ffcdc459f031e8c9b4231d0329487b8e885ef887cd617c25a950c3bb3ea72",
-    "gameroom_story/session.py": "sha256:69148cfc44162d4e979416fc865007263382b0b41f4abfdb10ca854000d2facd",
+    "gameroom_story/session.py": "sha256:13b51acd96943bd1b55417f401cd25add01eb569711f27f9e5a88a27293c6fe8",
     "gameroom_story/state.py": "sha256:fa947a8bdefbc928fe5860e7d9010079a0b73db4e529c94cbd70b3b0e025191b",
     "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/ghost.py": "sha256:4e6492773689676bc528195b0c60e63b84dfae7eeb5ae9d9f58215f5c280f7ac",
     "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
     "hooks/toolfence.py": "sha256:e52fc01e4e1bbd1874ec83e55957ca6d8148f5935f0d8356a6fc2d664905687c",
     "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
-    "plugin.json": "sha256:9ec3258f209c38bbb970bb03a847604fa8da323c2dcab29b0c7a6bec2a0128e1",
+    "plugin.json": "sha256:3636f1e4919eb0741e66509b069f8f92c99751eb17f67a5907a081535919d666",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
     "routes/play.py": "sha256:e1b6e9803c74440d4a94f451ccfcf25bed0d35247b79a08177ec514b8807a284",
@@ -38,7 +38,7 @@
     "tests/fixtures/stories/roled-tale/rooms/1-parlor.json": "sha256:8248a3e408c6b95f391918355836c46fa59666d144c0ea1ed4de772afa0845ea",
     "tests/fixtures/stories/roled-tale/story.json": "sha256:f5f31aacb8ccc34576958b58933234c606e0c1f9fd1a26750ead34fc42b5e693",
     "tests/test_builder_grammar.py": "sha256:08abda142045bc7f7df843b025f83b8560f793440389b6138b8d534000426a65",
-    "tests/test_cast.py": "sha256:33ed0d86dbe0e5b16ed4dd305879586f2d659e468b650b16433c2478389f82f9",
+    "tests/test_cast.py": "sha256:ea1c3174fb0152e019d05e33ff92f819b6ff098207ea3353b50586a3e123d4c5",
     "tests/test_chat_lifecycle_hooks.py": "sha256:bebf7787432754f920bed8220fdbce7da01c451571ef2fe832491a3faec187f2",
     "tests/test_fixwave_hunt.py": "sha256:a2264152e44a9e869d2ca2fcd7b63bb039170209575b9e16c87e7f077c928686",
     "tests/test_one_move_per_turn.py": "sha256:7f7e938a36b893a89137e03303ebb47a1ed6a67792012cb1ca24cb5146a68a80",
@@ -58,5 +58,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "D5flcriLPhtUMhDIZczPnzX6ynHoMb6fuw3TuCIdXcJlIrxAZwTKo7p3Er41B0ucYuhgih7d43l/lg3dP0U5Cw=="
+  "signature": "kLPZEvp3jSJ/7A0omGzLgRD3apc26NzN7kT6iKfiXQtJjk0MpW3g8t87nScHEA8YoMiIBGLf5NsDPYDe1jQ0Ag=="
 }

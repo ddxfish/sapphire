@@ -1221,6 +1221,10 @@ const SLOT_PINS = { hat: ['r', 9], outer: ['r', 25], jacket: ['r', 25], body: ['
     shirt: ['r', 37], bra: ['l', 31], pants: ['r', 58], underwear: ['l', 53],
     shoes: ['r', 93], socks: ['l', 87], in_hand: ['l', 46], pack: ['l', 40], holster: ['l', 61] };
 
+// Wardrobe layers (2026-08-26): worn items with a cut-out paint over the
+// portrait, bottom to top in this slot order (unknown slots go on top).
+const LAYER_ORDER = ['underwear', 'bra', 'socks', 'pants', 'shirt', 'shoes', 'body', 'jacket', 'outer', 'hat', 'in_hand'];
+
 function personCard(cid, c, a) {
     const esc = room.esc;
     document.getElementById('st-card')?.remove();
@@ -1231,6 +1235,12 @@ function personCard(cid, c, a) {
     const wearing = c.wearing || {};
     const slots = c.slots || [];
     const icons = (a && a.icons) || {};
+    const layerUrls = (a && a.layers) || {};
+    const layers = Object.entries(wearing)
+        .filter(([, it]) => it && layerUrls[it])
+        .sort((x, y) => { const o = sl => { const i = LAYER_ORDER.indexOf(sl); return i < 0 ? 99 : i; }; return o(x[0]) - o(y[0]); })
+        .map(([, it]) => `<img src="${esc(layerUrls[it])}" alt="" style="position:absolute;left:0;top:0;height:100%;width:100%;pointer-events:none">`)
+        .join('');
     // Pins live INSIDE the portrait box (wrapper shrinks to the image, so
     // percent offsets are image coordinates). Translucent over the art.
     // Uniform square slot (Krem 2026-08-26, HUX): tiny label ABOVE, the item
@@ -1277,7 +1287,7 @@ function personCard(cid, c, a) {
     wrap.innerHTML = `
         <div class="st-card" style="width:min(920px,94vw);max-width:min(920px,94vw);${c.image ? 'height:min(86vh,840px,calc(94vw * 0.9));' : 'max-height:86vh;'}position:relative;display:flex;gap:14px;padding:14px;overflow:hidden;text-align:left">
             <button type="button" data-close title="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;color:inherit;font-size:1.15em;cursor:pointer;opacity:.65;z-index:2">✕</button>
-            ${c.image ? `<div style="flex:0 0 auto;height:100%;position:relative"><img src="${esc(c.image)}" alt="" style="height:100%;display:block">${pins}</div>` : ''}
+            ${c.image ? `<div style="flex:0 0 auto;height:100%;position:relative"><img src="${esc(c.image)}" alt="" style="height:100%;display:block">${layers}${pins}</div>` : ''}
             <div style="flex:1;min-width:0;overflow-y:auto;align-self:stretch">
                 <div class="st-card-title" style="margin-bottom:0;font-size:1.45em">${titleFace}${esc(pretty(c.name || cid))}</div>
                 <div class="st-card-note" style="text-align:left;margin:0 0 8px">${c.controlled_by === 'player' ? 'your character' : 'played by the storyteller'}</div>
