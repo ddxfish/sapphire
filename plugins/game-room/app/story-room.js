@@ -1213,57 +1213,168 @@ function sceneCard(title, desc, actions) {
 // opens this — portrait (cast `image`, URL-resolved server-side), who
 // plays them, worn gear, parts with tap-to-draft actions, sheet fields.
 // Wave 3 adds dressing controls HERE — this card is their future home.
+// Slot pins over the portrait (Krem's blank check, 2026-08-26): [side, y%]
+// in the 720x1200 standard frame — hat at the head, shoes at the feet.
+// Unknown slots stack down the left. Percent-of-image, so any portrait
+// at that aspect lines up.
+const SLOT_PINS = { hat: ['r', 9], outer: ['r', 25], jacket: ['r', 25], body: ['r', 25],
+    shirt: ['r', 37], bra: ['l', 31], pants: ['r', 58], underwear: ['l', 53],
+    shoes: ['r', 93], socks: ['l', 87], in_hand: ['l', 46], pack: ['l', 40], holster: ['l', 61] };
+
 function personCard(cid, c, a) {
     const esc = room.esc;
     document.getElementById('st-card')?.remove();
+    document.getElementById('st-slot-menu')?.remove();
     const wrap = document.createElement('div');
     wrap.id = 'st-card';
-    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:10000';
-    const acts = [];   // flat index across every part's verb buttons
-    const worn = Object.entries(c.wearing || {}).map(([sl, it]) =>
-        `<span class="st-exit st-obj">\u{1F455} ${esc(pretty(it))} <span style="opacity:.6">(${esc(sl)})</span></span>`).join('');
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:10000';
+    const wearing = c.wearing || {};
+    const slots = c.slots || [];
+    const icons = (a && a.icons) || {};
+    // Pins live INSIDE the portrait box (wrapper shrinks to the image, so
+    // percent offsets are image coordinates). Translucent over the art.
+    // Uniform square slot (Krem 2026-08-26, HUX): tiny label ABOVE, the item
+    // icon fills the square, no item name until clicked. Empty = dashed.
+    const tile = (sl) => {
+        const it = wearing[sl];
+        const ic = it && icons[it];
+        const inner = ic ? `<img src="${esc(ic)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">`
+            : (it ? `<div style="font-size:.6em;line-height:1.15;padding:3px;text-align:center;overflow:hidden">${esc(pretty(it))}</div>` : '');
+        return `<div style="font-size:.58em;letter-spacing:.07em;text-transform:uppercase;color:#fff;text-shadow:0 1px 3px #000,0 0 2px #000;opacity:.9;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(pretty(sl))}</div>
+            <div style="width:64px;height:64px;border-radius:9px;border:1px ${it ? 'solid rgba(255,255,255,.5)' : 'dashed rgba(255,255,255,.45)'};background:rgba(10,10,14,.62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;overflow:hidden;color:#fff">${inner}</div>`;
+    };
+    let extraY = 66;
+    const pins = slots.map(sl => {
+        const [side, y] = SLOT_PINS[sl] || ['l', (extraY += 9)];
+        const it = wearing[sl];
+        return `<div data-slot="${esc(sl)}" data-side="${side}" data-y="${y}" title="${esc(it ? pretty(it) : pretty(sl))}" style="position:absolute;top:${y}%;${side === 'r' ? 'right:8px' : 'left:8px'};transform:translateY(-50%);width:64px;cursor:pointer;text-align:center">${tile(sl)}</div>`;
+    }).join('');
+    // No portrait: the grid stands in (same popover on click).
+    const slotBoxes = slots.map(sl => {
+        const it = wearing[sl];
+        return `<div data-slot="${esc(sl)}" title="${esc(it ? pretty(it) : pretty(sl))}" style="width:64px;cursor:pointer;text-align:center">${tile(sl)}</div>`;
+    }).join('');
+    const acts = [];
     const parts = Object.entries(c.parts || {}).map(([pn, p]) => {
         const btns = (p.verbs || []).map(v => {
             acts.push({ draft: draftVerb(v, `${cid}_${pn}`) });
             return `<button type="button" class="btn-sm" data-act="${acts.length - 1}">${esc(v)}</button>`;
         }).join('');
-        const pst = Object.entries(p.state || {}).map(([k, v]) => `${pretty(k)}: ${v}`).join(' \u00b7 ');
-        return `<div style="margin:4px 0"><b>\u270B ${esc(pretty(pn))}</b>${pst ? ` \u2014 ${esc(pst)}` : ''}${p.desc ? `<div style="opacity:.85;font-size:.9em">${esc(p.desc)}</div>` : ''}${btns ? `<div class="st-card-verbs">${btns}</div>` : ''}</div>`;
+        const pst = Object.entries(p.state || {}).map(([k, v]) => `${pretty(k)}: ${v}`).join(' · ');
+        return `<div style="margin:4px 0"><b>✋ ${esc(pretty(pn))}</b>${pst ? ` — ${esc(pst)}` : ''}${p.desc ? `<div style="opacity:.85;font-size:.9em">${esc(p.desc)}</div>` : ''}${btns ? `<div class="st-card-verbs">${btns}</div>` : ''}</div>`;
     }).join('');
-    // Party inventory is SHARED (engine truth until per-char NPC pockets,
-    // Later wave A) — shown here honestly labeled, collapsed by default.
+    // Party inventory is SHARED (engine truth until per-char NPC pockets).
     const carrying = ((a && a.inventory) || []).map(i =>
-        `<span class="st-exit st-obj">${esc(pretty(String(i)))}</span>`).join('');
-    const fields = Object.entries(c.fields || {}).map(([k, v]) => `${pretty(k)}: ${v}`).join(' \u00b7 ');
+        `<span class="st-exit st-obj" style="display:inline-flex;align-items:center;gap:5px">${icons[i] ? `<img src="${esc(icons[i])}" alt="" style="width:22px;height:22px;border-radius:4px;object-fit:cover">` : ''}${esc(pretty(String(i)))}</span>`).join('');
+    const fields = Object.entries(c.fields || {}).map(([k, v]) => `${pretty(k)}: ${v}`).join(' · ');
     const sec = (label, body) => body
         ? `<div style="font-weight:600;font-size:1.08em;margin:10px 0 3px">${label}</div><div style="padding:0 0 4px">${body}</div>` : '';
     const titleFace = !c.image && c.badge
         ? `<img src="${esc(c.badge)}" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;vertical-align:-10px;margin-right:6px">`
         : (c.image ? '' : '\u{1F464} ');
-    // Go big or go home (Krem 2026-08-25): full-height portrait column on
-    // the left, scrollable info sidebar on the right; portraitless
-    // characters collapse to a single column. Wave 3's dressing controls
-    // land in this sidebar.
+    // Portrait column shrinks to the image; the card's height is capped by
+    // viewport height AND width (0.6 aspect) so the sidebar keeps room.
     wrap.innerHTML = `
-        <div class="st-card" style="width:min(860px,94vw);max-width:min(860px,94vw);${c.image ? 'height:min(84vh,820px);' : 'max-height:84vh;'}position:relative;display:flex;gap:14px;padding:14px;overflow:hidden;text-align:left">
-            <button type="button" data-close title="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;color:inherit;font-size:1.15em;cursor:pointer;opacity:.65;z-index:1">\u2715</button>
-            ${c.image ? `<div style="flex:1.15;min-width:0;display:flex;align-items:center;justify-content:center;overflow:hidden"><img src="${esc(c.image)}" alt="" style="height:100%;max-width:100%;object-fit:contain"></div>` : ''}
+        <div class="st-card" style="width:min(920px,94vw);max-width:min(920px,94vw);${c.image ? 'height:min(86vh,840px,calc(94vw * 0.9));' : 'max-height:86vh;'}position:relative;display:flex;gap:14px;padding:14px;overflow:hidden;text-align:left">
+            <button type="button" data-close title="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;color:inherit;font-size:1.15em;cursor:pointer;opacity:.65;z-index:2">✕</button>
+            ${c.image ? `<div style="flex:0 0 auto;height:100%;position:relative"><img src="${esc(c.image)}" alt="" style="height:100%;display:block">${pins}</div>` : ''}
             <div style="flex:1;min-width:0;overflow-y:auto;align-self:stretch">
                 <div class="st-card-title" style="margin-bottom:0;font-size:1.45em">${titleFace}${esc(pretty(c.name || cid))}</div>
                 <div class="st-card-note" style="text-align:left;margin:0 0 8px">${c.controlled_by === 'player' ? 'your character' : 'played by the storyteller'}</div>
                 ${sec('Bio', c.desc ? `<div style="white-space:pre-wrap">${esc(c.desc)}</div>` : '')}
-                ${sec('Wearing', worn)}
+                ${c.image ? '' : sec('Wearing', slotBoxes ? `<div style="display:flex;flex-wrap:wrap;gap:10px">${slotBoxes}</div>` : '')}
                 ${sec('Interact', parts)}
                 ${sec('Carrying (shared)', carrying)}
                 ${fields ? `<div style="margin-top:6px;opacity:.9">${esc(fields)}</div>` : ''}
             </div>
         </div>`;
-    wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
-    wrap.querySelector('[data-close]').onclick = () => wrap.remove();
+    // ── lifecycle: one close(), Escape aware, menu-aware backdrop ──
+    let menu = null, menuFor = null;
+    const closeMenu = () => { if (menu) { menu.remove(); menu = null; menuFor = null; } };
+    const onKey = e => { if (e.key === 'Escape') { if (menu) closeMenu(); else close(); } };
+    // Pin layout (Krem 2026-08-26, "in-hand and pack overlap"): anchors are
+    // preferences; per side, pins sort by anchor and get pushed apart to a
+    // real pixel gap (tile height + 6), then the chain slides up if it ran
+    // off the bottom. Re-run on resize — the portrait's height moves.
+    const layoutPins = () => {
+        const box = wrap.querySelector('img')?.parentElement;
+        if (!box) return;
+        const H = box.clientHeight;
+        if (!H) return;
+        for (const side of ['l', 'r']) {
+            const els = [...wrap.querySelectorAll(`[data-side="${side}"]`)]
+                .sort((p, q) => +p.dataset.y - +q.dataset.y);
+            if (!els.length) continue;
+            const h = els[0].offsetHeight || 84, gap = h + 6;
+            const ys = els.map(el => Math.max(h / 2, Math.min(H - h / 2, H * (+el.dataset.y) / 100)));
+            for (let i = 1; i < ys.length; i++) ys[i] = Math.max(ys[i], ys[i - 1] + gap);
+            const over = ys[ys.length - 1] - (H - h / 2);
+            if (over > 0) { for (let i = 0; i < ys.length; i++) ys[i] -= over; }
+            for (let i = ys.length - 2; i >= 0; i--) ys[i] = Math.min(ys[i], ys[i + 1] - gap);
+            els.forEach((el, i) => { el.style.top = `${Math.max(h / 2, ys[i])}px`; });
+        }
+    };
+    const onResize = () => layoutPins();
+    window.addEventListener('resize', onResize);
+    const close = () => { closeMenu(); document.removeEventListener('keydown', onKey); window.removeEventListener('resize', onResize); wrap.remove(); };
+    document.addEventListener('keydown', onKey);
+    wrap.addEventListener('click', e => { if (menu) { closeMenu(); return; } if (e.target === wrap) close(); });
+    wrap.querySelector('[data-close]').onclick = close;
+    const redress = async (action, item) => {
+        try {
+            const r = await api('story/wear', 'POST', { char: cid, action, item });
+            if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return; }
+            if (r.detail) ui.showToast(r.detail, 'success');
+            _status = (await api('story/status')).active;
+            paintPanel();
+            const c2 = _status && _status.cast && _status.cast[cid];
+            close();
+            if (c2) personCard(cid, c2, _status);
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    };
     wrap.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
         draftToComposer(acts[+b.dataset.act].draft);
-        wrap.remove();
+        close();
+    });
+    // Slot popover: floats over everything, reflows nothing (the old inline
+    // <select> grew its box — Krem's jank report). Flips up near the bottom.
+    const openMenu = (pin, sl) => {
+        closeMenu();
+        menuFor = pin;
+        const cur = wearing[sl] || '';
+        const cands = Object.entries((a && a.wearables) || {}).filter(([, ws]) => ws === sl).map(([n]) => n);
+        const r = pin.getBoundingClientRect();
+        menu = document.createElement('div');
+        menu.id = 'st-slot-menu';
+        menu.style.cssText = 'position:fixed;z-index:10001;min-width:180px;max-width:280px;background:var(--bg-secondary,#1e1e26);color:var(--text-primary,#eee);border:1px solid var(--border-color,#555);border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,.5)';
+        const row = (label, val, on) => `<button type="button" data-pick="${esc(val)}" style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:${on ? 'rgba(255,255,255,.12)' : 'none'};border:none;color:inherit;padding:5px 8px;border-radius:6px;cursor:pointer">${val && icons[val] ? `<img src="${esc(icons[val])}" alt="" style="width:28px;height:28px;border-radius:5px;object-fit:cover;flex:0 0 auto">` : `<span style="width:28px;flex:0 0 auto"></span>`}<span>${label}</span></button>`;
+        menu.innerHTML = `<div style="font-size:.68em;opacity:.7;text-transform:uppercase;letter-spacing:.06em;padding:4px 8px 2px">${esc(pretty(sl))}</div>`
+            + (cur ? row(`${esc(pretty(cur))} <span style="opacity:.6">(worn)</span>`, cur, true) : '')
+            + cands.map(n => row(esc(pretty(n)), n, false)).join('')
+            + (!cur && !cands.length ? `<div style="padding:4px 8px 6px;opacity:.55;font-size:.82em">nothing in the inventory fits here</div>` : '')
+            + row(cur ? '— remove —' : '— none —', '', !cur);
+        document.body.appendChild(menu);
+        const mw = menu.offsetWidth, mh = menu.offsetHeight;
+        let top = r.bottom + 4;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+        const left = Math.min(Math.max(8, r.left), window.innerWidth - mw - 8);
+        menu.style.top = `${top}px`; menu.style.left = `${left}px`;
+        menu.querySelectorAll('[data-pick]').forEach(b => b.onclick = e => {
+            e.stopPropagation();
+            const v = b.dataset.pick;
+            closeMenu();
+            if (!v && cur) redress('remove', sl);
+            else if (v && v !== cur) redress('wear', v);
+        });
+    };
+    wrap.querySelectorAll('[data-slot]').forEach(pin => pin.onclick = e => {
+        e.stopPropagation();
+        if (menu && menuFor === pin) { closeMenu(); return; }   // same square = toggle
+        openMenu(pin, pin.dataset.slot);
     });
     document.body.appendChild(wrap);
+    layoutPins();
+    const img = wrap.querySelector('img');
+    if (img && !img.complete) img.onload = layoutPins;
 }
 

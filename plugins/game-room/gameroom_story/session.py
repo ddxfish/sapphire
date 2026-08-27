@@ -80,6 +80,13 @@ def _as_bool(v, default=True):
 # may deny her. story_act is the engine door — never listed, never fenced.
 FENCEABLE_TOOLS = ("story_place", "story_status", "story_end")
 
+# Default equipment slots (Krem's set, 2026-08-24) — a cast entry's own
+# `slots` list overrides per character; packs add slots freely.
+# `outer` is the big-item slot — blazer, raincoat, spacesuit: one slot,
+# so nothing layers under a suit (Krem 2026-08-26). Socks/holster/pack
+# retired the same day (tester's ruling + no mechanics behind them yet).
+WEAR_SLOTS = ("hat", "outer", "shirt", "pants", "shoes", "underwear", "in_hand")
+
 
 def conduct_for(story):
     """(universal_text | None, dm_guide | None) — the two GM layers."""
@@ -451,6 +458,53 @@ def _activate_prompt_for(system, chat, prompt_name):
         return False, str(e)
 
 
+def _overlay_cast(story, state):
+    """Cast DECLARATIONS read live from the pack at load (2026-08-26): name,
+    desc, image, badge, slots, part specs — like room templates, not like
+    state. Only wearing / part state / fields are journal state. Before
+    this, every pack tweak needed a fresh run (the 'jacket' slot rename
+    stranded a worn blazer in a slot the pack no longer declared). A
+    declared character missing from the state (pre-cast run) is created
+    with EMPTY wearing — state must come from the journal, never seeded
+    at a read seam (a load-time seed would re-dress after every remove)."""
+    declared = story["meta"].get("cast")
+    if not isinstance(declared, list):
+        return
+    cast = state.setdefault("cast", {})
+    for c in declared:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or "").strip()
+        if not cid:
+            continue
+        rec = cast.get(cid)
+        if rec is None:
+            rec = cast[cid] = {"wearing": {}, "fields": dict(c.get("fields") or {}),
+                               "parts": {}}
+        rec["name"] = c.get("name") or cid
+        rec["desc"] = c.get("desc") or ""
+        rec["controlled_by"] = c.get("controlled_by") or "dm"
+        rec["image"] = c.get("image") or ""
+        rec["badge"] = c.get("badge") or ""
+        rec["slots"] = [str(x) for x in (c.get("slots") or [])]
+        # Part SPECS refresh; each part's live state survives the refresh.
+        old_parts = rec.get("parts") or {}
+        new_parts = {}
+        for pn, spec in (c.get("parts") or {}).items():
+            if not isinstance(spec, dict):
+                continue
+            np_ = dict(spec)
+            live = (old_parts.get(pn) or {}).get("state")
+            if live:
+                np_["state"] = live
+            new_parts[pn] = np_
+        # Parts the journal created that the pack never declared stay.
+        for pn, spec in old_parts.items():
+            if pn not in new_parts and isinstance(spec, dict) and spec.get("state"):
+                new_parts[pn] = spec
+        rec["parts"] = new_parts
+
+
 def load_active(chat):
     """(story, state) for a chat's active playthrough, or (None, None).
     Generated rooms merge over canonical ones; then the playthrough's user
@@ -477,6 +531,7 @@ def load_active(chat):
     state = st.replay(entry["story"], chat)
     _merge_user_layer(story, entry["story"], chat, state)
     _apply_slots(story, entry.get("slots") or {})
+    _overlay_cast(story, state)
     # Missing-room fallback (2026-08-21 hunt — the "bricked run" class, four
     # doors in: a goto to a nonexistent room, a scenario swap dropping the
     # room she stands in, a user-room delete racing her move into it, and a
@@ -502,6 +557,11 @@ def load_active(chat):
     if story.get("items") and not state["ended"]:
         inv = {referee._key(i) for i in state["inventory"]}
         tkn = {referee._key(t) for t in state.get("taken") or []}
+        # Worn is worn (B): a starting item on a body is not re-granted —
+        # without this the always-was grant re-added a worn cloak to the
+        # inventory on EVERY load (dress write-path trace, 2026-08-25).
+        wrn = {referee._key(i) for c in (state.get("cast") or {}).values()
+               for i in (c.get("wearing") or {}).values()}
         for n in story["items"]:
             k = referee._key(n)
             if not k:
@@ -509,7 +569,7 @@ def load_active(chat):
             if k not in tkn:
                 state.setdefault("taken", []).append(n)
                 tkn.add(k)
-            if k not in inv:
+            if k not in inv and k not in wrn:
                 state["inventory"].append(n)
                 inv.add(k)
     return story, state
@@ -536,6 +596,11 @@ def _overlay_object_map(target, objs):
                 base["desc"] = spec["desc"]
             if "hidden" in spec:
                 base["hidden"] = bool(spec["hidden"])
+            if "wears" in spec:
+                # Wearable slot (dressing, 2026-08-25) — a user shadow may
+                # make a shipped item wearable (or re-slot it); same
+                # field-replace law as desc/hidden.
+                base["wears"] = spec["wears"]
             ints = dict(base.get("interactions") or {})
             for verb, vspec in (spec.get("interactions") or {}).items():
                 if not isinstance(vspec, dict):
@@ -776,6 +841,7 @@ def _seed_cast(story):
                            "controlled_by": c.get("controlled_by") or "dm",
                            "image": c.get("image") or "",
                            "badge": c.get("badge") or "",
+                           "slots": c.get("slots") or [],
                            "wearing": c.get("wearing") or {},
                            "parts": c.get("parts") or {},
                            "fields": c.get("fields") or {}})
@@ -1534,6 +1600,25 @@ def full_state(system, session=None):
     entry = (st.get_active_entry(chat) or {})
     room = story["rooms"].get(state["room"])
     _open_flag = (story["meta"].get("open_flag") or "").strip()
+
+    def _wear_slot(n):
+        _x, spec = referee._find(story.get("items") or {}, n)
+        if not spec:
+            _x, pair = referee._find(
+                referee._carried_objects(story, story["rooms"], state), n)
+            spec = pair[1] if pair else None
+        return (spec or {}).get("wears") or None
+
+    def _icon_url(n):
+        # Item icons (2026-08-26): explicit `icon` on the spec, else the
+        # CONVENTION `icon-<name>.webp` in the pack's art dir — a user-added
+        # item named like a shipped icon file gets it with zero fields.
+        _x, spec = referee._find(story.get("items") or {}, n)
+        if not spec:
+            _x, pair = referee._find(
+                referee._carried_objects(story, story["rooms"], state), n)
+            spec = pair[1] if pair else None
+        return _art_url(story, (spec or {}).get("icon") or f"icon-{n}.webp")
     return {
         "story": story["meta"].get("title", story["meta"]["slug"]),
         "slug": story["meta"]["slug"],
@@ -1605,6 +1690,12 @@ def full_state(system, session=None):
             # Headshot badge (party-portrait chip in the People row)
             "badge": _art_url(story, c.get("badge")),
             "wearing": c.get("wearing") or {},
+            # Equipment grid (Krem 2026-08-26): every slot shows — dotted
+            # when empty. Declared per character, engine default fallback;
+            # a worn key outside the list still shows (nothing hides).
+            "slots": ([str(x) for x in (c.get("slots") or [])] or list(WEAR_SLOTS))
+                     + [sl for sl in (c.get("wearing") or {})
+                        if sl not in ((c.get("slots") or []) or list(WEAR_SLOTS))],
             "fields": c.get("fields") or {},
             "parts": {pn: {"desc": spec.get("desc") or "",
                            "state": spec.get("state") or {},
@@ -1614,6 +1705,17 @@ def full_state(system, session=None):
                       and referee.check_condition(spec.get("condition"), state)},
         } for cid, c in (state.get("cast") or {}).items()
           if isinstance(c, dict)},
+        # {item: slot} for every wearable in the inventory — each slot
+        # box's dropdown filters this by its own slot.
+        "wearables": {n: _wear_slot(n) for n in state["inventory"]
+                      if _wear_slot(n)},
+        # {item: icon url} for everything in hand or on a body — pins,
+        # popover rows and Carrying chips all draw from this one map.
+        "icons": {n: u for n in (set(state["inventory"])
+                                 | {i for c in (state.get("cast") or {}).values()
+                                    if isinstance(c, dict)
+                                    for i in (c.get("wearing") or {}).values()})
+                  for u in [_icon_url(n)] if u},
         "solved": state["solved"],
         "found": state["found"],
         "flags": state["flags"],
@@ -1772,6 +1874,32 @@ def delete_user_item(chat, slug, name):
         items.pop(name)
         st.save_user_layer(slug, chat, {**layer, "items": items})
     return f"'{name}' removed from the kit.", True
+
+
+def player_dress(chat, verb, item, char=None):
+    """Player-side dressing from the character card (Krem's A vote,
+    2026-08-25). Rides referee.resolve's wear/remove path — the SAME rules
+    as her verbs (`wears` slot required, worn-is-worn, switched gear back
+    to inventory) and the same journal, so regen unwinds it. No DM turn is
+    consumed: like placed objects, the new sheet just shows next turn."""
+    entry = st.get_active_entry(chat)
+    if not entry:
+        return "No active playthrough.", False
+    if entry.get("paused"):
+        return "Story is paused — resume before changing anyone's clothes.", False
+    story, state = load_active(chat)
+    if not story or state["ended"]:
+        return "No live story here.", False
+    room = story["rooms"].get(state["room"])
+    events, msg, ok = referee.resolve(story, state, room, story["rooms"],
+                                      verb, item, answer=char)
+    if not ok:
+        return msg, False
+    for ev in events:
+        ev["turn"] = state["turn"]
+    if not st.append_many(entry["story"], chat, events):
+        return "The journal refused the write (sealed chat?).", False
+    return msg, True
 
 
 def set_room_text(chat, slug, room_id, template=None, player_desc=None,

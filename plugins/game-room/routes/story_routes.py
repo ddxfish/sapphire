@@ -1044,6 +1044,22 @@ def set_fence(body=None, **_):
     return {'success': True, 'fence': fence}
 
 
+def dress(body=None, **_):
+    """Wear/remove gear from the character card (player-side write, Krem's
+    A vote 2026-08-25). Same referee rules as her wear/remove verbs."""
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    verb = str(body.get('action') or '').strip().lower()
+    if verb not in ('wear', 'remove'):
+        return {'success': False, 'detail': "action must be 'wear' or 'remove'."}
+    sess = _session()
+    msg, ok = sess.player_dress(chat, verb, str(body.get('item') or ''),
+                                char=str(body.get('char') or '') or None)
+    return {'success': ok, 'detail': msg}
+
+
 def load_scenario(body=None, **_):
     """PURE SWAP: this playthrough's environment BECOMES the named scenario
     (empty name = reset to the shipped-only house). Applied the moment the

@@ -16,18 +16,49 @@
       "interactions": {
         "look": {
           "message": "Her face, painted small.",
-          "show": {"image": "lightbox-test.webp", "caption": "The locket"}
+          "show": {
+            "image": "lightbox-test.webp",
+            "caption": "The locket"
+          }
         }
       }
+    },
+    "cloak": {
+      "desc": "A travel cloak, still dusty.",
+      "wears": "body"
     }
   },
   "slots": [
-    {"key": "relationship", "label": "Our relationship", "section": "Characters",
-     "width": 30, "options": ["partner", "rival"], "allow_custom": true, "default": "partner"},
-    {"key": "watchword", "label": "", "section": "Characters", "width": 999,
-     "options": [], "allow_custom": true, "default": "lantern"},
-    {"key": "combo", "label": "The chest combo", "sealed": true,
-     "seal_key": "1:chest:open"},
-    {"key": "", "label": "malformed — dropped"}
+    {
+      "key": "relationship",
+      "label": "Our relationship",
+      "section": "Characters",
+      "width": 30,
+      "options": [
+        "partner",
+        "rival"
+      ],
+      "allow_custom": true,
+      "default": "partner"
+    },
+    {
+      "key": "watchword",
+      "label": "",
+      "section": "Characters",
+      "width": 999,
+      "options": [],
+      "allow_custom": true,
+      "default": "lantern"
+    },
+    {
+      "key": "combo",
+      "label": "The chest combo",
+      "sealed": true,
+      "seal_key": "1:chest:open"
+    },
+    {
+      "key": "",
+      "label": "malformed \u2014 dropped"
+    }
   ]
 }

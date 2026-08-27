@@ -640,6 +640,8 @@ function itemsPanel(slug, session, initialData) {
             <input type="text" class="grs-item-name" placeholder="item name, e.g. picture_of_joey">
             <div class="grs-item-mech-note" style="display:none;color:var(--text-secondary,#8a8fa3);font-size:var(--font-sm,0.85em)"></div>
             <input type="text" class="grs-item-desc" placeholder="what looking at it shows her">
+            <input type="text" class="grs-item-wears" list="grs-wear-slots" placeholder="wearable? slot name e.g. body (blank = not wearable)">
+            <datalist id="grs-wear-slots"><option>hat</option><option>outer</option><option>shirt</option><option>pants</option><option>shoes</option><option>underwear</option><option>in_hand</option><option>bra</option></datalist>
             <div class="grs-item-act-rows"></div>
             <button type="button" class="pk-btn grs-item-act-add">+ Add action</button>
             <div style="display:flex;gap:6px">
@@ -656,6 +658,7 @@ function itemsPanel(slug, session, initialData) {
         if (!list || !form) return;
         const nameIn = form.querySelector('.grs-item-name');
         const descIn = form.querySelector('.grs-item-desc');
+        const wearsIn = form.querySelector('.grs-item-wears');
         const actRows = form.querySelector('.grs-item-act-rows');
         const mechNote = form.querySelector('.grs-item-mech-note');
         const resetBtn = form.querySelector('.grs-item-reset');
@@ -680,11 +683,11 @@ function itemsPanel(slug, session, initialData) {
             form.style.display = 'none';
             editing = null; authoring = true;
             nameIn.value = ''; nameIn.disabled = false;
-            descIn.value = ''; actRows.innerHTML = '';
+            descIn.value = ''; wearsIn.value = ''; actRows.innerHTML = '';
             mechNote.style.display = 'none';
         };
         const readDescriptor = () => ({
-            desc: descIn.value.trim(), take: false, hidden: false,
+            desc: descIn.value.trim(), wears: wearsIn.value.trim(), take: false, hidden: false,
             visCond: null, puzzle: null, solveFx: null,
             acts: [...actRows.querySelectorAll('.grs-act-card')].map(card => {
                 const lk = card._lw.readLocks() || {};
@@ -701,6 +704,7 @@ function itemsPanel(slug, session, initialData) {
             nameIn.value = editing || '';
             nameIn.disabled = !!editing;
             descIn.value = '';
+            wearsIn.value = '';
             mechNote.style.display = 'none';
             resetBtn.style.display = 'none';
             const so = editing ? shipped[editing] : null;
@@ -710,11 +714,13 @@ function itemsPanel(slug, session, initialData) {
                 if (itemFits(editing, merged)) {
                     const d = objToDescriptor(merged);
                     descIn.value = d.desc;
+                    wearsIn.value = d.wears || '';
                     for (const a of d.acts) addCard(a);
                 } else {
                     // Text-shadow lane: machinery rides pack-side, read-only.
                     authoring = false;
                     descIn.value = (ov && ov.desc != null) ? ov.desc : (so.desc || '');
+                    wearsIn.value = merged.wears || '';
                     for (const [v, m] of Object.entries(so.verbs || {})) {
                         const ovMsg = ov?.interactions?.[v]?.message;
                         addCard({ verb: v, resp: ovMsg != null ? ovMsg : m });
@@ -728,6 +734,7 @@ function itemsPanel(slug, session, initialData) {
             } else if (editing && ov) {
                 const d = objToDescriptor(ov);
                 descIn.value = d.desc;
+                wearsIn.value = d.wears || '';
                 for (const a of d.acts) addCard(a);
             }
             form.querySelector('.grs-item-save').textContent = editing ? 'Save' : 'Add';
@@ -769,6 +776,8 @@ function itemsPanel(slug, session, initialData) {
                 const spec = {};
                 const desc = descIn.value.trim();
                 if (desc !== (so.desc || '')) spec.desc = desc;
+                const wv = wearsIn.value.trim();
+                if (wv !== (objMerged(so.spec || {}, ovNow).wears || '')) spec.wears = wv;
                 const ints = {};
                 for (const a of d.acts) {
                     if (a.verb in (so.verbs || {})) {
@@ -1322,6 +1331,7 @@ const objMerged = (sspec, ov) => {
     const m = { ...(sspec || {}) };
     if ('desc' in ov) m.desc = ov.desc;
     if ('hidden' in ov) m.hidden = !!ov.hidden;
+    if ('wears' in ov) m.wears = ov.wears;
     const ints = { ...(m.interactions || {}) };
     for (const [v, s] of Object.entries(ov.interactions || {})) {
         if (!s || typeof s !== 'object') continue;
@@ -1356,7 +1366,7 @@ const _fxWords = (f) => [
 const objToDescriptor = (spec) => {
     const puz = spec.puzzle;
     return {
-        desc: spec.desc || '', take: !!spec.takeable,
+        desc: spec.desc || '', wears: spec.wears || '', take: !!spec.takeable,
         hidden: !!spec.hidden, visCond: spec.condition || null,
         // answers as CSV — one req row, OR inside the field (Krem 2026-08-23)
         puzzle: puz ? { riddle: puz.riddle || OBJ_RIDDLE_DEFAULT,
@@ -1391,6 +1401,7 @@ const objToDescriptor = (spec) => {
 // lane (src null), the gated shipped lane, and the fits check.
 const compileObj = (name, d, src) => {
     const spec = { desc: d.desc };
+    if (d.wears) spec.wears = d.wears;
     if (d.take) spec.takeable = true;
     if (d.hidden) spec.hidden = true;
     if (d.visCond) spec.condition = d.visCond;
@@ -1517,6 +1528,7 @@ const objMechWords = (spec) => {
     if (spec.hidden) bits.push('hidden until found');
     if (spec.condition) bits.push(`appears when ${_condWords(spec.condition)}`);
     if (spec.gives) bits.push(`finding gives ${spec.gives}`);
+    if (spec.wears) bits.push(`wearable (${spec.wears})`);
     if (spec.puzzle) bits.push('\u{1F9E9} riddle'
         + (spec.puzzle.solutions ? ` (${spec.puzzle.solutions.length} answers)` : ''));
     for (const [v, s] of Object.entries(spec.interactions || {})) {

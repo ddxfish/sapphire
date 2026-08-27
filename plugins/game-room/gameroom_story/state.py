@@ -323,7 +323,7 @@ def _cast_member(state, cid):
     cast = state.setdefault("cast", {})
     if cid not in cast:
         cast[cid] = {"name": cid, "desc": "", "controlled_by": "dm",
-                     "image": "", "badge": "",
+                     "image": "", "badge": "", "slots": [],
                      "wearing": {}, "parts": {}, "fields": {}}
     return cast[cid]
 
@@ -439,6 +439,9 @@ def apply_event(state, ev):
                 "controlled_by": ev.get("controlled_by") or "dm",
                 "image": ev.get("image") or "",
                 "badge": ev.get("badge") or "",
+                # Declared wear-slots for the equipment grid — empty list =
+                # the engine default set (resolved view-side, full_state).
+                "slots": [str(x) for x in (ev.get("slots") or [])],
                 "wearing": dict(ev.get("wearing") or {}),
                 "parts": {p: dict(spec) for p, spec
                           in (ev.get("parts") or {}).items()

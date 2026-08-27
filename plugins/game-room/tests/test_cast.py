@@ -197,3 +197,130 @@ class TestSeedCast:
         assert evs[0]["controlled_by"] == "dm"
         assert evs[1]["controlled_by"] == "player"
         assert "Jack" in evs[1]["desc"]
+
+
+# ── Player-side dressing (card write path, Krem's A vote 2026-08-25) ────────
+
+class TestPlayerDress:
+    def _setup(self, monkeypatch, chat):
+        from gameroom_story import rooms
+        monkeypatch.setattr(rooms, "_story_roots",
+                            lambda: [Path(__file__).parent / "fixtures" / "stories"])
+        st.set_active(chat, "mad-manse", None)
+        story = rooms.load_story("mad-manse")
+        assert st.append_many("mad-manse", chat, [
+            {"event": "started", "story": "mad-manse",
+             "room": story["meta"]["start"], "turn": 0},
+            {"event": "cast_join", "id": "player", "name": "P",
+             "controlled_by": "player", "turn": 0}])
+        return story
+
+    def test_wear_remove_roundtrip_and_no_regrant(self, monkeypatch):
+        chat = "dress-rt-chat"
+        self._setup(monkeypatch, chat)
+        msg, ok = session.player_dress(chat, "wear", "cloak")
+        assert ok, msg
+        _s, state = session.load_active(chat)
+        assert state["cast"]["player"]["wearing"]["body"] == "cloak"
+        # worn is worn — the always-was grant must NOT re-add it (the
+        # load_active re-grant bug this wave caught and fixed)
+        assert "cloak" not in state["inventory"]
+        assert "wearables" not in state  # engine state stays lean
+        msg, ok = session.player_dress(chat, "remove", "cloak")
+        assert ok, msg
+        _s, state = session.load_active(chat)
+        assert "body" not in state["cast"]["player"]["wearing"]
+        assert "cloak" in state["inventory"]
+
+    def test_refusals(self, monkeypatch):
+        chat = "dress-ref-chat"
+        self._setup(monkeypatch, chat)
+        msg, ok = session.player_dress(chat, "wear", "locket")   # no wears slot
+        assert not ok and "wearable" in msg
+        st.update_active(chat, paused=True)
+        msg, ok = session.player_dress(chat, "wear", "cloak")
+        assert not ok and "paused" in msg
+        assert session.player_dress("never-started-chat", "wear", "cloak")[1] is False
+
+
+def test_overlay_carries_wears_on_shipped_shadow():
+    # A user shadow may make a shipped item wearable (B.1, 2026-08-25) —
+    # the field-merge law must carry `wears` like desc/hidden.
+    target = {"raincoat": {"desc": "yellow", "interactions": {"look": {"message": "m"}}}}
+    session._overlay_object_map(target, {"raincoat": {"wears": "body"}})
+    assert target["raincoat"]["wears"] == "body"
+    assert target["raincoat"]["desc"] == "yellow"          # untouched
+    assert "look" in target["raincoat"]["interactions"]    # mechanics survive
+
+
+# ── Equipment grid (slots + per-slot wearables, Krem 2026-08-26) ────────────
+
+def test_cast_join_carries_slots():
+    s = _state({"event": "cast_join", "id": "x", "slots": ["hat", "jacket"]})
+    assert s["cast"]["x"]["slots"] == ["hat", "jacket"]
+
+
+def test_full_state_slots_and_wearables_map(monkeypatch):
+    from gameroom_story import rooms
+    monkeypatch.setattr(rooms, "_story_roots",
+                        lambda: [Path(__file__).parent / "fixtures" / "stories"])
+    chat = "grid-chat"
+    st.set_active(chat, "mad-manse", None)
+    story = rooms.load_story("mad-manse")
+    assert st.append_many("mad-manse", chat, [
+        {"event": "started", "story": "mad-manse",
+         "room": story["meta"]["start"], "turn": 0},
+        {"event": "cast_join", "id": "a", "slots": ["jacket", "shirt"],
+         "controlled_by": "player", "turn": 0},
+        {"event": "cast_join", "id": "b", "turn": 0}])
+    full = session.full_state(None, session=chat)
+    assert full["cast"]["a"]["slots"] == ["jacket", "shirt"]      # declared
+    assert full["cast"]["b"]["slots"] == list(session.WEAR_SLOTS)  # default
+    # fixture cloak declares wears: body → the dropdown map carries it
+    assert full["wearables"].get("cloak") == "body"
+
+
+def test_full_state_icons_by_convention(monkeypatch):
+    # icon-<name>.webp in the pack's art dir → icons map, no spec field needed
+    from gameroom_story import rooms
+    monkeypatch.setattr(rooms, "_story_roots",
+                        lambda: [Path(__file__).parent / "fixtures" / "stories"])
+    chat = "icons-chat"
+    st.set_active(chat, "mad-manse", None)
+    story = rooms.load_story("mad-manse")
+    assert st.append_many("mad-manse", chat, [
+        {"event": "started", "story": "mad-manse",
+         "room": story["meta"]["start"], "turn": 0}])
+    full = session.full_state(None, session=chat)
+    assert full["icons"]["cloak"].endswith("/backdrops/icon-cloak.webp")
+    assert "locket" not in full["icons"]          # no file → no entry, no broken img
+
+
+# ── Declarations live at load; state stays journaled (2026-08-26) ───────────
+
+def test_overlay_cast_refreshes_declarations_keeps_state():
+    story = {"meta": {"cast": [
+        {"id": "s", "name": "New Name", "slots": ["hat", "outer"],
+         "image": "s.webp",
+         "parts": {"hands": {"desc": "v2", "interactions": {"hold": {"message": "m"}}}}}]}}
+    state = _state({"event": "cast_join", "id": "s", "name": "Old", "slots": ["hat", "jacket"],
+                    "wearing": {"jacket": "blazer"},
+                    "parts": {"hands": {"desc": "v1"}}},
+                   {"event": "part_set", "char": "s", "part": "hands", "key": "held", "value": True},
+                   {"event": "cast_set", "char": "s", "key": "trust", "value": 4})
+    session._overlay_cast(story, state)
+    c = state["cast"]["s"]
+    assert c["name"] == "New Name" and c["slots"] == ["hat", "outer"] and c["image"] == "s.webp"
+    assert c["parts"]["hands"]["desc"] == "v2"                 # spec refreshed
+    assert c["parts"]["hands"]["state"]["held"] is True        # live state kept
+    assert c["wearing"] == {"jacket": "blazer"}                # state untouched
+    assert c["fields"]["trust"] == 4
+
+
+def test_overlay_cast_creates_missing_with_empty_wearing():
+    story = {"meta": {"cast": [{"id": "p", "name": "P", "controlled_by": "player",
+                                "wearing": {"outer": "coat"}}]}}
+    state = st.initial_state()
+    session._overlay_cast(story, state)
+    assert state["cast"]["p"]["name"] == "P"
+    assert state["cast"]["p"]["wearing"] == {}   # never seeded at a read seam
