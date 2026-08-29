@@ -374,17 +374,84 @@ def test_save_memory_tool_cannot_set_favorite(palace, monkeypatch):
 
 # ─── I. Caps ─────────────────────────────────────────────────────────────────
 
-def test_content_length_cap(palace):
-    long = "x" * (palace.MAX_CHUNK_LENGTH + 1)
+# Over-cap saves used to be REFUSED (ok=False → she rewrote and retried,
+# 5 tool calls for one memory). Since 2026-08-29 they trim at a word
+# boundary, save, and the receipt carries the dropped text.
+
+def test_content_over_cap_trims_and_saves(palace):
+    cap = palace.MAX_CHUNK_LENGTH
+    long = ("word " * 130).strip()            # 649 chars, all word boundaries
     msg, ok = palace._save_memory(long, scope="default")
-    assert ok is False
-    assert "too long" in msg.lower()
-    # and nothing landed
+    assert ok is True
+    assert "Memory saved" in msg and "TRIMMED" in msg
     conn = _connect(palace)
     try:
-        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+        rows = conn.execute("SELECT content FROM chunks").fetchall()
     finally:
         conn.close()
+    assert len(rows) == 1
+    kept = rows[0][0]
+    assert len(kept) <= cap
+    assert not kept.endswith("wor"), "cut must land on a word boundary"
+    dropped = long[len(kept):].strip()
+    assert f'Dropped: "{dropped}"' in msg, "receipt must carry the cut text verbatim"
+    assert f"{len(dropped)} chars over the {cap} cap" in msg
+    assert "update_memory(" in msg and "save_memory" in msg
+
+
+def test_content_at_cap_untouched(palace):
+    exact = "y" * palace.MAX_CHUNK_LENGTH
+    msg, ok = palace._save_memory(exact, scope="default")
+    assert ok and "TRIMMED" not in msg
+    conn = _connect(palace)
+    try:
+        assert conn.execute("SELECT content FROM chunks").fetchone()[0] == exact
+    finally:
+        conn.close()
+
+
+def test_trim_hard_cuts_when_no_whitespace(palace):
+    cap = palace.MAX_CHUNK_LENGTH
+    kept, dropped = palace._trim_to_cap("z" * (cap + 40))
+    assert len(kept) == cap and len(dropped) == 40
+
+
+def test_trim_prefers_last_whitespace(palace):
+    cap = palace.MAX_CHUNK_LENGTH
+    text = "a" * 500 + " " + "b" * 100
+    kept, dropped = palace._trim_to_cap(text)
+    assert kept == "a" * 500 and dropped == "b" * 100
+
+
+def test_update_over_cap_trims_and_updates(palace):
+    cap = palace.MAX_CHUNK_LENGTH
+    msg, ok = palace._save_memory("short seed", scope="default")
+    mid = int(msg.split("ID: ")[1].split(",")[0].rstrip(")"))
+    long = ("edit " * 130).strip()
+    msg, ok = palace._update_memory(mid, "default", content=long)
+    assert ok is True and "Memory updated" in msg and "TRIMMED" in msg
+    assert f"update_memory({mid})" in msg
+    conn = _connect(palace)
+    try:
+        kept = conn.execute("SELECT content FROM chunks WHERE id = ?", (mid,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert len(kept) <= cap and kept.startswith("edit edit")
+    assert f'Dropped: "{long[len(kept):].strip()}"' in msg
+
+
+def test_knowledge_layer_still_exempt_from_cap(palace, monkeypatch):
+    """The Library chunks for itself — no trim on layer='knowledge'."""
+    seen = {}
+    from plugins.mindpalace.tools import library
+    def fake_import(scope, title, content, **kw):
+        seen['len'] = len(content)
+        return 7, None
+    monkeypatch.setattr(library, "import_note", fake_import)
+    long = ("k " * 400).strip()
+    msg, ok = palace._save_memory(long, scope="default", layer="knowledge")
+    assert ok and "TRIMMED" not in msg
+    assert seen['len'] == len(long)
 
 
 # ─── J. Mutual-exclusion refusal (function_manager tweak) ────────────────────
@@ -553,7 +620,9 @@ def test_update_memory_label_only_and_refusals(palace):
     assert not palace._update_memory(mid, "default")[1]      # nothing to update
     assert not palace._update_memory(999, "default", content="x")[1]
     assert not palace._update_memory(mid, "other", content="x")[1]  # scope wall
-    assert not palace._update_memory(mid, "default", content="y" * 600)[1]
+    # over-cap content trims + updates now (was a refusal) — see section I
+    msg, ok = palace._update_memory(mid, "default", content="y" * 600)
+    assert ok and "TRIMMED" in msg
 
 
 def test_update_memory_private_wall(palace):

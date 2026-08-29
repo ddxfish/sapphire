@@ -39,7 +39,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": f"Save information to long-term memory. Keep under 450 chars. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge.",
+            "description": f"Save information to long-term memory. Max 512 chars (aim under 450) — longer is trimmed at a word boundary and the reply says what was cut. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -773,6 +773,21 @@ def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
 
 MAX_MEMORY_LENGTH = 512
 
+
+def _trim_to_cap(content: str, cap: int = MAX_MEMORY_LENGTH) -> tuple:
+    """Over-cap content → (kept, dropped), cut at the last whitespace at or
+    before the cap so no word splits (hard cut only if there is none).
+    Refusing over-cap saves sent her into a rewrite loop — 5 tool calls for
+    one memory. Now it saves and the receipt carries what was cut."""
+    content = content.strip()
+    if len(content) <= cap:
+        return content, ''
+    head = content[:cap + 1]
+    idx = max(head.rfind(ch) for ch in (' ', '\n', '\t'))
+    if idx <= 0:
+        idx = cap
+    return content[:idx].rstrip(), content[idx:].strip()
+
 # Per-scope row cap. Prevents a runaway AI (or import) from ballooning a
 # single scope to millions of rows — vector search scales poorly past this.
 # Knowledge entries already have a 50k cap; memories/people get the same
@@ -785,8 +800,9 @@ def _save_memory(content: str, label: str = None, scope: str = 'default',
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
-        if len(content) > MAX_MEMORY_LENGTH:
-            return f"Memory too long ({len(content)} chars). Max is {MAX_MEMORY_LENGTH}. Write a shorter, more concise memory.", False
+        # Over-cap content is trimmed at a word boundary and saved anyway;
+        # the receipt says what was cut.
+        content, dropped = _trim_to_cap(content)
         # Cap check — count rows in scope before writing.
         with _get_connection() as conn:
             count = conn.execute(
@@ -856,7 +872,14 @@ def _save_memory(content: str, label: str = None, scope: str = 'default',
             publish_mind_changed('memory', scope, 'save')
         except Exception:
             pass
-        return f"Memory saved (ID: {memory_id}{label_str}{priv_str})", True
+        msg = f"Memory saved (ID: {memory_id}{label_str}{priv_str})"
+        if dropped:
+            logger.info(f"[MEMORY] save trimmed {len(dropped)} chars over cap (ID {memory_id})")
+            msg += (f". TRIMMED: {len(dropped)} chars over the {MAX_MEMORY_LENGTH} cap "
+                    f"were cut. Dropped: \"{dropped}\". Keep it: save_memory the "
+                    f"dropped text as its own memory, or delete_memory({memory_id}) "
+                    f"and re-save tighter. Or leave it.")
+        return msg, True
 
     except Exception as e:
         logger.error(f"Error saving memory: {e}")

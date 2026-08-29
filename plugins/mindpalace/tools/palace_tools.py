@@ -103,7 +103,9 @@ TOOLS = [
         "function": {
             "name": "save_memory",
             "description": (
-                "Save to layered long-term memory. Keep under 450 chars. Layers: "
+                "Save to layered long-term memory. Max 512 chars (aim under 450) — "
+                "longer content is trimmed at a word boundary and the reply says "
+                "what was cut. Layers: "
                 "'events' (default — things that happened), 'entities' (a fact "
                 "about a person/place/thing — requires entity name), 'knowledge' "
                 "(reference material). Who-you-are edits go through update_self "
@@ -222,7 +224,8 @@ TOOLS = [
             "name": "update_memory",
             "description": ("Edit a memory in place by ID — fix wording, add a "
                             "detail, or re-label without losing the memory's id, "
-                            "age, or history. Content max 450 chars. Memories "
+                            "age, or history. Content max 512 chars (longer is "
+                            "trimmed; the reply says what was cut). Memories "
                             "only: [N] ids. Library documents ([doc N]) are NOT "
                             "editable here."),
             "parameters": {
@@ -306,6 +309,28 @@ def get_tools():
 
 SIMILARITY_THRESHOLD = 0.40
 MAX_CHUNK_LENGTH = 512
+
+
+def _trim_to_cap(content: str, cap: int = MAX_CHUNK_LENGTH) -> tuple:
+    """Over-cap content → (kept, dropped), cut at the last whitespace at or
+    before the cap so no word splits (hard cut only if there is none).
+    Refusing over-cap saves sent her into a rewrite loop — 5 tool calls for
+    one memory. Now it saves and the receipt carries what was cut."""
+    content = content.strip()
+    if len(content) <= cap:
+        return content, ''
+    head = content[:cap + 1]
+    idx = max(head.rfind(ch) for ch in (' ', '\n', '\t'))
+    if idx <= 0:
+        idx = cap
+    return content[:idx].rstrip(), content[idx:].strip()
+
+
+def _trim_note(dropped: str, memory_id, cap: int = MAX_CHUNK_LENGTH) -> str:
+    return (f" TRIMMED: {len(dropped)} chars over the {cap} cap were cut. "
+            f"Dropped: \"{dropped}\". Keep it: update_memory({memory_id}) with "
+            f"tighter wording, or save_memory the dropped text as its own "
+            f"memory. Or leave it.")
 # Per (scope, layer) — the old system capped memories and knowledge separately
 # at 50k each; layers restore that separation inside the single table.
 MAX_CHUNKS_PER_SCOPE_LAYER = 50_000
@@ -1283,11 +1308,12 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
-        # The Library chunks for itself — knowledge saves skip the memory cap.
-        if (len(content) > MAX_CHUNK_LENGTH
-                and (layer or '').strip().lower() != 'knowledge'):
-            return (f"Memory too long ({len(content)} chars). Max is {MAX_CHUNK_LENGTH}. "
-                    f"Write a shorter, more concise memory."), False
+        # Over-cap content is trimmed at a word boundary and saved anyway;
+        # the receipt says what was cut. Knowledge is exempt — the Library
+        # chunks for itself.
+        dropped = ''
+        if (layer or '').strip().lower() != 'knowledge':
+            content, dropped = _trim_to_cap(content)
 
         layer, err = _validate_layer(layer)
         if err:
@@ -1449,8 +1475,11 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         if private_key:
             bits.append("private")
         logger.info(f"[MINDPALACE] Stored chunk {chunk_id} ({layer}) in scope '{scope}'")
-        return f"Memory saved ({', '.join(bits)}).{self_note}" if self_note \
-            else f"Memory saved ({', '.join(bits)})", True
+        if dropped:
+            logger.info(f"[MINDPALACE] save trimmed {len(dropped)} chars over cap (chunk {chunk_id})")
+        note = self_note + (_trim_note(dropped, chunk_id) if dropped else '')
+        msg = f"Memory saved ({', '.join(bits)})"
+        return (f"{msg}.{note}" if note else msg), True
 
     except Exception as e:
         logger.error(f"[MINDPALACE] Error saving memory: {e}")
@@ -1919,9 +1948,9 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         new_label = label.strip().lower() if (label and label.strip()) else None
         if new_content is None and new_label is None:
             return "Nothing to update — pass content and/or label.", False
-        if new_content and len(new_content) > MAX_CHUNK_LENGTH:
-            return (f"Memory too long ({len(new_content)} chars). "
-                    f"Max is {MAX_CHUNK_LENGTH}."), False
+        dropped = ''
+        if new_content:
+            new_content, dropped = _trim_to_cap(new_content)
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
         with _get_connection() as conn:
             cursor = conn.cursor()
@@ -2016,7 +2045,10 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         if new_label:
             bits.append(f"label: {new_label}")
         logger.info(f"[MINDPALACE] Updated chunk {memory_id} in scope '{scope}'")
-        return f"Memory updated ({', '.join(bits)})", True
+        if dropped:
+            logger.info(f"[MINDPALACE] update trimmed {len(dropped)} chars over cap (chunk {memory_id})")
+        msg = f"Memory updated ({', '.join(bits)})"
+        return (f"{msg}.{_trim_note(dropped, memory_id)}" if dropped else msg), True
     except Exception as e:
         logger.error(f"[MINDPALACE] Error updating memory: {e}")
         return f"Failed to update memory: {e}", False

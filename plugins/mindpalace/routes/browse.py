@@ -219,6 +219,12 @@ def create_chunk(body=None, **_):
     if not scope:
         return {'error': 'scope required'}, 400
     pt = _pt()
+    # Humans keep the hard wall — it's their text in the box to edit. The
+    # tool path trims instead (she can't see a box; refusal = rewrite loop).
+    if ((b.get('layer') or '').strip().lower() != 'knowledge'
+            and len(content) > pt.MAX_CHUNK_LENGTH):
+        return {'error': f'Max {pt.MAX_CHUNK_LENGTH} chars — long reference '
+                         f'text belongs in the Library (layer: knowledge)'}, 400
     kw = dict(layer=b.get('layer'), entity=b.get('entity'),
               label=b.get('label'), favorite=bool(b.get('favorite')),
               private_key=b.get('private_key'))
