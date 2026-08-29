@@ -6,7 +6,7 @@ import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
-import { hasPendingActivate } from './api.js';
+import { hasPendingActivate, fetchStatus } from './api.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor, setDefaultBackground } from './features/chat-settings.js';
 import { setInstanceColor } from './features/logo.js';
@@ -561,15 +561,47 @@ function initEventBus() {
     // AI typing events. D4: ignore a foreign stream's typing (a live phone call /
     // background conversation) — it isn't the operator's own turn, and refreshing
     // their active chat on it caused spurious churn.
+    // Tab mirror (2026-08-29, one-turn-per-chat wave): a turn live in
+    // ANOTHER tab flips this tab Send→Stop too, so Enter / regen / continue
+    // are blocked here exactly as in the owner tab (the server would 409
+    // them anyway — this is the UX half). Owner = has an abort controller
+    // (typed send/regen/continue set one before the fetch); a voice turn
+    // owns the button via voice_turn_start, which both doors publish
+    // BEFORE the engine's typing event. Declared here (not at the
+    // voice_turn_start handler below) so these handlers can read it.
+    let _voiceTurnActive = false;
+    const _mirrored = () => getIsProc() && !getAbortController() && !_voiceTurnActive;
+
     eventBus.on(eventBus.Events.AI_TYPING_START, (data) => {
         if (data?.foreign) return;
         console.log('[EventBus] AI typing started');
+        if (getAbortController() || _voiceTurnActive) return;
+        setProc(true);
+        ui.showStatus();
+        ui.updateStatus('Generating...');
     });
 
     eventBus.on(eventBus.Events.AI_TYPING_END, (data) => {
         if (data?.foreign) return;
         console.log('[EventBus] AI typing ended');
+        if (_mirrored()) { ui.hideStatus(); setProc(false); }
         debouncedRefresh();
+    });
+
+    // Self-heal: a tab that lost SSE between START and END would sit on
+    // Stop forever. On (re)connect, release a mirrored lock the server no
+    // longer holds. Release direction only — is_streaming aggregates phone /
+    // background streams too, so it can't arm a fresh tab safely.
+    eventBus.on('bus_connected', async () => {
+        if (!_mirrored()) return;
+        try {
+            const st = await fetchStatus();
+            if (st && !st.is_streaming && _mirrored()) {
+                ui.hideStatus();
+                setProc(false);
+                refresh(false);
+            }
+        } catch (e) { /* status unreachable — next connect retries */ }
     });
 
     // TTS events. Phone-call playback (surface 'phone') is NOT local audio —
@@ -622,7 +654,7 @@ function initEventBus() {
     // instead of letting the saved message blob in at the end. While a voice turn is live we
     // SUPPRESS the MESSAGE_ADDED refresh (it would wipe the live bubble mid-stream);
     // finishStreaming reconciles with the saved message on END — same as the web-typed path.
-    let _voiceTurnActive = false;
+    // (_voiceTurnActive is declared up by the typing-mirror handlers.)
     eventBus.on('voice_turn_start', (data) => {
         // A turn that belongs to another chat (a phone call's side chat) must not
         // render into the chat being viewed — it used to stream in, then vanish on

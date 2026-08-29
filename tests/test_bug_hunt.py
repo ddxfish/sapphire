@@ -995,23 +995,9 @@ class TestPluginSettingsEncoding:
         assert "encoding='utf-8'" in source or 'encoding="utf-8"' in source
 
 
-# =============================================================================
-# Bug Hunt 3: TTS prose extraction null safety
-# =============================================================================
-
-class TestExtractEditableContentNullSafety:
-    """extractEditableContent must use optional chaining on querySelector."""
-
-    def test_think_block_div_uses_optional_chaining(self):
-        """querySelector('div') must use ?. to avoid null deref."""
-        ui_js = Path(PROJECT_ROOT / "interfaces" / "web" / "static" / "ui.js")
-        source = ui_js.read_text(encoding='utf-8')
-        # Find the extractEditableContent function
-        start = source.index('extractEditableContent')
-        end = source.index('};', start)
-        fn_source = source[start:end]
-        assert "querySelector('div')?." in fn_source, \
-            "querySelector('div') must use optional chaining"
+# (TestExtractEditableContentNullSafety removed 2026-08-29: extractEditableContent
+# was deleted with the edit-fix of 2026-08-27 — edit mode now reads msg.content,
+# not the DOM — so the guard had nothing left to guard.)
 
 
 if __name__ == '__main__':

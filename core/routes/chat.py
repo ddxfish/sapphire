@@ -114,7 +114,18 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
 
     # Per-request StreamingChat instance. Each /api/chat call gets its own
     # — no more singleton stomping between tabs. H4 2026-04-22.
-    stream, sid, active_chat = system.llm_chat.begin_stream()
+    # exclusive: one operator turn per chat (2026-08-29) — a second send
+    # while a turn is live (Enter past the Stop button, another tab)
+    # interleaved into the live turn's history. {"error"} shape: the
+    # frontend's !res.ok path reads err.error for the toast.
+    from core.chat.chat import ChatBusy
+    try:
+        stream, sid, active_chat = system.llm_chat.begin_stream(exclusive=True)
+    except ChatBusy:
+        logger.info("[CHAT-STREAM] 409 — turn already live on the active chat")
+        return JSONResponse(
+            {"error": "Sapphire is still replying in this chat — wait for her to finish or press Stop."},
+            status_code=409)
     system.web_active_inc()
 
     def generate():

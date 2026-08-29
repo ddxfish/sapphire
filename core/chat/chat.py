@@ -106,6 +106,13 @@ def _inject_tool_images(messages, tool_images, provider=None):
 
 
 
+class ChatBusy(Exception):
+    """A turn is already live on this chat (begin_stream exclusive=True)."""
+    def __init__(self, chat_name):
+        self.chat_name = chat_name
+        super().__init__(f"chat '{chat_name}' already has a live turn")
+
+
 def friendly_llm_error(e):
     """Convert LLM provider exceptions to user-friendly messages. Returns None if unrecognized."""
     error_str = str(e).lower()
@@ -253,10 +260,20 @@ class LLMChat:
 
     # ── Per-request streaming state API ──
 
-    def begin_stream(self, chat_name=None):
+    def begin_stream(self, chat_name=None, exclusive=False):
         """Create a fresh StreamingChat, register it. Caller owns the ref.
 
         Returns (stream, stream_id, chat_name_used). Pair with end_stream().
+
+        exclusive=True: one operator turn per chat at a time. Refuses
+        (raises ChatBusy) while the chat has a live stream that has NOT been
+        cancelled — a second turn on a busy chat interleaves its rows into
+        the first turn's history (user message inside an open tool cycle,
+        a final landing between tool_use and tool_result → provider 400s
+        on the next turn). Cancelled streams don't count: Stop→immediate-
+        Send sets cancel_flag before the new send arrives. Check + register
+        are one critical section so two simultaneous sends can't both pass.
+        2026-08-29.
         """
         import secrets as _secrets
         stream = StreamingChat(self)
@@ -268,6 +285,14 @@ class LLMChat:
             except Exception:
                 chat_name = ''
         with self._streams_lock:
+            if exclusive:
+                live = [i for i in self._streams_by_chat.get(chat_name, set())
+                        if i in self._streams_by_id
+                        and not self._streams_by_id[i].cancel_flag]
+                if live:
+                    logger.info(f"begin_stream: refused — chat '{chat_name}' "
+                                f"has {len(live)} live stream(s)")
+                    raise ChatBusy(chat_name)
             self._streams_by_id[sid] = stream
             self._streams_by_chat.setdefault(chat_name, set()).add(sid)
         stream.active_chat_name = chat_name

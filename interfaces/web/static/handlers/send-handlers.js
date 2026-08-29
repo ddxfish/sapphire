@@ -20,6 +20,11 @@ import {
 } from '../core/state.js';
 
 export async function handleSend() {
+    // One turn per chat (2026-08-29): Send is hidden behind Stop while a
+    // turn is live, but Enter never checked. Silent — Stop showing IS the
+    // message; the text stays in the box. Same guard as triggerSendWithText
+    // / handleRegen / handleContinue.
+    if (getIsProc()) { console.log('Send blocked: a turn is already live'); return; }
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
     if (!txt && !Images.hasPendingUploadImages() && !Images.hasPendingFiles()) return;
@@ -138,6 +143,18 @@ export async function handleSend() {
                 if (e.message === 'Cancelled') {
                     console.log('Stream cancelled by user');
                     if (streamOk) ui.cancelStreaming();
+                    return;
+                }
+                if (statusCode === 409) {
+                    // Server gate (one turn per chat): another tab's turn is
+                    // live and this tab hadn't mirrored it yet. Undo the
+                    // optimistic paint — text back in the box, bubble gone.
+                    // Attached images/files are dropped (rare cross-tab race).
+                    input.value = txt;
+                    input.dispatchEvent(new Event('input'));
+                    const bubbles = document.querySelectorAll('#chat-container .message.user');
+                    bubbles[bubbles.length - 1]?.remove();
+                    ui.showToast(e.message, 'error');
                     return;
                 }
                 console.error('Stream failed:', e.message);
