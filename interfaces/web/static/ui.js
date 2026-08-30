@@ -4,6 +4,7 @@ import * as Images from './ui-images.js';
 import * as Parsing from './ui-parsing.js';
 import * as Streaming from './ui-streaming.js';
 import * as api from './api.js';
+import { dismissLater } from './shared/toast.js';
 
 // DOM references. The chat surface is JS-rendered at boot (surface/surface.js)
 // so #chat-container / #chatbg-overlay don't exist at module-eval time —
@@ -813,5 +814,5 @@ export const showToast = (msg, type = 'error', duration = 4000) => {
     // ran unconditionally, so duration 0 removed the toast on the next tick —
     // the privacy-mode-removal notice was never seen by anyone (scout find,
     // 2026-07-19; same bug killed the 1h env-build-cap message).
-    if (duration > 0) setTimeout(() => toast.remove(), duration);
+    dismissLater(toast, duration);
 };

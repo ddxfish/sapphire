@@ -558,10 +558,12 @@ body {
     position: absolute;
     right: 0;
     top: 12px;
-    padding: 20px 10px;
+    min-width: 44px;
+    padding: 20px 12px 20px 14px;
     border: 1px solid var(--trim, var(--border));
     border-right: none;
     border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    touch-action: manipulation;
     background: var(--bg-secondary);
     color: var(--trim, var(--text-muted));
     cursor: pointer;
@@ -611,12 +613,26 @@ body {
     border-radius: 50%;
 }
 
-/* Scene background button — sits next to the accent circle in the sidebar header */
-.sb-scene-btn {
+/* Appearance button (accent + scene + motion modal) — the circle wears the
+   chat's accent so it still reads as the trim swatch at a glance. */
+.sb-appearance-btn {
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 0.75rem; line-height: 1; color: var(--text);
+    background: var(--trim-light, transparent);
+    border-color: var(--trim, var(--border));
 }
-.sb-scene-btn:hover { border-color: var(--trim, var(--accent-blue, #4a9eff)); }
+.sb-appearance-btn:hover { background: var(--trim-border, var(--bg-hover)); }
+
+/* Appearance modal: accent row above the scene grid */
+.appearance-accent-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+}
+.appearance-accent-row input[type="color"] {
+    width: 44px; height: 30px; padding: 2px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg-tertiary); cursor: pointer;
+}
+.appearance-accent-help { font-size: var(--font-xs); color: var(--text-muted); }
 .sb-accent-circle::-moz-color-swatch {
     border: none;
     border-radius: 50%;
@@ -700,8 +716,15 @@ body {
 .sb-icon-danger:hover { color: var(--error); }
 
 .sb-collapse-btn {
+    width: 32px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 0.75rem;
     color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-tertiary);
     transition: transform 0.2s, background 0.15s, color 0.15s;
 }
 
@@ -5164,6 +5187,10 @@ a.gallery-caption:hover {
     }
 
     .sb-resizer { display: none; }   /* overlay mode: fixed width, no drag */
+
+    /* The right-most ~20px sit in the OS back-gesture zone — give the tab
+       enough body that a thumb lands inside it anyway. */
+    .sb-expand-tab { min-width: 56px; padding: 22px 14px 22px 18px; }
 
     .chat-sidebar.collapsed {
         width: 0;

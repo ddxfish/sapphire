@@ -28,6 +28,7 @@ let llmProviders = [];
 let llmMetadata = {};
 let personasList = [];
 let defaultPersonaName = '';
+let _trimColor = '';   // active chat's own accent ('' = riding the global default); seeds the Appearance modal
 let _docClickHandler = null;
 let _personaHandler = null;
 
@@ -427,10 +428,6 @@ export default {
                 if (el.id === 'sb-llm-primary') {
                     updateModelSelector(container, el.value, '');
                 }
-                if (el.id === 'sb-trim-color') {
-                    el.dataset.cleared = 'false';
-                    applyTrimColor(el.value);
-                }
                 if (el.id === 'sb-spice-turns') {
                     const toggle = container.querySelector('#sb-spice-toggle');
                     if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
@@ -442,23 +439,12 @@ export default {
             sidebarRoot.addEventListener('input', handleSidebarInput);
         }
 
-        // Accent circle: double-click to reset to global default
-        const accentCircle = container.querySelector('#sb-trim-color');
-        if (accentCircle) {
-            accentCircle.addEventListener('dblclick', () => {
-                const globalTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
-                accentCircle.value = globalTrim;
-                accentCircle.dataset.cleared = 'true';
-                applyTrimColor('');
-                debouncedSave(container);
-            });
-        }
-
-        // Scene background: button opens the shared scene-picker in a modal.
-        const sceneBtn = container.querySelector('#sb-scene-btn') || document.getElementById('sb-scene-btn');
-        if (sceneBtn && !sceneBtn.dataset.bound) {
-            sceneBtn.dataset.bound = '1';
-            sceneBtn.addEventListener('click', openSceneModal);
+        // Appearance: one modal for accent color + scene + motion (2026-08-29;
+        // was a color circle + a scene button crowding the header row).
+        const appearanceBtn = container.querySelector('#sb-appearance-btn');
+        if (appearanceBtn && !appearanceBtn.dataset.bound) {
+            appearanceBtn.dataset.bound = '1';
+            appearanceBtn.addEventListener('click', openAppearanceModal);
         }
 
         // "Go to Mind" buttons are now wired by the shared/scope-dropdowns.js renderer
@@ -908,18 +894,9 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
             `Spice \u00b7 ${settings.spice_turns || 3}`);
         setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
 
-        // Trim color
-        const trimInput = container.querySelector('#sb-trim-color');
-        if (trimInput) {
-            if (settings.trim_color) {
-                trimInput.value = settings.trim_color;
-                trimInput.dataset.cleared = 'false';
-            } else {
-                trimInput.value = localStorage.getItem('sapphire-trim') || '#4a9eff';
-                trimInput.dataset.cleared = 'true';
-            }
-            applyTrimColor(settings.trim_color || '');
-        }
+        // Trim color — edited in the Appearance modal, persisted from there
+        _trimColor = settings.trim_color || '';
+        applyTrimColor(_trimColor);
 
         // Scene background (resolved server-side: chat override > persona default > none)
         applyBackground(settings.background || '');
@@ -1006,14 +983,20 @@ export async function flushPendingSave() {
     }
 }
 
-function openSceneModal() {
+function openAppearanceModal() {
     const current = document.getElementById('chatbg')?.dataset.scene || '';
+    const globalTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
         <div class="modal-base">
-            <div class="modal-header"><h3>Chat Scene</h3><button class="close-btn modal-x" type="button">&times;</button></div>
+            <div class="modal-header"><h3>Appearance</h3><button class="close-btn modal-x" type="button">&times;</button></div>
             <div class="modal-body">
+                <div class="appearance-accent-row">
+                    <input type="color" id="appearance-trim" value="${escapeHtml(_trimColor || globalTrim)}" title="Accent color">
+                    <button class="btn btn-secondary btn-sm" id="appearance-trim-reset" type="button">Reset</button>
+                    <span class="appearance-accent-help" id="appearance-trim-help"></span>
+                </div>
                 <div id="scene-picker-mount"></div>
                 <div class="scene-motion-sect">
                     <h4>Motion</h4>
@@ -1029,6 +1012,29 @@ function openSceneModal() {
     overlay.querySelector('.modal-x')?.addEventListener('click', close);
     overlay.querySelector('.modal-close')?.addEventListener('click', close);
     setupModalClose(overlay, close);
+
+    // Accent: live-apply on every input tick, persist on change (a color
+    // picker drag fires dozens of 'input' events — one PUT per commit).
+    // Same direct-PUT path as scene/motion below; trim_color left the
+    // sidebar's collectSettings, so ordinary sidebar saves can't clobber it.
+    const trimInput = overlay.querySelector('#appearance-trim');
+    const trimHelp = overlay.querySelector('#appearance-trim-help');
+    const paintHelp = () => { trimHelp.textContent = _trimColor ? 'This chat\'s accent' : 'Default accent'; };
+    const persistTrim = (color) => {
+        _trimColor = color;
+        applyTrimColor(color);
+        paintHelp();
+        const chatName = document.getElementById('chat-select')?.value;
+        if (chatName) api.updateChatSettings(chatName, { trim_color: color })
+            .catch(() => ui.showToast('Accent shown but not saved — the chat refused the write', 'error', 4000));
+    };
+    paintHelp();
+    trimInput.addEventListener('input', () => applyTrimColor(trimInput.value));
+    trimInput.addEventListener('change', () => persistTrim(trimInput.value));
+    overlay.querySelector('#appearance-trim-reset').addEventListener('click', () => {
+        trimInput.value = globalTrim;
+        persistTrim('');
+    });
 
     mountScenePicker(overlay.querySelector('#scene-picker-mount'), {
         current,
@@ -1104,9 +1110,6 @@ async function saveSettings(container, chatNameOverride = null) {
 }
 
 function collectSettings(container) {
-    const trimInput = container.querySelector('#sb-trim-color');
-    const trimColor = trimInput?.dataset.cleared === 'true' ? '' : (trimInput?.value || '');
-
     // Pull scope values from the shared renderer's dropdowns.
     // Init data is cached after the first /api/init call, so getInitDataSync()
     // returns the same scope_declarations the renderer was built from.
@@ -1130,7 +1133,6 @@ function collectSettings(container) {
         ghost_context: getVal(container, '#sb-ghost-context'),
         llm_primary: getVal(container, '#sb-llm-primary') || 'auto',
         llm_model: getSelectedModel(container),
-        trim_color: trimColor,
         ...scopeValues,
         rag_context: getVal(container, '#sb-rag-context') || 'normal'
     };

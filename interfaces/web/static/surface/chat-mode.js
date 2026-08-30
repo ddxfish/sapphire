@@ -45,10 +45,9 @@ export const chatMode = {
                         <div id="functions-display"></div>`,
 
     sidebarHeader: `
-                        <!-- Row 1: accent circle + chat name + collapse (always visible) -->
+                        <!-- Row 1: appearance + chat name + collapse (always visible) -->
                         <div class="sb-chat-header">
-                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color (double-click to reset)">
-                            <button type="button" id="sb-scene-btn" class="sb-accent-circle sb-scene-btn" title="Chat background scene">&#x1F3DE;</button>
+                            <button type="button" id="sb-appearance-btn" class="sb-accent-circle sb-appearance-btn" title="Appearance &#8212; accent color, scene, motion">&#x1F3A8;</button>
                             <div class="sb-chat-picker" id="sb-chat-picker">
                                 <button class="sb-chat-picker-btn" id="sb-chat-picker-btn">
                                     <span id="sb-chat-name">Chat</span>

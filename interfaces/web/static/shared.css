@@ -371,15 +371,20 @@ html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1));
 /* =============================================================================
    TOAST NOTIFICATIONS
    ============================================================================= */
+/* Top-CENTER, over the transcript — never over the sidebar header, whose
+   controls (eye, collapse, expand tab) a top-right toast used to cover. */
 #toast-container {
     position: fixed;
-    top: 20px;
-    right: 20px;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 10100;
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: var(--space-sm);
     pointer-events: none;
+    max-width: calc(100vw - 32px);
 }
 
 .toast {
@@ -393,10 +398,20 @@ html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1));
     font-size: var(--font-md);
     box-shadow: 0 4px 12px var(--shadow-medium);
     opacity: 0;
-    transform: translateX(100px);
-    animation: toastIn var(--transition-slow) forwards, toastOut var(--transition-slow) 3.7s forwards;
+    transform: translateY(-12px);
+    animation: toastIn var(--transition-slow) forwards;
+    transition: opacity var(--transition-slow), transform var(--transition-slow);
     pointer-events: auto;
     max-width: 350px;
+}
+
+/* Exit is driven by JS (shared/toast.js dismissLater) — the element goes
+   inert the instant it starts fading, so it can never sit invisible and
+   clickable on top of something else. */
+.toast.leaving {
+    opacity: 0 !important;             /* !important: outranks toastIn's forwards fill */
+    transform: translateY(-12px) !important;
+    pointer-events: none;
 }
 
 .toast-text { flex: 1; }
@@ -423,7 +438,6 @@ html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1));
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);
-    animation: toastIn var(--transition-slow) forwards;
 }
 
 .toast-message {
@@ -466,8 +480,7 @@ html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1));
     opacity: 1;
 }
 
-@keyframes toastIn { to { opacity: 1; transform: translateX(0); } }
-@keyframes toastOut { to { opacity: 0; transform: translateX(100px); } }
+@keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
 
 @keyframes shake {
     0%, 100% { transform: translateX(0); }

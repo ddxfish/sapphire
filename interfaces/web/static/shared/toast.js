@@ -1,6 +1,19 @@
 // /static/shared/toast.js - Shared toast notifications
 // Requires shared.css loaded for .toast styles
 
+const LEAVE_MS = 300;  // matches .toast.leaving transition in shared.css
+
+// The ONE exit clock. The old CSS `toastOut` keyframe faded every toast at a
+// hardcoded 3.7s while JS removed it at `duration` — anything longer than 4s
+// (10s plugin errors, the 12s integrity warning) spent the gap as an invisible,
+// pointer-events:auto rectangle parked over the sidebar header, eating clicks
+// and showing an I-beam (ghost toast, 2026-08-29). duration <= 0 = sticky.
+export function dismissLater(toast, duration) {
+  if (!(duration > 0)) return;
+  setTimeout(() => toast.classList.add('leaving'), Math.max(0, duration - LEAVE_MS));
+  setTimeout(() => toast.remove(), duration);
+}
+
 export function showToast(message, type = 'info', duration = 4000) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
@@ -26,9 +39,8 @@ export function showToast(message, type = 'info', duration = 4000) {
 
   // duration <= 0 = persistent, click to dismiss — same contract as
   // ui.js showToast (aligned 2026-07-19; they previously disagreed).
-  if (duration > 0) {
-    setTimeout(() => toast.remove(), duration);
-  } else {
+  dismissLater(toast, duration);
+  if (!(duration > 0)) {
     toast.style.cursor = 'pointer';
     toast.addEventListener('click', () => toast.remove());
   }
@@ -80,8 +92,5 @@ export function showActionToast(message, actionText, actionCallback, type = 'inf
     document.body.appendChild(toast);
   }
   
-  // Auto-dismiss if duration > 0
-  if (duration > 0) {
-    setTimeout(() => toast.remove(), duration);
-  }
+  dismissLater(toast, duration);
 }
