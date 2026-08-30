@@ -1,9 +1,10 @@
 // main.js - Application orchestrator
 import * as audio from './audio.js';
 import * as ui from './ui.js';
-import { initElements, refresh, setHistLen, getElements, getIsProc, setProc, getAbortController } from './core/state.js';
+import { initElements, refresh, setHistLen, getElements, getIsProc, setProc, getAbortController, setSendLabel } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
+import { initConvo } from './features/convo.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
 import { hasPendingActivate, fetchStatus } from './api.js';
@@ -159,7 +160,7 @@ async function init() {
 
         // Disable input until loaded
         sendBtn.disabled = true;
-        sendBtn.textContent = '\u23F3';
+        setSendLabel('boot');
         if (micBtn) {
             micBtn.disabled = true;
             micBtn.style.opacity = '0.5';
@@ -413,6 +414,7 @@ async function init() {
 
         // === UI WIRING (must always run) ===
         initVolumeControls();
+        initConvo();
         startMicIconPolling();
         bindAllEvents();
         setupImageHandlers();
@@ -423,7 +425,7 @@ async function init() {
 
         // Re-enable input
         sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
+        setSendLabel('send');
         if (micBtn) {
             micBtn.disabled = false;
             micBtn.style.opacity = '1';
@@ -460,7 +462,7 @@ async function init() {
         const { sendBtn, micBtn, input } = getElements();
         if (sendBtn) {
             sendBtn.disabled = false;
-            sendBtn.textContent = 'Send';
+            setSendLabel('send');
         }
         if (micBtn) {
             micBtn.disabled = false;
@@ -475,6 +477,7 @@ async function init() {
         // Still wire up core UI even on error
         try {
             initVolumeControls();
+            initConvo();
             startMicIconPolling();
             bindAllEvents();
             setupImageHandlers();

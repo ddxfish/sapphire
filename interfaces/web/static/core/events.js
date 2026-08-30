@@ -33,11 +33,18 @@ export function bindAllEvents() {
     el.sendBtn.addEventListener('click', handleSend);
     el.stopBtn.addEventListener('click', handleStop);
 
-    // Volume controls
+    // Audio flyout (volume + conversation) hangs off the mic caret
     el.volumeSlider.addEventListener('input', handleVolumeChange);
     el.muteBtn.addEventListener('click', () => {
-        const compact = document.getElementById('volume-compact');
-        if (compact) compact.classList.toggle('open');
+        const m = !audio.isMuted();
+        audio.setMuted(m);
+        el.muteBtn.textContent = m ? '\u{1F507}' : '\u{1F50A}';
+        el.muteBtn.classList.toggle('muted', m);
+        localStorage.setItem('sapphire-muted', String(m));
+    });
+    document.getElementById('mic-menu-btn')?.addEventListener('click', e => {
+        e.stopPropagation();
+        document.getElementById('mic-split')?.classList.toggle('open');
     });
 
     // Mic button - dual purpose (TTS stop or record)
@@ -76,8 +83,8 @@ export function bindAllEvents() {
     // Close dropdowns on outside click
     document.addEventListener('click', e => {
         if (!e.target.closest('.kebab-menu')) closeAllKebabs();
-        if (!e.target.closest('.volume-compact')) {
-            document.getElementById('volume-compact')?.classList.remove('open');
+        if (!e.target.closest('.mic-split')) {
+            document.getElementById('mic-split')?.classList.remove('open');
         }
     });
 

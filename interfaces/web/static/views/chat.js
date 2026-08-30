@@ -317,8 +317,7 @@ export default {
         };
 
         // Toggle buttons (Spice, Date/Time) — PER-CHAT (saved via debouncedSave).
-        // [data-system] toggles (Conversation local/browser) are excluded here and wired below.
-        container.querySelectorAll('.sb-toggle:not([data-system])').forEach(btn => {
+        container.querySelectorAll('.sb-toggle').forEach(btn => {
             btn.addEventListener('click', () => {
                 const active = btn.dataset.active !== 'true';
                 btn.dataset.active = active;
@@ -327,78 +326,7 @@ export default {
             });
         });
 
-        // System-level toggles (NOT per-chat). Conversation (local) = true speech mode on
-        // the server mic (runtime API); Conversation (browser) = same mode fed by THIS
-        // browser's mic over a WebSocket — the WS connection itself is the mode switch,
-        // so its button state reflects only via conversation_mode_changed (no optimistic
-        // flip; mic-permission prompts make the start async). Mutually exclusive
-        // server-side. Never touches per-chat settings.
-        const _csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
-        const convBtn = container.querySelector('#sb-conversation-toggle');
-        if (convBtn) {
-            convBtn.addEventListener('click', async () => {
-                const want = convBtn.dataset.active !== 'true';
-                convBtn.dataset.active = want; convBtn.classList.toggle('active', want);
-                try {
-                    const res = await fetch('/api/runtime/true-speech', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': _csrf() },
-                        body: JSON.stringify({ enabled: want }),
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    const on = data.active === true;
-                    convBtn.dataset.active = String(on); convBtn.classList.toggle('active', on);
-                    if (!res.ok || on !== want) ui.showToast?.(data.note || 'Could not toggle Conversation mode', 'error');
-                } catch (e) {
-                    convBtn.dataset.active = String(!want); convBtn.classList.toggle('active', !want);
-                    ui.showToast?.('Network error toggling Conversation mode', 'error');
-                }
-            });
-        }
-        const convBrowserBtn = container.querySelector('#sb-conversation-browser-toggle');
-        if (convBrowserBtn) {
-            convBrowserBtn.addEventListener('click', async () => {
-                const want = convBrowserBtn.dataset.active !== 'true';
-                try {
-                    const _v2 = window.__v ? `?v=${window.__v}` : '';
-                    const conv = await import(`../features/conversation.js${_v2}`);
-                    if (want) {
-                        const ok = await conv.start();
-                        if (!ok) ui.showToast?.('Could not start browser conversation (mic/connection)', 'error');
-                    } else {
-                        conv.stop();
-                    }
-                } catch (e) {
-                    ui.showToast?.('Browser conversation failed to load', 'error');
-                }
-            });
-        }
-        // Reflect Conversation state when the backend announces a change (tool / other
-        // tab / WS connect+disconnect). `source` says which endpoint owns the mode.
-        eventBus.on('conversation_mode_changed', (data) => {
-            const on = data?.enabled === true;
-            const src = data?.source || null;
-            const bl = container.querySelector('#sb-conversation-toggle');
-            const bb = container.querySelector('#sb-conversation-browser-toggle');
-            if (bl) { const a = on && src === 'local'; bl.dataset.active = String(a); bl.classList.toggle('active', a); }
-            if (bb) { const a = on && src === 'browser'; bb.dataset.active = String(a); bb.classList.toggle('active', a); }
-        });
-        // Initial state for the system toggles (not in per-chat settings).
-        (async () => {
-            try {
-                const r = await fetch('/api/runtime/true-speech');
-                if (r.ok) {
-                    const d = await r.json();
-                    const on = d.enabled === true;
-                    // Only light a button for its OWN source. A phone call is
-                    // source='phone' — it lights NEITHER local nor browser (it's not a
-                    // mic session on this machine). Was `!== 'browser'`, which wrongly
-                    // lit Local for phone calls. 2026-07-02.
-                    setToggle(container, '#sb-conversation-toggle', on && d.source === 'local', null);
-                    setToggle(container, '#sb-conversation-browser-toggle', on && d.source === 'browser', null);
-                }
-            } catch (e) { /* ignore */ }
-        })();
+        // Conversation mode moved to the composer's mic flyout (features/convo.js).
 
         // Auto-save on any sidebar input change.
         // EVENT DELEGATION: bind ONCE to the chat-sidebar parent so dynamically-added
@@ -464,7 +392,7 @@ export default {
         });
 
         // Sidebar mode tabs (Easy/Full)
-        initSidebarModes(container);
+        initPersonaStrip(container);
 
         // Listen for persona-loaded events (added/removed in show/hide)
         _personaHandler = () => loadSidebar();
@@ -916,9 +844,7 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         if (pitchSlider) updateSliderFill(pitchSlider);
         if (speedSlider) updateSliderFill(speedSlider);
 
-        const firstTab = container.querySelector('.sb-mode-tab[data-mode="easy"]');
-        if (firstTab) firstTab.textContent = 'Persona';
-        updateEasyMode(container, settings, init);
+        renderPersonaStrip(container, settings);
 
         // RAG context level
         setVal(container, '#sb-rag-context', settings.rag_context || 'normal');
@@ -1189,27 +1115,9 @@ function getSelectedModel(container) {
     return '';
 }
 
-// === Easy/Full sidebar mode ===
+// === Faces strip ===
 
-function initSidebarModes(container) {
-    const tabs = container.querySelectorAll('.sb-mode-tab');
-    const easyContent = container.querySelector('.sb-easy-content');
-    const fullContent = container.querySelector('.sb-full-content');
-    if (!tabs.length || !easyContent || !fullContent) return;
-
-    // Restore saved mode
-    const saved = localStorage.getItem('sapphire-sidebar-mode') || 'full';
-    setSidebarMode(container, saved);
-
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            const mode = tab.dataset.mode;
-            setSidebarMode(container, mode);
-            localStorage.setItem('sapphire-sidebar-mode', mode);
-        });
-    });
-
-    // Easy mode persona grid clicks
+function initPersonaStrip(container) {
     container.querySelector('#sb-persona-grid')?.addEventListener('click', async e => {
         const cell = e.target.closest('.sb-pgrid-cell');
         if (!cell) return;
@@ -1241,43 +1149,6 @@ function initSidebarModes(container) {
         } catch (e) {
             ui.showToast(e.message || 'Failed', 'error');
         }
-    });
-
-    // Easy mode detail: accordion toggles, nav links, edit button (delegated, bound once)
-    container.querySelector('#sb-persona-detail')?.addEventListener('click', e => {
-        // Nav links inside accordion headers
-        const navLink = e.target.closest('.sb-pdetail-acc-link');
-        if (navLink) {
-            e.stopPropagation();
-            const view = navLink.dataset.nav;
-            if (view) switchView(view);
-            return;
-        }
-        const header = e.target.closest('.sb-pdetail-acc-header');
-        if (header) {
-            const content = header.nextElementSibling;
-            const open = header.classList.toggle('open');
-            content.style.display = open ? '' : 'none';
-            return;
-        }
-        if (e.target.closest('.sb-pdetail-edit')) {
-            const name = container.querySelector('.sb-pdetail-name')?.textContent?.trim();
-            if (name) window._pendingPersonaSelect = name;
-            switchView('personas');
-        }
-    });
-}
-
-function setSidebarMode(container, mode) {
-    const easyContent = container.querySelector('.sb-easy-content');
-    const fullContent = container.querySelector('.sb-full-content');
-    if (!easyContent || !fullContent) return;
-
-    easyContent.style.display = mode === 'easy' ? '' : 'none';
-    fullContent.style.display = mode === 'full' ? '' : 'none';
-
-    container.querySelectorAll('.sb-mode-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.mode === mode);
     });
 }
 
@@ -1352,127 +1223,22 @@ async function refreshVoiceDropdown() {
     }
 }
 
-function updateEasyMode(container, settings, init) {
+function renderPersonaStrip(container, settings) {
     const gridEl = container.querySelector('#sb-persona-grid');
-    const detailEl = container.querySelector('#sb-persona-detail');
+    if (!gridEl) return;
     const personaName = settings.persona;
-
-    // Build persona grid
-    if (gridEl) {
-        gridEl.innerHTML = personasList.map(p => `
-            <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}">
-                ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}
-                <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
-            </div>
-        `).join('') + `
-            <div class="sb-pgrid-cell sb-pgrid-new" data-action="new">
-                <span class="sb-pgrid-new-icon">+</span>
-                <span class="sb-pgrid-name">New...</span>
-            </div>`;
-    }
-
-    // Build detail section
-    if (!detailEl) return;
-    if (!personaName) {
-        detailEl.innerHTML = '<div class="sb-pdetail-empty">No persona loaded</div>';
-        return;
-    }
-
-    // Look up prompt preset components
-    const presets = init?.prompts?.presets || {};
-    const presetData = presets[settings.prompt] || {};
-    const pretty = s => s ? s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'None';
-
-    // Prompt pieces
-    const promptRows = ['character', 'location', 'relationship', 'goals', 'format', 'scenario']
-        .filter(k => presetData[k] && presetData[k] !== 'none')
-        .map(k => `<div class="sb-pdetail-row"><span>${k}</span><span>${pretty(presetData[k])}</span></div>`)
-        .join('') || '<div class="sb-pdetail-row"><span>preset</span><span>' + pretty(settings.prompt) + '</span></div>';
-
-    const extras = (presetData.extras || []).map(pretty);
-    const emotions = (presetData.emotions || []).map(pretty);
-
-    // Build tools list grouped by module
-    const toolsetName = settings.toolset || 'all';
-    const tsData = (init?.toolsets?.list || []).find(t => t.name === toolsetName);
-    const enabledFuncs = new Set(tsData?.functions || []);
-    const modules = init?.functions?.modules || {};
-    let toolsHtml = `<div class="sb-pdetail-row"><span>active</span><span>${pretty(toolsetName)}</span></div>`;
-    const moduleEntries = Object.entries(modules)
-        .map(([mod, info]) => {
-            const active = (info.functions || []).filter(f => enabledFuncs.has(f.name));
-            return [mod, info, active];
-        })
-        .filter(([, , active]) => active.length > 0)
-        .sort(([a], [b]) => a.localeCompare(b));
-    if (moduleEntries.length) {
-        toolsHtml += '<div class="sb-pdetail-tools">';
-        for (const [mod, info, active] of moduleEntries) {
-            const emoji = info.emoji || '\u{1F527}';
-            toolsHtml += `<div class="sb-pdetail-tool-group"><span class="sb-pdetail-tool-mod">${emoji} ${pretty(mod)}</span>`;
-            toolsHtml += active.map(f => `<span class="sb-pdetail-tool">${f.name.replace(/_/g, ' ')}</span>`).join('');
-            toolsHtml += '</div>';
-        }
-        toolsHtml += '</div>';
-    }
-
-    // Build detail HTML
-    const activePd = personasList.find(p => p.name === personaName);
-    detailEl.innerHTML = `
-        <div class="sb-pdetail-header">
-            ${activePd ? avatarImg(activePd.name, activePd.trim_color, 'sb-pdetail-avatar', activePd.avatar) : ''}
-            <div class="sb-pdetail-info">
-                <span class="sb-pdetail-name">${escapeHtml(personaName)}</span>
-                <span class="sb-pdetail-tagline" id="sb-pdetail-tagline"></span>
-            </div>
-            <button class="sb-pdetail-edit" title="Edit persona" data-view="personas">\u270E</button>
+    gridEl.innerHTML = personasList.map(p => `
+        <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)}">
+            ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}
+            <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
         </div>
-        ${easyAccordion('Prompt', `
-            ${promptRows}
-            ${extras.length ? `<div class="sb-pdetail-wrap-row"><span>extras</span><span>${extras.join(', ')}</span></div>` : ''}
-            ${emotions.length ? `<div class="sb-pdetail-wrap-row"><span>emotions</span><span>${emotions.join(', ')}</span></div>` : ''}
-        `, { desc: 'Character & scenario', view: 'prompts' })}
-        ${easyAccordion('Toolset', toolsHtml, { desc: 'AI capabilities', view: 'toolsets' })}
-        ${easyAccordion('Spice', `
-            <div class="sb-pdetail-row"><span>set</span><span>${pretty(settings.spice_set)}</span></div>
-            <div class="sb-pdetail-row"><span>enabled</span><span>${settings.spice_enabled !== false ? 'Yes' : 'No'}</span></div>
-            <div class="sb-pdetail-row"><span>turns</span><span>${settings.spice_turns || 3}</span></div>
-        `, { desc: 'Style & flavor', view: 'spices' })}
-        ${easyAccordion('TTS', `
-            <div class="sb-pdetail-row"><span>voice</span><span>${_voiceNames[settings.voice] || settings.voice || 'Heart'}</span></div>
-            <div class="sb-pdetail-row"><span>pitch</span><span>${settings.pitch || 0.98}</span></div>
-            <div class="sb-pdetail-row"><span>speed</span><span>${settings.speed || 1.3}</span></div>
-        `, { desc: 'Voice synthesis' })}
-        ${easyAccordion('Mind', `
-            <div class="sb-pdetail-row"><span>memory</span><span>${pretty(settings.memory_scope)}</span></div>
-            <div class="sb-pdetail-row"><span>goals</span><span>${pretty(settings.goal_scope)}</span></div>
-            <div class="sb-pdetail-row"><span>knowledge</span><span>${pretty(settings.knowledge_scope)}</span></div>
-            <div class="sb-pdetail-row"><span>people</span><span>${pretty(settings.people_scope)}</span></div>
-        `, { desc: 'Memory & knowledge' })}
-        ${easyAccordion('Model', `
-            <div class="sb-pdetail-row"><span>provider</span><span>${pretty(settings.llm_primary)}</span></div>
-            ${settings.llm_model ? `<div class="sb-pdetail-row"><span>model</span><span>${settings.llm_model}</span></div>` : ''}
-        `, { desc: 'LLM backend' })}
-    `;
-
-    // Fetch tagline
-    fetch(`/api/personas/${encodeURIComponent(personaName)}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(p => {
-            const el = container.querySelector('#sb-pdetail-tagline');
-            if (p?.tagline && el) el.textContent = p.tagline;
-        })
-        .catch(() => {});
-}
-
-function easyAccordion(title, content, opts = {}) {
-    const desc = opts.desc ? `<span class="sb-pdetail-acc-desc">${opts.desc}</span>` : '';
-    const link = opts.view ? `<span class="sb-pdetail-acc-link" data-nav="${opts.view}">\u2197</span>` : '';
-    return `
-        <div class="sb-pdetail-acc">
-            <div class="sb-pdetail-acc-header"><span class="accordion-arrow">\u25B6</span> ${title}${desc}${link}</div>
-            <div class="sb-pdetail-acc-content" style="display:none">${content}</div>
+    `).join('') + `
+        <div class="sb-pgrid-cell sb-pgrid-new" data-action="new" title="New persona from this chat">
+            <span class="sb-pgrid-new-icon">+</span>
+            <span class="sb-pgrid-name">New...</span>
         </div>`;
+    // Keep the active face in view
+    gridEl.querySelector('.sb-pgrid-cell.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function escapeHtml(str) {

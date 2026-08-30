@@ -23,21 +23,34 @@ export const chatMode = {
                         <div id="context-bar"></div>
                         <div id="image-preview-area" style="display: none;"></div>
                         <form id="chat-form">
-                            <div class="volume-compact" id="volume-compact">
-                                <button type="button" id="mute-btn" class="vol-btn" title="Volume">&#x1F50A;</button>
-                                <div class="volume-popover" id="volume-popover">
-                                    <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
+                            <!-- Mic split: #mic-btn keeps every gesture handler; the caret is a
+                                 SIBLING (never a child) and opens this device's audio flyout —
+                                 volume + Conversation mode. Composer = device runtime, sidebar =
+                                 chat settings (tmp/chat-sidebar-composer-plan.md). -->
+                            <div class="mic-split" id="mic-split">
+                                <button type="button" id="mic-btn" title="Hold to record">&#x1F3A4;</button>
+                                <button type="button" id="mic-menu-btn" class="mic-caret" title="Volume &amp; conversation mode">&#x25BE;</button>
+                                <div class="mic-flyout" id="mic-flyout">
+                                    <div class="mic-flyout-row">
+                                        <button type="button" id="mute-btn" class="vol-btn" title="Mute">&#x1F50A;</button>
+                                        <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
+                                    </div>
+                                    <div class="mic-flyout-label">Conversation</div>
+                                    <div class="conv-seg" id="conv-seg">
+                                        <button type="button" data-conv="off" class="active" title="Conversation mode off">Off</button>
+                                        <button type="button" data-conv="local" title="Conversation mode on the server's mic">Local mic</button>
+                                        <button type="button" data-conv="browser" title="Conversation mode using this browser's mic">Browser mic</button>
+                                    </div>
                                 </div>
                             </div>
-                            <button type="button" id="mic-btn" title="Hold to record">&#x1F3A4;</button>
                             <div class="textarea-wrapper">
                                 <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">&#x1F4CE;</button>
                                 <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
                             </div>
                             <input type="file" id="image-upload-input" accept="image/*,.py,.txt,.md,.js,.ts,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.sh,.bash,.html,.css,.xml,.csv,.log,.env,.rs,.go,.java,.c,.cpp,.h" multiple style="display: none;">
                             <div class="send-btn-wrapper">
-                                <button type="submit" id="send-btn">Send</button>
-                                <button type="button" id="stop-btn" style="display: none;">Stop</button>
+                                <button type="submit" id="send-btn"><span class="btn-txt">Send</span><span class="btn-ico" aria-hidden="true">&#x27A4;</span></button>
+                                <button type="button" id="stop-btn" style="display: none;"><span class="btn-txt">Stop</span><span class="btn-ico" aria-hidden="true">&#x23F9;</span></button>
                                 <span id="llm-indicator"></span>
                             </div>
                         </form>
@@ -72,21 +85,12 @@ export const chatMode = {
                             </div>
                         </div>
 
-                        <!-- Sidebar mode tabs -->
-                        <div class="sb-mode-tabs">
-                            <button class="sb-mode-tab active" data-mode="easy">Persona</button>
-                            <button class="sb-mode-tab" data-mode="full">Settings</button>
-                        </div>`,
+                        <!-- Faces strip: click = load that persona's bundle onto this chat.
+                             The fields below are the live values (2026-08-29: the old
+                             Persona/Settings tabs were two views of one form). -->
+                        <div class="sb-persona-grid" id="sb-persona-grid"></div>`,
 
     sidebarBody: `
-                        <!-- Easy mode: persona-centric view -->
-                        <div class="sb-easy-content" style="display:none">
-                            <div class="sb-persona-grid" id="sb-persona-grid"></div>
-                            <div class="sb-persona-detail" id="sb-persona-detail"></div>
-                        </div>
-
-                        <!-- Full mode: all settings -->
-                        <div class="sb-full-content">
                         <div class="sidebar-section">
                             <div class="sb-field">
                                 <label for="sb-prompt">prompt</label>
@@ -130,11 +134,6 @@ export const chatMode = {
                         <div class="sb-toggles">
                             <button type="button" class="sb-toggle active" id="sb-spice-toggle" data-active="true">Spice &middot; 3</button>
                             <button type="button" class="sb-toggle" id="sb-datetime-toggle" data-active="false">Date/Time</button>
-                        </div>
-                        <!-- System toggles (NOT per-chat): true speech mode, local mic vs browser mic -->
-                        <div class="sb-toggles">
-                            <button type="button" class="sb-toggle" id="sb-conversation-toggle" data-system data-active="false" title="Conversation mode on the server's mic">Convo: Local</button>
-                            <button type="button" class="sb-toggle" id="sb-conversation-browser-toggle" data-system data-active="false" title="Conversation mode using this browser's mic">Convo: Browser</button>
                         </div>
 
                         <!-- Mind Scopes Accordion — populated by shared/scope-dropdowns.js
@@ -226,6 +225,5 @@ export const chatMode = {
                         <!-- Save As New Persona -->
                         <div class="sidebar-section sb-footer">
                             <button type="button" id="sb-save-as-persona" class="sb-btn-full">Save As New Persona</button>
-                        </div>
-                        </div><!-- /.sb-full-content -->`,
+                        </div>`,
 };

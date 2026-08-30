@@ -1,7 +1,9 @@
-# 2.12.4 - QoL
+# 2.12.4 - QoL UX UI
 - LLM has repeat penalty and more params
 - Cap memory at 512 char and write it trimmed instead of rejecting
 - New toolbar upper right, bigger click targets, combined bg modal and color
+- Removed personas sidebar tab in favor of faces-strip
+- Moved conversation and TTS controls to flyout on STT button
 # 2.12.3 - Story Engine expansion
 - Items can have multiple verbs with actions
 - Set images and create rooms

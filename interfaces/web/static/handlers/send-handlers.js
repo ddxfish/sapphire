@@ -16,7 +16,8 @@ import {
     setIsCancelling,
     getIsCancelling,
     refresh,
-    setHistLen
+    setHistLen,
+    setSendLabel
 } from '../core/state.js';
 
 export async function handleSend() {
@@ -45,7 +46,7 @@ export async function handleSend() {
     setProc(true);
     input.value = '';
     sendBtn.disabled = true;
-    sendBtn.textContent = '...';
+    setSendLabel('busy');
     input.dispatchEvent(new Event('input'));
     
     // Get pending images and files, then clear them
@@ -205,7 +206,7 @@ export async function handleSend() {
     } finally {
         ui.hideStatus();
         sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
+        setSendLabel('send');
         input.focus();
         setProc(false);
     }
