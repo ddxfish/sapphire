@@ -679,7 +679,7 @@ class SettingsManager:
         """
         # Hot-reload: These are read per-request, no restart needed
         hot_reload = {
-            'DEFAULT_USERNAME', 'DEFAULT_PERSONA', 'USER_TIMEZONE',
+            'DEFAULT_USERNAME', 'DEFAULT_PERSONA', 'USER_TIMEZONE', 'PERSONA_FAVORITES',
             'AVATARS_IN_CHAT', 'ICON_COLOR', 'DEFAULT_BACKGROUND', 'IMAGE_UPLOAD_MAX_WIDTH',
             'GENERATION_DEFAULTS', 'MODEL_GENERATION_PROFILES',
             'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',

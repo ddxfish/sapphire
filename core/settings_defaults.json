@@ -7,6 +7,7 @@
     "ICON_COLOR": "",
     "DEFAULT_BACKGROUND": "",
     "DEFAULT_PERSONA": "",
+    "PERSONA_FAVORITES": [],
     "USER_TIMEZONE": "UTC",
     "DASHBOARD_DISPLAY_NAME": "Sapphire",
     "DASHBOARD_FONTS_AUTOFETCH": true

@@ -263,6 +263,18 @@ body {
 /* Mobile overflow */
 .nav-item.overflow-hidden { display: none !important; }
 
+/* Mobile-only gem (dashboard now, quick actions later) */
+.nav-gem { display: none; }
+.nav-gem svg { width: 24px; height: 24px; }
+
+/* ⋯ menu: indented children under a group parent, section separators */
+.nav-overflow-menu .nav-overflow-item.child {
+    padding-left: 38px;
+    font-size: var(--font-sm);
+    opacity: 0.92;
+}
+.nav-overflow-sep { height: 1px; background: var(--border); margin: 4px 10px; }
+
 /* Mobile overflow dropup menu */
 .nav-overflow-menu {
     position: absolute;
@@ -5203,6 +5215,7 @@ a.gallery-caption:hover {
     .nav-spacer { display: none; }
     .nav-version { display: none; }
     .nav-profile-btn { display: none; }
+    .nav-gem { display: flex; align-items: center; justify-content: center; }
 
     .nav-item {
         width: 48px;
@@ -7185,6 +7198,20 @@ a.gallery-caption:hover {
 }
 .pa-default-star { font-size: 0.7em; vertical-align: middle; }
 
+.panel-list-item { position: relative; }
+.pa-fav-star {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, transform 0.1s;
+}
+.panel-list-item:hover .pa-fav-star { opacity: 1; }
+.pa-fav-star:hover { transform: scale(1.25); color: var(--text); }
+.pa-fav-star.faved { opacity: 1; color: #eab308; }
+
 .pa-list-tagline {
     font-size: var(--font-xs);
     color: var(--text-muted);
@@ -7560,7 +7587,19 @@ a.gallery-caption:hover {
     border-bottom-color: var(--trim, #4a9eff);
 }
 
-/* Faces strip — horizontal scroller under the chat actions */
+/* Faces strip — horizontal scroller under the chat actions. Thin scrollbar
+   (a hidden bar left 12 faces unscrollable — Krem 2026-08-30). 4 faces fit
+   at the 260px default width; ↗ floats top-right (.sb-persona-wrap). */
+.sb-persona-wrap { position: relative; }
+.sb-personas-goto {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    padding: 0 4px;
+    line-height: 1.3;
+    background: var(--bg-secondary);
+    z-index: 2;
+}
 .sb-persona-grid {
     display: flex;
     gap: 2px;
@@ -7573,6 +7612,7 @@ a.gallery-caption:hover {
 }
 .sb-persona-grid::-webkit-scrollbar { height: 6px; }
 .sb-persona-grid::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+.sb-pgrid-cell.dragging { opacity: 0.35; }
 
 .sb-pgrid-cell {
     display: flex;
@@ -7580,7 +7620,7 @@ a.gallery-caption:hover {
     align-items: center;
     gap: 4px;
     flex: 0 0 auto;
-    width: 64px;
+    width: 56px;
     padding: 6px 2px;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -7612,7 +7652,7 @@ a.gallery-caption:hover {
     color: var(--text-muted);
     text-align: center;
     text-transform: capitalize;
-    max-width: 60px;
+    max-width: 52px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -88,7 +88,10 @@ export const chatMode = {
                         <!-- Faces strip: click = load that persona's bundle onto this chat.
                              The fields below are the live values (2026-08-29: the old
                              Persona/Settings tabs were two views of one form). -->
-                        <div class="sb-persona-grid" id="sb-persona-grid"></div>`,
+                        <div class="sb-persona-wrap">
+                            <div class="sb-persona-grid" id="sb-persona-grid"></div>
+                            <button type="button" class="sb-btn-sm sb-personas-goto" id="sb-personas-goto" title="All personas">&#x2197;</button>
+                        </div>`,
 
     sidebarBody: `
                         <div class="sidebar-section">
@@ -221,9 +224,5 @@ export const chatMode = {
 
                         <!-- Plugin-registered accordions (injected by JS) -->
                         <div id="sb-plugin-accordions"></div>
-
-                        <!-- Save As New Persona -->
-                        <div class="sidebar-section sb-footer">
-                            <button type="button" id="sb-save-as-persona" class="sb-btn-full">Save As New Persona</button>
-                        </div>`,
+`,
 };

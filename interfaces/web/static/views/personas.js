@@ -9,7 +9,8 @@ import { mountScenePicker } from '../shared/scene-picker.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
 import { helpPills } from '../features/video-link.js';
-import { getInitData } from '../shared/init-data.js';
+import { getInitData, refreshInitData } from '../shared/init-data.js';
+import { updateSettingsBatch } from '../shared/settings-api.js';
 import {
     renderScopeDropdowns,
     fetchScopeData,
@@ -89,6 +90,28 @@ export default {
     }
 };
 
+let favorites = [];   // PERSONA_FAVORITES — ordered; curates the chat sidebar strip
+
+async function toggleFavorite(name) {
+    const i = favorites.indexOf(name);
+    if (i >= 0) favorites.splice(i, 1); else favorites.push(name);
+    // In-place star flip — a full render() rebuilt the roster and reset its
+    // scroll position to the top (Krem repro 2026-08-30)
+    const star = container?.querySelector(`.panel-list-item[data-pl-id="${CSS.escape(name)}"] .pa-fav-star`);
+    if (star) {
+        const on = i < 0;
+        star.classList.toggle('faved', on);
+        star.textContent = on ? '\u2605' : '\u2606';
+        star.title = on ? 'Unfavorite' : 'Favorite — shows in the chat sidebar strip';
+    }
+    try {
+        await updateSettingsBatch({ PERSONA_FAVORITES: favorites });
+        await refreshInitData();   // chat strip reads init cache
+    } catch (e) {
+        ui.showToast('Favorite not saved', 'error');
+    }
+}
+
 async function loadData() {
     try {
         // Fetch init data first so we know which scope_declarations to drive from
@@ -107,6 +130,7 @@ async function loadData() {
         personas.sort((a, b) => a.name.localeCompare(b.name));
         initData = init.status === 'fulfilled' ? init.value : null;
         defaultPersona = initData?.personas?.default || '';
+        favorites = (initData?.settings?.PERSONA_FAVORITES || []).slice();
         const llmData = llmResp.status === 'fulfilled' ? llmResp.value : null;
         if (llmData) {
             llmProviders = llmData.providers || [];
@@ -146,7 +170,8 @@ function render() {
                     <div class="pa-list-info">
                         <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}${_refsVaultPrompt(p) ? ` <span title="References vault prompt '${esc(p.settings?.prompt || '')}'">\u{1F5DD}</span>` : ''}</span>
                         ${p.tagline ? `<span class="pa-list-tagline">${esc(p.tagline)}</span>` : ''}
-                    </div>`,
+                    </div>
+                    <span class="pa-fav-star${favorites.includes(p.name) ? ' faved' : ''}" title="${favorites.includes(p.name) ? 'Unfavorite' : 'Favorite — shows in the chat sidebar strip'}">${favorites.includes(p.name) ? '\u2605' : '\u2606'}</span>`,
                 emptyHTML: '<div class="text-muted" style="padding:16px;font-size:var(--font-sm)">No personas yet. Click + to create one from your current chat settings.</div>',
                 addTitle: 'New from current chat',
                 extraHeader: '<button class="btn-sm" id="pa-import" title="Import persona">\u2B07</button>',
@@ -540,7 +565,8 @@ function bindEvents() {
 
     // Roster select / add / delete via the shared panel-list
     bindPanelList(container, {
-        onSelect: async (name) => {
+        onSelect: async (name, e) => {
+            if (e?.target?.closest('.pa-fav-star')) { await toggleFavorite(name); return; }
             selectedName = name;
             try { selectedData = await getPersona(selectedName); } catch { selectedData = null; }
             render();

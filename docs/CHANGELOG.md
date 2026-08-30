@@ -3,7 +3,9 @@
 - Cap memory at 512 char and write it trimmed instead of rejecting
 - New toolbar upper right, bigger click targets, combined bg modal and color
 - Removed personas sidebar tab in favor of faces-strip
+- Faces strip has favorites (in Personas) and can re-order
 - Moved conversation and TTS controls to flyout on STT button
+- Mobile bottom navrail has Sapphire Gem icon, User modal
 # 2.12.3 - Story Engine expansion
 - Items can have multiple verbs with actions
 - Set images and create rooms

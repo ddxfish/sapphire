@@ -104,29 +104,27 @@ function initMobileOverflow(rail) {
             return;
         }
 
-        const items = rail.querySelectorAll('.nav-item:not(.nav-overflow)');
-        items.forEach((item, i) => {
+        // .nav-mobile-overflow groups (Settings) live in the ⋯ permanently on
+        // mobile and don't spend a visible slot (2026-08-29 designed-menu rework).
+        const all = [...rail.querySelectorAll('.nav-item:not(.nav-overflow)')];
+        const pinned = all.filter(i => i.classList.contains('nav-mobile-overflow'));
+        const flowing = all.filter(i => !i.classList.contains('nav-mobile-overflow'));
+        pinned.forEach(i => i.classList.add('overflow-hidden'));
+        flowing.forEach((item, i) => {
             item.classList.toggle('overflow-hidden', i >= MOBILE_MAX_VISIBLE);
         });
 
-        if (overflow) {
-            overflow.style.display = items.length > MOBILE_MAX_VISIBLE ? '' : 'none';
-        }
+        // ⋯ always shows on mobile now — Settings + Profile live inside
+        if (overflow) overflow.style.display = '';
 
-        // Populate overflow menu with hidden items
         if (menu) {
             menu.innerHTML = '';
-            items.forEach((item, i) => {
-                if (i < MOBILE_MAX_VISIBLE) return;
-                const viewId = item.dataset.view;
-                const icon = item.querySelector('.nav-icon')?.textContent || '';
-                const label = item.querySelector('.nav-label')?.textContent || viewId;
+            // DOM API, not innerHTML — labels stay safe even if nav items
+            // ever carry HTML. Day-ruiner #A defense-depth.
+            const addRow = (viewId, icon, label, extraClass = '') => {
                 const btn = document.createElement('button');
-                btn.className = 'nav-overflow-item';
-                btn.dataset.view = viewId;
-                // textContent-derived but still going through innerHTML — use
-                // DOM API so the round-trip stays safe even if upstream nav
-                // items ever start carrying HTML. Day-ruiner #A defense-depth.
+                btn.className = 'nav-overflow-item' + extraClass;
+                if (viewId) btn.dataset.view = viewId;
                 const iconSpan = document.createElement('span');
                 iconSpan.textContent = icon;
                 const labelSpan = document.createElement('span');
@@ -134,7 +132,44 @@ function initMobileOverflow(rail) {
                 btn.appendChild(iconSpan);
                 btn.appendChild(labelSpan);
                 menu.appendChild(btn);
+                return btn;
+            };
+            const addSep = () => {
+                const hr = document.createElement('div');
+                hr.className = 'nav-overflow-sep';
+                menu.appendChild(hr);
+            };
+
+            // Pinned groups: clickable parent row + indented children read
+            // from the group's own flyout markup (single source of truth)
+            pinned.forEach(group => {
+                addRow(group.dataset.view,
+                    group.querySelector('.nav-icon')?.textContent || '',
+                    group.querySelector('.nav-label')?.textContent || group.dataset.view);
+                group.querySelectorAll('.nav-flyout-item').forEach(fi => {
+                    if (fi.dataset.view === group.dataset.view) return;  // parent row covers it
+                    const txt = fi.textContent.trim();
+                    const sp = txt.indexOf(' ');
+                    addRow(fi.dataset.view,
+                        sp > 0 ? txt.slice(0, sp) : '',
+                        sp > 0 ? txt.slice(sp + 1) : txt, ' child');
+                });
             });
+
+            // Items squeezed out of the bar by the slot budget
+            const extra = flowing.filter((item, i) => i >= MOBILE_MAX_VISIBLE);
+            if (extra.length) {
+                addSep();
+                extra.forEach(item => {
+                    addRow(item.dataset.view,
+                        item.querySelector('.nav-icon')?.textContent || '',
+                        item.querySelector('.nav-label')?.textContent || item.dataset.view);
+                });
+            }
+
+            // Profile — was unreachable on mobile before this row
+            addSep();
+            addRow('', '\u{1F464}', 'Profile').dataset.action = 'profile';
         }
     };
 
@@ -153,6 +188,13 @@ function initMobileOverflow(rail) {
         menu.addEventListener('click', e => {
             const item = e.target.closest('.nav-overflow-item');
             if (!item) return;
+            if (item.dataset.action === 'profile') {
+                // Desktop profile button is display:none here but its handler
+                // still runs — reuse it instead of duplicating the modal.
+                document.getElementById('nav-profile-btn')?.click();
+                menu.classList.add('hidden');
+                return;
+            }
             const viewId = item.dataset.view;
             if (viewId) switchView(viewId);
             menu.classList.add('hidden');

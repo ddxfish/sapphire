@@ -7,6 +7,7 @@ import { updateScene, updateSendButtonLLM } from '../features/scene.js';
 import { applyTrimColor, applyBackground } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData, refreshInitData, getInitDataSync } from '../shared/init-data.js';
+import { updateSettingsBatch } from '../shared/settings-api.js';
 import { switchView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 import { initAgentStatus } from '../features/agent-status.js';
@@ -88,9 +89,10 @@ export default {
         });
 
         // Refresh voice dropdown when TTS provider changes
-        eventBus.on('settings_changed', (data) => {
+        eventBus.on('settings_changed', async (data) => {
             if (data?.key === 'TTS_PROVIDER') refreshVoiceDropdown();
             if (data?.key === 'LLM_PROVIDERS' || data?.key === 'LLM_CUSTOM_PROVIDERS') loadSidebar();
+            if (data?.key === 'PERSONA_FAVORITES') { await refreshInitData(); loadSidebar(); }
         });
 
         // Refresh prompt dropdown when a user actually saves/deletes a prompt.
@@ -398,24 +400,6 @@ export default {
         _personaHandler = () => loadSidebar();
 
         // Save As New Persona button
-        const saveAsPersonaBtn = container.querySelector('#sb-save-as-persona');
-        if (saveAsPersonaBtn) {
-            saveAsPersonaBtn.addEventListener('click', async () => {
-                const name = prompt('Name for the new persona:');
-                if (!name?.trim()) return;
-                try {
-                    const res = await createFromChat(name.trim());
-                    if (res?.name) {
-                        ui.showToast(`Persona "${res.name}" created`, 'success');
-                    } else {
-                        ui.showToast(res?.detail || 'Failed to create persona', 'error');
-                    }
-                } catch (e) {
-                    ui.showToast(e.message || 'Failed', 'error');
-                }
-            });
-        }
-
         // Document upload handler
         const docUpload = container.querySelector('#sb-doc-upload');
         if (docUpload) {
@@ -844,7 +828,7 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         if (pitchSlider) updateSliderFill(pitchSlider);
         if (speedSlider) updateSliderFill(speedSlider);
 
-        renderPersonaStrip(container, settings);
+        renderPersonaStrip(container, settings, init);
 
         // RAG context level
         setVal(container, '#sb-rag-context', settings.rag_context || 'normal');
@@ -1118,6 +1102,8 @@ function getSelectedModel(container) {
 // === Faces strip ===
 
 function initPersonaStrip(container) {
+    // ↗ anchored top-right of the strip → full roster
+    container.querySelector('#sb-personas-goto')?.addEventListener('click', () => switchView('personas'));
     container.querySelector('#sb-persona-grid')?.addEventListener('click', async e => {
         const cell = e.target.closest('.sb-pgrid-cell');
         if (!cell) return;
@@ -1223,12 +1209,31 @@ async function refreshVoiceDropdown() {
     }
 }
 
-function renderPersonaStrip(container, settings) {
+function renderPersonaStrip(container, settings, init) {
     const gridEl = container.querySelector('#sb-persona-grid');
     if (!gridEl) return;
     const personaName = settings.persona;
-    gridEl.innerHTML = personasList.map(p => `
-        <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)}">
+
+    // Favorites curate the strip: PERSONA_FAVORITES (ordered) picks + orders
+    // the faces. Empty list = show all (fresh installs unchanged). The ⭐
+    // default and the ACTIVE persona always show even when unfavorited.
+    const favs = init?.settings?.PERSONA_FAVORITES || [];
+    let shown = personasList;
+    if (favs.length) {
+        const byName = new Map(personasList.map(p => [p.name, p]));
+        shown = favs.map(n => byName.get(n)).filter(Boolean);
+        if (defaultPersonaName && byName.has(defaultPersonaName)
+                && !shown.some(p => p.name === defaultPersonaName)) {
+            shown.unshift(byName.get(defaultPersonaName));
+        }
+        if (personaName && byName.has(personaName)
+                && !shown.some(p => p.name === personaName)) {
+            shown.push(byName.get(personaName));
+        }
+    }
+
+    gridEl.innerHTML = shown.map(p => `
+        <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)} — drag to reorder" draggable="true">
             ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}
             <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
         </div>
@@ -1237,8 +1242,58 @@ function renderPersonaStrip(container, settings) {
             <span class="sb-pgrid-new-icon">+</span>
             <span class="sb-pgrid-name">New...</span>
         </div>`;
+
+    _bindStripDnD(gridEl);
     // Keep the active face in view
     gridEl.querySelector('.sb-pgrid-cell.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// Desktop drag-to-reorder (Fork D: v1 is DnD-only — phones inherit the order).
+// On drop, the RENDERED order becomes the new PERSONA_FAVORITES — in show-all
+// mode a drag adopts the full roster in your order; stars later prune it.
+let _stripDragName = null;
+let _stripDragFrom = null;
+function _bindStripDnD(gridEl) {
+    gridEl.querySelectorAll('.sb-pgrid-cell[data-name]').forEach(cell => {
+        // Browsers native-drag <img> — that would hijack the cell drag
+        cell.querySelector('img')?.setAttribute('draggable', 'false');
+        cell.addEventListener('dragstart', e => {
+            _stripDragName = cell.dataset.name;
+            _stripDragFrom = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]')].map(c => c.dataset.name).join(',');
+            cell.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', _stripDragName); } catch { /* IE-era quirk */ }
+        });
+    });
+    if (gridEl.dataset.dndBound) return;   // grid-level listeners survive re-renders
+    gridEl.dataset.dndBound = '1';
+    gridEl.addEventListener('dragover', e => {
+        if (!_stripDragName) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const dragging = gridEl.querySelector('.sb-pgrid-cell.dragging');
+        if (!dragging) return;
+        const cells = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]:not(.dragging)')];
+        const after = cells.find(c => {
+            const r = c.getBoundingClientRect();
+            return e.clientX < r.left + r.width / 2;
+        });
+        gridEl.insertBefore(dragging, after || gridEl.querySelector('.sb-pgrid-new'));
+    });
+    gridEl.addEventListener('drop', e => { if (_stripDragName) e.preventDefault(); });
+    gridEl.addEventListener('dragend', async () => {
+        gridEl.querySelector('.sb-pgrid-cell.dragging')?.classList.remove('dragging');
+        if (!_stripDragName) return;
+        _stripDragName = null;
+        const names = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]')].map(c => c.dataset.name);
+        if (names.join(',') === _stripDragFrom) return;   // no-op drag: don't adopt the roster
+        try {
+            await updateSettingsBatch({ PERSONA_FAVORITES: names });
+            await refreshInitData();
+        } catch (e) {
+            ui.showToast('Order shown but not saved', 'error');
+        }
+    });
 }
 
 function escapeHtml(str) {

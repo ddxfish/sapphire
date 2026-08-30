@@ -195,6 +195,25 @@ class PersonaManager:
     # === CRUD ===
 
     @staticmethod
+    def _favorites_sync(old_name, new_name):
+        """Keep the PERSONA_FAVORITES settings list honest across rename
+        (new_name set) and delete (new_name None). Same referrer-upkeep
+        pattern as _vault_ref_sync — the list is the chat sidebar strip's
+        curation and must never dangle silently. 2026-08-29."""
+        try:
+            from core.settings_manager import settings as app_settings
+            favs = list(app_settings.get('PERSONA_FAVORITES') or [])
+            if old_name not in favs:
+                return
+            if new_name:
+                out = [new_name if n == old_name else n for n in favs]
+            else:
+                out = [n for n in favs if n != old_name]
+            app_settings.set('PERSONA_FAVORITES', out, persist=True)
+        except Exception as e:
+            logger.warning(f"[PERSONAS] favorites sync failed for '{old_name}': {e}")
+
+    @staticmethod
     def _vault_ref_sync(new_prompt, old_prompt):
         """Personas are one of the three referrer classes of the vault
         references index. Called OUTSIDE self._lock, best-effort."""
@@ -253,6 +272,8 @@ class PersonaManager:
             ok = self._save_to_user()
         if ok and "settings" in data:
             self._vault_ref_sync(persona["settings"].get("prompt"), old_prompt)
+        if ok and persona.get("name") != name:
+            self._favorites_sync(name, persona.get("name"))
         return ok
 
     def delete(self, name: str) -> bool:
@@ -320,6 +341,8 @@ class PersonaManager:
             del self._personas[name]
             ok = self._save_to_user()
         self._vault_ref_sync(None, old_prompt)
+        if ok:
+            self._favorites_sync(name, None)
         return ok
 
     def duplicate(self, name: str, new_name: str) -> bool:
