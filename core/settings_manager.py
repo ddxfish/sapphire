@@ -692,7 +692,7 @@ class SettingsManager:
             # Providers hot-swap at runtime via switch_*_provider() methods
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
             # Tool settings - read per-request
-            'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS', 'DEBUG_TOOL_CALLING',
+            'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS',
             'TOOL_HISTORY_MAX_ENTRIES', 'RAG_SIMILARITY_THRESHOLD',
             # AI self-switch gates + roster - read per-request by the
             # function_manager settings-gate and the meta tools
@@ -792,8 +792,16 @@ class SettingsManager:
                     # restart, STT recorder rebuild, embedder reload) can
                     # take seconds and stalled every concurrent settings
                     # read for the entire rebuild duration. Stop-the-world.
-                    # `set()` already uses this snapshot-then-dispatch
-                    # pattern at L405-410. Wildcard scout 2026-05-07 W2.
+                    # Wildcard scout 2026-05-07 W2.
+                    # WARNING (negspace R1#5, 2026-08-31): set() does NOT use
+                    # this pattern — its callback dispatch still runs under
+                    # self._lock. Currently defused because every live
+                    # provider-switch caller passes _skip_callbacks=True, but
+                    # registering a NEW reload callback reopens an app-wide
+                    # stall (config.X proxies every read through this lock).
+                    # Convert set() to snapshot-then-dispatch before adding
+                    # callbacks. (The old comment here claimed set() was
+                    # already converted — it never was.)
                     with self._lock:
                         snapshot = [
                             (key, cb, self._config.get(key))

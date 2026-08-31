@@ -923,45 +923,56 @@ export const handlePress = async (btn) => {
 export const handleRelease = async (btn, triggerSendFn) => {
     if (!isRec) return;
     isRec = false;
-    const blob = await stopRec();
-    btn.classList.remove('recording');
-    dispatch(Events.STT_RECORDING_END, { source: 'browser' });
-
-    if (blob && blob.size > 1000) {
-        ui.updateStatus('Transcribing...');
-        dispatch(Events.STT_PROCESSING, { source: 'browser' });
+    // ONE unconditional exit signal (outer finally). stopRec() throwing
+    // BEFORE the old inner try (device unplug, revoked permission,
+    // audioContext failure) skipped every signalMicActive(false) path and
+    // stranded a permanent +1 on the wakeword-suppression counter — she
+    // stopped answering to her name until restart (negspace N3, 2026-08-31).
+    // Server clamps at 0, so the old double-signal paths stay harmless.
+    try {
+        let blob = null;
         try {
-            const response = await api.postAudio(blob);
-            // /api/transcribe manages _web_active in its own finally block
-            const text = response.text;
+            blob = await stopRec();
+        } catch (e) {
+            console.error('stopRec failed:', e);
+        }
+        btn.classList.remove('recording');
+        dispatch(Events.STT_RECORDING_END, { source: 'browser' });
 
-            if (!text || !text.trim()) {
-                const msg = response.quiet
-                    ? 'No audio received — check browser mic selection'
-                    : 'No speech detected';
+        if (blob && blob.size > 1000) {
+            ui.updateStatus('Transcribing...');
+            dispatch(Events.STT_PROCESSING, { source: 'browser' });
+            try {
+                const response = await api.postAudio(blob);
+                // /api/transcribe manages _web_active in its own finally block
+                const text = response.text;
+
+                if (!text || !text.trim()) {
+                    const msg = response.quiet
+                        ? 'No audio received — check browser mic selection'
+                        : 'No speech detected';
+                    ui.updateStatus(msg);
+                    setTimeout(() => ui.hideStatus(), 3000);
+                    return null;
+                }
+
+                ui.hideStatus();
+                await triggerSendFn(text);
+                return text;
+
+            } catch (e) {
+                console.error('Transcription failed:', e);
+                const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
+                    ? e.message : 'Transcription failed';
                 ui.updateStatus(msg);
-                setTimeout(() => ui.hideStatus(), 3000);
+                setTimeout(() => ui.hideStatus(), 2000);
                 return null;
             }
-
-            ui.hideStatus();
-            await triggerSendFn(text);
-            return text;
-
-        } catch (e) {
-            console.error('Transcription failed:', e);
-            const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
-                ? e.message : 'Transcription failed';
-            ui.updateStatus(msg);
-            setTimeout(() => ui.hideStatus(), 2000);
-            return null;
-        } finally {
-            signalMicActive(false);
         }
-    } else {
-        signalMicActive(false);
         ui.hideStatus();
         return null;
+    } finally {
+        signalMicActive(false);
     }
 };
 

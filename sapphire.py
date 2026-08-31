@@ -79,6 +79,7 @@ class VoiceChatSystem:
         self.current_session = None
         self._processing_lock = threading.Lock()
         self._web_active_count = 0  # Ref-counted wakeword suppression during web UI activity
+        self._web_active_stamp = 0.0  # last inc time -- TTL guard against stranded counts (N3)
         # Conversation mode (v3): ephemeral per-session flag + audio-session handle.
         # NOT persisted — resets on restart. See enter/exit_conversation_mode.
         self.conversation_mode_enabled = False
@@ -264,10 +265,18 @@ class VoiceChatSystem:
 
     @property
     def _web_active(self):
-        return self._web_active_count > 0
+        # TTL guard: the counter is a one-way ratchet -- one lost decrement
+        # (tab killed mid-record, release path threw) used to suppress the
+        # wakeword FOREVER; a restart "fixed" it, so it read as a flake.
+        # Every legit hold refreshes the stamp (press inc + the transcribe
+        # route's own inc), so 15 min of silence = stale, not busy.
+        # (negspace N3, 2026-08-31)
+        return (self._web_active_count > 0
+                and (time.time() - self._web_active_stamp) < 900)
 
     def web_active_inc(self):
         self._web_active_count += 1
+        self._web_active_stamp = time.time()
 
     def web_active_dec(self):
         self._web_active_count = max(0, self._web_active_count - 1)
@@ -468,6 +477,17 @@ class VoiceChatSystem:
                     "error": f"Wake word initialization failed ({type(e).__name__}: {e}). "
                              f"Sapphire booted without wake word detection — "
                              f"check model file and reinitialize via settings.",
+                })
+                # Also land it in the boot-errors lane (/api/init -> toast):
+                # the SSE publish above fires before any tab is connected and
+                # the replay ring is never read in production, so it was
+                # guaranteed-invisible (negspace N7, 2026-08-31).
+                from core.plugin_loader import plugin_loader as _pl_boot
+                _pl_boot._load_errors.append({
+                    "plugin": "wakeword",
+                    "error": ("Wake word init failed -- Sapphire booted DEAF. "
+                              "Check the wakeword model / settings, then "
+                              "re-toggle wake word."),
                 })
             except Exception:
                 pass

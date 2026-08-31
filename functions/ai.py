@@ -47,7 +47,10 @@ def execute(function_name, arguments, config):
                     f"or add your API key in Settings → LLM → Claude."
                 ), False
             
-            client = anthropic.Anthropic(api_key=api_key)
+            # 120s cap — this was the only unbounded network call in the tool
+            # path (SDK default: 600s with retries); a hung call holds the
+            # whole turn (negspace, 2026-08-31).
+            client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
             
             msg = client.messages.create(
                 model="claude-sonnet-4-5-20250929",

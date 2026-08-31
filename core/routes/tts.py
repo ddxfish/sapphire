@@ -408,8 +408,11 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
     if gate:
         raise HTTPException(status_code=403, detail=gate)
 
-    system.web_active_inc()
+    # mkstemp BEFORE the inc: a raise between inc and try stranded a permanent
+    # +1 on the wakeword-suppression counter -- she stops answering to her name
+    # until restart (negspace N3, 2026-08-31).
     fd, temp_path = tempfile.mkstemp(suffix=".wav")
+    system.web_active_inc()
     try:
         os.close(fd)
         contents = await audio.read()

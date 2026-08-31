@@ -768,6 +768,7 @@ function bindEvents() {
             const blob = await resp.blob();
             const audio = new Audio(URL.createObjectURL(blob));
             audio.onended = () => URL.revokeObjectURL(audio.src);
+            audio.onerror = () => URL.revokeObjectURL(audio.src);
             audio.play();
         } catch (err) {
             ui.showToast(err.message || 'TTS preview failed', 'error');

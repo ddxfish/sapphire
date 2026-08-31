@@ -92,10 +92,6 @@
     "short": "Audio buffer chunk size in samples",
     "long": "Size of audio chunks for wake word detection. 1280 samples (80ms at 16kHz) is optimal for OpenWakeWord. Larger multiples of 1280 increase efficiency but add latency."
   },
-  "BUFFER_DURATION": {
-    "short": "Wake word audio buffer duration (seconds)",
-    "long": "How many seconds of audio to buffer before processing for wake word detection. Longer buffers improve accuracy but increase latency. 0.5 seconds is typical for responsive detection."
-  },
   "WAKEWORD_MODEL": {
     "short": "Wake word to listen for",
     "long": "The wake word model to use for detection. Built-in models include: 'alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', and 'weather'. Custom models are auto-detected from user/wakeword/models/ - just drop .onnx or .tflite files there and they'll appear in the dropdown. Community models available at github.com/fwartner/home-assistant-wakewords-collection"
@@ -372,9 +368,9 @@
     "short": "Maximum tool calls per iteration",
     "long": "How many tools the AI can call in a single tool iteration. Allows multiple tools at once. Multiple iterations per reply."
   },
-  "DEBUG_TOOL_CALLING": {
-    "short": "Enable verbose tool calling debug logs",
-    "long": "When enabled, logs detailed information about every tool call: parameters, responses, timing, errors. Very helpful for debugging tool issues but creates large log files. Disable in production for better performance."
+  "UPDATE_CHECK_ENABLED": {
+    "short": "Check GitHub for updates daily",
+    "long": "When enabled, Sapphire checks GitHub once a day for a newer release. Turn off to stop the only unprompted outbound call the core app makes. A toggle takes effect within a day; restart applies it immediately."
   },
   "AI_TOOLSET_SWITCH_ENABLED": {
     "short": "Let the AI switch its own toolset",

@@ -256,13 +256,20 @@ def _empty_cache():
     return {"folder": "inbox", "messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
 
 def _get_cache():
-    scope = _get_current_email_scope() or 'default'
+    scope = _get_current_email_scope()
+    if scope is None:
+        # NEVER launder None into the shared 'default' bucket — that served
+        # another scope's inbox to email-disabled chats (N1, 2026-08-31).
+        # Throwaway empty cache: always a miss, never stored, never shared.
+        return _empty_cache()
     if scope not in _inbox_cache:
         _inbox_cache[scope] = _empty_cache()
     return _inbox_cache[scope]
 
 def _reset_cache():
-    scope = _get_current_email_scope() or 'default'
+    scope = _get_current_email_scope()
+    if scope is None:
+        return
     _inbox_cache[scope] = _empty_cache()
 
 # IMAP folder name candidates (tried in order, first success wins)
@@ -1321,6 +1328,13 @@ def _get_current_people_scope():
 # ─── Executor ────────────────────────────────────────────────────────────────
 
 def execute(function_name, arguments, config):
+    # Scope gate at the ONE door. The resolver correctly returns None for
+    # disabled/unresolved — but _get_cache used to launder None into the
+    # shared 'default' bucket, serving another scope's cached mail (full
+    # bodies, no TTL) to chats with email OFF (negspace N1 CRIT, 2026-08-31).
+    # Refuse here, before any cache or creds path runs.
+    if _get_current_email_scope() is None:
+        return "Email is disabled for this chat.", False
     try:
         if function_name == "get_inbox":
             return _get_inbox(count=arguments.get('count', 20), folder=arguments.get('folder', 'inbox'))

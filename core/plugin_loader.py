@@ -1051,7 +1051,7 @@ class PluginLoader:
                 for sd in scope_defs:
                     key = sd.get("key")
                     if key:
-                        unregister_plugin_scope(key)
+                        unregister_plugin_scope(key, plugin_name=name)
         except Exception as e:
             logger.warning(f"[PLUGINS] {name}: failed to unregister scopes: {e}")
 
@@ -1234,6 +1234,9 @@ class PluginLoader:
                             self._plugins[name]["manifest"] = json.loads(
                                 manifest_path.read_text(encoding="utf-8-sig")
                             )
+                            # Restamp, or rescan() re-queues this reload FOREVER
+                            # after any manifest edit (negspace N14, 2026-08-31).
+                            self._plugins[name]["_manifest_mtime"] = manifest_path.stat().st_mtime
                         except Exception as e:
                             logger.warning(f"[PLUGINS] Failed to re-read manifest for {name}: {e}")
                     # Re-verify signature (code may have been tampered with since scan)
@@ -2126,10 +2129,16 @@ class PluginLoader:
         return [n for n, info in self._plugins.items() if info["enabled"]]
 
     def get_load_errors(self) -> list:
-        """Get accumulated plugin load errors (for startup toast display)."""
-        errors = list(self._load_errors)
-        self._load_errors.clear()
-        return errors
+        """Get accumulated plugin load errors (for startup toast display).
+
+        NON-destructive (negspace N7/P1#12, 2026-08-31): any /api/init — a
+        background tab, an SSE-reconnect refresh — used to DRAIN the list, so
+        the only report of a failed plugin could be swallowed by a tab nobody
+        was looking at. The frontend dedupes its toasts per browser session;
+        the list is bounded here instead of cleared."""
+        if len(self._load_errors) > 100:
+            del self._load_errors[:-50]
+        return list(self._load_errors)
 
     def get_loaded_plugins(self) -> List[str]:
         """Names of currently loaded plugins."""

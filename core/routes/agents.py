@@ -111,7 +111,10 @@ async def workspace_run(req: RunRequest, _=Depends(require_login)):
     try:
         popen_kwargs = dict(
             shell=True, cwd=workspace,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            # DEVNULL, not PIPE: nothing ever drained the pipe, so any run
+            # emitting >64KB blocked forever on write() and then reported
+            # "already_running" until restart (negspace N20, 2026-08-31).
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
         )
         if not _IS_WINDOWS:

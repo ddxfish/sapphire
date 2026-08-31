@@ -10,6 +10,7 @@ EMOJI = "📡"
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "get_self_info",
             "description": "Your system status: time, model, services, plugins, memory stats, diagnostics.",

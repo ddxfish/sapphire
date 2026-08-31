@@ -16,6 +16,7 @@ EMOJI = "\u23F0"
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "schedule_task",
             "description": (

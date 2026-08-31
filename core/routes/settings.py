@@ -321,6 +321,14 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                                                   "origin": request.headers.get('X-Session-ID')})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
+    # SOCKS session cache: the single-key PUT clears it, but this batch route
+    # -- the one the Settings page actually uses -- never did, so enabling
+    # SOCKS showed green while every web tool kept the cached direct session
+    # (traffic exited the real IP) until restart. Found independently by two
+    # scouts (negspace N2, 2026-08-31).
+    if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT')):
+        from core.socks_proxy import clear_session_cache
+        clear_session_cache()
     # Execute deferred provider switches (runtime values are already set via
     # settings.set above; persistence for provider-switch keys is held until
     # we confirm the switch succeeded, then written to persisted_keys below.
@@ -739,6 +747,8 @@ async def set_socks_credential(request: Request, _=Depends(require_login)):
     username = data.get('username', '')
     password = data.get('password', '')
     if credentials.set_socks_credentials(username, password):
+        from core.socks_proxy import clear_session_cache
+        clear_session_cache()  # old creds are baked into the cached proxy URL (N2)
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to save credentials")
@@ -749,6 +759,8 @@ async def delete_socks_credential(request: Request, _=Depends(require_login)):
     """Delete SOCKS credentials."""
     from core.credentials_manager import credentials
     if credentials.clear_socks_credentials():
+        from core.socks_proxy import clear_session_cache
+        clear_session_cache()  # (N2)
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to delete credentials")

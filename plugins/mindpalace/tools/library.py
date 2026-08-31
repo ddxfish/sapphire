@@ -176,6 +176,18 @@ def decode_bytes(raw: bytes) -> str:
     return raw.decode('utf-8', errors='replace')
 
 
+def _write_working(path, text):
+    """CRLF/CR -> LF before writing working.md. Path.write_text translates
+    every '\n' to os.linesep blindly — pre-existing '\r' becomes '\r\r\n' on
+    Windows, and universal-newline read-back then turns every line break into
+    a paragraph break: chunks shred, embeddings compute over fragments,
+    retrieval silently degrades. The v1 engine's one-line guard
+    (core/routes/knowledge.py) never travelled to this replacement
+    (negspace N6 / succession class, 2026-08-31)."""
+    path.write_text(text.replace('\r\n', '\n').replace('\r', '\n'),
+                    encoding='utf-8')
+
+
 # ─── Format extractors (P2) — refusals happen BEFORE any row exists ──────────
 
 def _extract(ext, raw):
@@ -829,7 +841,7 @@ def _watch_ingest(scope, fid, root, rel, mtime, size, collection_id):
     ddir = sources_dir() / str(doc_id)
     ddir.mkdir(parents=True, exist_ok=True)
     working = ddir / 'working.md'
-    working.write_text(text, encoding='utf-8')
+    _write_working(working, text)
     with get_connection() as conn:
         cur = conn.cursor()
         now = _now()
@@ -887,7 +899,7 @@ def _watch_refresh(scope, doc_id, full: Path, mtime, size):
         return
     working = sources_dir() / str(doc_id) / 'working.md'
     working.parent.mkdir(parents=True, exist_ok=True)
-    working.write_text(text, encoding='utf-8')
+    _write_working(working, text)
     with get_connection() as conn:
         cur = conn.cursor()
         now = _now()
@@ -1378,7 +1390,7 @@ def import_file(scope, filename, raw: bytes, kind=None, title=None,
     source_path = ddir / filename
     source_path.write_bytes(raw)
     working_path = ddir / 'working.md'
-    working_path.write_text(text, encoding='utf-8')
+    _write_working(working_path, text)
     with get_connection() as conn:
         cur = conn.cursor()
         now = _now()
@@ -1760,7 +1772,7 @@ def _enqueue_text_doc(scope, title, text, kind, importance, collection_id,
     ddir = sources_dir() / str(doc_id)
     ddir.mkdir(parents=True, exist_ok=True)
     working = ddir / 'working.md'
-    working.write_text(text, encoding='utf-8')
+    _write_working(working, text)
     with get_connection() as conn:
         cur = conn.cursor()
         now = _now()

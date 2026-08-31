@@ -6,8 +6,8 @@ export default {
     id: 'network',
     name: 'Network',
     icon: '\uD83C\uDF10',
-    description: 'SOCKS proxy settings',
-    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'],
+    description: 'SOCKS proxy and update-check settings',
+    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'UPDATE_CHECK_ENABLED'],
 
     render(ctx) {
         return `

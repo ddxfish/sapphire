@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📝'
-NOTEPAD_PATH = Path("user/notepad/notepad.txt")
+# __file__-anchored (functions/ -> project root). Was CWD-relative — the only
+# user-path in the tree that broke when launched outside the project root
+# (notes landed outside the tree + backups, invisibly). negspace 2026-08-31.
+NOTEPAD_PATH = Path(__file__).absolute().parent.parent / "user" / "notepad" / "notepad.txt"
 _notepad_lock = threading.Lock()
 
 AVAILABLE_FUNCTIONS = [

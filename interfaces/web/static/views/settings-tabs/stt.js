@@ -177,13 +177,21 @@ export default {
         // bound by the generic data-key path, no manual handlers here.
         updateVadStatusBadge(el);
         attachVadTestListener(el);
-        const refreshInterval = setInterval(() => updateVadStatusBadge(el), 5000);
-        const observer = new MutationObserver(() => {
-            if (!document.body.contains(el)) {
-                clearInterval(refreshInterval);
-                observer.disconnect();
+        // Timer guard on el (the PERSISTENT #settings-content container): the
+        // old cleanup was a body-wide MutationObserver waiting for el to leave
+        // the DOM — but renderTabContent only ever innerHTML-refills el, so
+        // the guard could never fire and every render stacked one interval +
+        // one document-subtree observer (GC pressure scaling with chat churn).
+        // Same shape as attachGenericListeners' _genericBound guard.
+        // (negspace N19, 2026-08-31)
+        if (el._vadTimer) clearInterval(el._vadTimer);
+        el._vadTimer = setInterval(() => {
+            if (!el.querySelector('#vad-status-badge')) {
+                clearInterval(el._vadTimer);
+                el._vadTimer = null;
+                return;
             }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+            updateVadStatusBadge(el);
+        }, 5000);
     }
 };

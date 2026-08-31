@@ -693,10 +693,16 @@ class Updater:
 
     def start_background_checker(self):
         def _checker():
+            import config
             time.sleep(30)
             while True:
                 try:
-                    self.check_for_update()
+                    # Off switch (negspace N29, 2026-08-31): the privacy-
+                    # focused app had an unconditional daily GitHub poll with
+                    # no setting to disable it. Checked per-iteration so a
+                    # toggle takes effect without restart (within a day).
+                    if getattr(config, 'UPDATE_CHECK_ENABLED', True):
+                        self.check_for_update()
                 except Exception as e:
                     logger.warning(f"Background version check failed: {e}")
                 time.sleep(CHECK_INTERVAL)

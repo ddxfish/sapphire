@@ -17,7 +17,8 @@
     "SOCKS_ENABLED": false,
     "SOCKS_HOST": "",
     "SOCKS_PORT": 1080,
-    "SOCKS_TIMEOUT": 10.0
+    "SOCKS_TIMEOUT": 10.0,
+    "UPDATE_CHECK_ENABLED": true
   },
 
   "privacy": {
@@ -52,7 +53,6 @@
   "wakeword": {
     "WAKE_WORD_ENABLED": false,
     "CHUNK_SIZE": 1280,
-    "BUFFER_DURATION": 0.5,
     "WAKEWORD_MODEL": "hey_sapphire",
     "WAKEWORD_THRESHOLD": 0.60,
     "WAKEWORD_FRAMEWORK": "onnx",
@@ -76,7 +76,6 @@
   
   "recorder": {
     "RECORDER_CHUNK_SIZE": 1024,
-    "RECORDER_CHANNELS": 1,
     "STT_VAD_ENABLED": true,
     "STT_VAD_SPEECH_THRESHOLD": 0.5,
     "RECORDER_SILENCE_THRESHOLD": 0.0025,
@@ -262,7 +261,6 @@
     "TOOL_RESULT_MAX_CHARS": 200000,
     "MAX_TOOL_ITERATIONS": 7,
     "MAX_PARALLEL_TOOLS": 5,
-    "DEBUG_TOOL_CALLING": false,
     "AI_TOOLSET_SWITCH_ENABLED": false,
     "AI_MODEL_SWITCH_ENABLED": false,
     "AI_MODEL_SWITCH_ROSTER": [],

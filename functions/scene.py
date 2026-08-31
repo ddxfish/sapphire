@@ -43,6 +43,7 @@ def _build_description():
 def _tool_schema(description):
     return [{
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "set_scene",
             "description": description,

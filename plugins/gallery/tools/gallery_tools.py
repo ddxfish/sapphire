@@ -17,6 +17,7 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif'}
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "gallery_browse",
             "description": "Browse image folders. Lists subfolders + image counts. Start with path='' for root.",
@@ -34,6 +35,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "gallery_grid",
             "description": "Numbered thumbnail grid for a folder. Use gallery_browse to find the folder first.",
@@ -56,6 +58,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "gallery_view",
             "description": "View one image at full preview. Use index from gallery_grid.",

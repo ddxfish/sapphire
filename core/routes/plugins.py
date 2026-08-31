@@ -412,7 +412,12 @@ async def set_plugin_surfaces(plugin_name: str, request: Request, _=Depends(requ
 
 
 @router.put("/api/webui/plugins/toggle/{plugin_name}")
-async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
+def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
+    # Plain def on purpose — FastAPI runs sync handlers in its threadpool.
+    # This route was skipped by the 2026-08-06 C3 fix (which covered
+    # install/revert) and stalled chat/voice/SSE for up to 5s per toggle
+    # (daemon thread.join, full module exec, re-hash, key fetch) — negspace
+    # N8, 2026-08-31.
     """Toggle a plugin."""
     if plugin_name in LOCKED_PLUGINS:
         raise HTTPException(status_code=403, detail=f"Cannot disable locked plugin: {plugin_name}")
@@ -553,7 +558,20 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                             elif "hash mismatch" in verify_msg or "tamper" in verify_msg.lower():
                                 detail = "Plugin signature is invalid — files were modified after signing"
                             else:
-                                detail = f"Plugin blocked: {verify_msg}"
+                                # A VERIFIED plugin refused at load (tool-name
+                                # collision, deps) used to report "Plugin
+                                # blocked: verified" — the real reason went to
+                                # the bus, not the 403 the user is staring at.
+                                # This is the memory<->mindpalace swap flow.
+                                # (negspace N15, 2026-08-31)
+                                _errs = [le for le in plugin_loader._load_errors
+                                         if le.get("plugin") == plugin_name]
+                                if _errs:
+                                    detail = _errs[-1].get("error") or f"Plugin blocked: {verify_msg}"
+                                    if _errs[-1].get("hint"):
+                                        detail += f" — {_errs[-1]['hint']}"
+                                else:
+                                    detail = f"Plugin blocked: {verify_msg}"
                             raise HTTPException(status_code=403, detail=detail)
                     else:
                         plugin_loader.unload_plugin(plugin_name)
@@ -916,7 +934,8 @@ def _extract_css_preview(css_path):
 
 
 @router.post("/api/plugins/rescan")
-async def rescan_plugins(_=Depends(require_login)):
+def rescan_plugins(_=Depends(require_login)):
+    # Plain def — blocking work in threadpool, off the event loop (C3/N8 2026-08-31).
     """Scan for new/removed plugin folders without restart."""
     try:
         from core.plugin_loader import plugin_loader
@@ -927,7 +946,8 @@ async def rescan_plugins(_=Depends(require_login)):
 
 
 @router.post("/api/plugins/{plugin_name}/reload")
-async def reload_plugin(plugin_name: str, _=Depends(require_login)):
+def reload_plugin(plugin_name: str, _=Depends(require_login)):
+    # Plain def — blocking work in threadpool, off the event loop (C3/N8 2026-08-31).
     """Hot-reload a plugin (unload + load). For development."""
     from core.plugin_loader import plugin_loader
     info = plugin_loader.get_plugin_info(plugin_name)
@@ -1328,7 +1348,8 @@ def install_plugin(
 
 
 @router.delete("/api/plugins/{plugin_name}/uninstall")
-async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
+def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
+    # Plain def — rmtree + unload in threadpool, off the event loop (C3/N8 2026-08-31).
     """Uninstall a user plugin — remove all files, settings, and state."""
     from core.plugin_loader import plugin_loader
     info = plugin_loader.get_plugin_info(plugin_name)

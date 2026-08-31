@@ -618,6 +618,15 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
             if embs is not None:
                 from core.embeddings import stamp_embedding
                 embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+            else:
+                # Embed returned None (transient failure) — a NEW person row
+                # lands with a NULL vector, invisible to semantic search while
+                # the backfill latch stays set. Warn + re-arm (mirrors
+                # memory_tools 2026-05-07 #H; negspace N22, 2026-08-31).
+                global _backfill_done
+                _backfill_done = False
+                logger.warning("[KNOWLEDGE] people embed returned None — "
+                               "row may store NULL vector; backfill re-armed.")
 
         now = datetime.now().isoformat()
 
@@ -819,6 +828,14 @@ def add_entry(tab_id, content, chunk_index=0, source_filename=None):
         if embs is not None:
             from core.embeddings import stamp_embedding
             embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+        else:
+            # Embed returned None — row stores a NULL vector. Warn + re-arm the
+            # backfill latch so the next search sweeps it up (mirrors
+            # memory_tools 2026-05-07 #H; negspace N22, 2026-08-31).
+            global _backfill_done
+            _backfill_done = False
+            logger.warning("[KNOWLEDGE] add_entry embed returned None — "
+                           "row stored with NULL vector; backfill re-armed.")
 
     with _get_connection() as conn:
         cursor = conn.cursor()
@@ -866,6 +883,13 @@ def update_entry(entry_id, content):
         if embs is not None:
             from core.embeddings import stamp_embedding
             embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+        else:
+            # Embed returned None — the OLD vector is kept for the NEW content
+            # (guard below). Not NULL, so backfill can't fix it; stale-vector
+            # re-embed is a separate board item. At least say so in the log
+            # (negspace N22, 2026-08-31).
+            logger.warning("[KNOWLEDGE] update_entry embed returned None — "
+                           "content updated but its stored vector is now STALE.")
 
     tab_scope = None
     with _get_connection() as conn:

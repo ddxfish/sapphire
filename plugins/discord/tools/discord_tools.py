@@ -91,8 +91,13 @@ AVAILABLE_FUNCTIONS = [t["function"]["name"] for t in TOOLS]
 
 
 def _get_account():
-    from core.chat.function_manager import scope_discord
-    acct = scope_discord.get()
+    try:
+        from core.chat.function_manager import scope_discord
+        acct = scope_discord.get()
+    except Exception:
+        # Scope unregistered (plugin toggled mid-flight) — treat as disabled,
+        # matching every other resolver in the fleet (negspace, 2026-08-31).
+        return None
     return acct if acct and acct != 'none' else None
 
 

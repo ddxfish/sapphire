@@ -197,11 +197,21 @@ async function init() {
             }
             // Show any plugin load errors from startup (before SSE was connected)
             if (initData?.load_errors?.length) {
+                // load_errors is non-destructive now — a background tab's
+                // /api/init used to DRAIN it, swallowing the only report of a
+                // failed plugin (negspace N7, 2026-08-31). Dedupe per browser
+                // session so reloads don't re-toast the same boot errors.
+                let seen = [];
+                try { seen = JSON.parse(sessionStorage.getItem('loadErrorsToasted') || '[]'); } catch {}
                 for (const err of initData.load_errors) {
+                    const key = `${err.plugin}:${err.error}`;
+                    if (seen.includes(key)) continue;
+                    seen.push(key);
                     const hint = err.hint ? ` — ${err.hint}` : '';
                     const isDeps = err.missing_deps?.length > 0;
                     ui.showToast(`Plugin '${err.plugin}': ${err.error}${hint}`, isDeps ? 'warning' : 'error', isDeps ? 0 : 10000);
                 }
+                try { sessionStorage.setItem('loadErrorsToasted', JSON.stringify(seen.slice(-100))); } catch {}
             }
             // Core integrity: yell once per browser session if the install doesn't
             // match its manifest. Check-and-toast ONLY — repair is a human-only

@@ -86,6 +86,9 @@ def emit(event: dict):
     with _lock:
         if not _sinks:
             return
+    # Revive the drain thread if it ever died — otherwise events queue
+    # unbounded with no signal (negspace hunt, 2026-08-31).
+    _ensure_worker()
     _queue.put(event)
 
 

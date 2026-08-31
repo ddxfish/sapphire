@@ -410,7 +410,6 @@ class StreamingChat:
             # Send only enabled tools - model should only know about active tools
             # Snapshot names too — used to validate tool calls against what LLM actually received
             # Snapshot executors to protect against reload yanking executors mid-chat
-            enabled_tools = self._effective_enabled_tools()
             # tools_filter hook (2026-08-24): plugins subtract tools from THIS
             # turn's schema — the game-room scenario fence. Subtract-only by
             # construction (intersection against the resolved list), fail-open
@@ -418,19 +417,29 @@ class StreamingChat:
             # chat + stream-brain override), so _allowed_tool_names below is
             # derived from the FILTERED list — a hallucinated call to a
             # fenced tool is refused like any unknown tool.
-            try:
-                # NO local import here: binding hook_runner OR HookEvent
-                # locally shadows the module-level names for the WHOLE
-                # function → UnboundLocal at the pre_chat fire above
-                # (both bitten and caught by --long, 2026-08-24).
-                _ev = HookEvent(chat_name=chat_name, tools=list(enabled_tools))
-                hook_runner.fire("tools_filter", _ev)
-                _kept = {t["function"]["name"] for t in (_ev.tools or [])
-                         if isinstance(t, dict) and "function" in t}
-                enabled_tools = [t for t in enabled_tools
-                                 if t.get("function", {}).get("name") in _kept]
-            except Exception as e:
-                logger.warning(f"tools_filter hook failed (unfiltered list ships): {e}")
+            # Closure so the post-tool-cycle refresh applies the SAME filter:
+            # pre-fix the refresh rebuilt from the RAW list, so the fence
+            # evaporated after the first tool call of every turn — and
+            # story_act is NEVER_FENCED, so essentially every story turn
+            # disarmed it (negspace N4, 2026-08-31).
+            def _filtered_enabled_tools():
+                tools = self._effective_enabled_tools()
+                try:
+                    # NO local import here: binding hook_runner OR HookEvent
+                    # locally shadows the module-level names for the WHOLE
+                    # function → UnboundLocal at the pre_chat fire above
+                    # (both bitten and caught by --long, 2026-08-24).
+                    _ev = HookEvent(chat_name=chat_name, tools=list(tools))
+                    hook_runner.fire("tools_filter", _ev)
+                    _kept = {t["function"]["name"] for t in (_ev.tools or [])
+                             if isinstance(t, dict) and "function" in t}
+                    tools = [t for t in tools
+                             if t.get("function", {}).get("name") in _kept]
+                except Exception as e:
+                    logger.warning(f"tools_filter hook failed (unfiltered list ships): {e}")
+                return tools
+
+            enabled_tools = _filtered_enabled_tools()
             _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
             _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 
@@ -699,6 +708,15 @@ class StreamingChat:
                         tc["id"] = f"call_{iteration}_{tool_calls.index(tc)}"
                         logger.info(f"[TOOL] Generated fallback ID for tool call: {tc['function']['name']}")
 
+                # Drop sparse-index padding stubs (id="" name="") BEFORE anything
+                # persists: they used to ride into history whole and emit a
+                # dangling tool_use next turn on providers with non-contiguous
+                # tool-call indexes. openai_compat filters its OWN final list;
+                # the accumulator that writes history didn't (negspace N18,
+                # 2026-08-31).
+                tool_calls = [tc for tc in tool_calls
+                              if tc.get("id") and tc.get("function", {}).get("name")]
+
                 if tool_calls and any(tc.get("id") and tc.get("function", {}).get("name") for tc in tool_calls):
                     logger.info(f"[TOOL] Processing {len(tool_calls)} tool call(s)")
                     
@@ -894,7 +912,7 @@ class StreamingChat:
                     # on the next iteration. Without this, the LLM would see
                     # new tools in tools= but execute_function would reject
                     # them as "not in active toolset". Mirrors chat.py:680.
-                    enabled_tools = self._effective_enabled_tools()
+                    enabled_tools = _filtered_enabled_tools()  # re-fence (N4)
                     _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
                     _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 

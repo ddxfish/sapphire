@@ -99,14 +99,25 @@ def register_plugin_scope(key: str, plugin_name: str = "", default='default'):
     return var
 
 
-def unregister_plugin_scope(key: str):
+def unregister_plugin_scope(key: str, plugin_name: str = None):
     """Remove a scope from the registry. Called by plugin_loader on unload so
     the next register_plugin_scope for the same key picks up manifest changes
     (different default, etc.) instead of hitting the idempotent early-return
-    and silently keeping the stale registration."""
-    if key in SCOPE_REGISTRY:
-        SCOPE_REGISTRY.pop(key, None)
-        logger.info(f"Unregistered scope '{key}'")
+    and silently keeping the stale registration.
+
+    plugin_name: when given, unregister only if this plugin is the recorded
+    OWNER. Shared keys (memory + mindpalace both declare 'memory'/'people')
+    used to be stripped from the LIVE owner when the OTHER plugin was
+    unloaded/removed (negspace N16, 2026-08-31)."""
+    entry = SCOPE_REGISTRY.get(key)
+    if not entry:
+        return
+    if plugin_name is not None and entry.get('plugin') != plugin_name:
+        logger.info(f"Scope '{key}' owned by '{entry.get('plugin')}', "
+                    f"not '{plugin_name}' — leaving registered")
+        return
+    SCOPE_REGISTRY.pop(key, None)
+    logger.info(f"Unregistered scope '{key}'")
 
 
 def apply_scopes_from_settings(fm, settings: dict):
@@ -474,14 +485,22 @@ class FunctionManager:
                         namespace = existing_mod.__dict__
                     else:
                         source = tool_path.read_text(encoding="utf-8")
-                        namespace = {"__file__": str(tool_path), "__name__": canonical_name}
-                        exec(compile(source, str(tool_path), "exec"), namespace)
-                        # Install the exec'd namespace as a real module in sys.modules
-                        # so future `from plugins.memory.tools import memory_tools` calls
-                        # resolve to the SAME module object (no split state).
+                        # Exec DIRECTLY into the module stub's __dict__. The old
+                        # copy (`mod_stub.__dict__.update(namespace)`) left the
+                        # exec'd functions closing over ONE dict while
+                        # sys.modules held ANOTHER: external rebinds like
+                        # `mem._backfill_done = False` (the embedding-swap
+                        # re-arm) silently wrote the dead copy, so NULL vectors
+                        # stayed invisible until restart (negspace N5,
+                        # 2026-08-31). One dict = reads AND writes coherent.
                         mod_stub = types.ModuleType(canonical_name)
-                        mod_stub.__dict__.update(namespace)
                         mod_stub.__file__ = str(tool_path)
+                        namespace = mod_stub.__dict__
+                        namespace["__file__"] = str(tool_path)
+                        exec(compile(source, str(tool_path), "exec"), namespace)
+                        # Install as a real module in sys.modules so future
+                        # `from plugins.memory.tools import memory_tools` calls
+                        # resolve to the SAME module object (no split state).
                         sys.modules[canonical_name] = mod_stub
 
                     if not namespace.get('ENABLED', True):
