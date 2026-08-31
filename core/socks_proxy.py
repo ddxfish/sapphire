@@ -113,10 +113,12 @@ def get_session():
             time.sleep(2)
             _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
 
-        # socks5h — DNS resolves THROUGH the proxy. Plain socks5:// leaked every
-        # hostname to local DNS while the payload rode the tunnel (fork-4 scope,
-        # 2026-08-31). Creds URL-quoted: an @ or : in a password broke the parse.
-        proxy_url = (f"socks5h://{quote(username, safe='')}:{quote(password, safe='')}"
+        # Scheme via _scheme(): socks5h resolves DNS THROUGH the proxy (plain
+        # socks5:// leaked every hostname to local DNS while the payload rode
+        # the tunnel — fork-4 scope 2026-08-31); SOCKS_REMOTE_DNS=false gives
+        # socks5 back for proxies with no server-side DNS. Creds URL-quoted:
+        # an @ or : in a password broke the parse.
+        proxy_url = (f"{_scheme()}://{quote(username, safe='')}:{quote(password, safe='')}"
                      f"@{config.SOCKS_HOST}:{config.SOCKS_PORT}")
 
         session.proxies = {
@@ -176,6 +178,18 @@ def register_invalidator(fn):
     openai_compat registers its httpx-pool drop here."""
     if fn not in _invalidators:
         _invalidators.append(fn)
+
+
+def _scheme() -> str:
+    """socks5h (DNS via proxy — no local leak) unless the proxy cannot resolve
+    names server-side: SOCKS_REMOTE_DNS=false falls back to socks5 (local
+    DNS; hostnames visible to this box's resolver, traffic still tunneled).
+    Canonical no-remote-DNS proxy: PIA's standalone SOCKS5 — verdict B on
+    Prime, 2026-08-31 (0x04 host-unreachable for every hostname request).
+    NOTE: the LLM lane (httpx/socksio) ALWAYS sends hostnames to the proxy
+    regardless of scheme — on a no-DNS proxy, LLMs need SOCKS_ROUTE_LLM off.
+    """
+    return 'socks5h' if getattr(config, 'SOCKS_REMOTE_DNS', True) else 'socks5'
 
 
 def _host_is_lan(host: str) -> bool:
@@ -278,7 +292,7 @@ def apply_proxy_env() -> None:
         _env_warnings.append(
             "SOCKS enabled but credentials are missing — proxied requests will "
             "fail until set (traffic never falls back to direct)")
-    proxy = f"socks5h://{auth}{config.SOCKS_HOST}:{config.SOCKS_PORT}"
+    proxy = f"{_scheme()}://{auth}{config.SOCKS_HOST}:{config.SOCKS_PORT}"
     no_proxy = build_no_proxy()
     for var in _PROXY_VARS:
         os.environ[var] = proxy
@@ -291,8 +305,8 @@ def apply_proxy_env() -> None:
         _env_warnings.append(
             "httpx[socks] not installed — LLM/cloud requests will fail while "
             "the proxy is on. Fix: pip install 'httpx[socks]'")
-    logger.info(f"Proxy env applied: socks5h://{config.SOCKS_HOST}:"
-                f"{config.SOCKS_PORT} (DNS via proxy) · NO_PROXY={no_proxy}")
+    logger.info(f"Proxy env applied: {_scheme()}://{config.SOCKS_HOST}:"
+                f"{config.SOCKS_PORT} · NO_PROXY={no_proxy}")
     for w in _env_warnings:
         logger.warning(f"[PROXY] {w}")
         _push_network_load_error(w, "Settings › Network")
@@ -322,6 +336,34 @@ def start_boot_probe() -> None:
             _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT,
                              username, password,
                              getattr(config, 'SOCKS_TIMEOUT', 10.0))
+            # The auth test dials an IP — it PASSES on a proxy with no
+            # server-side DNS while every hostname request dies with 0x04
+            # (Prime freeze, 2026-08-31). With remote DNS on, prove a
+            # hostname connect too.
+            if getattr(config, 'SOCKS_REMOTE_DNS', True):
+                import socks as _pysocks
+                ts = _pysocks.socksocket()
+                try:
+                    ts.set_proxy(_pysocks.SOCKS5, config.SOCKS_HOST,
+                                 config.SOCKS_PORT, rdns=True,
+                                 username=username or None,
+                                 password=password or None)
+                    ts.settimeout(getattr(config, 'SOCKS_TIMEOUT', 10.0))
+                    ts.connect(('api.anthropic.com', 443))
+                except Exception as de:
+                    msg = (f"SOCKS proxy cannot resolve hostnames server-side "
+                           f"({type(de).__name__}: {de}) — most requests will fail. "
+                           f"Proxies without remote DNS (e.g. PIA standalone SOCKS) "
+                           f"need Settings › Network › 'DNS via proxy' turned OFF.")
+                    logger.error(f"[PROXY] {msg}")
+                    _env_warnings.append(msg)
+                    _push_network_load_error(
+                        msg, "Settings › Network › DNS via proxy → off")
+                finally:
+                    try:
+                        ts.close()
+                    except Exception:
+                        pass
             logger.info("[PROXY] boot probe ok — SOCKS proxy reachable")
         except Exception as e:
             msg = (f"SOCKS proxy unreachable: {e} — proxied traffic will fail "
@@ -370,10 +412,12 @@ def proxy_status() -> dict:
         httpx_socks = True
     except ImportError:
         httpx_socks = False
+    remote_dns = bool(getattr(config, 'SOCKS_REMOTE_DNS', True))
     return {
         'enabled': enabled,
         'route_llm': bool(getattr(config, 'SOCKS_ROUTE_LLM', True)),
-        'dns_via_proxy': enabled,
+        'remote_dns': remote_dns,
+        'dns_via_proxy': enabled and remote_dns,
         'env_applied': bool(os.environ.get('ALL_PROXY')),
         'httpx_socks': httpx_socks,
         'no_proxy': [e for e in (os.environ.get('NO_PROXY') or '').split(',') if e],

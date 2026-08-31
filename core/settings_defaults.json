@@ -19,6 +19,7 @@
     "SOCKS_PORT": 1080,
     "SOCKS_TIMEOUT": 10.0,
     "SOCKS_ROUTE_LLM": true,
+    "SOCKS_REMOTE_DNS": true,
     "SOCKS_NO_PROXY_EXTRA": "",
     "UPDATE_CHECK_ENABLED": true
   },

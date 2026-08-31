@@ -173,3 +173,19 @@ def test_proxy_status_shape(socks_on):
     assert st["env_applied"] is True
     assert "127.0.0.1" in st["no_proxy"]
     assert isinstance(st["warnings"], list)
+
+
+def test_scheme_follows_remote_dns(socks_on):
+    sp.apply_proxy_env()
+    assert os.environ["ALL_PROXY"].startswith("socks5h://")
+    socks_on.setattr(config, "SOCKS_REMOTE_DNS", False, raising=False)
+    sp.apply_proxy_env()
+    assert os.environ["ALL_PROXY"].startswith("socks5://")
+
+
+def test_status_reports_remote_dns(socks_on):
+    socks_on.setattr(config, "SOCKS_REMOTE_DNS", False, raising=False)
+    sp.apply_proxy_env()
+    st = sp.proxy_status()
+    assert st["remote_dns"] is False
+    assert st["dns_via_proxy"] is False

@@ -326,7 +326,7 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # SOCKS showed green while every web tool kept the cached direct session
     # (traffic exited the real IP) until restart. Found independently by two
     # scouts (negspace N2, 2026-08-31).
-    if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA')):
+    if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA')):
         from core.socks_proxy import clear_session_cache
         clear_session_cache()
     # Execute deferred provider switches (runtime values are already set via
@@ -550,7 +550,7 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         persist=(persist and not is_provider_switch),
         _skip_callbacks=is_provider_switch,
     )
-    if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA'}:
+    if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA'}:
         clear_session_cache()
     # Tracks switch outcome so we know whether to persist + rollback.
     # Defined BEFORE the first toggle site that can set it.

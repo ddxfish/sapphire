@@ -7,7 +7,7 @@ export default {
     name: 'Network',
     icon: '\uD83C\uDF10',
     description: 'SOCKS proxy and update-check settings',
-    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA', 'UPDATE_CHECK_ENABLED'],
+    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA', 'UPDATE_CHECK_ENABLED'],
 
     render(ctx) {
         return `
@@ -104,9 +104,13 @@ export default {
             const warn = '<span style="color:var(--warning,#f59e0b)">\u25CF</span> ';
             const off = '<span style="color:var(--text-muted)">\u25CB</span> ';
             const rows = [];
-            rows.push(ok + 'Web tools, search &amp; downloads \u2014 routed (DNS resolves via proxy)');
+            rows.push(ok + (st.remote_dns
+                ? 'Web tools, search &amp; downloads \u2014 routed (DNS resolves via proxy)'
+                : 'Web tools, search &amp; downloads \u2014 routed (DNS resolves LOCALLY \u2014 hostnames visible to this box\u2019s resolver)'));
             rows.push(st.route_llm
-                ? ok + 'LLM providers \u2014 routed (\u2601\uFE0F cloud; \uD83C\uDFE0 local stays direct)'
+                ? (st.remote_dns
+                    ? ok + 'LLM providers \u2014 routed (\u2601\uFE0F cloud; \uD83C\uDFE0 local stays direct)'
+                    : warn + 'LLM providers \u2014 routed, but the LLM lane always asks the proxy to resolve names; on a proxy without remote DNS these WILL fail \u2014 turn off Route LLM traffic')
                 : off + 'LLM providers \u2014 exempted (Route LLM traffic is off)');
             rows.push(ok + 'Model &amp; plugin-key downloads \u2014 routed');
             rows.push(off + 'Discord &amp; Telegram \u2014 direct (own connection libraries)');

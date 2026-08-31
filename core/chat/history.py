@@ -139,23 +139,43 @@ def get_user_defaults() -> Dict[str, Any]:
     return merged
 
 _tokenizer = None
+_tokenizer_failed = False
 
 def get_tokenizer():
-    """Lazy load tokenizer once."""
-    global _tokenizer
-    if _tokenizer is None:
-        _tokenizer = tiktoken.get_encoding("cl100k_base")
+    """Lazy load tokenizer — ONE download attempt per boot. On a box where the
+    fetch can't succeed (offline, or egress through a dead proxy) tiktoken
+    re-dialed on EVERY count_tokens call, and /api/status counts tokens inside
+    an async route — each blocking retry chain froze the whole event loop
+    (Sapph Prime boot freeze, 2026-08-31). Returns None after a failed
+    attempt; callers fall back to char-estimates. A restart retries (the
+    cache file may have been seeded meanwhile)."""
+    global _tokenizer, _tokenizer_failed
+    if _tokenizer is None and not _tokenizer_failed:
+        try:
+            _tokenizer = tiktoken.get_encoding("cl100k_base")
+        except Exception as e:
+            _tokenizer_failed = True
+            logger.warning(f"tokenizer load failed — char-estimates for the rest "
+                           f"of this boot: {type(e).__name__}: {e}")
     return _tokenizer
+
+# Warm the tokenizer OFF the request path: on a cache miss get_encoding does
+# network I/O, and without this the first /api/status of the boot paid that
+# inline (same freeze family as above, just once).
+threading.Thread(target=get_tokenizer, daemon=True, name="tiktoken-warm").start()
 
 def count_tokens(text: str) -> int:
     """Token count for budgeting. Soft-fails to an estimate rather than raising —
     counting is telemetry, never worth crashing a chat turn over."""
     if not text:
         return 0
+    tok = get_tokenizer()
+    if tok is None:
+        return max(1, len(str(text)) // 3)
     try:
         # disallowed_special=() -> count special-token strings like '<|endoftext|>'
         # as normal text instead of raising. We only use the length, never the IDs.
-        return len(get_tokenizer().encode(text, disallowed_special=()))
+        return len(tok.encode(text, disallowed_special=()))
     except Exception as e:
         logger.warning(f"count_tokens fell back to estimate: {type(e).__name__}: {e}")
         return max(1, len(str(text)) // 3)

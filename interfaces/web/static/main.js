@@ -135,6 +135,25 @@ function initAppearance() {
     }
 }
 
+// Boot awaits are BOUNDED: a wedged backend endpoint must degrade the page
+// (input unlocked, Settings reachable, one toast says why) — never hold it
+// at "Loading Web UI..." forever. The Prime freeze, 2026-08-31: a blocked
+// /api/status held init() pending with zero explanation.
+const bootBounded = (p, ms, label) => Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(
+        () => rej(new Error(`${label} timed out after ${ms / 1000}s — backend busy or stuck`)), ms)),
+]);
+let _bootDegradedToasted = false;
+function bootDegraded(reason) {
+    console.warn('[Init] degraded:', reason);
+    if (_bootDegradedToasted) return;
+    _bootDegradedToasted = true;
+    try {
+        ui.showToast(`Page loaded degraded: ${reason}. Settings still work — check the server logs.`, 'warning', 0);
+    } catch {}
+}
+
 async function init() {
     const t0 = performance.now();
 
@@ -183,7 +202,7 @@ async function init() {
         // Must run BEFORE initRouter so chat dropdown has real data when chat.show() fires
         let initData = null;
         try {
-            initData = await getInitData();
+            initData = await bootBounded(getInitData(), 20000, '/api/init');
             ui.initFromInitData(initData);
             setInstanceColor(initData?.settings?.ICON_COLOR || '');
             setDefaultBackground(initData?.settings?.DEFAULT_BACKGROUND || '');
@@ -231,7 +250,7 @@ async function init() {
             }
             // Discover plugin apps — promote nav apps, show Apps grid if others exist
             try {
-                const appsRes = await fetch('/api/apps');
+                const appsRes = await fetch('/api/apps', { signal: AbortSignal.timeout(15000) });
                 if (appsRes.ok) {
                     const appsData = await appsRes.json();
                     const allApps = appsData.apps || [];
@@ -388,26 +407,27 @@ async function init() {
             } catch {}
         } catch (e) {
             console.warn('[Init] Could not fetch init data:', e);
+            bootDegraded(e?.message || 'init data unavailable');
         }
 
         // Use allSettled so one failure doesn't kill the other
         const [sceneResult, refreshResult] = await Promise.allSettled([
-            updateScene(),
-            refresh(false)
+            bootBounded(updateScene(), 20000, '/api/status'),
+            bootBounded(refresh(false), 20000, 'history fetch')
         ]);
 
         const status = sceneResult.status === 'fulfilled' ? sceneResult.value : null;
         const historyLen = refreshResult.status === 'fulfilled' ? refreshResult.value : 0;
 
-        if (sceneResult.status === 'rejected') console.warn('[Init] updateScene failed:', sceneResult.reason);
-        if (refreshResult.status === 'rejected') console.warn('[Init] refresh failed:', refreshResult.reason);
+        if (sceneResult.status === 'rejected') { console.warn('[Init] updateScene failed:', sceneResult.reason); bootDegraded(sceneResult.reason?.message || 'status unavailable'); }
+        if (refreshResult.status === 'rejected') { console.warn('[Init] refresh failed:', refreshResult.reason); bootDegraded(refreshResult.reason?.message || 'history unavailable'); }
 
         setHistLen(historyLen);
 
         // Populate chat dropdown + picker (before router so chat.show() has real chat name).
         // Always via populateChatDropdown — the old status.chats fast-path skipped its
         // archived/private filters, leaking both into the picker on every boot.
-        try { await populateChatDropdown(); } catch (e) { console.warn('[Init] Chat dropdown failed:', e); }
+        try { await bootBounded(populateChatDropdown(), 15000, 'chat list'); } catch (e) { console.warn('[Init] Chat dropdown failed:', e); bootDegraded(e?.message || 'chat list unavailable'); }
 
         // Apply chat settings
         const settings = status?.chat_settings || {};

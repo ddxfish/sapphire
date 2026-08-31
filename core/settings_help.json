@@ -32,6 +32,10 @@
     "short": "SOCKS proxy connection timeout (seconds)",
     "long": "How long to wait for the SOCKS proxy to respond before timing out. Default is 10 seconds. Increase if your proxy is slow or on a high-latency connection."
   },
+  "SOCKS_REMOTE_DNS": {
+    "short": "Resolve DNS through the proxy (socks5h)",
+    "long": "On (recommended): hostnames are sent to the proxy and resolved there — your local DNS never sees what Sapphire visits. Off: names resolve locally (visible to this machine's DNS resolver) and only the traffic rides the tunnel. Turn OFF for proxies with no server-side DNS — PIA's standalone SOCKS5 is the canonical case (every hostname request fails with 'host unreachable' until this is off)). Note: LLM traffic (httpx) always asks the proxy to resolve names regardless of this setting \u2014 on a proxy without remote DNS, also turn OFF 'Route LLM traffic via proxy'."
+  },
   "SOCKS_ROUTE_LLM": {
     "short": "Route LLM traffic via proxy",
     "long": "When the SOCKS proxy is on, LLM API requests (Claude, OpenAI, Gemini, custom providers) ride the proxy like everything else. Turn this off if a provider blocks proxy IPs (403s) — LLM hosts are then exempted while all other traffic stays proxied. Local/LAN LLM servers are always exempt: a remote proxy can't reach your LAN."
