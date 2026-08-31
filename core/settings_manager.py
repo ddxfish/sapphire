@@ -703,7 +703,9 @@ class SettingsManager:
             'PRIVATE_ALLOW_UNFLAGGED_TOOLS',
             'LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
             # SOCKS can be hot-reloaded - session cache is cleared on change
+            # (which also re-derives the process proxy env + httpx pools)
             'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT',
+            'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA',
             # Providers hot-swap at runtime via switch_*_provider() methods
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
             # Tool settings - read per-request

@@ -68,6 +68,16 @@ except Exception as e:
     logger.critical(f"FATAL: Import error during startup: {e}", exc_info=True)
     sys.exit(1)
 
+# Proxy env — stamped BEFORE anything spawns or dials out. Fail-closed:
+# SOCKS on + broken proxy = loud request failures, never silent direct
+# traffic. Daemon subprocesses inherit via dict(os.environ) at spawn.
+# (SOCKS-for-all, 2026-08-31)
+from core.socks_proxy import apply_proxy_env
+try:
+    apply_proxy_env()
+except Exception as _e:
+    logger.error(f"apply_proxy_env failed at boot: {_e}")
+
 from core.process_manager import ProcessManager, kill_process_on_port
 
 from core import prompts
@@ -1364,6 +1374,11 @@ def run():
         BOLD = '\033[1m'
         RESET = '\033[0m'
         print(f"\n{CYAN_BG}{BLACK}{BOLD} * SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
+
+        # SOCKS boot probe — late on purpose: plugin scan is done, so the
+        # load_errors toast lane exists for a dead-proxy warning.
+        from core.socks_proxy import start_boot_probe
+        start_boot_probe()
 
         logger.info(f"Sapphire is running. Starting uvicorn server...")
 

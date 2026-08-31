@@ -156,16 +156,19 @@ const tabConfig = {
         },
         local: {
             label: 'Local (Nomic ONNX)',
+            is_local: true,
             essentialKeys: [],
             advancedKeys: []
         },
         api: {
             label: 'Remote (Nomic API)',
+            is_local: false,
             essentialKeys: ['EMBEDDING_API_URL'],
             advancedKeys: ['EMBEDDING_API_KEY']
         },
         sapphire_router: {
             label: 'Sapphire Router',
+            is_local: false,
             essentialKeys: ['SAPPHIRE_ROUTER_URL', 'SAPPHIRE_ROUTER_TENANT_ID'],
             advancedKeys: []
         }

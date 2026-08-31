@@ -281,10 +281,15 @@ class ClaudeProvider(BaseProvider):
             request_kwargs["tools"] = self._convert_tools(tools, cache_enabled, cache_ttl)
         
         # Wrap in retry for rate limiting
-        response = retry_on_rate_limit(
-            self._client.messages.create,
-            **request_kwargs
-        )
+        try:
+            response = retry_on_rate_limit(
+                self._client.messages.create,
+                **request_kwargs
+            )
+        except Exception as e:
+            from core.socks_proxy import maybe_llm_proxy_hint
+            maybe_llm_proxy_hint('Claude', str(e))
+            raise
         
         return self._parse_response(response)
     

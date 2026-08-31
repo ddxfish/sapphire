@@ -32,6 +32,14 @@
     "short": "SOCKS proxy connection timeout (seconds)",
     "long": "How long to wait for the SOCKS proxy to respond before timing out. Default is 10 seconds. Increase if your proxy is slow or on a high-latency connection."
   },
+  "SOCKS_ROUTE_LLM": {
+    "short": "Route LLM traffic via proxy",
+    "long": "When the SOCKS proxy is on, LLM API requests (Claude, OpenAI, Gemini, custom providers) ride the proxy like everything else. Turn this off if a provider blocks proxy IPs (403s) — LLM hosts are then exempted while all other traffic stays proxied. Local/LAN LLM servers are always exempt: a remote proxy can't reach your LAN."
+  },
+  "SOCKS_NO_PROXY_EXTRA": {
+    "short": "Hosts that bypass the proxy (comma-separated)",
+    "long": "Extra hostnames or IPs that must never ride the proxy — LAN gear the proxy can't reach, e.g. homeassistant.local, 192.168.1.50. Loopback and detected LAN LLM endpoints are exempted automatically. Applies while the SOCKS proxy is enabled."
+  },
   "BACKUPS_ENABLED": {
     "short": "Enable automatic backup system",
     "long": "When enabled, the system will automatically create backups of the user/ directory on a schedule. Runs at BACKUPS_HOUR daily, weekly on Sundays, monthly on the 1st. Manual backups can be triggered from the UI."

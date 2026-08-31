@@ -19,7 +19,7 @@ import os
 import shutil
 import socket
 import threading
-import urllib.request
+import requests
 from pathlib import Path
 from typing import Optional
 
@@ -330,10 +330,15 @@ def _ensure_model_downloaded() -> Path:
     # a timeout kwarg directly; use urlopen + copyfileobj instead. 2026-05-20.
     tmp_path = MODEL_CACHE_PATH.with_suffix(".onnx.tmp")
     try:
-        req = urllib.request.Request(SILERO_VAD_URL)
-        with urllib.request.urlopen(req, timeout=_DOWNLOAD_READ_TIMEOUT_S) as resp:
-            with open(tmp_path, 'wb') as f:
-                shutil.copyfileobj(resp, f)
+        # get_session, not urllib: urllib can't ride the SOCKS env (no SOCKS
+        # support — under a proxy this download just died), and proxy users
+        # want model pulls routed too. SOCKS-for-all conversion, 2026-08-31.
+        from core.socks_proxy import get_session
+        resp = get_session().get(SILERO_VAD_URL, timeout=_DOWNLOAD_READ_TIMEOUT_S, stream=True)
+        resp.raise_for_status()
+        with open(tmp_path, 'wb') as f:
+            for chunk in resp.iter_content(65536):
+                f.write(chunk)
         if tmp_path.stat().st_size < 1_000_000:
             raise RuntimeError(f"Downloaded file too small ({tmp_path.stat().st_size} bytes) — likely a redirect/error page")
         if SILERO_VAD_SHA256:
@@ -345,7 +350,7 @@ def _ensure_model_downloaded() -> Path:
         os.replace(tmp_path, MODEL_CACHE_PATH)
         logger.info(f"[SILERO] Model cached at {MODEL_CACHE_PATH} ({MODEL_CACHE_PATH.stat().st_size:,} bytes)")
         return MODEL_CACHE_PATH
-    except (socket.timeout, TimeoutError) as e:
+    except (socket.timeout, TimeoutError, requests.exceptions.Timeout) as e:
         # Clean up partial download
         if tmp_path.exists():
             try: tmp_path.unlink()

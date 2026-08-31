@@ -15,6 +15,7 @@ const tabConfig = {
         },
         kokoro: {
             label: 'Local (Kokoro)',
+            is_local: true,
             essentialKeys: ['KOKORO_DEVICE'],
             advancedKeys: [
                 'KOKORO_CUDA_DEVICE',

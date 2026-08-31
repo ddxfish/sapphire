@@ -15,6 +15,7 @@ const tabConfig = {
         },
         faster_whisper: {
             label: 'Local (Faster Whisper)',
+            is_local: true,
             essentialKeys: ['STT_MODEL_SIZE'],
             advancedKeys: [
                 'FASTER_WHISPER_DEVICE', 'FASTER_WHISPER_CUDA_DEVICE', 'FASTER_WHISPER_COMPUTE_TYPE',
@@ -23,6 +24,7 @@ const tabConfig = {
         },
         fireworks_whisper: {
             label: 'Fireworks Whisper',
+            is_local: false,
             essentialKeys: ['STT_FIREWORKS_API_KEY', 'STT_FIREWORKS_MODEL'],
             advancedKeys: []
         }

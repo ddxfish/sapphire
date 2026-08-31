@@ -326,7 +326,7 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # SOCKS showed green while every web tool kept the cached direct session
     # (traffic exited the real IP) until restart. Found independently by two
     # scouts (negspace N2, 2026-08-31).
-    if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT')):
+    if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA')):
         from core.socks_proxy import clear_session_cache
         clear_session_cache()
     # Execute deferred provider switches (runtime values are already set via
@@ -550,7 +550,7 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         persist=(persist and not is_provider_switch),
         _skip_callbacks=is_provider_switch,
     )
-    if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'}:
+    if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA'}:
         clear_session_cache()
     # Tracks switch outcome so we know whether to persist + rollback.
     # Defined BEFORE the first toggle site that can set it.
@@ -790,6 +790,14 @@ async def test_socks_connection(request: Request, _=Depends(require_login)):
             return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
     return await asyncio.to_thread(_test_socks)
+
+
+@router.get("/api/socks/status")
+async def get_socks_status(request: Request, _=Depends(require_login)):
+    """Trust-strip truth for Settings > Network: what the proxy env actually
+    covers right now (SOCKS-for-all, 2026-08-31)."""
+    from core.socks_proxy import proxy_status
+    return proxy_status()
 
 
 # =============================================================================

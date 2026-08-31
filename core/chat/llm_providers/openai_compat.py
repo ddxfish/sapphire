@@ -54,6 +54,22 @@ def _shared_http_client(base_url):
         return cli
 
 
+def _drop_http_pool():
+    """Proxy config changed — drop pooled clients so the next construction
+    picks up the new env mounts (httpx reads proxy env at CLIENT build).
+    References only: in-flight requests finish on their old client, GC
+    reaps. (SOCKS-for-all, 2026-08-31)"""
+    with _HTTP_POOL_LOCK:
+        _HTTP_POOL.clear()
+
+
+try:
+    from core.socks_proxy import register_invalidator as _reg_inv
+    _reg_inv(_drop_http_pool)
+except Exception:
+    pass
+
+
 # Params a strict endpoint may refuse; each is optional to the request. A
 # 400 naming one is learned ONCE per provider instance (Krem's F1a,
 # 2026-08-23): stripped, the request retried, never sent again until
@@ -370,6 +386,8 @@ class OpenAICompatProvider(BaseProvider):
         except Exception as e:
             bad = self._params_named(e, request_kwargs)
             if not bad:
+                from core.socks_proxy import maybe_llm_proxy_hint
+                maybe_llm_proxy_hint(self.config.get('display_name') or self.provider_name, str(e))
                 raise
             self._rejected_params.update(bad)
             self._strip_rejected(request_kwargs)
@@ -378,7 +396,12 @@ class OpenAICompatProvider(BaseProvider):
                    f"now on (until restart). Clear it under Settings › LLM › {where} to stop this.")
             logger.warning(f"[OPENAI-COMPAT] {msg} | {e}")
             _notify(msg)
-            return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
+            try:
+                return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
+            except Exception as e2:
+                from core.socks_proxy import maybe_llm_proxy_hint
+                maybe_llm_proxy_hint(self.config.get('display_name') or self.provider_name, str(e2))
+                raise
     
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

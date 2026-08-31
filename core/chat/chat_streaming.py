@@ -1245,6 +1245,14 @@ class StreamingChat:
             raise
         except Exception as e:
             logger.error(f"[ERR] [STREAMING FATAL] Unhandled error: {e}", exc_info=True)
+            # Learn-once proxy hint — this is the one catcher every streaming
+            # provider failure funnels through (claude stream-enter included),
+            # so proxy-blocked errors get named here. (SOCKS-for-all, 2026-08-31)
+            try:
+                from core.socks_proxy import maybe_llm_proxy_hint
+                maybe_llm_proxy_hint('LLM provider', str(e))
+            except Exception:
+                pass
             # Save error so history doesn't end with a dangling user message
             # (consecutive user messages break Claude's alternating requirement)
             self.main_chat.session_manager.add_assistant_final(

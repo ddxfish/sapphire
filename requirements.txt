@@ -82,4 +82,4 @@ telethon>=1.34.0
 mcp>=1.26.0
 
 # Async HTTP (embeddings, STT/TTS providers)
-httpx>=0.27.0
+httpx[socks]>=0.27.0  # [socks]=socksio: SOCKS-for-all env routing (2026-08-31); PySocks above covers only the requests lane

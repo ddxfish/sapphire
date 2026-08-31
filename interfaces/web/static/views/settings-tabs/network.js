@@ -7,7 +7,7 @@ export default {
     name: 'Network',
     icon: '\uD83C\uDF10',
     description: 'SOCKS proxy and update-check settings',
-    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'UPDATE_CHECK_ENABLED'],
+    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA', 'UPDATE_CHECK_ENABLED'],
 
     render(ctx) {
         return `
@@ -35,11 +35,17 @@ export default {
                 </div>
                 <div class="net-test-result" id="socks-result" style="display:none"></div>
             </div>
+
+            <div class="net-section">
+                <h4>What rides the proxy</h4>
+                <div id="socks-strip" style="font-size:var(--font-sm);line-height:1.7">Loading\u2026</div>
+            </div>
         `;
     },
 
     async attachListeners(ctx, el) {
         this.refreshCreds(el);
+        this.renderStrip(el);
 
         el.querySelector('#socks-save')?.addEventListener('click', async () => {
             const user = el.querySelector('#socks-user').value;
@@ -80,6 +86,43 @@ export default {
                 this.refreshCreds(el);
             } catch { ui.showToast('Failed', 'error'); }
         });
+    },
+
+    // Trust strip — the honest lane list. Fail-closed plumbing means the
+    // silent risk is inverted: lanes the env CAN'T reach going direct while
+    // the user believes "everything routed". This strip is that truth.
+    async renderStrip(el) {
+        const strip = el.querySelector('#socks-strip');
+        if (!strip) return;
+        try {
+            const st = await fetchWithTimeout('/api/socks/status');
+            if (!st.enabled) {
+                strip.innerHTML = '<span style="color:var(--text-muted)">Proxy off \u2014 all traffic goes direct.</span>';
+                return;
+            }
+            const ok = '<span style="color:var(--success,#22c55e)">\u25CF</span> ';
+            const warn = '<span style="color:var(--warning,#f59e0b)">\u25CF</span> ';
+            const off = '<span style="color:var(--text-muted)">\u25CB</span> ';
+            const rows = [];
+            rows.push(ok + 'Web tools, search &amp; downloads \u2014 routed (DNS resolves via proxy)');
+            rows.push(st.route_llm
+                ? ok + 'LLM providers \u2014 routed (\u2601\uFE0F cloud; \uD83C\uDFE0 local stays direct)'
+                : off + 'LLM providers \u2014 exempted (Route LLM traffic is off)');
+            rows.push(ok + 'Model &amp; plugin-key downloads \u2014 routed');
+            rows.push(off + 'Discord &amp; Telegram \u2014 direct (own connection libraries)');
+            rows.push(off + 'Voice calls \u2014 direct (UDP media; SOCKS cannot carry it)');
+            rows.push(off + 'Email \u2014 direct (IMAP/SMTP sockets)');
+            if (st.no_proxy?.length)
+                rows.push(off + 'Bypassed hosts: ' + st.no_proxy.join(', '));
+            if (!st.httpx_socks)
+                rows.push(warn + "httpx[socks] not installed \u2014 LLM/cloud requests will FAIL: pip install 'httpx[socks]'");
+            for (const w of (st.warnings || []))
+                rows.push(warn + w);
+            rows.push('<span style="color:var(--text-muted)">Nothing falls back to direct \u2014 a dead proxy fails loudly.</span>');
+            strip.innerHTML = rows.join('<br>');
+        } catch {
+            strip.textContent = 'Status unavailable';
+        }
     },
 
     async refreshCreds(el) {

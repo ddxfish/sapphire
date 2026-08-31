@@ -275,6 +275,7 @@ function _renderCustomRow(k, c, i) {
                     <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
                     <span class="provider-order">${i + 1}</span>
                     <span class="custom-provider-status">${statusIcon}</span>
+                    <span class="provider-icon">${c.is_local ? '\uD83C\uDFE0' : '\u2601\uFE0F'}</span>
                     <span class="provider-name">${_esc(c.display_name || k)}</span>
                     <span class="custom-provider-detail">${_esc(model)} · ${template}</span>
                 </div>

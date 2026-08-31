@@ -157,24 +157,26 @@ async def test_account(**kwargs):
                     return {"success": False, "error": f"Discord API returned {resp.status}"}
     except ImportError:
         # Fallback without aiohttp
-        import urllib.request
-        import json as json_mod
-        req = urllib.request.Request(
-            "https://discord.com/api/v10/users/@me",
-            headers={"Authorization": f"Bot {token}"}
-        )
+        # requests via core get_session, not urllib: urllib can't ride the
+        # SOCKS env (no SOCKS support) — under a proxy this fallback just
+        # died. SOCKS-for-all conversion, 2026-08-31.
+        from core.socks_proxy import get_session
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json_mod.loads(resp.read())
-                bot_name = data.get("username", "Unknown")
-                def _patch(accts):
-                    accts = dict(accts or {})
-                    if account_name in accts:
-                        accts[account_name]["bot_name"] = bot_name
-                        accts[account_name]["bot_id"] = data.get("id", "")
-                    return accts
-                state.update_with_lock("accounts", _patch, default={})
-                return {"success": True, "bot_name": bot_name, "bot_id": data.get("id", "")}
+            resp = get_session().get(
+                "https://discord.com/api/v10/users/@me",
+                headers={"Authorization": f"Bot {token}"}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            bot_name = data.get("username", "Unknown")
+
+            def _patch(accts):
+                accts = dict(accts or {})
+                if account_name in accts:
+                    accts[account_name]["bot_name"] = bot_name
+                    accts[account_name]["bot_id"] = data.get("id", "")
+                return accts
+            state.update_with_lock("accounts", _patch, default={})
+            return {"success": True, "bot_name": bot_name, "bot_id": data.get("id", "")}
         except Exception as e:
             return {"success": False, "error": str(e)}
     except Exception as e:

@@ -1,3 +1,7 @@
+# 2.12.5 - Privacy enhancement
+- Aggressive caching of resources (STT, TTS, embeddings, silero, CLIP, fonts)
+- Added 24 hour cache to plugin keys
+- Routed whole app through SOCKS with option to bypass LLM
 # 2.12.4 - QoL UX UI
 - LLM has repeat penalty and more params
 - Cap memory at 512 char and write it trimmed instead of rejecting

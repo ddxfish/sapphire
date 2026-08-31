@@ -148,7 +148,7 @@
         "type": "string",
         "label": "Model override",
         "default": "",
-        "help": "Model for librarian passes (empty = the app's normal selection). Passes read raw memory in bulk — a local model here is both a cost and a privacy lever. The dates pass wants a 9B-class model or better; below that, the built-in date resolver alone is more accurate.",
+        "help": "Model for librarian passes (empty = the app's normal selection). Passes read raw memory in bulk — a local model here is both a cost and a privacy lever, while a cloud model means memory text leaves the machine on every pass (key-gated private memories are excluded from tending and never ride). The dates pass wants a 9B-class model or better; below that, the built-in date resolver alone is more accurate.",
         "hidden": true
       },
       {
