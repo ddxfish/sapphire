@@ -1234,8 +1234,8 @@ function renderPersonaStrip(container, settings, init) {
 
     gridEl.innerHTML = shown.map(p => `
         <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)} — drag to reorder" draggable="true">
-            ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}
-            <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
+            ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}${p.name === defaultPersonaName ? '<span class="sb-pgrid-default" title="Default persona">&#x2B50;</span>' : ''}
+            <span class="sb-pgrid-name">${escapeHtml(p.name)}</span>
         </div>
     `).join('') + `
         <div class="sb-pgrid-cell sb-pgrid-new" data-action="new" title="New persona from this chat">

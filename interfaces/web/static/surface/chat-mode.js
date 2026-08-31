@@ -72,8 +72,8 @@ export const chatMode = {
                         </div>
                         <!-- Row 2: chat actions (always visible) -->
                         <div class="sb-chat-actions">
+                            <div class="sb-actions-left">
                             <button type="button" id="sb-new-chat" class="sb-icon-btn" title="New Chat">+</button>
-                            <button type="button" id="sb-privacy-eye" class="sb-icon-btn" title="Private chat &#8212; local models and tools only">&#x1F441;&#xFE0E;</button>
                             <button type="button" id="sb-delete-chat" class="sb-icon-btn sb-icon-danger" title="Delete Chat">&#x1F5D1;</button>
                             <button type="button" id="clear-chat-btn" class="sb-icon-btn" title="Clear Chat">&#x2715;</button>
                             <div class="sb-kebab kebab-menu" id="chat-menu">
@@ -82,6 +82,12 @@ export const chatMode = {
                                     <button id="import-chat-btn">Import</button>
                                     <button id="export-chat-btn">Export</button>
                                 </div>
+                            </div>
+                            </div>
+                            <div class="sb-actions-right">
+                            <!-- Vault toggle — right-aligned away from the chat tools; glyph
+                                 tracks vault state (scene.js poll): sealed U+1F512, open U+1F513 -->
+                            <button type="button" id="sb-privacy-eye" class="sb-icon-btn" title="Private mode off &#8212; click to unlock the vault">&#x1F512;&#xFE0E;</button>
                             </div>
                         </div>
 
