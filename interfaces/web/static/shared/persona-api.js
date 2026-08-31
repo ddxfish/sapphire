@@ -12,15 +12,26 @@ export const createPersona = (data) => fetchWithTimeout('/api/personas', {
     body: JSON.stringify(data)
 });
 
-export const updatePersona = (name, data) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-});
+export const updatePersona = async (name, data) => {
+    const res = await fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+    // rename runs _favorites_sync + chat re-point server-side -- bust the
+    // init cache or the next star click PUTs the stale list back,
+    // resurrecting the dead name (S4 #3, hunt 2026-08-30)
+    await refreshInitData();
+    return res;
+};
 
-export const deletePersona = (name) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}`, {
-    method: 'DELETE'
-});
+export const deletePersona = async (name) => {
+    const res = await fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}`, {
+        method: 'DELETE'
+    });
+    await refreshInitData();  // delete prunes PERSONA_FAVORITES server-side (S4 #3)
+    return res;
+};
 
 export const duplicatePersona = (name, newName) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}/duplicate`, {
     method: 'POST',

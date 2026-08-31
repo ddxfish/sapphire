@@ -45,3 +45,12 @@ def test_trim_helper_boundaries(isolated_memory):
     kept, dropped = mt._trim_to_cap("z" * (cap + 40))
     assert len(kept) == cap and len(dropped) == 40
     assert mt._trim_to_cap("  short  ") == ("short", "")
+    # Early-whitespace region (hunt 2026-08-30 CRIT): a short label followed
+    # by an unbroken run (CJK / base64 / URL) must hard-cut at the cap, not
+    # save the label as a stub with the whole payload dropped.
+    kept, dropped = mt._trim_to_cap("Note: " + "x" * 600)
+    assert len(kept) == cap, f"stub save: kept only {len(kept)} chars"
+    assert kept.startswith("Note: x")
+    # Whitespace in the back half is still preferred (no word split).
+    kept, dropped = mt._trim_to_cap("q" * 400 + " " + "r" * 200)
+    assert kept == "q" * 400

@@ -111,7 +111,7 @@ class SettingsManager:
         """Load core/settings_defaults.json"""
         defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
         try:
-            with open(defaults_path, 'r', encoding='utf-8') as f:
+            with open(defaults_path, 'r', encoding='utf-8-sig') as f:
                 nested = json.load(f)
             self._defaults = self._flatten_dict(nested)
             logger.info(f"Loaded default settings from {defaults_path}")
@@ -315,7 +315,7 @@ class SettingsManager:
             try:
                 # Load the defaults again in nested form
                 defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
-                with open(defaults_path, 'r', encoding='utf-8') as f:
+                with open(defaults_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
                 
                 # Remove auth section (has env vars and computed values)
@@ -501,7 +501,7 @@ class SettingsManager:
         # Load category mapping from defaults to know where keys belong
         defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
         try:
-            with open(defaults_path, 'r', encoding='utf-8') as f:
+            with open(defaults_path, 'r', encoding='utf-8-sig') as f:
                 defaults_nested = json.load(f)
         except Exception:
             return nested

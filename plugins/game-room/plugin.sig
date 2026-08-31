@@ -14,12 +14,12 @@
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
     "gameroom_story/render.py": "sha256:a8a141142561dde035d3d219fa302def007dc04bb999c29dbdaf3ee3bf752388",
     "gameroom_story/rooms.py": "sha256:ed4ffcdc459f031e8c9b4231d0329487b8e885ef887cd617c25a950c3bb3ea72",
-    "gameroom_story/session.py": "sha256:13b51acd96943bd1b55417f401cd25add01eb569711f27f9e5a88a27293c6fe8",
+    "gameroom_story/session.py": "sha256:2a5297e56fa53d9761085de4469caea9430c6762bc76343089862915e7f0622f",
     "gameroom_story/state.py": "sha256:fa947a8bdefbc928fe5860e7d9010079a0b73db4e529c94cbd70b3b0e025191b",
     "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/ghost.py": "sha256:4e6492773689676bc528195b0c60e63b84dfae7eeb5ae9d9f58215f5c280f7ac",
     "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
-    "hooks/toolfence.py": "sha256:e52fc01e4e1bbd1874ec83e55957ca6d8148f5935f0d8356a6fc2d664905687c",
+    "hooks/toolfence.py": "sha256:7699471d95fd54aa7a886bd64b497dbeb6dae0402c970dde2c18f2d26d2282d8",
     "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
     "plugin.json": "sha256:3636f1e4919eb0741e66509b069f8f92c99751eb17f67a5907a081535919d666",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
@@ -58,5 +58,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "kLPZEvp3jSJ/7A0omGzLgRD3apc26NzN7kT6iKfiXQtJjk0MpW3g8t87nScHEA8YoMiIBGLf5NsDPYDe1jQ0Ag=="
+  "signature": "UHezeuyUAYqwIxInlLg3P9wsiRPEFbgLy0UplzN6uyba/BgPtmG0Bu286gH5shMnfTRy3YHnwYPyb7yhFjiuBQ=="
 }

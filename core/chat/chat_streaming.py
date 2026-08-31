@@ -118,6 +118,27 @@ class StreamingChat:
         """Streaming-lane wrapper — see stamp_private_if_unlocked below."""
         stamp_private_if_unlocked(self.main_chat.session_manager)
 
+    def _close_dangling_tool_calls(self):
+        """Inject dummy tool_results for tool_calls that never got one, so
+        provider history stays valid (tool_use without tool_result -> 400).
+        Idempotent; call while the tool cycle is still open. Shared by the
+        cancel partial-save and the finally (S1 #2, hunt 2026-08-30)."""
+        try:
+            msgs = self.main_chat.session_manager._effective_chat().messages
+            for msg in reversed(msgs):
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    existing = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
+                    for tc in msg["tool_calls"]:
+                        tc_id = tc.get("id", "")
+                        if tc_id and tc_id not in existing:
+                            self.main_chat.session_manager.add_tool_result(
+                                tc_id, tc.get("function", {}).get("name", "unknown"),
+                                "[Cancelled by user]"
+                            )
+                    break
+        except Exception as e:
+            logger.warning(f"[CLEANUP] Failed to inject cancel tool results: {e}")
+
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
@@ -196,7 +217,10 @@ class StreamingChat:
             # (H4 2026-04-22 history: single bool let two concurrent streams
             # corrupt mid-turn history; counter fix.)
             self.main_chat.session_manager.begin_streaming()
-            self.cancel_flag = False
+            # No cancel_flag reset here: StreamingChat is per-request
+            # (__init__ starts it False) -- a reset only EATS a /api/cancel
+            # that landed between registration and this generator's first
+            # next() (S1 #5, hunt 2026-08-30).
             self.tts_stopped = False
             self.current_stream = None
             self.ephemeral = False
@@ -875,6 +899,11 @@ class StreamingChat:
                     _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 
                     if self.cancel_flag:
+                        # This iteration's prose is already persisted on the
+                        # tool_calls row -- clear it or the cancel partial-
+                        # save stores it a second time as a standalone
+                        # assistant message (S1 #2b).
+                        current_content = ""
                         break
 
                     continue
@@ -992,6 +1021,14 @@ class StreamingChat:
             # partial prose as a TEXT assistant message — never a tool_use, so the
             # tool_use->tool_result contract is untouched. Then fall through. 2026-06-19.
             if self.cancel_flag:
+                # Stop with a tool cycle still open (e.g. between parallel
+                # tool calls): close dangling ids BEFORE the partial save --
+                # add_assistant_final clears _in_tool_cycle, which disarmed
+                # the finally's injector and left tool_calls without results
+                # -> next-turn repair orphaned the tool rows -> provider 400
+                # (S1 #2, hunt 2026-08-30).
+                if self.main_chat.session_manager._in_tool_cycle:
+                    self._close_dangling_tool_calls()
                 partial = (current_content or "").strip()
                 save_content = ""
                 if partial:
@@ -1216,28 +1253,14 @@ class StreamingChat:
             # (e.g. user hit Stop mid-tool-execution)
             if self.main_chat.session_manager._in_tool_cycle:
                 logger.info("[CLEANUP] Closing orphaned tool cycle from cancelled stream")
-                # Inject dummy tool_results for any pending tool_calls so LLM history
-                # stays valid (providers require tool_result after tool_calls)
-                try:
-                    msgs = self.main_chat.session_manager._effective_chat().messages
-                    for msg in reversed(msgs):
-                        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                            existing_results = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
-                            for tc in msg["tool_calls"]:
-                                tc_id = tc.get("id", "")
-                                if tc_id not in existing_results:
-                                    self.main_chat.session_manager.add_tool_result(
-                                        tc_id, tc.get("function", {}).get("name", "unknown"),
-                                        "[Cancelled by user]"
-                                    )
-                            break
-                except Exception as e:
-                    logger.warning(f"[CLEANUP] Failed to inject cancel tool results: {e}")
+                self._close_dangling_tool_calls()
                 self.main_chat.session_manager.add_assistant_final(
                     content="[Cancelled during tool execution]"
                 )
             self._cleanup_stream()
-            self.cancel_flag = False
+            # cancel_flag intentionally NOT reset (S1 #5): flipping it False
+            # here made a cancelled stream read as live-not-cancelled in the
+            # gap before the route's end_stream.
             self.is_streaming = False
             self.active_chat_name = None
             # A1: drop the per-stream brain override AFTER the cleanup that

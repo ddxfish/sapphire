@@ -105,6 +105,10 @@ export async function updateScene() {
             // border and the 🗝 in the dropdown, never on the toggle.
             eye.classList.toggle('private-on', vaultOpen);
             eye.classList.toggle('vault-locked', vaultAsleep);
+            // Glyph tracks vault state: open padlock while unlocked. (The
+            // chat-mode.js comment promised this; the line never shipped --
+            // S3 #5, hunt 2026-08-30.)
+            eye.textContent = vaultOpen ? '\u{1F513}︎' : '\u{1F512}︎';
             eye.title = vaultAsleep ? 'Private chat, vault locked — click to unlock'
                 : vaultOpen ? 'Private mode ON — talking marks the chat private; click to lock'
                 : 'Private mode off — click to unlock the vault';

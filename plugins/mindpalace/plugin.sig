@@ -25,7 +25,7 @@
     "tests/test_librarian_sheet.py": "sha256:84e6261a9b792f235918ebfed68371264d7517a9c41db837e8fad487206b1e10",
     "tests/test_library.py": "sha256:020ce57cd58af6080e0f3bc506a1cd1c073f2e00637894557464be65af15cdf2",
     "tests/test_library_export.py": "sha256:cf972e1355fa5e748f9a3d9133dc4d29aaeff18994571d85283e85c6d88a62a5",
-    "tests/test_mindpalace.py": "sha256:e16d3c1baaf24778dac9151ee4b95492dcc4ba7914564f1a0887271837f27dd2",
+    "tests/test_mindpalace.py": "sha256:e96b30ccb16daad494f1c670cbedb817bae8e52e1b175cdceba9c000ef3ceeec",
     "tests/test_mindpalace_dedup_human.py": "sha256:86e2ca4d32df1775e324363452a7b4115a792d719a08211d416c4e81cadb4976",
     "tests/test_mindpalace_goals.py": "sha256:51dfb3a499a83fc66d116fdf33cff3d57d8a8e688f3831cfb0d8b6d2e9e87e3a",
     "tests/test_mindpalace_import.py": "sha256:41e84eec08d9e192b6cbb62d52d0cd4552bba391890c626b1b2c43030c5c43ab",
@@ -58,7 +58,7 @@
     "tools/library.py": "sha256:e3d0dddc224253a70e164e3cbedaa1e887868aed7e6f2ac283aa3353e119240c",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
     "tools/metadata.py": "sha256:8ca10bffed6064e3167127e3ef5ba25cd60076b03a0101c9eaf7bd2042aac7ed",
-    "tools/palace_tools.py": "sha256:931da79bac22207a9727bec3362b5dc84cd1497f956c9bdeb338e8d86283979b",
+    "tools/palace_tools.py": "sha256:d868ddb8066d571dcaec7c283b1f60bac4bbd2c4c2bd01fb44dd199475aeab79",
     "tools/prompt_audit.py": "sha256:68c3cf6787f66344eece7f7ef421ef9d8d5c8201420bbabe75b516e75f2a7a54",
     "tools/self_tools.py": "sha256:a68b61ea0e0f5b4fa1927608141b770b9a6cdfb06606c5300a447296d84a5d49",
     "tools/spider.py": "sha256:7447f2e6841c889014175ce186ba1d1da7f5c637c9dd32c0b97b7d117c1f9457",
@@ -66,5 +66,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "4gWwqNZWaFZpT46PzrB78KXUFPPQuC3NnJX8yjHtBDiBN2+Jj7Rk3mCqTNAM8BmCV4/YfN+OvhkqT4c1cJnoDw=="
+  "signature": "d8CCOQviD3RgObQXJLY7MPi4cg4AcMg6hHLP+1Ir1g2f36P9P4T5Nfqv0+FnrmQSwO2/foicXqoi1rkhtEm1DQ=="
 }

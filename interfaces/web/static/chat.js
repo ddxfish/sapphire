@@ -270,12 +270,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         
         console.log(`[REGEN DEBUG] Will regenerate from: well, no logging..."`);
         
-        if (!confirm('Regenerate this response?')) {
-            console.log('[REGEN DEBUG] User cancelled');
-            return null;
-        }
-        
-        console.log('[REGEN DEBUG] User confirmed, setting proc...');
+        // (confirm happens in message-handlers.handleRegen, BEFORE the
+        // abort controller is registered -- S1 #3)
+        console.log('[REGEN DEBUG] Setting proc...');
         setProc(true);
         
         console.log('[REGEN DEBUG] Removing from user message...');
@@ -345,6 +342,18 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
             },
             async (e, statusCode) => {
                 if (e.message === 'Cancelled') return (console.log('[REGEN DEBUG] Stream cancelled by user'), streamOk && ui.cancelStreaming());
+                if (statusCode === 409) {
+                    // One-turn gate refused AFTER the old turn was deleted --
+                    // don't lose the words: optimistic bubble off, text back
+                    // in the box (same shape as handleSend's 409 undo).
+                    // S1 #3, hunt 2026-08-30.
+                    const bubbles = document.querySelectorAll('#chat-container .message.user');
+                    bubbles[bubbles.length - 1]?.remove();
+                    const inp = document.getElementById('prompt-input');
+                    if (inp) { inp.value = userMessage; inp.dispatchEvent(new Event('input')); }
+                    ui.showToast(e.message, 'error');
+                    return;
+                }
                 console.error('[REGEN DEBUG] Stream failed:', e.message);
                 streamOk && ui.cancelStreaming();
                 handleError(e, 'regenerate');

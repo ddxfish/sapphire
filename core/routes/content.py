@@ -822,7 +822,12 @@ async def update_persona(name: str, request: Request, _=Depends(require_login), 
     data = await request.json()
     if not persona_manager.update(name, data):
         raise HTTPException(status_code=500, detail="Failed to update persona")
-    reapply_if_active(system, 'persona', name)
+    # On rename, reapply must target the NEW name -- update() moved the
+    # record, so the old name resolves to None and the hot-reload silently
+    # no-op'd (S3 #1, hunt 2026-08-30).
+    final_name = name if persona_manager.exists(name) \
+        else persona_manager._sanitize_name(data.get("name", name))
+    reapply_if_active(system, 'persona', final_name)
     return {"status": "success"}
 
 

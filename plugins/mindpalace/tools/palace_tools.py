@@ -321,7 +321,10 @@ def _trim_to_cap(content: str, cap: int = MAX_CHUNK_LENGTH) -> tuple:
         return content, ''
     head = content[:cap + 1]
     idx = max(head.rfind(ch) for ch in (' ', '\n', '\t'))
-    if idx <= 0:
+    if idx < cap // 2:
+        # Whitespace missing or only near the start (label + unbroken CJK/
+        # base64/URL run): a break there would save a tiny stub as the whole
+        # memory. Hard-cut at the cap instead.
         idx = cap
     return content[:idx].rstrip(), content[idx:].strip()
 

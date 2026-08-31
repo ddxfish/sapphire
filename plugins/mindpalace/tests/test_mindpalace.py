@@ -423,6 +423,15 @@ def test_trim_prefers_last_whitespace(palace):
     assert kept == "a" * 500 and dropped == "b" * 100
 
 
+def test_trim_early_whitespace_hard_cuts(palace):
+    # Hunt 2026-08-30 CRIT: label + unbroken run (CJK/base64/URL) used to
+    # save the label as a stub ("Note:") with the whole payload dropped.
+    cap = palace.MAX_CHUNK_LENGTH
+    kept, dropped = palace._trim_to_cap("Note: " + "x" * 600)
+    assert len(kept) == cap, f"stub save: kept only {len(kept)} chars"
+    assert kept.startswith("Note: x")
+
+
 def test_update_over_cap_trims_and_updates(palace):
     cap = palace.MAX_CHUNK_LENGTH
     msg, ok = palace._save_memory("short seed", scope="default")

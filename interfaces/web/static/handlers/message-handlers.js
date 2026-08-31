@@ -35,7 +35,14 @@ export async function handleRegen(idx) {
         return;
     }
     console.log(`Regenerating message ${idx}`);
-    
+
+    // Confirm BEFORE registering the abort controller -- while the dialog
+    // sat open, the registered controller blinded the cross-tab AI_TYPING
+    // mirror (main.js gates on !getAbortController()), so a live foreign
+    // turn never flipped isProc and regen proceeded into a 409 AFTER
+    // deleting the turn (S1 #3, hunt 2026-08-30).
+    if (!confirm('Regenerate this response?')) return;
+
     const abortController = new AbortController();
     setAbortController(abortController);
     setIsCancelling(false);

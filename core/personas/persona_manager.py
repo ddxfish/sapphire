@@ -119,7 +119,7 @@ class PersonaManager:
         # First run — seed from core defaults
         core_path = self.BASE_DIR / "personas.json"
         try:
-            with open(core_path, 'r', encoding='utf-8') as f:
+            with open(core_path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             self._personas = {k: v for k, v in data.items() if not k.startswith('_')}
         except Exception as e:
@@ -214,6 +214,26 @@ class PersonaManager:
             logger.warning(f"[PERSONAS] favorites sync failed for '{old_name}': {e}")
 
     @staticmethod
+    def _chat_ref_sync(old_name, new_name):
+        """Rename: re-point every chat whose persona setting references the
+        old name. delete() has its own inline handoff (reset to 'default');
+        without this, a rename left chats holding a dead persona ref -- the
+        strip lost its active face and the hot-reload reapply silently
+        no-op'd (S3 #1, hunt 2026-08-30). Called OUTSIDE self._lock."""
+        try:
+            from core.api_fastapi import get_system
+            sm = getattr(getattr(get_system(), 'llm_chat', None), 'session_manager', None)
+            if sm is None or not hasattr(sm, 'reset_chat_scope_ref'):
+                return
+            affected = sm.reset_chat_scope_ref('persona', old_name, reset_to=new_name) or []
+            if affected:
+                logger.info(f"[PERSONA] Rename '{old_name}' -> '{new_name}' re-pointed "
+                            f"{len(affected)} chat(s): {affected}")
+        except Exception as e:
+            logger.warning(f"[PERSONA] chat ref sync failed for rename "
+                           f"'{old_name}' -> '{new_name}': {e}")
+
+    @staticmethod
     def _vault_ref_sync(new_prompt, old_prompt):
         """Personas are one of the three referrer classes of the vault
         references index. Called OUTSIDE self._lock, best-effort."""
@@ -274,6 +294,7 @@ class PersonaManager:
             self._vault_ref_sync(persona["settings"].get("prompt"), old_prompt)
         if ok and persona.get("name") != name:
             self._favorites_sync(name, persona.get("name"))
+            self._chat_ref_sync(name, persona.get("name"))
         return ok
 
     def delete(self, name: str) -> bool:
@@ -457,7 +478,7 @@ class PersonaManager:
             return 0
 
         try:
-            with open(core_path, 'r', encoding='utf-8') as f:
+            with open(core_path, 'r', encoding='utf-8-sig') as f:
                 core_personas = {k: v for k, v in json.load(f).items() if not k.startswith('_')}
         except Exception as e:
             logger.error(f"Failed to load core personas for merge: {e}")

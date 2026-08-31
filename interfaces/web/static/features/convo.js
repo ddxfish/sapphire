@@ -35,8 +35,15 @@ export async function setConvo(mode) {
     const cur = getConvo();
     try {
         if (mode === 'off') {
-            if (cur.source === 'browser') conversation.stop();
-            else if (cur.source === 'local' && cur.enabled) await setLocal(false);
+            if (cur.source === 'browser') {
+                // WS close IS the switch; state stays 'browser' until the SSE
+                // confirms. Painting from state here bounced the segment
+                // off->browser->off on EVERY click (S2 #2) -- let the
+                // optimistic 'off' stand.
+                conversation.stop();
+                return;
+            }
+            if (cur.source === 'local' && cur.enabled) await setLocal(false);
         } else if (mode === 'local') {
             if (cur.source === 'browser') conversation.stop();
             await setLocal(true);
@@ -44,6 +51,10 @@ export async function setConvo(mode) {
             if (cur.source === 'local' && cur.enabled) await setLocal(false);
             if (!(await conversation.start()))
                 throw new Error('Could not start browser conversation (mic/connection)');
+            // Browser truth arrives via the SSE; state is still stale here --
+            // painting now flashed 'off' after the (slow) mic-permission
+            // start (S2 #2b).
+            return;
         }
     } catch (e) {
         showToast(e.message || 'Conversation mode failed', 'error');

@@ -142,7 +142,7 @@ def _read_pack_file(fname):
     register the pack nearly EMPTY, wiping shipped prompts until the next
     re-registration (2026-08-21 hunt)."""
     try:
-        txt = (_PLUGIN_DIR / "prompts" / fname).read_text(encoding="utf-8")
+        txt = (_PLUGIN_DIR / "prompts" / fname).read_text(encoding="utf-8-sig")
         data = json.loads(txt)
         _pack_file_cache[fname] = txt
         return data

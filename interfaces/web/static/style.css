@@ -6161,8 +6161,10 @@ a.gallery-caption:hover {
 }
 
 /* Third state: private chat whose vault is asleep (locked). Amber pulse —
-   painted by the /api/status poll in scene.js. */
-#sb-privacy-eye.private-on.vault-locked {
+   painted by the /api/status poll in scene.js. Bare .vault-locked: scene.js
+   sets private-on / vault-locked mutually exclusively, so the old compound
+   selector could never match (S3 #4, hunt 2026-08-30). */
+#sb-privacy-eye.vault-locked {
     color: #f59e0b;
     border-color: #f59e0b;
     box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);

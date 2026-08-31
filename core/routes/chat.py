@@ -128,10 +128,29 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             status_code=409)
     system.web_active_inc()
 
+    # Release exactly once, from whichever side runs first. The generator's
+    # finally covers the normal path; the response background task covers the
+    # leak path -- a client that disconnects before the body iterator ever
+    # starts would leave the exclusive registration behind and 409 the chat
+    # until restart (S1 #4, hunt 2026-08-30). end_stream is idempotent;
+    # web_active_dec is a counter, hence the once-guard.
+    import threading as _threading
+    _rel_lock = _threading.Lock()
+    _released = [False]
+
+    def _release():
+        with _rel_lock:
+            if _released[0]:
+                return
+            _released[0] = True
+        system.llm_chat.end_stream(sid, active_chat)
+        system.web_active_dec()
+
     def generate():
+        gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files)
         try:
             chunk_count = 0
-            for event in stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files):
+            for event in gen:
                 if stream.cancel_flag:
                     logger.info(f"STREAMING CANCELLED at chunk {chunk_count}")
                     yield f"data: {json.dumps({'cancelled': True})}\n\n"
@@ -188,9 +207,18 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             msg = friendly_llm_error(e) or str(e)
             yield f"data: {json.dumps({'error': msg})}\n\n"
         finally:
-            system.llm_chat.end_stream(sid, active_chat)
-            system.web_active_dec()
+            # A cancel `break` above leaves the engine generator suspended
+            # with its finally (tool-cycle close, cleanup writes) pending
+            # until GC -- which could land AFTER a new turn started on this
+            # chat. close() forces it to run NOW, before the registration is
+            # released (S1 #1 mitigation; full fix = stream-lifecycle session).
+            try:
+                gen.close()
+            except Exception as e:
+                logger.warning(f"[CHAT-STREAM] engine generator close failed: {e}")
+            _release()
 
+    from starlette.background import BackgroundTask
     return StreamingResponse(
         generate(),
         media_type='text/event-stream',
@@ -198,7 +226,8 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no'
-        }
+        },
+        background=BackgroundTask(_release)
     )
 
 
@@ -734,6 +763,11 @@ async def edit_message(request: Request, _=Depends(require_login), system=Depend
         raise HTTPException(status_code=400, detail="Missing required fields")
     if role not in ['user', 'assistant']:
         raise HTTPException(status_code=400, detail="Invalid role")
+    if isinstance(new_content, str) and not new_content.strip():
+        # An emptied message is DROPPED at provider-format time -> two
+        # adjacent same-role messages -> alternation 400 on every later
+        # send (S1 #8, hunt 2026-08-30).
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     try:
         if system.llm_chat.session_manager.edit_message_by_timestamp(role, timestamp, new_content):

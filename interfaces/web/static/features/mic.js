@@ -80,16 +80,16 @@ export async function handleMicPress() {
 
 export async function handleMicRelease(triggerSendFn) {
     const { micBtn } = getElements();
-    
-    // If TTS was playing (we just stopped it) or the press ended a
-    // conversation, do nothing on release
-    if (micBtn.classList.contains('tts-playing') || micBtn.classList.contains('convo-on')) {
-        updateMicButtonState();
-        return;
-    }
-    
-    // Normal recording release
+
+    // Always defer to audio's own isRec guard (audio.js handleRelease
+    // no-ops on !isRec). Gating on the poll-painted classes read a clock up
+    // to 200ms behind truth: a press that started recording could meet a
+    // release that still saw a stale .convo-on/.tts-playing and never stop
+    // the recorder -- hot mic + dead button on touch (S2 #1, hunt
+    // 2026-08-30). Presses that didn't record (TTS stop / convo end) fall
+    // through harmlessly.
     await audio.handleRelease(micBtn, triggerSendFn);
+    updateMicButtonState();
 }
 
 export function handleMicLeave(triggerSendFn) {

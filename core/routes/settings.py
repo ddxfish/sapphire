@@ -313,7 +313,12 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                     logger.warning(f"Failed to enforce unsigned policy: {e}")
             # Defer SETTINGS_CHANGED for provider keys until after switch completes
             if key not in deferred_keys:
-                publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
+                # origin lets the writing tab skip its own SSE echo (event-bus
+                # self-skip, same as CHAT_SETTINGS_CHANGED) -- without it a
+                # favorites drag repainted the strip it had just reordered
+                # (S2 #4). Deferred provider keys stay unstamped.
+                publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier,
+                                                  "origin": request.headers.get('X-Session-ID')})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
     # Execute deferred provider switches (runtime values are already set via
