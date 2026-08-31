@@ -1,6 +1,8 @@
 import os
 import fnmatch
+import shutil
 import tarfile
+import time
 import sqlite3
 import logging
 import threading
@@ -128,24 +130,34 @@ class Backup:
         # still-writing file or count partials. R5 2026-04-21.
         with self._backup_op_lock:
             now = datetime.now()
-            results = []
+            ok_tiers, failed_tiers = [], []
 
             if getattr(config, 'BACKUPS_KEEP_DAILY', 7) > 0:
-                self.create_backup("daily")
-                results.append("daily")
+                (ok_tiers if self.create_backup("daily") else failed_tiers).append("daily")
 
             if now.weekday() == 6 and getattr(config, 'BACKUPS_KEEP_WEEKLY', 4) > 0:
-                self.create_backup("weekly")
-                results.append("weekly")
+                (ok_tiers if self.create_backup("weekly") else failed_tiers).append("weekly")
 
             if now.day == 1 and getattr(config, 'BACKUPS_KEEP_MONTHLY', 3) > 0:
-                self.create_backup("monthly")
-                results.append("monthly")
+                (ok_tiers if self.create_backup("monthly") else failed_tiers).append("monthly")
 
             # Rotate INSIDE the lock — otherwise a manual trigger between
             # create and rotate can race.
             self.rotate_backups()
-        return f"Scheduled backup complete: {', '.join(results)}"
+        # Honest report (X1 F8, negspace 2026-08-31): the old path appended
+        # every tier unconditionally and logged "complete" right after
+        # create_backup's own ERROR — success printed over failure.
+        if failed_tiers:
+            msg = f"Scheduled backup FAILED for: {', '.join(failed_tiers)}"
+            if ok_tiers:
+                msg += f" (succeeded: {', '.join(ok_tiers)})"
+            logger.error(msg)
+            self.last_scheduled_result = msg
+            return msg
+        msg = (f"Scheduled backup complete: {', '.join(ok_tiers)}"
+               if ok_tiers else "Scheduled backup: nothing due")
+        self.last_scheduled_result = msg
+        return msg
 
     def create_backup(self, backup_type="manual", extra_patterns=None, dest_dir=None,
                       require_complete=False):
@@ -184,6 +196,7 @@ class Backup:
         out_dir.mkdir(parents=True, exist_ok=True)
         filepath = out_dir / filename
         partial = out_dir / (filename + ".partial")
+        staging_dir = None
 
         try:
             # Checkpoint SQLite WAL files before backup. DBs whose checkpoint
@@ -191,12 +204,26 @@ class Backup:
             # — better to omit a DB from this backup than capture it in a
             # torn state that won't restore cleanly. The next scheduled
             # backup will retry. Day-ruiner scout 2026-05-07 #K.
-            failed_checkpoints = self._checkpoint_databases()
+            # WAL trim first (best-effort — no longer gates inclusion; the
+            # snapshot below is what guarantees consistency now).
+            self._checkpoint_databases()
+            # N10 (negspace 2026-08-31): NEVER tar a live SQLite file. The old
+            # checkpoint-then-tar left a TOCTOU — an auto-checkpoint during the
+            # minutes-long tar walk rewrote main.db pages mid-read, and the
+            # archive held a silently inconsistent DB discovered only at
+            # restore time. sqlite3's backup API produces a consistent
+            # point-in-time copy even against live writers; live db/-wal/-shm
+            # files are EXCLUDED from the walk and snapshots are added at the
+            # same arcnames, so restore stays transparent.
+            staging_dir = out_dir / f".dbsnap-{timestamp}"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            snapshots, failed_checkpoints = self._snapshot_databases(staging_dir)
             if require_complete and failed_checkpoints:
                 names = ', '.join(sorted(p.name for p in failed_checkpoints))
                 self.last_backup_error = (
                     f"{len(failed_checkpoints)} database(s) busy mid-write: {names}")
                 logger.error(f"Backup refused (require_complete): {self.last_backup_error}")
+                shutil.rmtree(staging_dir, ignore_errors=True)
                 return None
             # Exclusions = page patterns + any caller extras (offsite-only excludes).
             merged_patterns = _exclude_patterns_setting() + (extra_patterns or [])
@@ -208,22 +235,25 @@ class Backup:
                 if _is_excluded(rel, merged_patterns):
                     return None
                 return tarinfo
-            def _filter_with_busy(tarinfo):
+            # Exclude EVERY live db + -wal/-shm from the walk: snapshotted
+            # DBs ride in from staging below; failed ones are omitted entirely
+            # (same day-ruiner #K philosophy: omit beats torn capture).
+            _db_family = set()
+            for _db in list(snapshots.keys()) + list(failed_checkpoints):
+                _db_family.add(_db)
+                _db_family.add(Path(str(_db) + "-wal"))
+                _db_family.add(Path(str(_db) + "-shm"))
+            def _filter_db_files(tarinfo):
                 base = _patterns_filter(tarinfo)
                 if base is None:
                     return None
-                # Drop the failed DB and its WAL/SHM siblings so we don't
-                # ship a half-snapshot. Match against absolute path of the
-                # underlying file (tarinfo.name is relative to the arcname).
                 src = (self.user_dir / tarinfo.name[len("user/"):]).resolve() if tarinfo.name.startswith("user/") else None
-                if src is not None:
-                    for db in failed_checkpoints:
-                        if src == db or src == Path(str(db) + "-wal") or src == Path(str(db) + "-shm"):
-                            return None
+                if src is not None and src in _db_family:
+                    return None
                 return tarinfo
             kept_files = [0]
             skipped_files = [0]
-            base_filter = _filter_with_busy if failed_checkpoints else _patterns_filter
+            base_filter = _filter_db_files
             def _counting_filter(tarinfo):
                 ti = base_filter(tarinfo)
                 if ti is not None and ti.isfile():
@@ -242,8 +272,19 @@ class Backup:
                             return None
                     kept_files[0] += 1
                 return ti
+            user_root = self.user_dir.resolve()
             with tarfile.open(partial, "w:gz") as tar:
                 tar.add(self.user_dir, arcname="user", filter=_counting_filter)
+                # Snapshots ride in at the live DBs' arcnames (no -wal needed —
+                # snapshots are complete, checkpointed copies).
+                for _db, _snap in snapshots.items():
+                    _rel = _db.relative_to(user_root)
+                    if _is_excluded(str(_rel), merged_patterns):
+                        continue
+                    tar.add(_snap, arcname=f"user/{_rel}", recursive=False)
+                    kept_files[0] += 1
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            staging_dir = None
             if skipped_files[0]:
                 logger.warning(f"Backup completed with {skipped_files[0]} unreadable "
                                f"file(s) skipped — see warnings above")
@@ -272,6 +313,8 @@ class Backup:
             return filename
         except Exception as e:
             logger.error(f"Backup failed: {e}")
+            if staging_dir is not None:
+                shutil.rmtree(staging_dir, ignore_errors=True)
             try:
                 partial.unlink()
             except FileNotFoundError:
@@ -307,17 +350,59 @@ class Backup:
                 conn.close()
                 if row and row[0] == 1:
                     logger.warning(
-                        f"WAL checkpoint BUSY for {db_path.name} — backup will "
-                        f"skip this DB to avoid torn main+WAL state."
+                        f"WAL checkpoint BUSY for {db_path.name} — harmless for "
+                        f"backups (the snapshot lane guarantees consistency); "
+                        f"live WAL just stays un-trimmed this cycle."
                     )
                     failed.add(db_path.resolve())
             except Exception as e:
                 logger.warning(
-                    f"WAL checkpoint failed for {db_path.name}: {e} — "
-                    f"DB skipped from backup to avoid inconsistent capture."
+                    f"WAL checkpoint failed for {db_path.name}: {e} — harmless "
+                    f"for backups (snapshot lane guarantees consistency)."
                 )
                 failed.add(db_path.resolve())
         return failed
+
+    def _snapshot_databases(self, staging_dir):
+        """Consistent point-in-time copy of every SQLite DB under user/ via
+        sqlite3's backup API (safe against live writers — the API re-copies
+        pages a writer touches mid-run). Returns (snapshots, failed):
+        snapshots maps resolved live-db path -> staging file; failed is the
+        set of DBs that could not be snapshotted (omitted from the archive,
+        day-ruiner #K philosophy). negspace N10, 2026-08-31."""
+        snapshots, failed = {}, set()
+        user_root = self.user_dir.resolve()
+        for db_path in sorted(self.user_dir.rglob("*.db")):
+            resolved = db_path.resolve()
+            try:
+                resolved.relative_to(user_root)
+            except ValueError:
+                continue
+            snap = staging_dir / f"{len(snapshots) + len(failed)}_{db_path.name}"
+            src = dst = None
+            try:
+                src = sqlite3.connect(str(db_path), timeout=10.0)
+                src.execute("PRAGMA busy_timeout=10000")
+                dst = sqlite3.connect(str(snap))
+                src.backup(dst)
+                dst.close(); dst = None
+                src.close(); src = None
+                snapshots[resolved] = snap
+            except Exception as e:
+                logger.error(f"DB snapshot failed for {db_path.name}: {e} — "
+                             f"DB will be OMITTED from this backup")
+                failed.add(resolved)
+                for _c in (dst, src):
+                    try:
+                        if _c is not None:
+                            _c.close()
+                    except Exception:
+                        pass
+                try:
+                    snap.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return snapshots, failed
 
     def _db_housekeeping(self, is_weekly: bool = False):
         """Run DB integrity_check daily and VACUUM weekly against every
@@ -574,6 +659,63 @@ class Backup:
         return None
 
 
+    def _next_run_seconds(self, now=None):
+        """Seconds until the next BACKUPS_HOUR run (plus the target datetime).
+        Coerces + clamps the hour: a hand-edited "3" (string) used to
+        TypeError in the loop and kill the scheduler thread on iteration one
+        (X1 F7, negspace 2026-08-31)."""
+        from datetime import timedelta
+        raw = getattr(config, 'BACKUPS_HOUR', 3)
+        try:
+            hour = int(raw)
+        except (TypeError, ValueError):
+            logger.error(f"BACKUPS_HOUR invalid ({raw!r}) — using 3")
+            hour = 3
+        if not 0 <= hour <= 23:
+            logger.error(f"BACKUPS_HOUR out of range ({hour}) — using 3")
+            hour = 3
+        now = now or datetime.now()
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return (target - now).total_seconds(), target
+
+    def health_summary(self):
+        """One honest dict about backup health (negspace N11, 2026-08-31).
+        The mechanism was well-guarded but every failure mode was invisible:
+        sentinel halt had no UI, the status widget lied structurally, a dead
+        scheduler thread logged 'started', failures logged under 'complete'.
+        Served by GET /api/backup/health; rendered on Settings > Backup."""
+        newest = None
+        try:
+            allb = [b for tier in self.list_backups().values() for b in tier]
+            if allb:
+                def _mtime(b):
+                    try:
+                        return Path(b['path']).stat().st_mtime
+                    except OSError:
+                        return 0
+                nb = max(allb, key=_mtime)
+                ts = _mtime(nb)
+                newest = {
+                    'filename': nb.get('filename'),
+                    'size': nb.get('size'),
+                    'age_hours': round((time.time() - ts) / 3600, 1) if ts else None,
+                }
+        except Exception as e:
+            logger.warning(f"backup health: list failed: {e}")
+        sentinels = self._active_corruption_sentinels()
+        thread = getattr(self, '_scheduler_thread', None)
+        return {
+            'enabled': bool(getattr(config, 'BACKUPS_ENABLED', True)),
+            'sentinels': sentinels,
+            'halted': bool(sentinels),
+            'scheduler_alive': bool(thread and thread.is_alive()),
+            'newest': newest,
+            'last_scheduled_result': getattr(self, 'last_scheduled_result', None),
+            'last_backup_error': getattr(self, 'last_backup_error', None),
+        }
+
     def stop(self):
         """Signal the backup scheduler to stop."""
         if self._stop_event:
@@ -587,13 +729,16 @@ class Backup:
 
         def _backup_loop():
             while not self._stop_event.is_set():
-                hour = getattr(config, 'BACKUPS_HOUR', 3)
-                now = datetime.now()
-                target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-                if target <= now:
-                    target += timedelta(days=1)
-                wait_seconds = (target - now).total_seconds()
-                logger.info(f"Backup scheduler: next run in {wait_seconds / 3600:.1f}h at {target.strftime('%Y-%m-%d %H:%M')}")
+                try:
+                    wait_seconds, target = self._next_run_seconds()
+                    logger.info(f"Backup scheduler: next run in {wait_seconds / 3600:.1f}h at {target.strftime('%Y-%m-%d %H:%M')}")
+                except Exception as e:
+                    # The loop must NEVER die quietly — pre-fix a bad
+                    # BACKUPS_HOUR raised here, killed this thread on iteration
+                    # one, and "scheduler started" was logged right after over
+                    # the corpse (X1 F7, negspace 2026-08-31).
+                    logger.critical(f"Backup scheduler iteration failed: {e} — retrying in 1h")
+                    wait_seconds = 3600.0
                 if self._stop_event.wait(wait_seconds):
                     break  # Stop requested during sleep
 
@@ -621,9 +766,9 @@ class Backup:
                     logger.warning(f"Metrics prune during backup cycle failed: {e}")
 
         thread = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
+        self._scheduler_thread = thread   # exposed via health_summary (N11)
         thread.start()
-        hour = getattr(config, 'BACKUPS_HOUR', 3)
-        logger.info(f"Backup scheduler started (daily at {hour}:00 local time)")
+        logger.info("Backup scheduler started (daily at BACKUPS_HOUR local time)")
 
 
 backup_manager = Backup()

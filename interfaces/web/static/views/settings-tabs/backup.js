@@ -14,6 +14,7 @@ export default {
     render(ctx) {
         return `
             <div id="backup-restore-banner"></div>
+            <div id="backup-health"></div>
             ${ctx.renderFields(this.keys)}
 
             <div class="backup-hero">
@@ -198,6 +199,29 @@ export default {
             }
         } catch {}
         this.renderBackups(el);
+        this.loadHealth(el);
+    },
+
+    async loadHealth(el) {
+        // Backup trust strip (negspace N11, 2026-08-31): sentinel halt,
+        // scheduler liveness and failed runs were all invisible before this.
+        const box = el.querySelector('#backup-health');
+        if (!box) return;
+        let h = null;
+        try { h = await (await fetch('/api/backup/health')).json(); } catch {}
+        if (!h) { box.innerHTML = ''; return; }
+        const bad = [];
+        if (h.halted) bad.push(`<strong>Backups HALTED</strong> — corruption sentinel(s): <code>${(h.sentinels || []).map(esc).join(', ')}</code>. Fix the affected DB, then delete the flag file(s) in <code>user/health/</code> to resume.`);
+        if (h.enabled && h.scheduler_alive === false) bad.push('<strong>Backup scheduler thread is not running</strong> — scheduled backups will not fire until restart.');
+        if (h.last_scheduled_result && /FAILED/.test(h.last_scheduled_result)) bad.push(`Last scheduled run: <code>${esc(h.last_scheduled_result)}</code>`);
+        if (h.enabled && h.newest && h.newest.age_hours != null && h.newest.age_hours > 48) bad.push(`Newest backup is <strong>${Math.round(h.newest.age_hours / 24)} day(s) old</strong>.`);
+        if (!h.newest && h.enabled) bad.push('<strong>No backups exist yet.</strong>');
+        if (!bad.length) {
+            const age = h.newest && h.newest.age_hours != null ? `${h.newest.age_hours}h ago` : 'n/a';
+            box.innerHTML = `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;font-size:var(--font-sm);background:rgba(108,204,108,0.10);border:1px solid rgba(108,204,108,0.4)">&#10003; Backups healthy — newest: ${esc(age)}${h.scheduler_alive ? ' · scheduler running' : ''}</div>`;
+            return;
+        }
+        box.innerHTML = `<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:var(--font-sm);line-height:1.6;background:rgba(224,108,108,0.12);border:1px solid var(--danger,#e06c6c)">${bad.map(b => `<div>&#9888; ${b}</div>`).join('')}</div>`;
     },
 
     async loadRestoreResult(el) {

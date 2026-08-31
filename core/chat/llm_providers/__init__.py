@@ -139,6 +139,33 @@ class ProviderRegistry(_BaseRegistry):
         }
         logger.info(f"Plugin provider registered: {type_key} ({display_name}) from {plugin_name}")
 
+    def register_plugin(self, key: str, provider_class, display_name: str,
+                        plugin_name: str, **metadata):
+        """Manifest lane (plugin_loader capabilities.providers) — WIRED to the
+        real template registry. The inherited base method wrote self._plugins,
+        a dict the LLM path never reads: a plugin-declared LLM provider logged
+        'registered' at INFO and then never appeared anywhere (negspace N12,
+        2026-08-31). Delegate to register_plugin_provider so the class lands
+        in _classes (instantiable) + _plugin_classes (attributed)."""
+        if key in self._classes and key not in self._plugin_classes:
+            logger.warning(f"[llm] Plugin '{plugin_name}' tried to register core "
+                           f"template key '{key}' — skipping")
+            return
+        self.register_plugin_provider(
+            type_key=key,
+            display_name=display_name,
+            provider_class=provider_class,
+            plugin_name=plugin_name,
+            required_fields=metadata.get('required_fields'),
+            model_options=metadata.get('model_options'),
+        )
+
+    def unregister_plugin(self, plugin_name: str):
+        """Unload lane (plugin_loader) — remove this plugin's template
+        classes. The base method only popped the unread self._plugins dict
+        (N12)."""
+        self.unregister_plugin_providers(plugin_name)
+
     def unregister_plugin_providers(self, plugin_name: str):
         """Remove all provider classes from a plugin."""
         to_remove = [k for k, v in self._plugin_classes.items() if v['plugin_name'] == plugin_name]

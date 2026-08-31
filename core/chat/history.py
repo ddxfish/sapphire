@@ -4493,6 +4493,18 @@ class ChatSessionManager:
             return []
         if to_delete:
             logger.info(f"[TWILIO-REAP] deleted {len(to_delete)} expired ephemeral chat(s): {to_delete}")
+            # chat_deleted fires on EVERY delete path (core/hooks.py contract)
+            # — this reaper bypassed it, stranding plugin state kept OUTSIDE
+            # the chat DB; deterministic ephemeral names then hand the previous
+            # caller's plugin-side cache to the next caller (P1#5 / negspace
+            # N31, 2026-08-31). Best-effort, post-commit.
+            try:
+                from core.hooks import hook_runner, HookEvent
+                if hook_runner.has_handlers("chat_deleted"):
+                    for name in to_delete:
+                        hook_runner.fire("chat_deleted", HookEvent(metadata={"name": name}))
+            except Exception as e:
+                logger.warning(f"chat_deleted dispatch for reaped chats failed: {e}")
         return to_delete
 
     def reset_chat_scope_ref(self, setting_key: str, deleted_scope: str,

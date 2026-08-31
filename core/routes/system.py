@@ -31,6 +31,14 @@ async def list_backups(request: Request, _=Depends(require_login)):
     return {"backups": backup_manager.list_backups()}
 
 
+@router.get("/api/backup/health")
+async def backup_health(request: Request, _=Depends(require_login)):
+    """Backup trust at a glance (negspace N11, 2026-08-31): sentinel halt,
+    scheduler-thread liveness, newest backup age, last scheduled result."""
+    from core.backup import backup_manager
+    return backup_manager.health_summary()
+
+
 @router.post("/api/backup/create")
 async def create_backup(request: Request, _=Depends(require_login)):
     """Create a backup."""

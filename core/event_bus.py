@@ -19,6 +19,9 @@ class EventBus:
         self._async_subscribers: Dict[str, tuple] = {}  # sub_id -> (asyncio.Queue, loop)
         self._replay_buffer: deque = deque(maxlen=replay_size)
         self._subscriber_counter = 0
+        # sub_ids whose asyncio queue overflowed (marked from the loop thread
+        # in _async_put; set ops are GIL-atomic). Publish reaps them (N30).
+        self._async_overflow = set()
         logger.info(f"EventBus initialized (replay_size={replay_size})")
     
     # Ephemeral events aren't replayed to late subscribers. plugin_notice:
@@ -70,16 +73,39 @@ class EventBus:
             # Async subscribers — thread-safe put via event loop
             dead_async = []
             for sub_id, (aq, loop) in self._async_subscribers.items():
+                if sub_id in self._async_overflow:
+                    # Queue overflowed on an earlier publish (stalled tab that
+                    # never drains) — reap it. Pre-fix, QueueFull raised inside
+                    # the raw put_nowait callback where the bus couldn't see
+                    # it: the wedged subscriber stayed registered forever and
+                    # every publish scheduled another failing callback
+                    # (negspace N30, 2026-08-31).
+                    dead_async.append(sub_id)
+                    continue
                 try:
-                    loop.call_soon_threadsafe(aq.put_nowait, event)
+                    loop.call_soon_threadsafe(self._async_put, sub_id, aq, event)
                 except RuntimeError:
                     dead_async.append(sub_id)
 
             for sub_id in dead_async:
                 del self._async_subscribers[sub_id]
+                self._async_overflow.discard(sub_id)
+            # Drop overflow marks for subscribers that already disconnected
+            # normally (their generator finally removed them) so the set
+            # can't accumulate dead ids.
+            self._async_overflow &= set(self._async_subscribers.keys())
 
         logger.debug(f"Published: {event_type}")
     
+    def _async_put(self, sub_id, aq, event):
+        """Runs ON the subscriber's event loop. Catches QueueFull where the
+        bus can actually react: the mark is read by the next publish, which
+        reaps the subscriber (negspace N30, 2026-08-31)."""
+        try:
+            aq.put_nowait(event)
+        except asyncio.QueueFull:
+            self._async_overflow.add(sub_id)
+
     def subscribe(self, replay: bool = True) -> Generator[Dict[str, Any], None, None]:
         """Subscribe to events. Yields events as they arrive.
         

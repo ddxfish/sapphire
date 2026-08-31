@@ -31,8 +31,12 @@ def backup_mgr(tmp_path):
 
 
 def test_require_complete_refuses_on_busy_db(backup_mgr, monkeypatch):
+    # N10 contract move (negspace 2026-08-31): consistency comes from the
+    # snapshot lane now; require_complete gates on SNAPSHOT failures (a
+    # checkpoint-BUSY DB snapshots fine — that's the whole point).
     busy = {Path('/fake/user/chat.db')}
-    monkeypatch.setattr(backup_mgr, '_checkpoint_databases', lambda: busy)
+    monkeypatch.setattr(backup_mgr, '_snapshot_databases',
+                        lambda staging: ({}, busy))
 
     result = backup_mgr.create_backup('pre_update', require_complete=True)
 
@@ -47,7 +51,8 @@ def test_default_backup_still_ships_despite_busy_db(backup_mgr, monkeypatch):
     """Scheduled backups keep partial-is-better-than-none — only the
     pre-update path demands completeness."""
     busy = {Path('/fake/user/chat.db')}
-    monkeypatch.setattr(backup_mgr, '_checkpoint_databases', lambda: busy)
+    monkeypatch.setattr(backup_mgr, '_snapshot_databases',
+                        lambda staging: ({}, busy))
 
     result = backup_mgr.create_backup('daily')
 
@@ -57,7 +62,8 @@ def test_default_backup_still_ships_despite_busy_db(backup_mgr, monkeypatch):
 
 
 def test_complete_backup_passes_require_complete(backup_mgr, monkeypatch):
-    monkeypatch.setattr(backup_mgr, '_checkpoint_databases', lambda: set())
+    monkeypatch.setattr(backup_mgr, '_snapshot_databases',
+                        lambda staging: ({}, set()))
 
     result = backup_mgr.create_backup('pre_update', require_complete=True)
 

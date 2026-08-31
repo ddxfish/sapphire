@@ -513,12 +513,18 @@ def get_full_status_sync():
         backup_info = {}
         try:
             from core.backup import backup_manager
-            backups = backup_manager.list_backups()
-            backup_info["count"] = len(backups)
-            if backups:
-                backup_info["latest"] = backups[0].get("filename", "")
-                backup_info["latest_date"] = backups[0].get("date", "")
-                backup_info["latest_size"] = backups[0].get("size", 0)
+            # list_backups returns a DICT of tiers — len() was 5 forever and
+            # backups[0] KeyError'd into the bare except, so this panel showed
+            # "5 backups" with no date on a box that hadn't produced a tarball
+            # in months (X1 F2, negspace 2026-08-31). Flatten + pick latest.
+            tiers = backup_manager.list_backups()
+            allb = [b for lst in tiers.values() for b in lst]
+            backup_info["count"] = len(allb)
+            if allb:
+                latest = max(allb, key=lambda b: (b.get("date", ""), b.get("time", "")))
+                backup_info["latest"] = latest.get("filename", "")
+                backup_info["latest_date"] = latest.get("date", "")
+                backup_info["latest_size"] = latest.get("size", 0)
         except Exception:
             pass
 

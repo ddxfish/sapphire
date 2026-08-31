@@ -176,6 +176,15 @@ class ProcessManager:
             # restarted at each Sapphire boot — there's no long-lived log needed,
             # and the append path was growing the file unboundedly (Scout 1
             # finding 2026-04-19, measured 2.1MB already, linear per-utterance).
+            # BUT keep ONE previous generation: truncate-per-spawn erased the
+            # crash traceback the respawn was reacting to — the evidence
+            # self-destructed on a 12-second timer during crash loops
+            # (X1 F6 / negspace N21, 2026-08-31).
+            try:
+                if self.log_file.exists() and self.log_file.stat().st_size > 0:
+                    self.log_file.replace(self.log_file.with_name(self.log_file.name + ".prev"))
+            except OSError:
+                pass
             with open(self.log_file, "w") as log:
                 if IS_WINDOWS:
                     # Windows: no process groups, just start the process
@@ -265,10 +274,18 @@ class ProcessManager:
                 if not self._monitor_running:
                     break
                 
-                if self.process and self.process.poll() is not None:
-                    exit_code = self.process.returncode
-                    logger.info(f"Process '{self.script_path.name}' died (exit code {exit_code}), restarting...")
-                    
+                if self.process is None or self.process.poll() is not None:
+                    if self.process is not None:
+                        exit_code = self.process.returncode
+                        logger.info(f"Process '{self.script_path.name}' died (exit code {exit_code}), restarting...")
+                    else:
+                        # Initial start() failed -> self.process stayed None and
+                        # the old `if self.process and ...` condition was False
+                        # FOREVER: monitor alive, child never retried, TTS just
+                        # silently off (X1 F5 / negspace N21, 2026-08-31).
+                        logger.warning(f"Process '{self.script_path.name}' has no live process "
+                                       f"(initial start failed?) — retrying start...")
+
                     # Brief delay before restart
                     time.sleep(2)
                     
