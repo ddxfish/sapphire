@@ -58,7 +58,7 @@
     "tools/library.py": "sha256:b1103416963d2d6e743ddf67fc2dbc539cbff10c56cc3fd5c3425adf669b96ca",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
     "tools/metadata.py": "sha256:8ca10bffed6064e3167127e3ef5ba25cd60076b03a0101c9eaf7bd2042aac7ed",
-    "tools/palace_tools.py": "sha256:d868ddb8066d571dcaec7c283b1f60bac4bbd2c4c2bd01fb44dd199475aeab79",
+    "tools/palace_tools.py": "sha256:931e767d16cc6dcd332dff6c071752c39d69769772c6a0378b790e0acdbd5ba1",
     "tools/prompt_audit.py": "sha256:68c3cf6787f66344eece7f7ef421ef9d8d5c8201420bbabe75b516e75f2a7a54",
     "tools/self_tools.py": "sha256:a68b61ea0e0f5b4fa1927608141b770b9a6cdfb06606c5300a447296d84a5d49",
     "tools/spider.py": "sha256:7447f2e6841c889014175ce186ba1d1da7f5c637c9dd32c0b97b7d117c1f9457",
@@ -66,5 +66,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "Jhn49A2FjT8cXBESWUqmbUrxJXhVqOer+ABrG1qohBEZTrm+CYJnWRGO/GEwYYks7FhAv+I2dTviPY8M7TbrAg=="
+  "signature": "N/0EQLWMhUqVW5J0hGTRuduorFrqoH9gaefNp9E7MMVkC0Mb8nuJh1ITLn0/j9hzI8U7pu2iMLVINiF8CG1fBw=="
 }

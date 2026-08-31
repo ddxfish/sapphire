@@ -19,7 +19,6 @@ that don't already exist.
 """
 import logging
 import re
-import urllib.request
 from pathlib import Path
 from core.fs_utils import replace_with_retry
 
@@ -47,10 +46,19 @@ _TARGETS = {
 }
 
 
+def _http_get(url: str, timeout: float) -> bytes:
+    """All font fetches ride core.socks_proxy.get_session() — raw urllib went
+    DIRECT even with the SOCKS proxy on, a boot-time leak on a privacy app
+    (X1 warning / wave-3 B3, 2026-08-31). The sibling fonts route already
+    did it right; this module didn't."""
+    from core.socks_proxy import get_session
+    resp = get_session().get(url, headers={"User-Agent": _UA}, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
+
+
 def _fetch_css(timeout: float = 15.0) -> str:
-    req = urllib.request.Request(_CSS_URL, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8")
+    return _http_get(_CSS_URL, timeout).decode("utf-8")
 
 
 def _extract_latin_url(css: str, family: str) -> str | None:
@@ -74,9 +82,7 @@ def _download(url: str, dest: Path, timeout: float = 20.0) -> bool:
     failure; returns success bool. Atomic via temp + rename so a partial
     download doesn't leave a broken file."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": _UA})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
+        data = _http_get(url, timeout)
         if not data.startswith(b"wOF2"):
             logger.warning(f"font_bootstrap: {url} returned non-woff2 ({len(data)} bytes)")
             return False
@@ -116,27 +122,30 @@ def ensure_dashboard_fonts(user_dir: Path) -> dict[str, bool]:
         # config not available yet (very early boot) — proceed with default-on.
         pass
 
-    # Need at least one file. Fetch CSS once, then download each missing.
-    try:
-        css = _fetch_css()
-    except Exception as e:
-        logger.warning(f"font_bootstrap: could not fetch Google Fonts CSS: {type(e).__name__}: {e}")
-        return {fname: (fonts_dir / fname).exists() for fname in _TARGETS}
+    # Need at least one file. Fetch in a BACKGROUND thread — this used to run
+    # inline at api_fastapi import and could block boot ~35s of socket
+    # timeouts on a firewalled box (X1 warning / wave-3 B3). Missing files
+    # 404 cleanly and the CSS falls back, so boot never needs to wait.
+    def _fetch_missing():
+        try:
+            css = _fetch_css()
+        except Exception as e:
+            logger.warning(f"font_bootstrap: could not fetch Google Fonts CSS: {type(e).__name__}: {e}")
+            return
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+        for fname, family in _TARGETS.items():
+            dest = fonts_dir / fname
+            if dest.exists():
+                continue
+            url = _extract_latin_url(css, family)
+            if not url:
+                logger.warning(f"font_bootstrap: no latin URL found for {family} in CSS")
+                continue
+            if _download(url, dest):
+                logger.info(f"font_bootstrap: downloaded {family} -> {dest}")
 
-    fonts_dir.mkdir(parents=True, exist_ok=True)
-    results: dict[str, bool] = {}
-    for fname, family in _TARGETS.items():
-        dest = fonts_dir / fname
-        if dest.exists():
-            results[fname] = True
-            continue
-        url = _extract_latin_url(css, family)
-        if not url:
-            logger.warning(f"font_bootstrap: no latin URL found for {family} in CSS")
-            results[fname] = False
-            continue
-        ok = _download(url, dest)
-        if ok:
-            logger.info(f"font_bootstrap: downloaded {family} -> {dest}")
-        results[fname] = ok
-    return results
+    import threading
+    threading.Thread(target=_fetch_missing, daemon=True,
+                     name="font-bootstrap").start()
+    # Report current presence; the thread fills gaps shortly after boot.
+    return {fname: (fonts_dir / fname).exists() for fname in _TARGETS}

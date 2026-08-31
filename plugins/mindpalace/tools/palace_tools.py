@@ -1952,8 +1952,6 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         if new_content is None and new_label is None:
             return "Nothing to update — pass content and/or label.", False
         dropped = ''
-        if new_content:
-            new_content, dropped = _trim_to_cap(new_content)
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
         with _get_connection() as conn:
             cursor = conn.cursor()
@@ -1972,6 +1970,13 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                 return (f"Memory [{memory_id}] lives in read-only plugin layer "
                         f"'{layer}' — its content is managed by "
                         f"'{plugin_spec['plugin_name']}'."), False
+            # Trim AFTER the row is known: the old pre-fetch trim applied the
+            # 512 memory cap to EVERY row — updating a self-sheet section
+            # (they live at ~2000 chars, layer='self') silently shredded it to
+            # a quarter with ok=True (S4 #2 / wave-3 C2, 2026-08-31). Sheet
+            # rows keep their own contract; everything else trims as before.
+            if new_content and layer != 'self':
+                new_content, dropped = _trim_to_cap(new_content)
             now = _now()
             embed_failed = False
             if new_label is not None:

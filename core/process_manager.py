@@ -267,7 +267,8 @@ class ProcessManager:
         
         def _monitor():
             logger.info(f"Monitor started for '{self.script_path.name}' (interval: {check_interval}s)")
-            
+            retry_warns = 0  # throttle for the never-started branch (wave-3 A2)
+
             while self._monitor_running:
                 time.sleep(check_interval)
                 
@@ -283,14 +284,22 @@ class ProcessManager:
                         # the old `if self.process and ...` condition was False
                         # FOREVER: monitor alive, child never retried, TTS just
                         # silently off (X1 F5 / negspace N21, 2026-08-31).
-                        logger.warning(f"Process '{self.script_path.name}' has no live process "
-                                       f"(initial start failed?) — retrying start...")
+                        # Throttled: a permanently-failing service would
+                        # otherwise WARN every interval (~5,700/day). First 3,
+                        # then every 20th — still visible, no longer a firehose
+                        # (wave-3 A2).
+                        retry_warns += 1
+                        if retry_warns <= 3 or retry_warns % 20 == 0:
+                            logger.warning(f"Process '{self.script_path.name}' has no live process "
+                                           f"(initial start failed?) — retrying start "
+                                           f"(attempt {retry_warns})...")
 
                     # Brief delay before restart
                     time.sleep(2)
                     
                     if self._monitor_running:
-                        self.start()
+                        if self.start():
+                            retry_warns = 0  # healthy again — reset throttle
             
             logger.info(f"Monitor stopped for '{self.script_path.name}'")
         

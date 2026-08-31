@@ -519,6 +519,14 @@ class PluginLoader:
         if not info:
             return False
 
+        # A fresh load ATTEMPT supersedes this plugin's stale errors — since
+        # get_load_errors went non-destructive (N7), a fixed-then-reloaded
+        # plugin's old failure would otherwise toast in every new browser
+        # session forever. Fail again and this same call re-appends the
+        # current truth. (wave-3 A1, 2026-08-31)
+        self._load_errors[:] = [e for e in self._load_errors
+                                if e.get("plugin") != name]
+
         # Use verification result from scan
         verified = info.get("verified", False)
         verify_msg = info.get("verify_msg", "unknown")
@@ -1024,6 +1032,11 @@ class PluginLoader:
 
     def unload_plugin(self, name: str):
         """Unload a plugin — deregister all hooks, tools, routes, providers, schedule tasks, event sources, scopes, and dashboard widgets."""
+        # User turned it off / it's going away — its load errors are moot
+        # (and would otherwise toast forever now that the list is
+        # non-destructive). (wave-3 A1)
+        self._load_errors[:] = [e for e in self._load_errors
+                                if e.get("plugin") != name]
         hook_runner.unregister_plugin(name)
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)

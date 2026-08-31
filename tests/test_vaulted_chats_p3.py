@@ -135,6 +135,41 @@ class TestHookWithholdGate:
                .HookEvent(metadata={"name": "s"}, chat_name="s", chat_private=True))
         assert fired == ["s"]
 
+    def test_prestamped_name_resolves_that_chats_privacy(self):
+        """S1 #7 / wave-3 B2 (2026-08-31): a fire site that pre-stamps
+        chat_name (stream-brain override lane) must get THAT chat's privacy —
+        the resolver used to overwrite the stamp with the ACTIVE chat's."""
+        from core.hooks import HookEvent
+        r = self._runner()
+        seen = []
+        r.register("post_chat", lambda e: seen.append(1), plugin_name="plain")
+
+        def resolver(name=None):
+            if name is not None:
+                return (name, name == "vaulted-call")   # that chat is private
+            return ("active-open", False)
+        r.set_privacy_resolver(resolver)
+
+        # Pre-stamped PRIVATE chat: withheld though the ACTIVE chat is open
+        ev = r.fire("post_chat", HookEvent(input="x", chat_name="vaulted-call"))
+        assert seen == [] and ev.chat_private is True
+        assert ev.chat_name == "vaulted-call"           # stamp survives
+
+        # Pre-stamped PUBLIC chat: delivered
+        ev2 = r.fire("post_chat", HookEvent(input="x", chat_name="open-call"))
+        assert seen == [1] and ev2.chat_private is False
+
+    def test_prestamped_name_with_zero_arg_resolver_fails_closed(self):
+        """A resolver without per-name support + a pre-stamped name must fail
+        CLOSED — never mislabel the event from the active chat."""
+        from core.hooks import HookEvent
+        r = self._runner()
+        seen = []
+        r.register("post_chat", lambda e: seen.append(1), plugin_name="plain")
+        r.set_privacy_resolver(lambda: ("active-open", False))
+        ev = r.fire("post_chat", HookEvent(input="x", chat_name="other"))
+        assert seen == [] and ev.chat_private is True
+
     def test_clear_resets_privacy_registry(self):
         r = self._runner()
         r.mark_privacy_aware("careful")

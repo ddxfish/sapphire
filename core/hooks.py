@@ -310,7 +310,18 @@ class HookRunner:
                 event.chat_private = False
             else:
                 try:
-                    event.chat_name, event.chat_private = self._privacy_resolver()
+                    if event.chat_name is not None:
+                        # Pre-stamped identity (stream-brain override lane —
+                        # the override contextvar resets across Starlette
+                        # generator yields, so fire sites stamp the name from
+                        # a local). Resolve privacy FOR THAT chat: pre-fix the
+                        # resolver overwrote the stamp with the ACTIVE chat's
+                        # name+privacy at the one seam built to distinguish
+                        # them (S1 #7 / wave-3 B2, 2026-08-31). A resolver
+                        # without per-name support raises here -> fail closed.
+                        _rn, event.chat_private = self._privacy_resolver(event.chat_name)
+                    else:
+                        event.chat_name, event.chat_private = self._privacy_resolver()
                 except Exception:
                     event.chat_private = True
 

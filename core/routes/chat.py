@@ -1028,7 +1028,18 @@ async def bulk_export_chats_zip(request: Request, _=Depends(require_login), syst
                 continue
             if (d.get('settings') or {}).get('private_chat'):
                 continue  # Fork 2A: private chats don't ride bulk exports
-            zf.writestr(f"{name}.json", json.dumps({"name": str(name), **d}, indent=2))
+            # Windows reserved device basenames (CON, AUX, NUL, COM1...) make
+            # the zip unextractable there — prefix them. Import reads content,
+            # not the member name, so renamed members import fine (S5 #1 /
+            # wave-3 C1, 2026-08-31). The avatar-side twin stays on the
+            # Windows-hunt board (persona naming-convention ripple).
+            base = str(name)
+            if base.split('.')[0].upper() in (
+                    'CON', 'PRN', 'AUX', 'NUL',
+                    'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+                    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'):
+                base = f"_{base}"
+            zf.writestr(f"{base}.json", json.dumps({"name": str(name), **d}, indent=2))
             exported += 1
     if not exported:
         raise HTTPException(status_code=404, detail="No exportable chats in list")

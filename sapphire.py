@@ -106,9 +106,19 @@ class VoiceChatSystem:
         # then reach only privacy_aware plugins.
         from core.hooks import hook_runner as _hr
         _sm = self.llm_chat.session_manager
-        _hr.set_privacy_resolver(
-            lambda: (_sm._effective_chat_name(),
-                     bool((_sm.get_chat_settings() or {}).get('private_chat'))))
+
+        def _resolve_privacy(name=None):
+            # name given (a fire site pre-stamped it — stream-brain override
+            # lane): resolve THAT chat's privacy; an unknown name fails
+            # CLOSED. No name: the active/override chat as before.
+            # (S1 #7 / wave-3 B2, 2026-08-31)
+            if name is not None:
+                s = _sm.get_settings_for(name)
+                return (name, True if s is None else bool(s.get('private_chat')))
+            return (_sm._effective_chat_name(),
+                    bool((_sm.get_chat_settings() or {}).get('private_chat')))
+
+        _hr.set_privacy_resolver(_resolve_privacy)
 
         self._hand_back_game_chat()
         self._prime_default_prompt()

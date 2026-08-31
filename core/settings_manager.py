@@ -54,6 +54,15 @@ def _fsync_dir(path):
 class SettingsManager:
     """Manages application settings with hot-reload and persistence."""
     
+    # Serializes every settings.json tmp-write+rename across ALL instances.
+    # CLASS attribute on purpose: (1) all four persist sites share ONE tmp
+    # filename and were reachable unlocked from routes — two concurrent saves
+    # interleaved json.dump writes into the same tmp, then renamed the garbage
+    # over settings.json (S5 #5 / wave-3 B1, 2026-08-31); (2) test fixtures
+    # build managers with a patched __init__, so an instance-only lock
+    # AttributeError'd in save() (caught by --long same day).
+    _save_lock = threading.Lock()
+
     def __init__(self):
         self.BASE_DIR = Path(__file__).parent.parent
         self._defaults = {}
@@ -218,14 +227,15 @@ class SettingsManager:
                     llm['LLM_PROVIDERS'].pop(k, None)
             llm['LLM_CUSTOM_PROVIDERS'] = custom
             nested['llm'] = llm
-            tmp_path = user_path.with_suffix('.json.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(nested, f, indent=2)
-                _fsync_file(f)
-            replace_with_retry(tmp_path, user_path)
-            _fsync_dir(user_path.parent)
-            # Update mtime immediately — no gap for file watcher
-            self._last_mtime = user_path.stat().st_mtime
+            with self._save_lock:   # B1: shared tmp name — serialize
+                tmp_path = user_path.with_suffix('.json.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(nested, f, indent=2)
+                    _fsync_file(f)
+                replace_with_retry(tmp_path, user_path)
+                _fsync_dir(user_path.parent)
+                # Update mtime immediately — no gap for file watcher
+                self._last_mtime = user_path.stat().st_mtime
             logger.info(f"[SETTINGS] Migration persisted to disk")
         except Exception as e:
             logger.error(f"[SETTINGS] Failed to persist migration: {e}")
@@ -474,24 +484,28 @@ class SettingsManager:
                             section[ck] = ''
             
             user_path.parent.mkdir(exist_ok=True)
-            # Atomic write: tmp + fsync + rename + dir fsync to survive power loss
-            tmp_path = user_path.with_suffix('.json.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(nested, f, indent=2)
-                _fsync_file(f)
-            replace_with_retry(tmp_path, user_path)
-            _fsync_dir(user_path.parent)
-            # Update mtime IMMEDIATELY after rename — no gap for the file watcher
-            # to see a new mtime before _last_mtime is updated (fixes spurious reloads)
-            self._last_mtime = user_path.stat().st_mtime
+            # Atomic write: tmp + fsync + rename + dir fsync to survive power
+            # loss — under _save_lock because all persist sites share ONE tmp
+            # filename (B1).
+            with self._save_lock:
+                tmp_path = user_path.with_suffix('.json.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(nested, f, indent=2)
+                    _fsync_file(f)
+                replace_with_retry(tmp_path, user_path)
+                _fsync_dir(user_path.parent)
+                # Update mtime IMMEDIATELY after rename — no gap for the file watcher
+                # to see a new mtime before _last_mtime is updated (fixes spurious reloads)
+                self._last_mtime = user_path.stat().st_mtime
             logger.info(f"Saved user settings to {user_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to save user settings: {e}")
             try:
-                tmp_path = user_path.with_suffix('.json.tmp')
-                if tmp_path.exists():
-                    tmp_path.unlink()
+                with self._save_lock:   # don't unlink a concurrent writer's tmp (B1)
+                    tmp_path = user_path.with_suffix('.json.tmp')
+                    if tmp_path.exists():
+                        tmp_path.unlink()
             except Exception:
                 pass
             return False
@@ -556,13 +570,14 @@ class SettingsManager:
             user_path = self.BASE_DIR / 'user' / 'settings.json'
             try:
                 user_path.parent.mkdir(exist_ok=True)
-                tmp_path = user_path.with_suffix('.json.tmp')
-                with open(tmp_path, 'w', encoding='utf-8') as f:
-                    json.dump({"_comment": "Your custom settings - edit freely or use web UI"}, f, indent=2)
-                    _fsync_file(f)
-                replace_with_retry(tmp_path, user_path)
-                _fsync_dir(user_path.parent)
-                self._last_mtime = user_path.stat().st_mtime
+                with self._save_lock:   # B1: shared tmp name — serialize
+                    tmp_path = user_path.with_suffix('.json.tmp')
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump({"_comment": "Your custom settings - edit freely or use web UI"}, f, indent=2)
+                        _fsync_file(f)
+                    replace_with_retry(tmp_path, user_path)
+                    _fsync_dir(user_path.parent)
+                    self._last_mtime = user_path.stat().st_mtime
                 logger.info("Settings reset to defaults")
                 return True
             except Exception as e:
@@ -879,13 +894,14 @@ class SettingsManager:
             removed = self._remove_from_nested(nested, key)
             
             if removed:
-                tmp_path = user_path.with_suffix('.json.tmp')
-                with open(tmp_path, 'w', encoding='utf-8') as f:
-                    json.dump(nested, f, indent=2)
-                    _fsync_file(f)
-                replace_with_retry(tmp_path, user_path)
-                _fsync_dir(user_path.parent)
-                self._last_mtime = user_path.stat().st_mtime
+                with self._save_lock:   # B1: shared tmp name — serialize
+                    tmp_path = user_path.with_suffix('.json.tmp')
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump(nested, f, indent=2)
+                        _fsync_file(f)
+                    replace_with_retry(tmp_path, user_path)
+                    _fsync_dir(user_path.parent)
+                    self._last_mtime = user_path.stat().st_mtime
                 logger.debug(f"Removed '{key}' from settings file")
         except Exception as e:
             logger.error(f"Failed to remove key from file: {e}")
