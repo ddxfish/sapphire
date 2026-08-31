@@ -34,11 +34,11 @@
   },
   "SOCKS_REMOTE_DNS": {
     "short": "Resolve DNS through the proxy (socks5h)",
-    "long": "On (recommended): hostnames are sent to the proxy and resolved there — your local DNS never sees what Sapphire visits. Off: names resolve locally (visible to this machine's DNS resolver) and only the traffic rides the tunnel. Turn OFF for proxies with no server-side DNS — PIA's standalone SOCKS5 is the canonical case (every hostname request fails with 'host unreachable' until this is off)). Note: LLM traffic (httpx) always asks the proxy to resolve names regardless of this setting \u2014 on a proxy without remote DNS, also turn OFF 'Route LLM traffic via proxy'."
+    "long": "Off (default): hostnames resolve locally and only the traffic rides the tunnel — compatible with every SOCKS proxy, but this machine's DNS resolver sees the names Sapphire visits. On: names are sent to the proxy and resolved there (socks5h) — no local DNS leak; requires a proxy with server-side DNS. PIA's standalone SOCKS5 lacks it: every request fails 'host unreachable' while this is on."
   },
   "SOCKS_ROUTE_LLM": {
-    "short": "Route LLM traffic via proxy",
-    "long": "When the SOCKS proxy is on, LLM API requests (Claude, OpenAI, Gemini, custom providers) ride the proxy like everything else. Turn this off if a provider blocks proxy IPs (403s) — LLM hosts are then exempted while all other traffic stays proxied. Local/LAN LLM servers are always exempt: a remote proxy can't reach your LAN."
+    "short": "Route LLM traffic through the proxy",
+    "long": "Off (default): LLM API requests (Claude, OpenAI, Gemini, custom providers) go direct while everything else rides the proxy — the safe default: some providers block proxy IPs, and proxies without server-side DNS (e.g. PIA's standalone SOCKS5) can never carry the LLM lane, which always asks the proxy to resolve names. On: LLM traffic rides the proxy too — full-tunnel privacy; requires a proxy with working remote DNS. Local/LAN LLM servers are always exempt."
   },
   "SOCKS_NO_PROXY_EXTRA": {
     "short": "Hosts that bypass the proxy (comma-separated)",

@@ -47,6 +47,7 @@ def socks_on(monkeypatch):
     monkeypatch.setattr(config, "SOCKS_HOST", "proxy.example", raising=False)
     monkeypatch.setattr(config, "SOCKS_PORT", 1080, raising=False)
     monkeypatch.setattr(config, "SOCKS_ROUTE_LLM", True, raising=False)
+    monkeypatch.setattr(config, "SOCKS_REMOTE_DNS", True, raising=False)
     monkeypatch.setattr(config, "SOCKS_NO_PROXY_EXTRA", "", raising=False)
     monkeypatch.setattr(sp, "get_socks_credentials",
                         lambda: ("user", "p@ss:word"))
@@ -181,6 +182,22 @@ def test_scheme_follows_remote_dns(socks_on):
     socks_on.setattr(config, "SOCKS_REMOTE_DNS", False, raising=False)
     sp.apply_proxy_env()
     assert os.environ["ALL_PROXY"].startswith("socks5://")
+
+
+def test_conservative_defaults_when_keys_absent(socks_on):
+    """A box whose settings lack the new keys must land on the
+    works-everywhere posture: local DNS, LLMs direct (defaults-off flip,
+    Krem's ruling after the PIA incident, 2026-08-31)."""
+    socks_on.delattr(config, "SOCKS_REMOTE_DNS", raising=False)
+    socks_on.delattr(config, "SOCKS_ROUTE_LLM", raising=False)
+    socks_on.setattr("core.settings_manager.settings", FakeSettings({
+        "LLM_PROVIDERS": {"claude": {"model": "claude-fable-5"}},
+    }))
+    sp.apply_proxy_env()
+    assert os.environ["ALL_PROXY"].startswith("socks5://")          # local DNS
+    assert "api.anthropic.com" in os.environ["NO_PROXY"].split(",")  # LLM direct
+    st = sp.proxy_status()
+    assert st["route_llm"] is False and st["remote_dns"] is False
 
 
 def test_status_reports_remote_dns(socks_on):

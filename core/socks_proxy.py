@@ -189,7 +189,7 @@ def _scheme() -> str:
     NOTE: the LLM lane (httpx/socksio) ALWAYS sends hostnames to the proxy
     regardless of scheme — on a no-DNS proxy, LLMs need SOCKS_ROUTE_LLM off.
     """
-    return 'socks5h' if getattr(config, 'SOCKS_REMOTE_DNS', True) else 'socks5'
+    return 'socks5h' if getattr(config, 'SOCKS_REMOTE_DNS', False) else 'socks5'
 
 
 def _host_is_lan(host: str) -> bool:
@@ -233,7 +233,7 @@ def build_no_proxy() -> str:
     routing is opted out) + user extras (SOCKS_NO_PROXY_EXTRA, for LAN gear
     like Home Assistant that core can't enumerate)."""
     entries = ['localhost', '127.0.0.1', '::1']
-    route_llm = bool(getattr(config, 'SOCKS_ROUTE_LLM', True))
+    route_llm = bool(getattr(config, 'SOCKS_ROUTE_LLM', False))
     entries += sorted(_llm_hosts(include_cloud=not route_llm))
     extra = getattr(config, 'SOCKS_NO_PROXY_EXTRA', '') or ''
     entries += [h.strip() for h in str(extra).split(',') if h.strip()]
@@ -340,7 +340,7 @@ def start_boot_probe() -> None:
             # server-side DNS while every hostname request dies with 0x04
             # (Prime freeze, 2026-08-31). With remote DNS on, prove a
             # hostname connect too.
-            if getattr(config, 'SOCKS_REMOTE_DNS', True):
+            if getattr(config, 'SOCKS_REMOTE_DNS', False):
                 import socks as _pysocks
                 ts = _pysocks.socksocket()
                 try:
@@ -382,7 +382,7 @@ def maybe_llm_proxy_hint(provider_name: str, error_text: str) -> None:
     error says so. One per provider per boot; never raises."""
     try:
         if not (getattr(config, 'SOCKS_ENABLED', False)
-                and getattr(config, 'SOCKS_ROUTE_LLM', True)):
+                and getattr(config, 'SOCKS_ROUTE_LLM', False)):
             return
         if provider_name in _llm_hint_sent:
             return
@@ -412,10 +412,10 @@ def proxy_status() -> dict:
         httpx_socks = True
     except ImportError:
         httpx_socks = False
-    remote_dns = bool(getattr(config, 'SOCKS_REMOTE_DNS', True))
+    remote_dns = bool(getattr(config, 'SOCKS_REMOTE_DNS', False))
     return {
         'enabled': enabled,
-        'route_llm': bool(getattr(config, 'SOCKS_ROUTE_LLM', True)),
+        'route_llm': bool(getattr(config, 'SOCKS_ROUTE_LLM', False)),
         'remote_dns': remote_dns,
         'dns_via_proxy': enabled and remote_dns,
         'env_applied': bool(os.environ.get('ALL_PROXY')),
