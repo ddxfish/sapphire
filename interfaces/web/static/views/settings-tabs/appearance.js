@@ -116,7 +116,8 @@ export default {
         </div>
 
         <style>
-            .appearance-page { max-width: 900px; }
+            /* full-width like the other settings tabs (Krem 2026-08-30);
+               the auto-fill grids below add columns on wide screens */
             .setting-section-title { font-weight: 600; font-size: var(--font-sm); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
             .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
             .theme-card {

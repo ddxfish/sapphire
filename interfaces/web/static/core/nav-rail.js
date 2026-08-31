@@ -108,10 +108,19 @@ function initMobileOverflow(rail) {
         // mobile and don't spend a visible slot (2026-08-29 designed-menu rework).
         const all = [...rail.querySelectorAll('.nav-item:not(.nav-overflow)')];
         const pinned = all.filter(i => i.classList.contains('nav-mobile-overflow'));
-        const flowing = all.filter(i => !i.classList.contains('nav-mobile-overflow'));
         pinned.forEach(i => i.classList.add('overflow-hidden'));
+        // Un-hide before measuring (so our own previous pass doesn't skew
+        // the read), then let only RENDERED items spend a slot — #nav-apps
+        // hides itself when no apps are promoted (S3 #9 phantom row);
+        // #nav-gem is mobile-only.
+        const candidates = all.filter(i => !i.classList.contains('nav-mobile-overflow'));
+        candidates.forEach(i => i.classList.remove('overflow-hidden'));
+        const flowing = candidates.filter(i => getComputedStyle(i).display !== 'none');
+        // The ⋯ button holds a bar slot too: visible budget is MAX-1.
+        // With the gem the bar hit 7 icons (Krem repro 2026-08-30).
+        const budget = MOBILE_MAX_VISIBLE - 1;
         flowing.forEach((item, i) => {
-            item.classList.toggle('overflow-hidden', i >= MOBILE_MAX_VISIBLE);
+            item.classList.toggle('overflow-hidden', i >= budget);
         });
 
         // ⋯ always shows on mobile now — Settings + Profile live inside
@@ -157,7 +166,7 @@ function initMobileOverflow(rail) {
             });
 
             // Items squeezed out of the bar by the slot budget
-            const extra = flowing.filter((item, i) => i >= MOBILE_MAX_VISIBLE);
+            const extra = flowing.filter((item, i) => i >= budget);
             if (extra.length) {
                 addSep();
                 extra.forEach(item => {

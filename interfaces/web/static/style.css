@@ -1272,10 +1272,17 @@ body {
     min-height: 0;
 }
 
-.panel-list { width: 240px; }
+/* Fixed roster widths are DESKTOP-ONLY. The mobile stack block (max-width
+   768px) sets .panel-left to 100%, but single-class source order can't beat
+   .panel-list.pl-stacked's (0,2,0) specificity — the old "override below
+   still wins" comment was wrong, and every persona-section roster sat at
+   288px on phones (Krem repro 2026-08-30, 600px devtools). */
+@media (min-width: 769px) {
+    .panel-list { width: 240px; }
+    .panel-list.pl-stacked { width: 288px; }
+}
 /* Stacked header (persona-section rosters): title on line 1, toolbar wraps
-   to line 2, +20% column. Mobile full-width override below still wins. */
-.panel-list.pl-stacked { width: 288px; }
+   to line 2, +20% column. */
 .pl-stacked .panel-list-header { flex-wrap: wrap; row-gap: 6px; }
 .pl-stacked .panel-list-title { flex-basis: 100%; }
 .pl-stacked .panel-list-actions { margin-left: 0; }
@@ -7749,7 +7756,11 @@ a.gallery-caption:hover {
    ============================================================================= */
 
 .help-view { height: 100%; }
-.help-view .panel-left { width: 260px; }
+/* desktop-only: this (0,2,0) rule sits AFTER the mobile stack block in
+   source order and beat its 100% — same specificity trap as pl-stacked */
+@media (min-width: 769px) {
+    .help-view .panel-left { width: 260px; }
+}
 
 /* Sidebar */
 .help-sidebar { display: flex; flex-direction: column; overflow: hidden; }
