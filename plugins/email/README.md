@@ -133,7 +133,7 @@ SETUP:
 AVAILABLE TOOLS:
 - get_inbox(count?, folder?) - fetch emails (1-50, default 20, folders: inbox/sent/archive)
 - read_email(index) - read full email by 1-based index from get_inbox
-- search_emails(sender?, content?, date?, folder?, count?) - search; sender matches name+address substring (fish->ddxfish@gmail.com), content=subject OR body, date=YYYY-MM-DD returns ~10 each side; results load like get_inbox (use read_email/reply/archive/delete by index)
+- search_emails(sender?, content?, date?, folder?, count?) - search; sender matches name+address substring (fish->bigfish@example.com), content=subject OR body, date=YYYY-MM-DD returns ~10 each side; results load like get_inbox (use read_email/reply/archive/delete by index)
 - archive_emails(indices) - move to the real Archive folder (Gmail = All Mail) by index array
 - delete_emails(indices) - move to Trash (recoverable); refuses if no Trash folder found
 - forward_email(index, recipient_id?, address?, note?) - forward an inbox email to a contact; text only, attachments not carried

@@ -133,7 +133,7 @@ TOOLS = [
                 "properties": {
                     "sender": {
                         "type": "string",
-                        "description": "Match the sender — name or address, partial ok (e.g. 'fish' matches ddxfish@gmail.com)"
+                        "description": "Match the sender — name or address, partial ok (e.g. 'fish' matches bigfish@example.com)"
                     },
                     "content": {
                         "type": "string",
