@@ -188,7 +188,7 @@ function _renderAuthorAvatar(item) {
     // synthesize a fallback inline (cleaner than embedding JS in onerror).
     const username = _githubUsernameFromUrl(item.author_url);
     if (username) {
-        return `<img class="store-card-avatar" loading="lazy"
+        return `<img class="store-card-avatar" loading="lazy" referrerpolicy="no-referrer"
             src="https://github.com/${_esc(username)}.png?size=64"
             alt="${_esc(item.author || username)}"
             onerror="this.remove()">`;

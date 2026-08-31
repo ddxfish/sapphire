@@ -12,6 +12,15 @@ if sys.platform == 'win32':
     import asyncio
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# Quiet-egress env (negspace hunt 2026-08-31): tiktoken caches its BPE
+# file in the system temp dir — tmpfs on many boxes, so it re-downloaded
+# from openaipublic.blob.core.windows.net every reboot. Point it at a
+# persistent user/ dir (tiktoken mkdirs it). HF telemetry UA is pure
+# phone-home; off unconditionally. setdefault — a user's own env wins.
+os.environ.setdefault("TIKTOKEN_CACHE_DIR",
+                      str(Path(__file__).parent / "user" / "cache" / "tiktoken"))
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
 # CRITICAL: Import logging setup FIRST before any core modules
 import core.sapphire_logging
 import logging

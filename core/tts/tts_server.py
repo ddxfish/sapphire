@@ -14,6 +14,39 @@ import re
 import threading
 import tempfile
 import psutil
+# Quiet-egress (negspace E4, 2026-08-31): kokoro fetches config/model/voice
+# files via hf_hub, which pings huggingface.co on EVERY load even when the
+# cache is fully warm. Arm HF offline mode BEFORE the kokoro import (hf_hub
+# reads the env at import time) — but only when the model cache already
+# exists, so first-run downloads still work. Telemetry off unconditionally.
+# A voice missing from the cache lifts offline at synth time (_synth) and
+# retries online; init failures retry the same way below.
+_hf_home = os.environ.get('HF_HOME') or os.path.join(
+    os.path.expanduser('~'), '.cache', 'huggingface')
+_kokoro_snaps = os.path.join(_hf_home, 'hub', 'models--hexgrad--Kokoro-82M',
+                             'snapshots')
+try:
+    _kokoro_cached = os.path.isdir(_kokoro_snaps) and bool(os.listdir(_kokoro_snaps))
+except OSError:
+    _kokoro_cached = False
+if _kokoro_cached:
+    os.environ.setdefault('HF_HUB_OFFLINE', '1')
+os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
+
+
+def _hf_go_online():
+    """Lift HF offline mode for the rest of this process (a restart
+    re-arms). hf_hub modules may bind the flag as a module global at
+    import, so flip env AND every huggingface_hub module attr."""
+    os.environ['HF_HUB_OFFLINE'] = '0'
+    for _name, _mod in list(sys.modules.items()):
+        if _name.startswith('huggingface_hub') and hasattr(_mod, 'HF_HUB_OFFLINE'):
+            try:
+                _mod.HF_HUB_OFFLINE = False
+            except Exception:
+                pass
+
+
 from kokoro import KPipeline
 
 # Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
@@ -139,35 +172,77 @@ if _kokoro_device == 'cuda':
         _kokoro_device = 'cpu'
 
 logger.info(f"Loading Kokoro model on device='{_kokoro_device}'...")
+
+
+def _init_kpipeline():
+    """The original init fallback chain, verbatim — wrapped so the HF
+    offline-retry shell below can run it twice."""
+    global _kokoro_device
+    try:
+        return KPipeline(lang_code='a', device=_kokoro_device)
+    except TypeError:
+        # Older kokoro versions don't accept device= kwarg — fall back to
+        # auto-detect (respects CUDA_VISIBLE_DEVICES env if set by parent).
+        logger.warning("KPipeline doesn't accept device kwarg — using library default")
+        try:
+            return KPipeline(lang_code='a')
+        except Exception as e:
+            logger.error(f"Kokoro init failed even in auto-detect mode: {e}")
+            raise
+    except Exception as e:
+        # CUDA init can fail at runtime even when torch.cuda.is_available() returns
+        # True (driver/lib mismatch, OOM, device-context corruption). Fall back to
+        # cpu so TTS still works.
+        if _kokoro_device == 'cuda':
+            logger.warning(f"Kokoro CUDA init failed ({e}) — falling back to cpu")
+            try:
+                p = KPipeline(lang_code='a', device='cpu')
+                _kokoro_device = 'cpu'
+                return p
+            except Exception as e2:
+                logger.error(f"Kokoro init failed on both cuda and cpu: {e2}")
+                raise
+        else:
+            # cpu init failed — nothing left to fall back to
+            logger.error(f"Kokoro init failed on cpu: {e}")
+            raise
+
+
 pipeline = None
 try:
-    pipeline = KPipeline(lang_code='a', device=_kokoro_device)
-except TypeError:
-    # Older kokoro versions don't accept device= kwarg — fall back to
-    # auto-detect (respects CUDA_VISIBLE_DEVICES env if set by parent).
-    logger.warning("KPipeline doesn't accept device kwarg — using library default")
-    try:
-        pipeline = KPipeline(lang_code='a')
-    except Exception as e:
-        logger.error(f"Kokoro init failed even in auto-detect mode: {e}")
-        raise
-except Exception as e:
-    # CUDA init can fail at runtime even when torch.cuda.is_available() returns
-    # True (driver/lib mismatch, OOM, device-context corruption). Fall back to
-    # cpu so TTS still works.
-    if _kokoro_device == 'cuda':
-        logger.warning(f"Kokoro CUDA init failed ({e}) — falling back to cpu")
-        try:
-            pipeline = KPipeline(lang_code='a', device='cpu')
-            _kokoro_device = 'cpu'
-        except Exception as e2:
-            logger.error(f"Kokoro init failed on both cuda and cpu: {e2}")
-            raise
+    pipeline = _init_kpipeline()
+except Exception as _init_err:
+    if os.environ.get('HF_HUB_OFFLINE') == '1':
+        # Cache looked present but a needed file was missing — lift
+        # offline once and let the download happen (negspace E4).
+        logger.warning(f"Kokoro init failed under HF offline mode ({_init_err}) "
+                       "— retrying online")
+        _hf_go_online()
+        pipeline = _init_kpipeline()
     else:
-        # cpu init failed — nothing left to fall back to
-        logger.error(f"Kokoro init failed on cpu: {e}")
         raise
 logger.info(f"Model loaded successfully on device='{_kokoro_device}'. Using temp dir: {TEMP_DIR}")
+
+
+def _synth(text, voice, speed):
+    """pipeline() with HF offline fallback (negspace E4): voices/*.pt
+    download lazily PER VOICE, so a never-used voice under offline mode
+    raises. Lift offline once, retry, stay online for process life
+    (restart re-arms). Real synth errors pass straight through."""
+    try:
+        return pipeline(text, voice=voice, speed=speed)
+    except Exception as e:
+        if (os.environ.get('HF_HUB_OFFLINE') == '1'
+                and (type(e).__name__ in ('OfflineModeIsEnabled',
+                                          'LocalEntryNotFoundError',
+                                          'FileNotFoundError')
+                     or 'offline' in str(e).lower()
+                     or 'local_files_only' in str(e))):
+            logger.info(f"[TTS] voice '{voice}' not in local cache — "
+                        "lifting HF offline mode to download")
+            _hf_go_online()
+            return pipeline(text, voice=voice, speed=speed)
+        raise
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -328,7 +403,7 @@ class TTSHandler(BaseHTTPRequestHandler):
 
         generation_start = time.time()
         with pipeline_lock:
-            generator = pipeline(text_to_speak, voice=voice, speed=speed)
+            generator = _synth(text_to_speak, voice, speed)
             # Copy each segment to decouple from PyTorch tensor memory
             # Without copy, GC of generator tensors can free memory numpy still references → SIGSEGV
             audio_segments = [np.copy(seg) for _, _, seg in generator]
@@ -510,7 +585,7 @@ class TTSHandler(BaseHTTPRequestHandler):
 
         try:
             with pipeline_lock:
-                generator = pipeline(text_to_speak, voice=voice, speed=speed)
+                generator = _synth(text_to_speak, voice, speed)
                 for _, _, seg in generator:
                     # If downstream already failed (client gone), bail early —
                     # no point finishing inference for a dead socket.

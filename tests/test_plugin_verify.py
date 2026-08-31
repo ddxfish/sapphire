@@ -354,13 +354,17 @@ class TestCRLFRegression:
         pv._authorized_keys_cache = None
         pv._authorized_keys_fetched_at = 0
 
-        # Mock the fetch to return CRLF JSON
+        # Mock the fetch to return CRLF JSON. Seam moved 2026-08-31
+        # (negspace E1): _fetch_remote_keys rides core.socks_proxy
+        # get_session() now, not urllib — .json() decodes exactly like
+        # requests does, so the CRLF contract is still exercised.
         mock_resp = MagicMock()
-        mock_resp.read.return_value = crlf_bytes
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.raise_for_status = MagicMock(return_value=None)
+        mock_resp.json = lambda: json.loads(crlf_bytes.decode("utf-8"))
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
 
-        with patch("urllib.request.urlopen", return_value=mock_resp):
+        with patch("core.socks_proxy.get_session", return_value=mock_session):
             with patch("config.PLUGIN_KEYS_URL", "https://example.com/keys.json"):
                 with patch.object(pv, "_CACHE_FILE", tmp / "cache.json"):
                     passed, msg, meta = verify_plugin(d)
@@ -383,7 +387,12 @@ class TestNetworkFallbacks:
         pv._authorized_keys_cache = None
         pv._authorized_keys_fetched_at = 0
 
-        with patch("config.PLUGIN_KEYS_URL", "https://this-does-not-exist.invalid/keys.json"):
+        # Seam moved 2026-08-31 (negspace E1): fetch rides get_session().
+        # Mock it to raise so the suite never emits a real DNS query.
+        mock_session = MagicMock()
+        mock_session.get.side_effect = ConnectionError("unreachable")
+        with patch("core.socks_proxy.get_session", return_value=mock_session):
+          with patch("config.PLUGIN_KEYS_URL", "https://this-does-not-exist.invalid/keys.json"):
             with patch.object(pv, "_CACHE_FILE", tmp / "nonexistent_cache.json"):
                 passed, msg, meta = verify_plugin(d)
                 assert passed
@@ -398,12 +407,15 @@ class TestNetworkFallbacks:
         pv._authorized_keys_cache = None
         pv._authorized_keys_fetched_at = 0
 
+        # Seam moved 2026-08-31 (negspace E1): get_session, not urllib.
+        # requests' .json() raises on HTML — mock does the same.
         mock_resp = MagicMock()
-        mock_resp.read.return_value = b"<html><body>404 Not Found</body></html>"
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.raise_for_status = MagicMock(return_value=None)
+        mock_resp.json = MagicMock(side_effect=ValueError("No JSON could be decoded"))
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
 
-        with patch("urllib.request.urlopen", return_value=mock_resp):
+        with patch("core.socks_proxy.get_session", return_value=mock_session):
             with patch("config.PLUGIN_KEYS_URL", "https://example.com/keys.json"):
                 with patch.object(pv, "_CACHE_FILE", tmp / "no_cache.json"):
                     # Should not crash — HTML won't parse as JSON
@@ -421,12 +433,14 @@ class TestNetworkFallbacks:
         pv._authorized_keys_cache = None
         pv._authorized_keys_fetched_at = 0
 
+        # Seam moved 2026-08-31 (negspace E1): get_session, not urllib.
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({"not_keys": "lol", "schema": 42}).encode()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.raise_for_status = MagicMock(return_value=None)
+        mock_resp.json = MagicMock(return_value={"not_keys": "lol", "schema": 42})
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
 
-        with patch("urllib.request.urlopen", return_value=mock_resp):
+        with patch("core.socks_proxy.get_session", return_value=mock_session):
             with patch("config.PLUGIN_KEYS_URL", "https://example.com/keys.json"):
                 with patch.object(pv, "_CACHE_FILE", tmp / "no_cache.json"):
                     # Wrong schema → empty keys → author-signed plugin fails

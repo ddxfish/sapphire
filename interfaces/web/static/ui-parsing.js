@@ -459,7 +459,7 @@ const processInlineMarkdown = (html) => {
     // Balanced parens in URL for Wikipedia etc, tolerates space between ] and (
     html = html.replace(/!\[([^\]]*)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, alt, url) => {
         url = url.trim().replace(/ /g, '%20');
-        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img">`;
+        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img" referrerpolicy="no-referrer" loading="lazy">`;
         return m;
     });
 

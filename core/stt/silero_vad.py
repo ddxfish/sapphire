@@ -38,8 +38,12 @@ _WARMUP_HARD_TIMEOUT_S = 120
 logger = logging.getLogger(__name__)
 
 # Stable upstream — snakers4/silero-vad master branch
-SILERO_VAD_URL = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
-SILERO_VAD_SHA256 = None  # Not pinned for now; could add later if abuse becomes a concern
+# Commit-pinned (negspace fold-in, 2026-08-31): master is a mutable ref —
+# a moved file would have been swallowed silently (sha was never checked).
+# Pin = the model file at its last change (2025-11-06), verified against
+# the locally cached copy. Upstream update -> bump BOTH url commit + sha.
+SILERO_VAD_URL = "https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx"
+SILERO_VAD_SHA256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MODEL_CACHE_PATH = PROJECT_ROOT / "user" / "models" / "silero_vad.onnx"
@@ -332,6 +336,12 @@ def _ensure_model_downloaded() -> Path:
                 shutil.copyfileobj(resp, f)
         if tmp_path.stat().st_size < 1_000_000:
             raise RuntimeError(f"Downloaded file too small ({tmp_path.stat().st_size} bytes) — likely a redirect/error page")
+        if SILERO_VAD_SHA256:
+            import hashlib
+            got = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
+            if got != SILERO_VAD_SHA256:
+                tmp_path.unlink(missing_ok=True)
+                raise RuntimeError(f"silero_vad.onnx sha256 mismatch (got {got[:16]}…) — refusing unverified model")
         os.replace(tmp_path, MODEL_CACHE_PATH)
         logger.info(f"[SILERO] Model cached at {MODEL_CACHE_PATH} ({MODEL_CACHE_PATH.stat().st_size:,} bytes)")
         return MODEL_CACHE_PATH

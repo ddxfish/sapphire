@@ -1457,7 +1457,11 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
                     target=chunk_id, cursor=cursor,
                     summary=(f"saved to {layer}"
                              + (f" ({entity})" if entity else '')
-                             + f": \"{content[:60]}{'…' if len(content) > 60 else ''}\""))
+                             # keyed rows: no content preview — the ledger
+                             # tail rides read_self into system prompts
+                             # (negspace K3, 2026-08-31)
+                             + (": [keyed]" if private_key else
+                                f": \"{content[:60]}{'…' if len(content) > 60 else ''}\"")))
             conn.commit()
 
         if embed_failed_mid_session:

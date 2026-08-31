@@ -1793,6 +1793,7 @@ def _migrate_v2_chunks(keys, report):
         rows = conn.cursor().execute(
             "SELECT id, scope, content, label, source, chunk_index, meta "
             "FROM chunks WHERE layer = 'knowledge' "
+            "AND private_key IS NULL "
             "AND json_extract(meta, '$.library_migrated') IS NULL "
             "ORDER BY scope, COALESCE(chunk_index, 0), created").fetchall()
     groups = {}

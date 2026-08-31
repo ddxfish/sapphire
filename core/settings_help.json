@@ -306,7 +306,7 @@
   },
   "EMBEDDING_PROVIDER": {
     "short": "Where to run embedding inference",
-    "long": "Local runs Nomic on your CPU (requires onnxruntime + transformers). API sends text to a remote Nomic server. Disable to use text-only search."
+    "long": "Local runs Nomic on your CPU (requires onnxruntime + transformers). API sends text to a remote Nomic server — including the text of key-gated private memories at save time. Disable to use text-only search."
   },
   "EMBEDDING_API_URL": {
     "short": "Remote embedding server URL",

@@ -285,6 +285,7 @@ def build_batch(cursor, scope, what, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
+        AND private_key IS NULL
         AND (meta IS NULL OR (
             json_extract(meta, '$.librarian_at') IS NULL
             AND json_extract(meta, '$.pruned_at') IS NULL
@@ -304,6 +305,7 @@ def build_temporal_batch(cursor, scope, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
+        AND private_key IS NULL
         AND json_extract(meta, '$.refers_to_time') IS NOT NULL
         AND json_extract(meta, '$.temporal_at') IS NULL
         AND json_extract(meta, '$.pruned_at') IS NULL
@@ -326,6 +328,7 @@ def build_link_batch(cursor, scope, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
+        AND private_key IS NULL
         AND json_extract(meta, '$.noun_candidates') IS NOT NULL
         AND json_extract(meta, '$.link_at') IS NULL
         AND json_extract(meta, '$.pruned_at') IS NULL
@@ -345,6 +348,7 @@ def build_dedup_batch(cursor, scope, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
+        AND private_key IS NULL
         AND embedding IS NOT NULL
         AND json_extract(meta, '$.dedup_at') IS NULL
         AND json_extract(meta, '$.pruned_at') IS NULL
@@ -384,6 +388,7 @@ def find_duplicates(cursor, scope, batch, threshold):
         cand = cursor.execute(f'''
             SELECT id, content, embedding, embedding_provider, embedding_dim
             FROM chunks WHERE scope = ? AND layer IN ({lph})
+            AND private_key IS NULL
             AND embedding IS NOT NULL
             AND favorite = 0
             AND (importance IS NULL OR importance < ?)
@@ -611,6 +616,7 @@ def _self_shelf_rows(scope, ids=None):
     # was a scope-wide json_extract scan — slow, and one bad meta row
     # anywhere silently emptied the FEAST. Migrated notes are all events.
     q = ("SELECT id, created, content FROM chunks WHERE scope = ? "
+         "AND private_key IS NULL "
          "AND layer = 'events' "
          "AND json_extract(meta,'$.was_self_layer') IS NOT NULL "
          "AND json_extract(meta,'$.pruned_at') IS NULL "
@@ -1621,7 +1627,8 @@ def _worker_dedup(scope):
             if partner_ids:
                 ph = ','.join('?' * len(partner_ids))
                 partners = {r[0]: (r[1], r[2]) for r in cur.execute(
-                    f'SELECT id, created, content FROM chunks WHERE id IN ({ph})',
+                    f'SELECT id, created, content FROM chunks '
+                    f'WHERE private_key IS NULL AND id IN ({ph})',
                     partner_ids).fetchall()}
             conn.commit()
         if not batch:

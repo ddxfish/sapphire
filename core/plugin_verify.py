@@ -90,12 +90,23 @@ def _load_authorized_keys() -> list:
     if _authorized_keys_cache is not None and (time.time() - _authorized_keys_fetched_at) < _CACHE_TTL:
         return _authorized_keys_cache
 
-    # Try fetching from remote
+    # Disk cache FIRST (negspace E1, 2026-08-31): this used to dial GitHub
+    # network-first on every boot — the disk cache was only a failure
+    # fallback and the TTL global dies with the process. A fresh disk
+    # cache (24h) is now authoritative; boot with warm cache is silent.
+    disk = _read_disk_cache()
+    if disk is not None:
+        keys, fetched_at = disk
+        if (time.time() - fetched_at) < _CACHE_TTL:
+            _authorized_keys_cache = keys
+            _authorized_keys_fetched_at = fetched_at
+            return keys
+
+    # Stale or missing → refresh from remote (rides SOCKS when enabled)
     keys = _fetch_remote_keys()
     if keys is not None:
         _authorized_keys_cache = keys
         _authorized_keys_fetched_at = time.time()
-        # Persist to disk cache
         try:
             _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
             _CACHE_FILE.write_text(json.dumps({"keys": keys, "fetched_at": time.time()}, indent=2), encoding="utf-8")
@@ -103,22 +114,30 @@ def _load_authorized_keys() -> list:
             logger.warning(f"[PLUGIN-VERIFY] Failed to write key cache: {e}")
         return keys
 
-    # Fallback to disk cache
-    if _CACHE_FILE.exists():
-        try:
-            data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
-            keys = data.get("keys", [])
-            _authorized_keys_cache = keys
-            _authorized_keys_fetched_at = data.get("fetched_at", 0)
-            logger.info(f"[PLUGIN-VERIFY] Using cached authorized keys ({len(keys)} keys)")
-            return keys
-        except Exception as e:
-            logger.warning(f"[PLUGIN-VERIFY] Failed to read key cache: {e}")
+    # Remote failed → a stale disk cache beats nothing
+    if disk is not None:
+        keys, fetched_at = disk
+        _authorized_keys_cache = keys
+        _authorized_keys_fetched_at = fetched_at
+        logger.info(f"[PLUGIN-VERIFY] Remote refresh failed; using stale cached keys ({len(keys)} keys)")
+        return keys
 
     # No keys available
     _authorized_keys_cache = []
     _authorized_keys_fetched_at = time.time()
     return []
+
+
+def _read_disk_cache() -> tuple | None:
+    """(keys, fetched_at) from the disk cache, or None if absent/corrupt."""
+    if not _CACHE_FILE.exists():
+        return None
+    try:
+        data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        return data.get("keys", []), float(data.get("fetched_at", 0))
+    except Exception as e:
+        logger.warning(f"[PLUGIN-VERIFY] Failed to read key cache: {e}")
+        return None
 
 
 def _fetch_remote_keys() -> list | None:
@@ -133,12 +152,16 @@ def _fetch_remote_keys() -> list | None:
         return None
 
     try:
-        import urllib.request
-        import ssl
-        ctx = ssl.create_default_context()
-        req = urllib.request.Request(url, headers={"User-Agent": "Sapphire-PluginVerify/1.0"})
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        # Rides core.socks_proxy (negspace E1): raw urllib went DIRECT even
+        # with SOCKS on. get_session raising (proxy enabled but broken) is
+        # CORRECT fail-closed behavior — we fall back to the disk cache,
+        # never to a direct connection.
+        from core.socks_proxy import get_session
+        resp = get_session().get(url, timeout=10,
+                                 headers={"User-Agent": "Sapphire-PluginVerify/1.0"})
+        resp.raise_for_status()
+        if True:
+            data = resp.json()
             keys = data.get("keys", [])
             # Validate each key has required fields
             valid = []
