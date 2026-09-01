@@ -11,8 +11,8 @@
     "tests/test_oauth_refresh_error.py": "sha256:038dbc93d434de7185bfa5a53db785d5c587a20771016b7a1ad49e684e57d10e",
     "tests/test_search_emails.py": "sha256:f5cc9a4c9a354b03b564cc8fea8c25fecfdd0258ba523c4c14ff0e6155e606e4",
     "tests/test_send_email_mutex.py": "sha256:279220d7b548b86428b3e843027327ef490f89236ded03b7fbb510b58bcc6c1f",
-    "tools/email_tool.py": "sha256:f34c1776593742d3943dd4c18c035f212dacf8a2e57296b512e90fb0cffd66af",
+    "tools/email_tool.py": "sha256:692080ddbaec18d33e2de8bbe0a6cb1644a534967b90631c8dda81ceef4e70ec",
     "web/index.js": "sha256:376002392e2790776e7f286b2129e3d30a812b6a91b2b5f72fa014b16a49448a"
   },
-  "signature": "TMh7A4vqXyiA/pM1Abne77RTLXAJwGpvcEWV5k6yFAhyfWF9V9gXrpg2nBDkCNW9FtL1tj+zJG6SxqaEDwrLDA=="
+  "signature": "qEtSrlP7kXwaqJnZFKu5p7NkOJuiebFz5tC7nixcbmSC3kqL4yg/c6DvqaT/oD2Wo8VWGXcyCa2FU2nF3pFjCg=="
 }

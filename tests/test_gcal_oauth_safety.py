@@ -117,7 +117,7 @@ def test_refresh_saves_rotated_refresh_token(mock_gcal):
         }
         return r
 
-    with patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.post', side_effect=fake_post):
         token, cid, err = cal._get_access_token()
     assert err is None
     assert token == 'new-access'
@@ -135,7 +135,7 @@ def test_refresh_keeps_original_when_no_rotation(mock_gcal):
         r.json.return_value = {'access_token': 'new-access', 'expires_in': 3600}
         return r
 
-    with patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.post', side_effect=fake_post):
         cal._get_access_token()
     assert state['refresh_token'] == 'rt-current'
 
@@ -162,7 +162,7 @@ def test_concurrent_refreshes_serialize(mock_gcal):
 
     tokens = []
     def _worker():
-        with patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+        with patch('gcal_calendar_test.net.post', side_effect=fake_post):
             t, _, _ = cal._get_access_token()
             tokens.append(t)
 
@@ -194,7 +194,7 @@ def test_invalid_grant_surfaces_reconnect_message(mock_gcal):
         r.text = '{"error":"invalid_grant"}'
         return r
 
-    with patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.post', side_effect=fake_post):
         _, _, err = cal._get_access_token()
     assert err is not None
     assert 'invalid_grant' in err
@@ -212,7 +212,7 @@ def test_500_surfaces_transient_message(mock_gcal):
         r.text = 'Service Unavailable'
         return r
 
-    with patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.post', side_effect=fake_post):
         _, _, err = cal._get_access_token()
     assert err is not None
     assert 'temporarily unavailable' in err.lower() or 'try again' in err.lower()
@@ -226,7 +226,7 @@ def test_network_error_surfaces_network_message(mock_gcal):
     def fake_post(url, data=None, timeout=None):
         raise _req.ConnectionError("DNS failed")
 
-    with patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.post', side_effect=fake_post):
         _, _, err = cal._get_access_token()
     assert err is not None
     assert 'reach Google' in err or 'network' in err.lower() or 'ConnectionError' in err
@@ -261,8 +261,8 @@ def test_api_call_retries_once_on_401(mock_gcal):
         r.json.return_value = {'access_token': 'fresh', 'expires_in': 3600}
         return r
 
-    with patch('gcal_calendar_test.requests.request', side_effect=fake_request), \
-         patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.request', side_effect=fake_request), \
+         patch('gcal_calendar_test.net.post', side_effect=fake_post):
         data, err = cal._api_get('/calendars/{calendar_id}/events')
 
     assert err is None, f"retry should have succeeded; got err={err}"
@@ -290,8 +290,8 @@ def test_api_call_gives_up_after_second_401(mock_gcal):
         r.json.return_value = {'access_token': 'fresh', 'expires_in': 3600}
         return r
 
-    with patch('gcal_calendar_test.requests.request', side_effect=fake_request), \
-         patch('gcal_calendar_test.requests.post', side_effect=fake_post):
+    with patch('gcal_calendar_test.net.request', side_effect=fake_request), \
+         patch('gcal_calendar_test.net.post', side_effect=fake_post):
         data, err = cal._api_get('/calendars/{calendar_id}/events')
 
     assert err is not None

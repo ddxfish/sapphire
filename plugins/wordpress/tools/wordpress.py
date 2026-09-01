@@ -11,6 +11,7 @@ import logging
 import secrets
 
 import requests
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ def _wp_request(scope, method, path, params=None, json_body=None):
         return None, "This WordPress site is missing its URL, username, or Application Password (Settings > WordPress)."
     url = f"{base}{WP_API}{path}"
     try:
-        resp = requests.request(method, url, params=params, json=json_body,
+        resp = net.request(method, url, params=params, json=json_body,
                                 auth=(user, app_pw), timeout=TIMEOUT)
     except requests.RequestException as e:
         return None, f"Could not reach WordPress ({type(e).__name__}): {e}"

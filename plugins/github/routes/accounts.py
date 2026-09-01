@@ -6,6 +6,7 @@
 import logging
 
 import requests
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ def validate_token(body=None, **_):
         return {"valid": False, "error": "No token provided"}
 
     try:
-        resp = requests.get(
+        resp = net.get(
             API_USER,
             headers={
                 'Authorization': f'Bearer {pat}',

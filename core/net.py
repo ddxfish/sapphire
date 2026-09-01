@@ -100,17 +100,28 @@ def _make_session(lane: str, profile: str) -> requests.Session:
     return s
 
 
-def session_for(url: str, profile: str = 'plain') -> requests.Session:
-    """Pooled session for the lane this URL classifies into. For callers
-    that loop (polling etc.). NOTE: a session is lane-fixed — don't reuse
-    one across differently-classified URLs; call again per URL."""
-    lane = classify(urlsplit(url).hostname or '')
+def _pooled(lane: str, profile: str) -> requests.Session:
     key = (lane, profile)
     with _lock:
         s = _sessions.get(key)
         if s is None:
             s = _sessions[key] = _make_session(lane, profile)
     return s
+
+
+def session_for(url: str, profile: str = 'plain') -> requests.Session:
+    """Pooled session for the lane this URL classifies into. For callers
+    that loop (polling etc.). NOTE: a session is lane-fixed — don't reuse
+    one across differently-classified URLs; call again per URL."""
+    return _pooled(classify(urlsplit(url).hostname or ''), profile)
+
+
+def wan_session(profile: str = 'browser') -> requests.Session:
+    """The WAN lane's pooled session with no URL in hand — the
+    get_session() fold (C, 2026-09-01): web tools grab one session and
+    make many calls. Env does the proxying; browser profile by default
+    (that's what get_session always was)."""
+    return _pooled('wan', profile)
 
 
 def request(method: str, url: str, profile: str = 'plain', **kw) -> requests.Response:

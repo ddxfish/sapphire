@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from core import net
 
 from core.github_files import fetch_github_file
 from core.versions import is_newer
@@ -473,7 +474,7 @@ class Updater:
         the SHA string or None. Used by pre-flight to verify upstream hasn't
         force-pushed between check and click."""
         try:
-            resp = requests.get(
+            resp = net.get(
                 f'https://api.github.com/repos/{GITHUB_REPO}/commits/{branch}',
                 headers={'Accept': 'application/vnd.github.sha'},
                 timeout=10,

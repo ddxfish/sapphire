@@ -160,33 +160,27 @@ def test_lan_redirect_opt_in(monkeypatch):
 
 # ── guard rail: no new raw requests callers in first-party code ─────────
 
-# Phase-2 allowlist — shrinks as the WAN migration lands. user/plugins is
+# Allowlist — phase-2 WAN migration + C fold + alias sweep landed
+# 2026-09-01, so this is down to the irreducible three. user/plugins is
 # NOT scanned (third-party band rides the env belt by design).
 _ALLOWED = {
     'core/net.py',                            # the facade itself
-    'core/socks_proxy.py',                    # get_session (phase-2 C fold)
-    'core/github_files.py',
-    'core/stt/silero_vad.py',
-    'core/tts/providers/kokoro.py',
-    'core/updater.py',
-    'functions/network.py',
-    'functions/web.py',
-    'plugins/github/routes/accounts.py',
-    'plugins/github/tools/github.py',
-    'plugins/google-calendar/routes/oauth.py',
-    'plugins/google-calendar/tools/calendar.py',
-    'plugins/mindpalace/tools/geonames.py',
-    'plugins/sapphire-store/tools/store_tools.py',
-    'plugins/wordpress/tools/wordpress.py',
     'plugins/remembrance/tests/test_ops.py',  # test double
+    'plugins/email/daemon.py',                # out-of-process daemon — can't
+                                              # import core; env belt lane
 }
 _CALL = re.compile(r'\brequests\.(get|post|put|patch|delete|head|request|Session)\s*\(')
+_ALIAS = re.compile(r'\bimport requests as (\w+)')
+_VERBS = r'\.(get|post|put|patch|delete|head|request|Session)\s*\('
 
 
 def test_no_raw_requests_outside_allowlist():
     """New first-party HTTP callers must go through core.net (or be added
     here consciously). This is what keeps the Prime-blinds class from
-    quietly returning with the next plugin."""
+    quietly returning with the next plugin. Aliased imports (`import
+    requests as req`) are hunted too — the original sweep missed six of
+    those in routes/plugins.py, including HA test routes (the exact
+    blinds class, hiding in an alias)."""
     offenders = []
     for band in ('core', 'functions', 'plugins'):
         for py in (ROOT / band).rglob('*.py'):
@@ -199,7 +193,13 @@ def test_no_raw_requests_outside_allowlist():
                 text = py.read_text(encoding='utf-8', errors='replace')
             except OSError:
                 continue
-            if _CALL.search(text):
+            hit = bool(_CALL.search(text))
+            if not hit:
+                for alias in set(_ALIAS.findall(text)):
+                    if re.search(r'\b' + re.escape(alias) + _VERBS, text):
+                        hit = True
+                        break
+            if hit:
                 offenders.append(rel)
     assert not offenders, (
         f'raw requests.* calls outside core.net in: {offenders} — '

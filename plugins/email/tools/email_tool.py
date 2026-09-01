@@ -522,6 +522,7 @@ def _lock_for(scope: str) -> _threading.Lock:
 def _refresh_oauth_token(scope, creds):
     """Refresh an OAuth2 access token inline. Returns updated creds or None."""
     import requests as http_requests
+    from core import net
     from core.credentials_manager import credentials
 
     tenant = creds.get('oauth_tenant_id', 'common')
@@ -541,7 +542,7 @@ def _refresh_oauth_token(scope, creds):
             pass  # Fall through to do the refresh ourselves.
 
         try:
-            resp = http_requests.post(token_url, data={
+            resp = net.post(token_url, data={
                 'client_id': creds['oauth_client_id'],
                 'client_secret': creds['oauth_client_secret'],
                 'refresh_token': creds['oauth_refresh_token'],

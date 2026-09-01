@@ -8,6 +8,7 @@ Install triggers the local plugin manager endpoint.
 import logging
 import re
 import requests
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ def _browse(search=None, category=None, sort="newest", plugin_settings=None):
         # If search looks like an exact slug, try detail first
         if search and " " not in search.strip():
             try:
-                r = requests.get(f"{base}items/{search.strip()}", timeout=10)
+                r = net.get(f"{base}items/{search.strip()}", timeout=10)
                 if r.status_code == 200:
                     data = r.json()
                     if not data.get("code"):  # not an error
@@ -120,12 +121,12 @@ def _browse(search=None, category=None, sort="newest", plugin_settings=None):
         # Search or list
         if search:
             params = {"q": search, "per_page": 15}
-            r = requests.get(f"{base}items/search", params=params, timeout=10)
+            r = net.get(f"{base}items/search", params=params, timeout=10)
         else:
             params = {"per_page": 15, "sort": sort or "newest"}
             if category:
                 params["category"] = category
-            r = requests.get(f"{base}items", params=params, timeout=10)
+            r = net.get(f"{base}items", params=params, timeout=10)
 
         if r.status_code != 200:
             return f"Store API error: HTTP {r.status_code}", False
@@ -151,7 +152,7 @@ def _browse(search=None, category=None, sort="newest", plugin_settings=None):
         if len(plugins) == 1:
             try:
                 slug = plugins[0]["slug"]
-                dr = requests.get(f"{base}items/{slug}", timeout=10)
+                dr = net.get(f"{base}items/{slug}", timeout=10)
                 if dr.status_code == 200:
                     return _format_plugin_detail(dr.json()), True
             except Exception:
@@ -178,7 +179,7 @@ def _install(slug, plugin_settings=None):
 
     try:
         # Get plugin detail from store
-        r = requests.get(f"{base}items/{slug}", timeout=10)
+        r = net.get(f"{base}items/{slug}", timeout=10)
         if r.status_code != 200:
             return f"Plugin '{slug}' not found in the store.", False
 
@@ -230,7 +231,7 @@ def _install(slug, plugin_settings=None):
                 return f"Refusing to fetch from localhost / private IP range: {clean_url}", False
             zip_url = clean_url
             install_method = 'zip_url'
-            zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+            zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
             if zr.status_code != 200:
                 return f"Failed to download zip (HTTP {zr.status_code})", False
         else:
@@ -240,18 +241,18 @@ def _install(slug, plugin_settings=None):
                 owner, repo = m_gh.group(1), m_gh.group(2)
                 install_method = 'github_url'
                 zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
-                zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                 if zr.status_code in (301, 302, 303, 307, 308):
                     loc = zr.headers.get('Location', '')
                     if loc.startswith('https://codeload.github.com/'):
-                        zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                        zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                 if zr.status_code == 404:
                     zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
-                    zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                     if zr.status_code in (301, 302, 303, 307, 308):
                         loc = zr.headers.get('Location', '')
                         if loc.startswith('https://codeload.github.com/'):
-                            zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                            zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                 if zr.status_code != 200:
                     return f"Failed to download from GitHub (HTTP {zr.status_code})", False
             elif m_gl:
@@ -259,18 +260,18 @@ def _install(slug, plugin_settings=None):
                 full_path = f"{gl_path}/{gl_repo}"
                 install_method = 'gitlab_url'
                 zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
-                zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                 if zr.status_code in (301, 302, 303, 307, 308):
                     loc = zr.headers.get('Location', '')
                     if loc.startswith('https://gitlab.com/'):
-                        zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                        zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                 if zr.status_code == 404:
                     zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
-                    zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                     if zr.status_code in (301, 302, 303, 307, 308):
                         loc = zr.headers.get('Location', '')
                         if loc.startswith('https://gitlab.com/'):
-                            zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                            zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                 if zr.status_code != 200:
                     return f"Failed to download from GitLab (HTTP {zr.status_code})", False
             else:

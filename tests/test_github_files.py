@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 
 import requests
 
+from core import net
+
 from core.github_files import fetch_github_file
 
 
@@ -24,7 +26,7 @@ def test_contents_api_first_no_raw_call(monkeypatch):
         fetched.append(url)
         return _resp(200, '1.17.0\n')
 
-    monkeypatch.setattr(requests, 'get', fake_get)
+    monkeypatch.setattr(net, 'get', fake_get)
     assert fetch_github_file('owner/repo', 'main', 'VERSION') == '1.17.0\n'
     assert len(fetched) == 1
     assert 'api.github.com/repos/owner/repo/contents/VERSION' in fetched[0]
@@ -40,7 +42,7 @@ def test_falls_back_to_raw_on_api_failure(monkeypatch):
             return _resp(403)  # rate-limited
         return _resp(200, '1.17.0')
 
-    monkeypatch.setattr(requests, 'get', fake_get)
+    monkeypatch.setattr(net, 'get', fake_get)
     assert fetch_github_file('owner/repo', 'main', 'VERSION') == '1.17.0'
     assert len(fetched) == 2
     assert 'raw.githubusercontent.com/owner/repo/main/VERSION' in fetched[1]
@@ -52,12 +54,12 @@ def test_falls_back_on_api_exception(monkeypatch):
             raise requests.ConnectionError('api down')
         return _resp(200, 'text')
 
-    monkeypatch.setattr(requests, 'get', fake_get)
+    monkeypatch.setattr(net, 'get', fake_get)
     assert fetch_github_file('owner/repo', 'main', 'VERSION') == 'text'
 
 
 def test_both_fail_returns_none(monkeypatch):
-    monkeypatch.setattr(requests, 'get', lambda url, timeout=10, headers=None: _resp(404))
+    monkeypatch.setattr(net, 'get', lambda url, timeout=10, headers=None: _resp(404))
     assert fetch_github_file('owner/repo', 'nope', 'VERSION') is None
 
 
@@ -65,5 +67,5 @@ def test_both_raise_returns_none(monkeypatch):
     def fake_get(url, timeout=10, headers=None):
         raise requests.ConnectionError('offline')
 
-    monkeypatch.setattr(requests, 'get', fake_get)
+    monkeypatch.setattr(net, 'get', fake_get)
     assert fetch_github_file('owner/repo', 'main', 'VERSION') is None

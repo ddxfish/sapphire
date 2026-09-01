@@ -1012,6 +1012,7 @@ def install_plugin(
         url_install_method = None  # 'github_url' | 'gitlab_url' | 'zip_url' (set below)
         if url:
             import requests as req
+            from core import net
             from urllib.parse import urlparse
             clean_url = url.strip()
             # Parse once and reuse. The path-only checks below let URLs with
@@ -1047,7 +1048,7 @@ def install_plugin(
                 # allow_redirects=False — a 302 from an attacker's https URL to an
                 # internal http://127.0.0.1:... would otherwise bypass the localhost
                 # and https-only SSRF guards above.
-                r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                 if r.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Failed to download zip (HTTP {r.status_code})")
             else:
@@ -1064,18 +1065,18 @@ def install_plugin(
                     zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
                     url_install_method = 'github_url'
                     # GitHub serves the zip via 302 -> codeload.github.com; explicit allowlist.
-                    r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code in (301, 302, 303, 307, 308):
                         loc = r.headers.get('Location', '')
                         if loc.startswith('https://codeload.github.com/'):
-                            r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                            r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code == 404:
                         zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
-                        r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                        r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                         if r.status_code in (301, 302, 303, 307, 308):
                             loc = r.headers.get('Location', '')
                             if loc.startswith('https://codeload.github.com/'):
-                                r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                                r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code != 200:
                         raise HTTPException(status_code=400, detail=f"Failed to download from GitHub (HTTP {r.status_code})")
                 elif m_gl:
@@ -1088,20 +1089,20 @@ def install_plugin(
                     # preserve the SSRF guard pattern from the GitHub branch.
                     zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
                     url_install_method = 'gitlab_url'
-                    r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                     # GitLab may redirect within gitlab.com (e.g. moved repos).
                     # Allow only same-host redirects.
                     if r.status_code in (301, 302, 303, 307, 308):
                         loc = r.headers.get('Location', '')
                         if loc.startswith('https://gitlab.com/'):
-                            r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                            r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code == 404:
                         zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
-                        r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                        r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                         if r.status_code in (301, 302, 303, 307, 308):
                             loc = r.headers.get('Location', '')
                             if loc.startswith('https://gitlab.com/'):
-                                r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                                r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code != 200:
                         raise HTTPException(status_code=400, detail=f"Failed to download from GitLab (HTTP {r.status_code})")
                 else:
@@ -1467,11 +1468,12 @@ def check_plugin_update(plugin_name: str, _=Depends(require_login)):
                 break
     elif m_gl:
         import requests as req
+        from core import net
         gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
         full_path = f"{gl_path}/{gl_repo}"
         for branch in ("main", "master"):
             try:
-                r = req.get(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json", timeout=10)
+                r = net.get(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json", timeout=10)
                 if r.status_code == 200:
                     remote_manifest = r.json()
                     break
@@ -1864,8 +1866,9 @@ async def test_sdxl_connection(request: Request, _=Depends(require_login)):
 
     def _test():
         import requests as req
+        from core import net
         try:
-            response = req.get(url, timeout=5)
+            response = net.get(url, timeout=5)
             return {"success": True, "status_code": response.status_code, "message": f"Connected (HTTP {response.status_code})"}
         except req.exceptions.Timeout:
             return {"success": False, "error": "Connection timed out (5s)"}
@@ -1918,9 +1921,10 @@ async def test_ha_connection(request: Request, _=Depends(require_login)):
 
     def _test():
         import requests as req
+        from core import net
         try:
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            response = req.get(f"{url}/api/", headers=headers, timeout=10)
+            response = net.get(f"{url}/api/", headers=headers, timeout=10)
             if response.status_code == 200:
                 return {"success": True, "message": response.json().get('message', 'Connected')}
             elif response.status_code == 401:
@@ -1962,10 +1966,11 @@ async def test_ha_notify(request: Request, _=Depends(require_login)):
 
     def _test():
         import requests as req
+        from core import net
         try:
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
             payload = {"message": "Test notification from Sapphire", "title": "Sapphire"}
-            response = req.post(
+            response = net.post(
                 f"{url}/api/services/notify/{notify_service}",
                 headers=headers, json=payload, timeout=15
             )
@@ -2026,10 +2031,11 @@ async def get_ha_entities(request: Request, _=Depends(require_login)):
 
     def _fetch():
         import requests as req
+        from core import net
         import fnmatch
         try:
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            response = req.get(f"{url}/api/states", headers=headers, timeout=15)
+            response = net.get(f"{url}/api/states", headers=headers, timeout=15)
             if response.status_code != 200:
                 return {"success": False, "error": f"HTTP {response.status_code}"}
 
@@ -2038,7 +2044,7 @@ async def get_ha_entities(request: Request, _=Depends(require_login)):
             # Get areas via template API
             areas = []
             try:
-                tmpl = req.post(f"{url}/api/template", headers=headers,
+                tmpl = net.post(f"{url}/api/template", headers=headers,
                     json={"template": "{% for area in areas() %}{{ area_name(area) }}||{% endfor %}"},
                     timeout=10)
                 if tmpl.status_code == 200:

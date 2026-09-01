@@ -9,6 +9,7 @@ rate-limiting (60/hr unauthenticated) or API outages.
 import logging
 
 import requests
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def fetch_github_file(repo, branch, path, timeout=10):
     raw.githubusercontent (may lag pushes by a few minutes).
     """
     try:
-        resp = requests.get(
+        resp = net.get(
             _API_URL.format(repo=repo, path=path, branch=branch),
             headers={'Accept': 'application/vnd.github.raw+json'},
             timeout=timeout,
@@ -35,7 +36,7 @@ def fetch_github_file(repo, branch, path, timeout=10):
     except Exception as e:
         logger.debug(f"contents API fetch failed for {repo}/{path}@{branch}: {e}")
     try:
-        resp = requests.get(_RAW_URL.format(repo=repo, branch=branch, path=path), timeout=timeout)
+        resp = net.get(_RAW_URL.format(repo=repo, branch=branch, path=path), timeout=timeout)
         if resp.status_code == 200:
             return resp.text
     except Exception as e:

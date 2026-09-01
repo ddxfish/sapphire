@@ -105,7 +105,7 @@ def oauth_env(tmp_path, monkeypatch, creds_manager):
                                       'expires_in': 3600}
         return resp
 
-    monkeypatch.setattr(mod.requests, 'post', fake_post)
+    monkeypatch.setattr(mod.net, 'post', fake_post)
     req = SimpleNamespace(base_url='http://192.168.0.5:8073/')
     return SimpleNamespace(mod=mod, posts=posts, req=req, csrf=tmp_path / 'csrf.json')
 
@@ -198,7 +198,7 @@ def refresh_env(monkeypatch):
         resp.json.return_value = {'access_token': 'at-fresh', 'expires_in': 3600}
         return resp
 
-    monkeypatch.setattr(cal.requests, 'post', fake_post)
+    monkeypatch.setattr(cal.net, 'post', fake_post)
     return SimpleNamespace(cal=cal, state=state, posts=posts)
 
 

@@ -67,10 +67,12 @@ async def proxy_sdxl_image(image_id: str, request: Request, _=Depends(require_lo
 
     def _fetch_image():
         import requests as req
-        return req.get(f'{sdxl_url}/output/{image_id}.jpg', timeout=10)
+        from core import net
+        return net.get(f'{sdxl_url}/output/{image_id}.jpg', timeout=10)
 
     try:
         import requests as req
+        from core import net
         response = await asyncio.to_thread(_fetch_image)
         if response.status_code == 200:
             return StreamingResponse(io.BytesIO(response.content), media_type='image/jpeg')

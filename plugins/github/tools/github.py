@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ def _api(method: str, path: str, pat: str, params=None, body=None, raw=False):
     If raw=True, returns the raw response text (used for file content reads)."""
     url = f"{API_BASE}{path}"
     try:
-        resp = requests.request(
+        resp = net.request(
             method, url,
             headers=_headers(pat),
             params=params,

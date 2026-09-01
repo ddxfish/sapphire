@@ -4,6 +4,7 @@ import time
 from typing import Iterator, List, Optional, Tuple
 
 import requests
+from core import net
 import config
 
 from .base import BaseTTSProvider
@@ -88,7 +89,7 @@ class KokoroTTSProvider(BaseTTSProvider):
         for attempt in range(1 + len(delays)):
             try:
                 server_url = self._get_server_url()
-                response = requests.post(f"{server_url}/tts", json={
+                response = net.post(f"{server_url}/tts", json={
                     'text': text.replace("*", ""),
                     'voice': voice,
                     'speed': clamped_speed,
@@ -127,7 +128,7 @@ class KokoroTTSProvider(BaseTTSProvider):
 
         try:
             server_url = self._get_server_url()
-            response = requests.post(
+            response = net.post(
                 f"{server_url}/tts/stream",
                 json={
                     'text': text.replace("*", ""),
@@ -204,7 +205,7 @@ class KokoroTTSProvider(BaseTTSProvider):
 
     def _check_health(self, server_url: str, timeout: float = None) -> bool:
         try:
-            response = requests.get(f"{server_url}/health", timeout=timeout)
+            response = net.get(f"{server_url}/health", timeout=timeout)
             return response.status_code == 200
         except Exception:
             return False

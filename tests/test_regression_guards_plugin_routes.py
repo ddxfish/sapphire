@@ -210,10 +210,9 @@ def test_R3_install_rejects_302_redirect_to_localhost(client, monkeypatch):
         return redirect_response
 
     import core.routes.plugins
-    # The install function does `import requests as req` inside the body.
-    # Patch the requests module's get directly.
-    import requests
-    monkeypatch.setattr(requests, 'get', fake_get)
+    # The install function rides the net facade (2026-09-01).
+    from core import net
+    monkeypatch.setattr(net, 'get', fake_get)
 
     r = c.post(
         '/api/plugins/install',

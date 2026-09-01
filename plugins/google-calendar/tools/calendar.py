@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 
 import requests
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -204,10 +205,10 @@ def _get_access_token(force_refresh: bool = False):
         try:
             if auth_mode == 'relay':
                 relay = (creds.get('relay_url') or 'https://oauth.sapphireblue.dev').rstrip('/')
-                resp = requests.post(f"{relay}/refresh",
+                resp = net.post(f"{relay}/refresh",
                                      json={'refresh_token': refresh_token}, timeout=15)
             else:
-                resp = requests.post(GOOGLE_TOKEN_URL, data={
+                resp = net.post(GOOGLE_TOKEN_URL, data={
                     'refresh_token': refresh_token,
                     'client_id': client_id,
                     'client_secret': client_secret,
@@ -288,7 +289,7 @@ def _api_call(method: str, endpoint_template: str, params=None, body=None):
         if body is not None:
             headers['Content-Type'] = 'application/json'
         try:
-            resp = requests.request(method, url, headers=headers, params=params,
+            resp = net.request(method, url, headers=headers, params=params,
                                     json=body, timeout=15)
         except requests.RequestException as e:
             return None, f"Network error ({type(e).__name__}): {e}"

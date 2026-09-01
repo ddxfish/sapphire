@@ -14,6 +14,7 @@ import urllib.parse
 from pathlib import Path
 
 import requests
+from core import net
 from fastapi.responses import RedirectResponse
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ def _start_easy_auth(request, scope, settings):
     # covers the Google leg and is invisible to us.
     return_url = f"{_get_redirect_uri(request)}?state={state_token}"
     try:
-        resp = requests.post(f"{relay}/start", json={
+        resp = net.post(f"{relay}/start", json={
             'return_url': return_url, 'code_challenge': challenge}, timeout=15)
     except requests.RequestException as e:
         return {"error": (f"Couldn't reach the connect relay ({type(e).__name__}). "
@@ -195,7 +196,7 @@ def handle_callback(request=None, query=None, settings=None, **_):
         return {"error": "Missing client ID or secret in account settings"}
 
     # Exchange code for tokens
-    resp = requests.post(GOOGLE_TOKEN_URL, data={
+    resp = net.post(GOOGLE_TOKEN_URL, data={
         'code': code,
         'client_id': client_id,
         'client_secret': client_secret,
@@ -229,7 +230,7 @@ def _finish_easy_auth(scope, ticket, csrf_entry):
         return {"error": "No ticket received from connect relay"}
 
     try:
-        resp = requests.post(f"{relay}/claim", json={
+        resp = net.post(f"{relay}/claim", json={
             'ticket': ticket,
             'code_verifier': csrf_entry.get('verifier', ''),
         }, timeout=15)

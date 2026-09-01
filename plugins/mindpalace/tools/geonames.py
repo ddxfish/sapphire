@@ -102,8 +102,9 @@ def ensure_dataset() -> bool:
     import zipfile
     try:
         import requests
+        from core import net
         logger.info(f'[GEONAMES] downloading {DUMP_URL} (first use)')
-        r = requests.get(DUMP_URL, timeout=120)
+        r = net.get(DUMP_URL, timeout=120)
         r.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(r.content)) as z:
             _build_npz(z.read('cities1000.txt'))

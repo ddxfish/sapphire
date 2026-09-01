@@ -159,6 +159,18 @@ class VoiceChatSystem:
             logger.critical(f"Plugin loader failed — ALL plugins unavailable: {e}", exc_info=True)
             self._plugin_load_error = str(e)
 
+        # Re-derive proxy env now that plugins have registered their
+        # direct hosts (register_direct_hosts): the boot stamp ran
+        # pre-scan, so NO_PROXY lacked LAN-gear names. This is the belt
+        # for unmigrated raw-requests callers and for plugin daemons
+        # spawned post-boot (they inherit env). Zero-edit self-heal --
+        # no install ever needs a manual bypass entry. 2026-09-01.
+        try:
+            from core.socks_proxy import apply_proxy_env as _ape
+            _ape()
+        except Exception as e:
+            logger.error(f"post-scan apply_proxy_env failed: {e}")
+
         # Re-prime the prompt if the active chat wears a PACK-owned one
         # (story prompts like 'rose', pack monoliths): _prime_default_prompt
         # ran before the scan, so those names couldn't resolve yet and boot

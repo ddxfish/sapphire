@@ -390,14 +390,14 @@ def test_check_update_newer_version_returns_true(client, temp_user_dir, monkeypa
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    # Patch requests.get at module level — the GitHub path now goes through
+    # Patch net.get (the facade lane, 2026-09-01) — the GitHub path goes through
     # core.github_files (contents API + raw fallback), which reads resp.text.
     import json as _json
-    import requests as req_mod
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.1.0', 'author': 'user'})
-    monkeypatch.setattr(req_mod, 'get',
+    monkeypatch.setattr(net_mod, 'get',
                         lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
@@ -419,11 +419,11 @@ def test_check_update_same_version_returns_false(client, temp_user_dir, monkeypa
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
     import json as _json
-    import requests as req_mod
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.0.0', 'author': 'user'})
-    monkeypatch.setattr(req_mod, 'get',
+    monkeypatch.setattr(net_mod, 'get',
                         lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
@@ -486,7 +486,7 @@ def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkey
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests
+    from core import net as net_mod
     fetched = []
 
     def _fake_get(url, *_, **__):
@@ -495,7 +495,7 @@ def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkey
         resp.status_code = 404
         return resp
 
-    monkeypatch.setattr(requests, 'get', _fake_get)
+    monkeypatch.setattr(net_mod, 'get', _fake_get)
 
     c, csrf = client
     r = c.get('/api/plugins/gitlab_plugin/check-update')
@@ -524,11 +524,11 @@ def test_check_update_v_prefixed_remote_version_is_offered(client, temp_user_dir
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
     import json as _json
-    import requests as req_mod
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.text = _json.dumps({'name': 'pm', 'version': 'v1.1.0', 'author': 'user'})
-    monkeypatch.setattr(req_mod, 'get',
+    monkeypatch.setattr(net_mod, 'get',
                         lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
@@ -550,11 +550,11 @@ def test_check_update_unparseable_local_reports_reason(client, temp_user_dir, mo
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
     import json as _json
-    import requests as req_mod
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.1.0', 'author': 'user'})
-    monkeypatch.setattr(req_mod, 'get',
+    monkeypatch.setattr(net_mod, 'get',
                         lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
@@ -578,7 +578,7 @@ def test_check_update_github_tries_contents_api_first(client, temp_user_dir, mon
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests
+    from core import net as net_mod
     fetched = []
 
     def _fake_get(url, *_, **__):
@@ -587,7 +587,7 @@ def test_check_update_github_tries_contents_api_first(client, temp_user_dir, mon
         resp.status_code = 404
         return resp
 
-    monkeypatch.setattr(requests, 'get', _fake_get)
+    monkeypatch.setattr(net_mod, 'get', _fake_get)
 
     c, csrf = client
     r = c.get('/api/plugins/pm/check-update')
@@ -610,7 +610,7 @@ def test_check_update_url_with_query_params_still_matches(client, temp_user_dir,
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests
+    from core import net as net_mod
     fetched = []
 
     def _fake_get(url, *_, **__):
@@ -619,7 +619,7 @@ def test_check_update_url_with_query_params_still_matches(client, temp_user_dir,
         resp.status_code = 404
         return resp
 
-    monkeypatch.setattr(requests, 'get', _fake_get)
+    monkeypatch.setattr(net_mod, 'get', _fake_get)
 
     c, csrf = client
     r = c.get('/api/plugins/gh_with_qs/check-update')
@@ -643,12 +643,12 @@ def test_check_update_version_tuple_handles_non_numeric(client, temp_user_dir, m
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests as req_mod
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.json.return_value = {'name': 'exotic', 'version': 'unknown',
                                    'author': 'user'}
-    monkeypatch.setattr(req_mod, 'get', lambda url, timeout=10: fake_resp)
+    monkeypatch.setattr(net_mod, 'get', lambda url, timeout=10: fake_resp)
 
     c, csrf = client
     r = c.get('/api/plugins/exotic/check-update')

@@ -9,7 +9,6 @@ import sys
 import threading
 from urllib.parse import quote, urlsplit
 
-import requests
 import config
 from core.setup import get_socks_credentials, CONFIG_DIR
 
@@ -89,8 +88,6 @@ def get_session():
     if _cached_session:
         return _cached_session
 
-    session = requests.Session()
-
     if config.SOCKS_ENABLED:
         username, password = get_socks_credentials()
 
@@ -113,43 +110,19 @@ def get_session():
             time.sleep(2)
             _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
 
-        # Scheme via _scheme(): socks5h resolves DNS THROUGH the proxy (plain
-        # socks5:// leaked every hostname to local DNS while the payload rode
-        # the tunnel — fork-4 scope 2026-08-31); SOCKS_REMOTE_DNS=false gives
-        # socks5 back for proxies with no server-side DNS. Creds URL-quoted:
-        # an @ or : in a password broke the parse.
-        proxy_url = (f"{_scheme()}://{quote(username, safe='')}:{quote(password, safe='')}"
-                     f"@{config.SOCKS_HOST}:{config.SOCKS_PORT}")
-
-        session.proxies = {
-            'http': proxy_url,
-            'https': proxy_url
-        }
-
         logger.info(f"SOCKS5 enabled: {config.SOCKS_HOST}:{config.SOCKS_PORT}")
     else:
         logger.info("SOCKS5 disabled, using direct connection")
-    
-    # Realistic Chrome headers to avoid bot detection
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
-        'Cache-Control': 'max-age=0'
-    })
-    
-    _cached_session = session
-    return session
+
+    # C fold (2026-09-01): delegate to core.net's WAN browser session.
+    # The process env (apply_proxy_env) is the single proxy source now
+    # -- the old explicit session.proxies double-stamp dies here.
+    # Chrome headers live in net._BROWSER_HEADERS. The SOCKS auth
+    # pre-flight above is preserved (learn-once clear error on bad
+    # creds). Plan: tmp/net-facade-plan.md
+    from core import net
+    _cached_session = net.wan_session(profile='browser')
+    return _cached_session
 
 # ============================================================================
 # SOCKS-for-all: process-wide proxy env (2026-08-31)
