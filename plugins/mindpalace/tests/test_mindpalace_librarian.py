@@ -888,3 +888,14 @@ def test_self_tend_charter_carries_top5_budget(palace):
     text, _ = eng.charter_get('default', 'self_tend')
     assert 'FIVE' in text and 'To add one, drop one' in text
     assert 'growing' in text and 'projects' not in text   # 2026-07-24 rename
+
+
+def test_batch_override_dies_with_the_run(palace):
+    """Regression (2026-08-31 review pass): _drain_loop re-arms state
+    WITHOUT _claim — a test run's override must not survive into a later
+    drain and shrink its batches to test size."""
+    msg, ok = eng._claim('default', 'all', 'sort', chat=None, batch=5)
+    assert ok and eng._test_override_active()
+    eng._finish('test pass done')
+    assert not eng._test_override_active()
+    assert eng._cfg_for_run()['batch'] == eng._settings()['batch']

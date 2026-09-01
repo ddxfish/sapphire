@@ -1100,7 +1100,11 @@ def run_blocking(scope, what='all', kind='sort', chat=None):
 
 def _finish(message, error=False):
     with _state_lock:
-        _state.update(running=False, last_message=message)
+        # batch_override dies with the run — a stale one would shrink a
+        # later drain's batches to test size (_drain_loop re-arms state
+        # WITHOUT _claim, so this is the only reliable clear point).
+        _state.update(running=False, last_message=message,
+                      batch_override=None)
     (logger.error if error else logger.info)(f"[LIBRARIAN] {message}")
 
 
@@ -1218,6 +1222,7 @@ def _drain_loop(scope, what, kind):
                 _state['running'] = True
                 _state['chat'] = f"{chat_base}-c{i // per_chat + 1}"
                 _state['kind'] = kind
+                _state['batch_override'] = None
                 _state['drain'] = {'kind': kind, 'batch': i + 1,
                                    'handled': total, 'remaining': before,
                                    'stopping': _drain_stop}

@@ -33,7 +33,7 @@
     "tests/test_mindpalace_knowledge.py": "sha256:d1c95405ee4e45484049f89a7b4dae0463596e34d0ffebaa658858dfed727467",
     "tests/test_mindpalace_layers.py": "sha256:ff7a5bf036ab8e7404ad90b3d7f11c752ac7dfdcba76d80fc47194c9cb4dd9c1",
     "tests/test_mindpalace_ledger.py": "sha256:fdefeccee5d891ab4620d048738df7e86de86a3a9f819a7042cbc87e07ff73f2",
-    "tests/test_mindpalace_librarian.py": "sha256:6f29fb9f6a3f1a41ffc6f89697aff7ace8a47802f399844380ad66f36c2696e6",
+    "tests/test_mindpalace_librarian.py": "sha256:59b4b3b1ab59f3762f448737b6549de2c282964ff73910df3b8e74c1773d505d",
     "tests/test_mindpalace_maintenance.py": "sha256:7b5e08447811f2dff1493f96684f796fe6061a6d30c953dd49b64f9b34bbf48c",
     "tests/test_mindpalace_metadata.py": "sha256:719b22eecb0e4005fb15fa688178576f630b764dc848ac524a41bde655c4a7cf",
     "tests/test_mindpalace_self.py": "sha256:9e23cc366e67d36033f4066f7dd1fd135479d7f5e979e8de71a29fb59e1dc4c0",
@@ -54,7 +54,7 @@
     "tools/importance_report.py": "sha256:4443411245e56a0d6420af1748331736610809a2dd2c65beb868a37fa46c703d",
     "tools/layer_api.py": "sha256:4e54a5613540f13f60cd400ff33d8d9b36aa5b7f07432b5a54665887191ef855",
     "tools/ledger.py": "sha256:b375a4ccbc35055c70711da19a78d36e60bd49be3cd890b959579bf5fac17f30",
-    "tools/librarian.py": "sha256:d345417165fe4565d67824ff2502bd70771b8251fc7479cef9093a57857c40df",
+    "tools/librarian.py": "sha256:54014db5719c7b840fa780c97c02ad3f0450e91bb799c7388943e842652cccf2",
     "tools/librarian_tools.py": "sha256:791b5c535c586807f4acfa95bfa5883c8e862644c22001ff51256858db076a5f",
     "tools/library.py": "sha256:21ddf3f16d085ed79d973abde8cc1a2add0b41b0552b2aad2e0747e9d52ef89c",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
@@ -67,5 +67,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "LRbCmhih5UXKjczLseF/RUbdjxzggC6tw9+T09WflMhcTahiRbtNcpsJqTbm2zuaCMZMYVf7fQ5oOejvJCmiCw=="
+  "signature": "O1LU77ym09UdebrF/zc9jOE2Mr20+IoPVIUL78ZGZ8iVr0H0kDiwUG0uP0nluKKq4yycbPPs6o/Lddut69i8Dw=="
 }
