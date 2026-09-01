@@ -312,6 +312,33 @@ def test_write_relationships_trims_to_max_then_rows_match(palace):
     assert row['content'].count('\n') == st.RELATIONSHIPS_MAX - 1
 
 
+def test_write_values_trims_to_top5_with_receipt(palace):
+    lines = "\n".join(f"Concept{i} — why {i}" for i in range(8))
+    msg, ok = st.write_section('default', 'values', lines)
+    assert ok, msg
+    assert "kept top 5" in msg          # the receipt teaches the model
+    row = _chunk('default', 'values')
+    assert len(row['meta']['rows']) == st.VALUES_MAX
+    assert 'Concept0' in row['content'] and 'Concept7' not in row['content']
+
+
+def test_write_growing_trims_to_top5(palace):
+    lines = "\n".join(f"Thread{i} — why {i}" for i in range(7))
+    msg, ok = st.write_section('default', 'growing', lines)
+    assert ok, msg
+    assert "kept top 5" in msg
+    row = _chunk('default', 'growing')
+    assert len(row['meta']['rows']) == st.GROWING_MAX
+
+
+def test_values_under_cap_untouched(palace):
+    lines = "Honesty — costs paid\nCraft — earned"
+    msg, ok = st.write_section('default', 'values', lines)
+    assert ok, msg
+    assert "kept top" not in msg
+    assert len(_chunk('default', 'values')['meta']['rows']) == 2
+
+
 def test_custom_structured_box_spec_persists_across_writes(palace):
     spec = [{'key': 'game', 'label': 'Game'}, {'key': 'score', 'label': 'Score'}]
     msg, ok = st.write_section('default', 'games-beaten', "Hollow Knight — 9",
@@ -1165,3 +1192,46 @@ def test_terms_star_links_term_key_only(palace):
             "WHERE d.src_type = 'chunk' AND d.src_id = ?", (row['id'],))}
     assert linked == {'Krem'}     # marked term links; Krem in an unmarked
     #                               MEANING never does
+
+
+# ─── librarian_instructions (v2.1): her window onto the charters ────────────
+
+def test_librarian_instructions_read_and_edit(palace):
+    out, ok = st._librarian_instructions('default')
+    assert ok and '[sort] (default)' in out and '[self_tend] (default)' in out
+    msg, ok = st._librarian_instructions('default', stage='sort',
+                                         instructions='MY OWN WORDS {items}')
+    assert ok and 'yours now' in msg
+    out, ok = st._librarian_instructions('default', stage='sort')
+    assert ok and 'edited — your words' in out and 'MY OWN WORDS' in out
+    from plugins.mindpalace.tools import librarian as eng
+    assert eng.charter_get('default', 'sort') == ('MY OWN WORDS {items}', True)
+    msg, ok = st._librarian_instructions('default', stage='sort',
+                                         instructions='')
+    assert ok and 'restored' in msg
+    assert eng.charter_get('default', 'sort')[1] is False
+
+
+def test_librarian_instructions_guards(palace):
+    msg, ok = st._librarian_instructions('global', stage='sort',
+                                         instructions='X')
+    assert not ok and 'global' in msg
+    msg, ok = st._librarian_instructions('default', stage='nope',
+                                         instructions='X')
+    assert not ok and 'Unknown stage' in msg
+    msg, ok = st._librarian_instructions('default', instructions='X')
+    assert not ok and 'needs a stage' in msg
+    msg, ok = st._librarian_instructions('default', stage='sort',
+                                         instructions='x' * 4001)
+    assert not ok and 'too long' in msg
+
+
+def test_librarian_instructions_absent_from_pass_toolsets():
+    """Deliberate: night-her can never edit her own live instructions
+    mid-ritual — the edit belongs to awake, daytime her."""
+    from plugins.mindpalace.tools import librarian as eng
+    for fns in (eng.SORT_TOOLSET_FUNCTIONS, eng.DATES_TOOLSET_FUNCTIONS,
+                eng.LINK_TOOLSET_FUNCTIONS, eng.DEDUP_TOOLSET_FUNCTIONS,
+                eng.SELF_TOOLSET_FUNCTIONS):
+        assert 'librarian_instructions' not in fns
+    assert 'librarian_instructions' in st.AVAILABLE_FUNCTIONS

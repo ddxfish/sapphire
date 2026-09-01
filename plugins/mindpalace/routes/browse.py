@@ -551,15 +551,136 @@ def list_templates(**_):
 
 def librarian_run(body=None, **_):
     """Kick a librarian pass (the Admin-card Run buttons). body: scope, what,
-    pass ('sort' default | 'dates' | 'link' | 'dedup'; legacy names resolve).
-    Run is explicit human intent — the per-pass Admin toggles only shape the
-    nightly recipe, never this."""
+    pass ('sort' default | 'dates' | 'link' | 'dedup'; legacy names resolve),
+    batch (optional int = gear-modal TEST run: small batch, no daily-cap
+    spend). Run is explicit human intent — the per-pass Admin toggles only
+    shape the nightly recipe, never this. Returns the session chat name so
+    the caller can fetch the transcript/report."""
     from plugins.mindpalace.tools import librarian
     b = body or {}
+    chat = librarian.mint_session_chat((b.get('scope') or '').strip() or None)
     msg, ok = librarian.start(b.get('scope'), what=b.get('what', 'all'),
-                              kind=b.get('pass', 'sort'))
-    return ({'success': True, 'message': msg} if ok
+                              kind=b.get('pass', 'sort'), chat=chat,
+                              batch=b.get('batch'))
+    return ({'success': True, 'message': msg, 'chat': chat} if ok
             else ({'success': False, 'error': msg}, 409))
+
+
+def get_charters(query=None, **_):
+    """GET librarian/charters?scope= → every pass stage's charter for that
+    scope: effective text, edited flag, shipped default — plus the global
+    standing note. The gear modal's one fetch."""
+    from plugins.mindpalace.tools import librarian
+    scope = ((query or {}).get('scope') or '').strip()
+    if not scope:
+        return {'error': 'scope required'}, 400
+    stages = []
+    for kind, keys in librarian.STAGES_BY_KIND.items():
+        for key in keys:
+            text, edited = librarian.charter_get(scope, key)
+            stages.append({'key': key, 'kind': kind,
+                           'label': librarian.CHARTER_STAGES[key],
+                           'text': text, 'edited': edited,
+                           'default_text': librarian._CHARTER_DEFAULTS[key],
+                           'data_slots': list(librarian._DATA_SLOTS.get(key, ()))})
+    return {'scope': scope, 'stages': stages,
+            'note_global': librarian._standing_note()}
+
+
+def put_charter(body=None, **_):
+    """PUT librarian/charter {scope, stage, text} — per-scope override;
+    empty text restores the shipped default. Ledgered: what instructs the
+    tending of a scope is tamper-evidence, same as who speaks for it."""
+    from plugins.mindpalace.tools import librarian
+    pt = _pt()
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    b = body or {}
+    scope = (b.get('scope') or '').strip()
+    stage = (b.get('stage') or '').strip()
+    if not scope:
+        return {'error': 'scope required'}, 400
+    if stage not in librarian.CHARTER_STAGES:
+        return {'error': f"unknown stage '{stage}'"}, 400
+    text = str(b.get('text') or '').strip()
+    charters = dict(pt.scope_resident(scope).get('charters') or {})
+    was = charters.get(stage, '')
+    if text:
+        charters[stage] = text
+    else:
+        charters.pop(stage, None)
+    if not pt.set_scope_resident(scope, charters=charters):
+        return {'error': 'save failed'}, 500
+    if (was or '') != (text or ''):
+        pt._ledger(scope, 'user', 'edited', layer='self', target='charter',
+                   summary=(f"charter {stage}: "
+                            + ('custom text set' if text
+                               else 'restored to default')),
+                   detail={'stage': stage, 'chars': len(text)})
+    return {'success': True, 'stage': stage, 'edited': bool(text)}
+
+
+def charter_preview(query=None, **_):
+    """GET librarian/preview?scope=&pass=&stage= → tonight's message
+    assembled from a small LIVE batch (read-only, no stamps, no cap)."""
+    from plugins.mindpalace.tools import librarian
+    q = query or {}
+    scope = (q.get('scope') or '').strip()
+    if not scope:
+        return {'error': 'scope required'}, 400
+    kind = (q.get('pass') or 'sort').strip()
+    stage = (q.get('stage') or '').strip() or None
+    out = librarian.preview_message(scope, kind, stage=stage)
+    return out or {'text': '(preview unavailable)', 'live': False}
+
+
+def librarian_report(query=None, **_):
+    """GET librarian/report?scope=&chat= → the newest pass/run ledger row
+    with its children (per-item verbs), plus her closing line from the
+    session chat when ?chat= is given. The gear modal's after-test view."""
+    from plugins.mindpalace.tools import librarian
+    q = query or {}
+    scope = (q.get('scope') or '').strip()
+    if not scope:
+        return {'error': 'scope required'}, 400
+    pt = _pt()
+    out = {'found': False}
+    try:
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT id, ts, action, summary, detail FROM ledger "
+                "WHERE scope = ? AND actor = 'librarian' "
+                "AND action IN ('pass', 'run') AND parent_id IS NULL "
+                "ORDER BY id DESC LIMIT 1", (scope,)).fetchone()
+            if row:
+                detail = {}
+                try:
+                    detail = json.loads(row[4]) if row[4] else {}
+                except Exception:
+                    pass
+                kids = cur.execute(
+                    "SELECT action, layer, target, summary FROM ledger "
+                    "WHERE parent_id = ? ORDER BY id", (row[0],)).fetchall()
+                out = {'found': True, 'ts': row[1], 'action': row[2],
+                       'summary': row[3], 'detail': detail,
+                       'items': [{'action': k[0], 'layer': k[1],
+                                  'target': k[2], 'summary': k[3]}
+                                 for k in kids]}
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] report read failed: {e}")
+    chat = (q.get('chat') or '').strip()
+    if chat:
+        try:
+            msgs = librarian._session_manager().read_chat_messages(chat)
+            for m in reversed(msgs):
+                if m.get('role') == 'assistant' and isinstance(
+                        m.get('content'), str) and m['content'].strip():
+                    out['note'] = m['content'].strip()[:2000]
+                    break
+        except Exception as e:
+            logger.debug(f"[MINDPALACE] report note skipped: {e}")
+    return out
 
 
 def librarian_status(query=None, **_):

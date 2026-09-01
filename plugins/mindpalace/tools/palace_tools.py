@@ -649,7 +649,7 @@ def _ensure_db():
             # prompt_ledger (2026-07-23): the opt-out — '0' disables prompt
             # recording for this scope; NULL/anything else = on (default).
             for col in ('prompt', 'provider', 'model', 'lib_passes',
-                        'watched_prompt', 'prompt_ledger'):
+                        'watched_prompt', 'prompt_ledger', 'charters'):
                 if col not in scols:
                     cursor.execute(f'ALTER TABLE mind_scopes ADD COLUMN {col} TEXT')
 
@@ -1070,13 +1070,13 @@ def scope_resident(scope: str) -> dict:
     tended until someone flips its pills. Fails toward empty (silent-default
     invariant: no scope inherits another resident's voice on error)."""
     empty = {'prompt': None, 'provider': None, 'model': None, 'passes': {},
-             'watched_prompt': None, 'prompt_ledger': True}
+             'watched_prompt': None, 'prompt_ledger': True, 'charters': {}}
     try:
         if not _ensure_db():
             return empty
         with _get_connection() as conn:
             row = conn.execute('SELECT prompt, provider, model, lib_passes, '
-                               'watched_prompt, prompt_ledger '
+                               'watched_prompt, prompt_ledger, charters '
                                'FROM mind_scopes WHERE name = ?',
                                (scope,)).fetchone()
         if not row:
@@ -1087,10 +1087,17 @@ def scope_resident(scope: str) -> dict:
                 passes = {k: bool(v) for k, v in (json.loads(row[3]) or {}).items()}
             except Exception:
                 passes = {}
+        charters = {}
+        if row[6]:
+            try:
+                charters = {str(k): str(v) for k, v
+                            in (json.loads(row[6]) or {}).items()}
+            except Exception:
+                charters = {}
         return {'prompt': row[0] or None, 'provider': row[1] or None,
                 'model': row[2] or None, 'passes': passes,
                 'watched_prompt': row[4] or None,
-                'prompt_ledger': row[5] != '0'}
+                'prompt_ledger': row[5] != '0', 'charters': charters}
     except Exception as e:
         logger.warning(f"[MINDPALACE] scope_resident('{scope}') failed: {e}")
         return empty
@@ -1098,10 +1105,12 @@ def scope_resident(scope: str) -> dict:
 
 def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
                        passes=None, watched_prompt=None,
-                       prompt_ledger=None) -> bool:
+                       prompt_ledger=None, charters=None) -> bool:
     """Upsert residency fields. None leaves a field untouched; '' clears
     prompt/model/watched_prompt. `passes` replaces the whole opt-in dict.
-    `prompt_ledger` takes a bool: False stores '0' (recording off)."""
+    `prompt_ledger` takes a bool: False stores '0' (recording off).
+    `charters` replaces the whole per-scope charter-override dict (v2.1);
+    empty-string values drop out — an empty dict clears the column."""
     try:
         if not _ensure_db():
             return False
@@ -1129,6 +1138,12 @@ def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
             if prompt_ledger is not None:
                 sets.append('prompt_ledger = ?')
                 vals.append('1' if prompt_ledger else '0')
+            if charters is not None:
+                clean_ch = {str(k): str(v) for k, v in (charters or {}).items()
+                            if str(v).strip()}
+                sets.append('charters = ?')
+                vals.append(json.dumps(clean_ch, ensure_ascii=False)
+                            if clean_ch else None)
             if sets:
                 cur.execute(f"UPDATE mind_scopes SET {', '.join(sets)} "
                             f"WHERE name = ?", vals + [scope])

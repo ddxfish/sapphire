@@ -169,6 +169,15 @@
         "hidden": true
       },
       {
+        "key": "librarian_note_global",
+        "type": "string",
+        "label": "Standing note (all passes)",
+        "default": "",
+        "placeholder": "One instruction injected into every pass, every scope",
+        "help": "Injected verbatim into EVERY librarian pass of every scope, right after the message header, as '— Standing note from your user —'. The cross-cutting lever: per-pass wording lives in each pass card's gear (charter modal); this is for the thing you want said everywhere. Empty = absent.",
+        "hidden": true
+      },
+      {
         "key": "importance_enabled",
         "type": "boolean",
         "label": "Importance (ALPHA)",
@@ -345,6 +354,26 @@
         "method": "GET",
         "path": "librarian/status",
         "handler": "routes/browse.py:librarian_status"
+      },
+      {
+        "method": "GET",
+        "path": "librarian/charters",
+        "handler": "routes/browse.py:get_charters"
+      },
+      {
+        "method": "PUT",
+        "path": "librarian/charter",
+        "handler": "routes/browse.py:put_charter"
+      },
+      {
+        "method": "GET",
+        "path": "librarian/preview",
+        "handler": "routes/browse.py:charter_preview"
+      },
+      {
+        "method": "GET",
+        "path": "librarian/report",
+        "handler": "routes/browse.py:librarian_report"
       },
       {
         "method": "GET",

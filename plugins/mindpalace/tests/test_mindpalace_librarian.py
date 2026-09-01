@@ -801,3 +801,90 @@ def test_atomize_parts_anchor_dates_to_inherited_created(palace):
     for m in dated:
         for d in m['event_dates']:
             assert d.startswith('2026-02-12'), f"anchored to drain day: {d}"
+
+
+# ─── Charters (v2.1, 2026-08-31): the editable instruction layer ────────────
+
+def test_charter_default_and_override_per_scope(palace):
+    a = _save("Krem got a boat")
+    with pt._get_connection() as conn:
+        batch = eng.build_batch(conn.cursor(), 'default', 'all', 10)
+    text, edited = eng.charter_get('default', 'sort')
+    assert not edited and 'librarian hour' in text
+    pt.set_scope_resident('default', charters={'sort': 'CUSTOM RULES {items}'})
+    msg = eng._present_sort(batch, 'default', [], 1, 1)
+    assert 'CUSTOM RULES' in msg and f'[{a}]' in msg
+    assert 'librarian hour' not in msg          # override replaced the default
+    text2, edited2 = eng.charter_get('anita', 'sort')
+    assert not edited2 and 'librarian hour' in text2   # other scope untouched
+
+
+def test_charter_data_slot_guaranteed(palace):
+    """An edited charter that DROPPED {items} still delivers the batch —
+    prose edits can never starve her of the data."""
+    a = _save("boat fact")
+    with pt._get_connection() as conn:
+        batch = eng.build_batch(conn.cursor(), 'default', 'all', 10)
+    pt.set_scope_resident('default', charters={'sort': 'no slots here at all'})
+    msg = eng._present_sort(batch, 'default', [], 1, 1)
+    assert f'[{a}]' in msg and 'no slots here' in msg
+
+
+def test_charter_braces_survive_substitution(palace):
+    """Literal JSON braces in charter text must render verbatim — slot
+    substitution is regex-by-name, never str.format."""
+    out = eng.charter_render('default', 'dates', 'HDR', {'items': 'PAYLOAD-X'})
+    assert '{"memory_id": N,' in out and 'PAYLOAD-X' in out
+    assert '{items}' not in out
+
+
+def test_charter_restore_and_clear(palace):
+    pt.set_scope_resident('default', charters={'sort': 'CUSTOM'})
+    assert eng.charter_get('default', 'sort') == ('CUSTOM', True)
+    pt.set_scope_resident('default', charters={})   # empty dict clears
+    text, edited = eng.charter_get('default', 'sort')
+    assert not edited and 'librarian hour' in text
+
+
+def test_standing_note_injects_and_absents(palace, monkeypatch):
+    monkeypatch.setattr(eng, '_standing_note', lambda: 'MIND THE GAP')
+    out = eng.charter_render('default', 'dates', 'HDR', {'items': 'X'})
+    assert 'Standing note from your user' in out and 'MIND THE GAP' in out
+    monkeypatch.setattr(eng, '_standing_note', lambda: '')
+    out = eng.charter_render('default', 'dates', 'HDR', {'items': 'X'})
+    assert 'Standing note' not in out
+
+
+def test_test_override_skips_caps_and_budget(palace):
+    """A gear-modal test run (batch_override armed) passes the daily cap
+    and never spends it — the drain precedent."""
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        eng._ensure_state_table(cur)
+        cur.execute("INSERT INTO librarian_state (scope, pass, last_pass, "
+                    "day, passes_today) VALUES ('default', 'sort', 'x', ?, 3)",
+                    (eng._today(),))
+        conn.commit()
+        ok, why = eng._check_caps(cur, 'default', {'per_day': 3})
+        assert not ok
+        with eng._state_lock:
+            eng._state['batch_override'] = 5
+        try:
+            ok, _ = eng._check_caps(cur, 'default', {'per_day': 3})
+            assert ok
+            eng._record_pass(cur, 'default', 'sort', {'presented': 1})
+            row = cur.execute("SELECT passes_today FROM librarian_state "
+                              "WHERE scope='default' AND pass='sort'").fetchone()
+            assert row[0] == 3          # budget untouched
+        finally:
+            with eng._state_lock:
+                eng._state['batch_override'] = None
+        conn.commit()
+
+
+def test_self_tend_charter_carries_top5_budget(palace):
+    """The v2.1 nightly self charter states the budget EVERY night (the
+    overflow root cause: guidance used to appear only on first tending)."""
+    text, _ = eng.charter_get('default', 'self_tend')
+    assert 'FIVE' in text and 'To add one, drop one' in text
+    assert 'growing' in text and 'projects' not in text   # 2026-07-24 rename

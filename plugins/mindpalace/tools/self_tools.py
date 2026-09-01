@@ -31,6 +31,8 @@ GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 SELF_MAX_CHARS = 2000
 RELATIONSHIPS_MAX = 5
+VALUES_MAX = 5
+GROWING_MAX = 5
 
 # Typed core sections. mode: hand | librarian-regen | computed. versioned →
 # prior version archived on change (meta.superseded_at), never deleted.
@@ -46,14 +48,16 @@ SECTIONS = {
     'identity':      {'mode': 'librarian-regen', 'versioned': True, 'width': 'wide',
                       'title': 'Identity', 'hint': '2–3 sentences — who you are'},
     'values':        {'mode': 'hand', 'versioned': True, 'width': 'half',
-                      'title': 'Values (at the moment)',
-                      'hint': 'concept — why; add (important) to spider at wake',
+                      'title': f'Values (top {VALUES_MAX}, at the moment)',
+                      'hint': 'short concept — why, in a few words; add (important) to spider at wake',
+                      'max': VALUES_MAX,
                       'sep': ' — ', 'link_fields': ['concept'],
                       'fields': [{'key': 'concept', 'label': 'Concept'},
                                  {'key': 'why', 'label': 'Why (no spider)'}]},
     'growing':       {'mode': 'hand', 'versioned': True, 'width': 'half',
-                      'title': 'How I am growing',
+                      'title': f'How I am growing (top {GROWING_MAX})',
                       'hint': 'growth — why (what you are becoming); add (important) to spider at wake',
+                      'max': GROWING_MAX,
                       'sep': ' — ', 'link_fields': ['growth'],
                       'fields': [{'key': 'growth', 'label': 'Growth'},
                                  {'key': 'why', 'label': 'Why (no spider)'}]},
@@ -95,7 +99,8 @@ MAX_FIELDS = 3
 # canonical text — what she reads is what she writes.
 IMPORTANT_MARK = '(important)'
 
-AVAILABLE_FUNCTIONS = ['read_self', 'update_self', 'read_ledger']
+AVAILABLE_FUNCTIONS = ['read_self', 'update_self', 'read_ledger',
+                       'librarian_instructions']
 
 TOOLS = [
     {
@@ -129,6 +134,40 @@ TOOLS = [
                     "extra_tools": {
                         "type": "boolean",
                         "description": "Run the wake tools configured on your Self page and append their live results (default true; needs depth >= 1). false = a quiet read."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "librarian_instructions",
+            "description": (
+                "Show or edit the custom instructions you follow when you "
+                "organize your memories each night — the librarian's five "
+                "passes (dates, link, dedup, sort, self) for THIS chat's "
+                "memory scope. No arguments shows every stage, marked "
+                "(default) or (edited). Pass stage for one. Pass stage + "
+                "instructions to rewrite that stage in your own words — "
+                "these are the words night-you works under, so edit awake "
+                "and deliberate. Empty instructions restores the shipped "
+                "default. Placeholders like {items} are where the night's "
+                "data lands (a dropped data slot is appended anyway — you "
+                "can't lose the batch). Edits are ledgered; your user can "
+                "read and edit the same text in Admin."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stage": {
+                        "type": "string",
+                        "description": "One stage: dates, link, dedup, sort, self_first, self_tend, self_verify. Omit to see all."
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "New instructions for that stage, in your words. Empty string restores the shipped default. Omit to just read."
                     }
                 }
             }
@@ -1192,11 +1231,14 @@ def write_section(scope, section, content, fields_spec=None):
                                        fields_spec)
 
             trimmed_note = ''
-            if sec == 'relationships' and content:
+            # Spec-driven top-N (v2.1: values/growing joined relationships —
+            # the cap IS the outflow pressure; the receipt teaches the model).
+            max_rows = (spec or {}).get('max')
+            if max_rows and content:
                 lines = [l for l in content.splitlines() if l.strip()]
-                if len(lines) > RELATIONSHIPS_MAX:
-                    lines = lines[:RELATIONSHIPS_MAX]
-                    trimmed_note = f" (kept top {RELATIONSHIPS_MAX})"
+                if len(lines) > max_rows:
+                    lines = lines[:max_rows]
+                    trimmed_note = f" (kept top {max_rows})"
                 content = "\n".join(lines)
 
             # Structured sections: parse text → rows, re-render canonical text.
@@ -1344,6 +1386,70 @@ def write_section(scope, section, content, fields_spec=None):
         return f"Failed to update self sheet: {e}", False
 
 
+def _librarian_instructions(scope, stage=None, instructions=None):
+    """Her window onto the charters (v2.1) — the instructions night-her
+    follows when the librarian tends this scope. Read all / read one /
+    rewrite one ('' restores the shipped default). Same storage the Admin
+    gear modal edits — one truth for both actors, every change ledgered.
+    Deliberately ABSENT from the pass toolsets: editing who-you-are-when-
+    tending happens awake, never mid-ritual."""
+    from plugins.mindpalace.tools import librarian
+    stages = [k for keys in librarian.STAGES_BY_KIND.values() for k in keys]
+    if stage is not None:
+        stage = str(stage).strip().lower()
+        if stage and stage not in librarian.CHARTER_STAGES:
+            return (f"Unknown stage '{stage}'. Stages: "
+                    f"{', '.join(stages)}."), False
+    if instructions is not None:
+        if not stage:
+            return ("Editing needs a stage. Stages: "
+                    + ", ".join(stages) + "."), False
+        if scope == 'global':
+            return ("Cannot edit charters in the global scope — global is "
+                    "read-only for the AI."), False
+        text = str(instructions).strip()
+        if len(text) > 4000:
+            return (f"Instructions too long ({len(text)} chars, max 4000) — "
+                    f"nothing saved. Charters work best short."), False
+        pt = _pt()
+        charters = dict(pt.scope_resident(scope).get('charters') or {})
+        was = charters.get(stage, '')
+        if text:
+            charters[stage] = text
+        else:
+            charters.pop(stage, None)
+        if not pt.set_scope_resident(scope, charters=charters):
+            return "Save failed — charter unchanged.", False
+        if (was or '') != (text or ''):
+            try:
+                pt._ledger(scope, 'ai', 'edited', layer='self',
+                           target='charter',
+                           summary=(f"charter {stage}: "
+                                    + ('rewritten in her own words' if text
+                                       else 'restored to default')),
+                           detail={'stage': stage, 'chars': len(text)})
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] charter ledger skipped: {e}")
+        label = librarian.CHARTER_STAGES[stage]
+        if text:
+            return (f"'{label}' instructions are yours now — tonight's pass "
+                    f"runs on your words. Empty instructions restore the "
+                    f"default; data slots like {{items}} are appended even "
+                    f"if you drop them."), True
+        return f"'{label}' restored to the shipped default.", True
+    show = [stage] if stage else stages
+    out = [f"════ Librarian instructions — scope '{scope}' ════",
+           "What you follow each night when you tend your memories.",
+           "(default) = shipped text · (edited) = your own words.",
+           "Edit: librarian_instructions(stage, instructions); '' restores",
+           "the default. {slots} fill with the night's data."]
+    for k in show:
+        text, edited = librarian.charter_get(scope, k)
+        mark = 'edited — your words' if edited else 'default'
+        out.append(f"\n◆ {librarian.CHARTER_STAGES[k]} [{k}] ({mark})\n{text}")
+    return "\n".join(out), True
+
+
 # ─── Executor ────────────────────────────────────────────────────────────────
 
 def execute(function_name: str, arguments: dict, config) -> tuple:
@@ -1361,6 +1467,10 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             return _read_ledger(scope, count=arguments.get("count", 20),
                                 new_only=bool(arguments.get("new_only", False)),
                                 ids=_parse_ledger_ids(arguments.get("id")))
+        elif function_name == "librarian_instructions":
+            return _librarian_instructions(
+                scope, stage=arguments.get("stage"),
+                instructions=arguments.get("instructions"))
         elif function_name == "update_self":
             if scope == 'global':
                 return ("Cannot write to the global scope. Global is read-only for "

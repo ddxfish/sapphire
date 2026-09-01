@@ -301,34 +301,174 @@ function capsLine(key) {
     return bits.join(' · ');
 }
 
-function helpModal(p) {
-    const h = p.help;
-    if (!h) return;
+async function charterModal(p) {
+    // The charter modal (v2.1): per-SCOPE editable instructions for one
+    // pass, the old ? prose collapsed on top, a live preview assembled
+    // from real queue items, and a cap-free 5-item test run with an
+    // after-action report re-rendered from the ledger.
+    let data;
+    try {
+        data = await palaceGet(`librarian/charters?scope=${encodeURIComponent(scope)}`);
+    } catch (e) { ui.showToast(e.message, 'error'); return; }
+    const stages = (data.stages || []).filter(st => st.kind === p.key);
+    if (!stages.length) { ui.showToast('No charter stages for this pass', 'error'); return; }
+    const h = p.help || {};
+    let cur = stages[0].key;
+
     document.querySelector('.mind-modal-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.className = 'pr-modal-overlay mind-modal-overlay';
     overlay.innerHTML = `
         <div class="pr-modal palace-ent-modal">
             <div class="pr-modal-header">
-                <h3>${p.icon} ${escHtml(p.title)} — what this pass does</h3>
-                <button class="mind-btn-sm mind-modal-close">✕</button>
+                <h3>${p.icon} ${escHtml(p.title)} — charter · scope '${escHtml(scope)}'</h3>
+                <span style="display:flex;gap:8px;align-items:center">
+                    <button class="mind-btn" id="pal-ch-save"
+                        style="background:var(--trim);border-color:var(--trim);color:var(--bg)">Save</button>
+                    <button class="mind-btn-sm mind-modal-close">✕</button>
+                </span>
             </div>
             <div class="pr-modal-body view-scroll">
-                <p style="margin-top:0">${escHtml(h.about)}</p>
-                <p><b>Input</b> — ${escHtml(h.input)}</p>
-                <p><b>Processing</b> — ${escHtml(h.processing)}</p>
-                <p><b>Output</b> — ${escHtml(h.output)}</p>
-                <p style="margin-bottom:4px"><b>Tools she holds</b></p>
-                <ul style="margin-top:0">
-                    ${(h.tools || []).map(t => `<li>${escHtml(t)}</li>`).join('')}
-                </ul>
-                <p class="ui-meta-text" style="white-space:normal">Every pass runs as her. A session starts with her self sheet loaded, all of one night shares one chat, and every action is logged in the Ledger.</p>
+                <details style="margin-bottom:10px">
+                    <summary style="cursor:pointer"><b>How this pass works</b></summary>
+                    <p>${escHtml(h.about || '')}</p>
+                    <p><b>Input</b> — ${escHtml(h.input || '')}</p>
+                    <p><b>Processing</b> — ${escHtml(h.processing || '')}</p>
+                    <p><b>Output</b> — ${escHtml(h.output || '')}</p>
+                    <p style="margin-bottom:4px"><b>Tools she holds</b></p>
+                    <ul style="margin-top:0">${(h.tools || []).map(t => `<li>${escHtml(t)}</li>`).join('')}</ul>
+                    <p class="ui-meta-text" style="white-space:normal">Every pass runs as her. A session starts with her self sheet loaded, all of one night shares one chat, and every action is logged in the Ledger.</p>
+                </details>
+                ${stages.length > 1 ? `<div class="ui-row" style="margin-bottom:8px">${stages.map(st =>
+                    `<button class="ui-pill" data-ch-tab="${escAttr(st.key)}">${escHtml(st.label)}</button>`).join('')}</div>` : ''}
+                ${stages.map(st => `
+                <div data-ch-pane="${escAttr(st.key)}" style="display:none">
+                    <div class="ui-row" style="margin-bottom:4px">
+                        <span class="ui-meta-text" style="white-space:normal">Her instructions for THIS scope. {slots} fill with real data each run — a dropped data slot is appended anyway, so she always gets the batch.</span>
+                        <span class="ui-chip" data-ch-badge="${escAttr(st.key)}" style="margin-left:auto">${st.edited ? 'edited ●' : 'default'}</span>
+                        <button class="mind-btn-sm" data-ch-restore="${escAttr(st.key)}" title="Reset the text to the shipped default (Save to apply)">Restore default</button>
+                    </div>
+                    <textarea data-ch-text="${escAttr(st.key)}" rows="14" spellcheck="false"
+                        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px">${escHtml(st.text)}</textarea>
+                </div>`).join('')}
+                <div class="ui-row" style="margin:10px 0 4px">
+                    <b>Preview — tonight's message, real data</b>
+                    <button class="mind-btn-sm" id="pal-ch-preview" style="margin-left:auto" title="Renders the SAVED charter — Save first to preview edits">↻ Preview</button>
+                </div>
+                <pre id="pal-ch-prevout" class="pal-peek-out" style="max-height:260px;overflow:auto" hidden></pre>
+                <div class="ui-row" style="margin:10px 0 4px">
+                    <button class="mind-btn" id="pal-ch-test" title="Runs this pass on 5 real items in this scope — no daily-cap spend">▶ Test run — 5 items, this scope</button>
+                    <span class="ui-meta-text" id="pal-ch-teststate" style="white-space:normal"></span>
+                </div>
+                <div id="pal-ch-report" class="ui-card-body" style="white-space:pre-wrap"></div>
             </div>
         </div>`;
     document.body.appendChild(overlay);
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     setupModalClose(overlay, close);
+
+    const selectStage = (key) => {
+        cur = key;
+        overlay.querySelectorAll('[data-ch-tab]').forEach(b =>
+            b.classList.toggle('ui-pill-on', b.dataset.chTab === key));
+        overlay.querySelectorAll('[data-ch-pane]').forEach(d =>
+            d.style.display = d.dataset.chPane === key ? '' : 'none');
+    };
+    overlay.querySelectorAll('[data-ch-tab]').forEach(b =>
+        b.addEventListener('click', () => selectStage(b.dataset.chTab)));
+    selectStage(cur);
+
+    overlay.querySelectorAll('[data-ch-restore]').forEach(b =>
+        b.addEventListener('click', () => {
+            const st = stages.find(x => x.key === b.dataset.chRestore);
+            const ta = overlay.querySelector(`[data-ch-text="${b.dataset.chRestore}"]`);
+            if (st && ta) ta.value = st.default_text;
+        }));
+
+    overlay.querySelector('#pal-ch-save').addEventListener('click', async () => {
+        try {
+            let saved = 0;
+            for (const st of stages) {
+                const ta = overlay.querySelector(`[data-ch-text="${st.key}"]`);
+                if (!ta) continue;
+                // Text identical to the shipped default = no override.
+                const out = ta.value.trim() === st.default_text.trim() ? '' : ta.value;
+                const was = st.edited ? st.text : '';
+                if (out.trim() === was.trim()) continue;   // unchanged
+                const r = await palaceSend('librarian/charter', 'PUT',
+                    { scope, stage: st.key, text: out });
+                st.edited = r.edited;
+                st.text = out || st.default_text;
+                saved++;
+                const badge = overlay.querySelector(`[data-ch-badge="${st.key}"]`);
+                if (badge) badge.textContent = r.edited ? 'edited ●' : 'default';
+            }
+            ui.showToast(saved ? `Charter saved (${saved} stage${saved > 1 ? 's' : ''})` : 'No changes', 'success');
+        } catch (e) { ui.showToast(`Save failed: ${e.message}`, 'error'); }
+    });
+
+    const runPreview = async () => {
+        const out = overlay.querySelector('#pal-ch-prevout');
+        out.hidden = false;
+        out.textContent = '…';
+        const stageParam = p.key === 'self'
+            ? `&stage=${cur.replace('self_', '')}` : '';
+        try {
+            const r = await palaceGet(`librarian/preview?scope=${encodeURIComponent(scope)}&pass=${p.key}${stageParam}`);
+            out.textContent = (r.live ? '' : '(queue empty — charter shape, slots left visible)\n\n') + (r.text || '');
+        } catch (e) { out.textContent = `✗ ${e.message}`; }
+    };
+    overlay.querySelector('#pal-ch-preview').addEventListener('click', runPreview);
+    runPreview();
+
+    overlay.querySelector('#pal-ch-test').addEventListener('click', async () => {
+        const btn = overlay.querySelector('#pal-ch-test');
+        const state = overlay.querySelector('#pal-ch-teststate');
+        const rep = overlay.querySelector('#pal-ch-report');
+        btn.disabled = true;
+        rep.textContent = '';
+        state.textContent = 'starting…';
+        let chat;
+        try {
+            const r = await palaceSend('librarian/run', 'POST',
+                { scope, what: 'all', pass: p.key, batch: 5 });
+            chat = r.chat;
+        } catch (e) {
+            state.textContent = '';
+            btn.disabled = false;
+            ui.showToast(e.message, 'error');
+            return;
+        }
+        const t0 = Date.now();
+        const poll = async () => {
+            if (!overlay.isConnected) return;
+            let st2 = null;
+            try { st2 = await palaceGet(`librarian/status?scope=${encodeURIComponent(scope)}`); }
+            catch {}
+            if (st2?.running && Date.now() - t0 < 180000) {
+                const c = st2.current || {};
+                state.textContent = `⏳ running — message ${c.messages_done || 0}/${c.messages_total || '?'}`;
+                setTimeout(poll, 2000);
+                return;
+            }
+            state.textContent = st2?.current?.last_message || 'done';
+            btn.disabled = false;
+            try {
+                const r = await palaceGet(`librarian/report?scope=${encodeURIComponent(scope)}&chat=${encodeURIComponent(chat || '')}`);
+                if (r.found) {
+                    const items = (r.items || []).map(i =>
+                        `  [${i.target || ''}] ${i.action}${i.summary ? ' — ' + i.summary : ''}`).join('\n');
+                    rep.textContent = `${r.summary}${items ? '\n' + items : ''}`
+                        + (r.note ? `\n\nher note: "${r.note}"` : '')
+                        + `\n\ntranscript: '${chat}' — Chat Manager → \u{1F4DA} Librarian`;
+                } else {
+                    rep.textContent = `No ledger row landed (nothing queued, or the pass failed) — transcript '${chat}' in Chat Manager → \u{1F4DA} Librarian`;
+                }
+            } catch (e) { rep.textContent = `report failed: ${e.message}`; }
+        };
+        setTimeout(poll, 1500);
+    });
 }
 
 function passCard(p, st, libEnabled) {
@@ -341,8 +481,7 @@ function passCard(p, st, libEnabled) {
         <div class="ui-card" data-card="${escAttr(p.key)}" style="${on ? '' : 'opacity:.6'}">
             <div class="ui-row">
                 <span class="ui-card-title" style="padding-right:0">${p.icon} ${escHtml(p.title)}</span>
-                <button class="mind-btn-sm" data-pass-help="${escAttr(p.key)}" title="What this pass does" style="margin-left:auto">?</button>
-                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Librarian settings">⚙</button>
+                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Charter — her instructions, live preview, test run" style="margin-left:auto">⚙</button>
                 <label class="ui-toggle" title="Include this pass in the nightly round. Off = the nightly skips it; ▶ Run always works.">
                     <input type="checkbox" data-pass-toggle="${escAttr(p.key)}" ${on ? 'checked' : ''}>
                     <span class="ui-toggle-slider"></span>
@@ -683,18 +822,17 @@ function bindConsole(el) {
 
     el.querySelector('#pal-adm-settings')?.addEventListener('click', () => settingsModal('general'));
 
-    // Per-card gears + the caps line itself: open settings on that pass's tab.
-    el.querySelectorAll('[data-pass-gear],[data-caps]').forEach(b =>
+    // Per-card gear → the charter modal (v2.1): per-scope instructions,
+    // live preview, test run. The old ? help prose lives inside it now.
+    el.querySelectorAll('[data-pass-gear]').forEach(b =>
         b.addEventListener('click', () => {
-            const key = b.dataset.passGear || b.dataset.caps;
-            settingsModal(key === 'dedup' ? 'dedup' : 'general');
+            const p = PASSES.find(x => x.key === b.dataset.passGear);
+            if (p) charterModal(p);
         }));
-
-    // ? per pass — the IPO help modal.
-    el.querySelectorAll('[data-pass-help]').forEach(b =>
+    // The caps line still opens install-wide settings on the right tab.
+    el.querySelectorAll('[data-caps]').forEach(b =>
         b.addEventListener('click', () => {
-            const p = PASSES.find(x => x.key === b.dataset.passHelp);
-            if (p) helpModal(p);
+            settingsModal(b.dataset.caps === 'dedup' ? 'dedup' : 'general');
         }));
 }
 

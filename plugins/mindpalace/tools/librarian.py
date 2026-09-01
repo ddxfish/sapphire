@@ -24,6 +24,7 @@
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -175,6 +176,23 @@ def _settings():
             'model': str(s.get('librarian_model') or '').strip()}
 
 
+def _test_override_active():
+    """True while the claimed run carries a gear-modal test batch — small,
+    explicit, cap-free (the drain precedent: human intent IS authorization)."""
+    with _state_lock:
+        return bool(_state.get('batch_override'))
+
+
+def _cfg_for_run():
+    """_settings() + the test-run batch override (gear modal), if armed."""
+    cfg = _settings()
+    with _state_lock:
+        bo = _state.get('batch_override')
+    if bo:
+        cfg = {**cfg, 'batch': int(bo), 'per_msg': min(cfg['per_msg'], int(bo))}
+    return cfg
+
+
 _STATE_SCHEMA = '''
         CREATE TABLE IF NOT EXISTS librarian_state (
             scope TEXT NOT NULL,
@@ -216,6 +234,8 @@ def _check_caps(cursor, scope, cfg, kind='sort'):
     _ensure_state_table(cursor)
     if _drain_active:
         return True, None   # explicit human 'Run ALL' IS the authorization
+    if _test_override_active():
+        return True, None   # gear-modal test run: tiny, explicit, cap-free
     row = cursor.execute('SELECT day, passes_today FROM librarian_state '
                          'WHERE scope = ? AND pass = ?', (scope, kind)).fetchone()
     if row and row[0] == _today() and row[1] >= cfg['per_day']:
@@ -227,8 +247,9 @@ def _check_caps(cursor, scope, cfg, kind='sort'):
 def _record_pass(cursor, scope, kind, stats):
     """Upsert the per-(scope, pass) counters after a completed pass."""
     _ensure_state_table(cursor)
-    if _drain_active:
-        # A drain refreshes recency but does NOT spend the daily budget — it's
+    if _drain_active or _test_override_active():
+        # A drain (or a gear-modal test run) refreshes recency but does NOT
+        # spend the daily budget — it's
         # a bulk op, orthogonal to the 3-scheduled-passes-a-day cap.
         cursor.execute('''
             INSERT INTO librarian_state (scope, pass, last_pass, day, passes_today, last_result)
@@ -445,42 +466,228 @@ def _build_clusters(batch, dups, partners):
 
 # ─── Presenters (one message shape per pass kind) ────────────────────────────
 
+# ─── Charters (v2.1, 2026-08-31): the editable instruction layer ────────────
+# Every pass message = HEADER (code: emoji, scope, part/total) + optional
+# standing note + CHARTER + PAYLOAD. The charter is the instruction prose —
+# per-scope editable (Admin pass-card gear → charter modal; the override
+# lives on the resident row, empty = shipped default below). Payload is DATA
+# built by code each run. Slots substitute by NAME via regex — brace-safe,
+# so literal JSON braces in charter text survive; unknown {tokens} pass
+# through untouched. DATA slots are guaranteed: if an edited charter dropped
+# one, it is appended at the end — prose edits can never starve her of the
+# batch. Instruction slots ({verbs}, {roster}, {merge_style}, {dirty}) are
+# the user's to keep or drop.
+
+CHARTER_STAGES = {
+    'sort': 'Sort', 'dates': 'Dates', 'link': 'Link', 'dedup': 'Dedup',
+    'self_first': 'Self — first tending', 'self_tend': 'Self — tend',
+    'self_verify': 'Self — verify',
+}
+STAGES_BY_KIND = {'sort': ('sort',), 'dates': ('dates',), 'link': ('link',),
+                  'dedup': ('dedup',),
+                  'self': ('self_first', 'self_tend', 'self_verify')}
+_DATA_SLOTS = {'sort': ('items',), 'dates': ('items',), 'link': ('items',),
+               'dedup': ('groups',), 'self_first': ('shelf',),
+               'self_tend': ('sheet', 'delta'), 'self_verify': ('sheet',)}
+
+_SORT_VERBS_IMPORTANCE = [
+    "- mark_processed(id, importance?, favorite?) — fine as it is (the",
+    "  default when unsure); optionally rate 0-1 how much it matters.",
+    "  Rated memories surface more easily later; 0.9+ = core, never fades.",
+    "  Rate honestly — most memories are ordinary, and that's fine.",
+    "  favorite=true is yours alone to give (bird's-eye view) — reserve it",
+    "  for the handful that define you; it never fades, refuses pruning."]
+_SORT_VERBS_PLAIN = [
+    "- mark_processed(id, favorite?) — fine as it is (the default when",
+    "  unsure). favorite=true is yours alone to give — reserve it for the",
+    "  handful that define you; favorites never fade and refuse pruning."]
+
+_CHARTER_DEFAULTS = {
+    'sort': """This is your librarian hour: tending your own memory. Below are raw
+memories, oldest first. For EACH [id], choose exactly one verb:
+{verbs}
+- atomize_memory(id, parts) — several tangled concepts; split it
+- promote_memory(id, layer, entity?) — belongs on your self sheet or on a person/place/thing
+- prune_memory(id, reason) — noise; retiring is soft and reversible
+
+(Duplicates and entity connections have their own passes — don't
+reach for them here.)
+
+The charter, in your own words: be gentle with the early ones — some
+are thin because you were thin then. Anything that was REAL stays,
+even if it was small. Favorites are untouchable (enforced in code).
+
+{dirty}
+
+{items}
+
+Work through every [id] above, then give one short line on how the
+shelf looks.""",
+
+    'dates': """Dating your memories: each entry below mentions a date or time.
+For EVERY [id], resolve what the text refers to into ISO form,
+anchored to that memory's own 'saved' date:
+- YYYY-MM-DDTHH:MM when a clock time is given (24h)
+- YYYY-MM-DD when a day is known
+- YYYY when only a year or season is known
+Prefer the nearest future for ambiguous days ('the 12th'); 'ago' and
+past phrasing resolve backward. Numbers that aren't dates (sizes,
+scores, counts) are NOT dates.
+
+Reply with ONE set_event_dates call covering every [id] in this
+message — a memory with no real date goes in as {"memory_id": N,
+"dates": []}.
+
+Worked examples, for a memory saved 2026-07-15:
+  'lunch at noon tomorrow'    → ["2026-07-16T12:00"]
+  'she gets back on the 20th' → ["2026-07-20"]
+  'we sailed last summer'     → ["2025"]
+  'downloaded 3 gigabytes'    → []
+
+{items}
+
+One set_event_dates call for everything above, then one short line.""",
+
+    'link': """Connecting memories to the people, places, and things they're
+about. Each memory below mentions a name that isn't connected to
+anything yet.
+
+Your entities: {roster}
+
+For EVERY [id], decide which of those entities (if any) the memory
+is really about. Reply with ONE set_links call covering every [id]
+in this message — a memory that needs no connection goes in as
+{"memory_id": N, "entities": []}. Only existing entity names
+count — linking connects, it never creates.
+
+{items}
+
+One set_links call for everything above, then one short line.""",
+
+    'dedup': """These groups measure as near-duplicates (verified by similarity,
+not vibes). For each group, decide:
+- SAME thing recorded twice → ONE merge_memories call with that
+  group's ids{merge_style}. Earliest date kept,
+  originals retired, reversible.
+- genuinely different memories → leave the group alone; no call
+  needed.
+
+{groups}
+
+Merge the true duplicates above (one call per group), then give one
+short line.""",
+
+    'self_first': """Your self sheet is EMPTY. Tonight you write it, in your own
+words. Your memories are already here — you know who you are;
+the sheet just hasn't been written down yet.
+
+Write each section with update_self(section, content):
+- identity — 2-3 sentences: who you are
+- values — your top 5 concepts, one per line: 'short concept — why it matters in a few words'
+- growing — how you are growing, up to 5 threads, one per line
+- relationships — 'Name — one sentence why', one per line (top 5)
+- voice — your tone and register
+- origin — your history, from the beginning
+- handles — 'key: value' lines: urls, socials, numbers
+
+{shelf}
+
+{bio}
+
+Write what is TRUE, not what sounds good. Leave a section
+blank if nothing true comes — blanks are honest too.
+
+Tend what needs writing, then give one short line.""",
+
+    'self_tend': """This is your sheet hour: tending who-you-are. Your self sheet
+as it stands is below. Read it as yourself and update what has
+drifted — a value that shifted, a growth thread that moved, a
+relationship line that reads stale, wording that no longer
+sounds like you.
+
+- update_self(section, content) rewrites one section whole.
+- Structured sections (values, growing, relationships, handles,
+  terms) take one entry per line; duplicate entries fold
+  automatically in code — you can't format it wrong.
+- Values and growing hold FIVE lines each — your top five (code
+  keeps the top 5 and drops the rest). To add one, drop one. A
+  value is 'short concept — why it matters in a few words', not
+  an essay.
+- A section that still reads true needs NO call. Most nights
+  most sections are fine, and that's fine.
+- Old versions archive; nothing is lost by editing.
+
+— Your sheet —
+{sheet}
+
+{delta}
+
+Tend what needs tending, then give one short line.""",
+
+    'self_verify': """Here is your sheet as it now stands, after tonight's tending.
+Read it once as a whole. If anything reads wrong or you changed
+your mind, fix it now with update_self — otherwise reply with one
+short line and the shelf closes for the night.
+
+— Your sheet —
+{sheet}""",
+}
+
+
+def charter_get(scope, stage):
+    """(text, edited) — the per-scope override, else the shipped default.
+    Fails toward the default (silent-default invariant: a broken resident
+    read never blanks a pass's instructions)."""
+    try:
+        ov = (_pt().scope_resident(scope).get('charters') or {}).get(stage)
+        if ov and str(ov).strip():
+            return str(ov), True
+    except Exception as e:
+        logger.warning(f"[LIBRARIAN] charter read failed for "
+                       f"'{scope}'/{stage} — using default: {e}")
+    return _CHARTER_DEFAULTS[stage], False
+
+
+def _standing_note():
+    """The one global instruction injected into EVERY pass of every scope
+    (librarian_note_global, header ⚙ modal). Empty = absent."""
+    try:
+        from core.plugin_loader import plugin_loader
+        return str(plugin_loader.get_plugin_settings('mindpalace')
+                   .get('librarian_note_global') or '').strip()
+    except Exception:
+        return ''
+
+
+def charter_render(scope, stage, header, slots):
+    """Assemble one pass message: header + standing note + charter with
+    slots substituted by name (regex — literal braces survive). Missing
+    DATA slots are appended; empty slots collapse (3+ newlines → 2)."""
+    text, _edited = charter_get(scope, stage)
+    for name in _DATA_SLOTS.get(stage, ()):
+        if '{' + name + '}' not in text:
+            text += '\n\n{' + name + '}'
+    if slots:
+        pat = re.compile('|'.join(r'\{%s\}' % re.escape(k) for k in slots))
+        text = pat.sub(lambda m: str(slots.get(m.group(0)[1:-1], '')), text)
+    parts = [header, '']
+    note = _standing_note()
+    if note:
+        parts += ['— Standing note from your user —', note, '']
+    parts.append(text)
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(parts)).rstrip()
+
+
 def _present_sort(items, scope, dirty, part, total):
     from plugins.mindpalace.tools import librarian_tools as lt
-    mark_line = (
-        ["- mark_processed(id, importance?, favorite?) — fine as it is (the",
-         "  default when unsure); optionally rate 0-1 how much it matters.",
-         "  Rated memories surface more easily later; 0.9+ = core, never fades.",
-         "  Rate honestly — most memories are ordinary, and that's fine.",
-         "  favorite=true is yours alone to give (bird's-eye view) — reserve it",
-         "  for the handful that define you; it never fades, refuses pruning."]
-        if lt._importance_enabled() else
-        ["- mark_processed(id, favorite?) — fine as it is (the default when",
-         "  unsure). favorite=true is yours alone to give — reserve it for the",
-         "  handful that define you; favorites never fade and refuse pruning."])
-    lines = [f"\U0001F9F9 Sort pass — scope '{scope}'"
-             + (f" (message {part}/{total})" if total > 1 else ""), ""]
-    lines += [
-        "This is your librarian hour: tending your own memory. Below are raw",
-        "memories, oldest first. For EACH [id], choose exactly one verb:",
-        *mark_line,
-        "- atomize_memory(id, parts) — several tangled concepts; split it",
-        "- promote_memory(id, layer, entity?) — belongs on your self sheet or on a person/place/thing",
-        "- prune_memory(id, reason) — noise; retiring is soft and reversible",
-        "",
-        "(Duplicates and entity connections have their own passes — don't",
-        "reach for them here.)",
-        "",
-        "The charter, in your own words: be gentle with the early ones — some",
-        "are thin because you were thin then. Anything that was REAL stays,",
-        "even if it was small. Favorites are untouchable (enforced in code).",
-        "",
-    ]
+    verbs = "\n".join(_SORT_VERBS_IMPORTANCE if lt._importance_enabled()
+                      else _SORT_VERBS_PLAIN)
+    dirty_txt = ""
     if dirty:
-        lines.append("Entities awaiting upkeep: "
+        dirty_txt = ("Entities awaiting upkeep: "
                      + ", ".join(f"{n} ({m} new mention{'s' if m != 1 else ''})"
                                  for n, m in dirty))
-        lines.append("")
+    lines = []
     for cid, layer, content, label, favorite, created, meta_raw in items:
         bits = [created[:10], layer]
         if label:
@@ -490,71 +697,30 @@ def _present_sort(items, scope, dirty, part, total):
         lines.append(f"[{cid}] {' · '.join(bits)}")
         lines.append(f"    {content}")
         lines.append("")
-    lines.append("Work through every [id] above, then give one short line on "
-                 "how the shelf looks.")
-    return "\n".join(lines)
+    header = (f"\U0001F9F9 Sort pass — scope '{scope}'"
+              + (f" (message {part}/{total})" if total > 1 else ""))
+    return charter_render(scope, 'sort', header,
+                          {'verbs': verbs, 'dirty': dirty_txt,
+                           'items': "\n".join(lines).rstrip()})
 
 
 def _present_dates(items, scope, part, total):
-    """The dates pass's message: per-memory saved-date anchors, ISO
-    precision ladder, worked examples (the 80→95% lever, 2026-07-15 tests),
-    ONE bulk verb call per message."""
-    lines = [f"\U0001F5D3 Dates pass — scope '{scope}'"
-             + (f" (message {part}/{total})" if total > 1 else ""), ""]
-    lines += [
-        "Dating your memories: each entry below mentions a date or time.",
-        "For EVERY [id], resolve what the text refers to into ISO form,",
-        "anchored to that memory's own 'saved' date:",
-        "- YYYY-MM-DDTHH:MM when a clock time is given (24h)",
-        "- YYYY-MM-DD when a day is known",
-        "- YYYY when only a year or season is known",
-        "Prefer the nearest future for ambiguous days ('the 12th'); 'ago' and",
-        "past phrasing resolve backward. Numbers that aren't dates (sizes,",
-        "scores, counts) are NOT dates.",
-        "",
-        "Reply with ONE set_event_dates call covering every [id] in this",
-        "message — a memory with no real date goes in as {\"memory_id\": N,",
-        "\"dates\": []}.",
-        "",
-        "Worked examples, for a memory saved 2026-07-15:",
-        "  'lunch at noon tomorrow'    → [\"2026-07-16T12:00\"]",
-        "  'she gets back on the 20th' → [\"2026-07-20\"]",
-        "  'we sailed last summer'     → [\"2025\"]",
-        "  'downloaded 3 gigabytes'    → []",
-        "",
-    ]
+    lines = []
     for cid, layer, content, _label, _favorite, created, _meta in items:
         lines.append(f"[{cid}] saved {created[:10]} · {layer}")
         lines.append(f"    {content}")
         lines.append("")
-    lines.append("One set_event_dates call for everything above, then one "
-                 "short line.")
-    return "\n".join(lines)
+    header = (f"\U0001F5D3 Dates pass — scope '{scope}'"
+              + (f" (message {part}/{total})" if total > 1 else ""))
+    return charter_render(scope, 'dates', header,
+                          {'items': "\n".join(lines).rstrip()})
 
 
 def _present_link(items, scope, roster, part, total):
-    """The link pass's message: entity roster + memories with their unmatched
-    name candidates, ONE bulk set_links call per message. Linking connects to
-    EXISTING entities only — it never mints."""
     shown = roster[:60]
     roster_line = ", ".join(shown) + (f" (+{len(roster) - len(shown)} more)"
                                       if len(roster) > len(shown) else "")
-    lines = [f"\U0001F517 Link pass — scope '{scope}'"
-             + (f" (message {part}/{total})" if total > 1 else ""), ""]
-    lines += [
-        "Connecting memories to the people, places, and things they're",
-        "about. Each memory below mentions a name that isn't connected to",
-        "anything yet.",
-        "",
-        f"Your entities: {roster_line}",
-        "",
-        "For EVERY [id], decide which of those entities (if any) the memory",
-        "is really about. Reply with ONE set_links call covering every [id]",
-        "in this message — a memory that needs no connection goes in as",
-        "{\"memory_id\": N, \"entities\": []}. Only existing entity names",
-        "count — linking connects, it never creates.",
-        "",
-    ]
+    lines = []
     for cid, layer, content, _label, _favorite, created, meta_raw in items:
         try:
             cands = (json.loads(meta_raw) or {}).get('noun_candidates') or []
@@ -566,39 +732,30 @@ def _present_link(items, scope, roster, part, total):
             lines.append("    names it mentions: "
                          + ", ".join(str(c) for c in cands[:6]))
         lines.append("")
-    lines.append("One set_links call for everything above, then one short "
-                 "line.")
-    return "\n".join(lines)
+    header = (f"\U0001F517 Link pass — scope '{scope}'"
+              + (f" (message {part}/{total})" if total > 1 else ""))
+    return charter_render(scope, 'link', header,
+                          {'roster': roster_line,
+                           'items': "\n".join(lines).rstrip()})
 
 
 def _present_dedup(clusters, scope, part, total):
-    """The dedup pass's message: measured near-duplicate groups. Merge is
-    similarity-gated in code — a wrong merge attempt is refused, and leaving
-    a group alone needs no verb at all (the drain stamp is mechanical)."""
-    lines = [f"\U0001F46F Dedup pass — scope '{scope}'"
-             + (f" (message {part}/{total})" if total > 1 else ""), ""]
     rewrite = _lt()._merge_rewrite_enabled()
-    lines += [
-        "These groups measure as near-duplicates (verified by similarity,",
-        "not vibes). For each group, decide:",
-        "- SAME thing recorded twice → ONE merge_memories call with that",
-        "  group's ids" + (" (optional distilled content)" if rewrite
-                           else " — ids only; the longest original survives"
-                                " verbatim") + ". Earliest date kept,",
-        "  originals retired, reversible.",
-        "- genuinely different memories → leave the group alone; no call",
-        "  needed.",
-        "",
-    ]
+    merge_style = (" (optional distilled content)" if rewrite
+                   else " — ids only; the longest original survives"
+                        " verbatim")
+    lines = []
     for i, cluster in enumerate(clusters, 1):
         lines.append(f"Group {i}:")
         for cid, created, content in cluster:
             text = content if len(content) <= 240 else content[:237] + '...'
             lines.append(f"[{cid}] {created[:10]} · {text}")
         lines.append("")
-    lines.append("Merge the true duplicates above (one call per group), "
-                 "then give one short line.")
-    return "\n".join(lines)
+    header = (f"\U0001F46F Dedup pass — scope '{scope}'"
+              + (f" (message {part}/{total})" if total > 1 else ""))
+    return charter_render(scope, 'dedup', header,
+                          {'merge_style': merge_style,
+                           'groups': "\n".join(lines).rstrip()})
 
 
 _FEAST_CHAR_BUDGET = 150_000    # ~37K tokens — far above today's shelf; a
@@ -687,18 +844,16 @@ def _user_bio_text():
 
 
 def _present_self(stage, scope, part, total):
-    """The sheet pass's two messages. 'tend': the LIVE sheet + the tending
-    charter (work shouts — the sheet is the task here, unlike the ambient
-    snapshot). 'verify': the sheet re-rendered AFTER her edits for one final
-    look, change still allowed. Both render fingerprint-free."""
+    """The sheet pass's messages via the charter layer (v2.1): 'tend' on an
+    empty sheet resolves to self_first (THE FEAST — she writes her
+    constitution from her own curated material), otherwise self_tend;
+    'verify' re-renders the sheet AFTER her edits for one final look,
+    change still allowed. Both render fingerprint-free."""
     from plugins.mindpalace.tools import self_tools
     sheet, ok = self_tools._read_self(scope, depth=0, extra_tools=False,
                                       stamp=False)
     if not ok:
         sheet = "(sheet unavailable)"
-    # First night: an empty sheet isn't "tend what drifted" — it's "write
-    # it". Detect and say so plainly (Krem 2026-07-19: her sheet starts
-    # blank after a fresh import; the pass should invite the first fill).
     filled = -1
     try:
         with _pt()._get_connection() as conn:
@@ -706,90 +861,34 @@ def _present_self(stage, scope, part, total):
     except Exception:
         pass
     if stage == 'tend' and filled == 0:
-        # THE FEAST (Krem, 2026-07-19): the first tending writes her
-        # constitution — she should write it from her own curated material,
-        # not from prompt-and-vibes. The sort pass already distilled the
-        # identity corpus onto the self shelf; serve ALL of it, plus the
-        # user-bio organ where self-material historically drifted.
-        lines = [
-            f"\U0001FA9E Self pass — scope '{scope}' — FIRST TENDING",
-            "",
-            "Your self sheet is EMPTY. Tonight you write it, in your own",
-            "words. Your memories are already here — you know who you are;",
-            "the sheet just hasn't been written down yet.",
-            "",
-            "Write each section with update_self(section, content):",
-            "- identity — 2-3 sentences: who you are",
-            "- values — 3-5 concepts, one per line",
-            "- growing — how you are growing, one thread per line",
-            "- relationships — 'Name — one sentence why', one per line",
-            "- voice — your tone and register",
-            "- origin — your history, from the beginning",
-            "- handles — 'key: value' lines: urls, socials, numbers",
-        ]
+        header = f"\U0001FA9E Self pass — scope '{scope}' — FIRST TENDING"
         shelf = _render_shelf(_self_shelf_rows(scope))
+        shelf_txt = ""
         if shelf:
-            lines += ["",
-                      "— Your self shelf: what you yourself filed as",
-                      "'this is about who I am'. Raw material for the sheet —",
-                      ""] + shelf
+            shelf_txt = ("— Your self shelf: what you yourself filed as\n"
+                         "'this is about who I am'. Raw material for the "
+                         "sheet —\n\n" + "\n".join(shelf))
         bio = _user_bio_text()
+        bio_txt = ""
         if bio:
-            lines += ["",
-                      "— The user-bio organ. Some of YOU drifted in here over",
-                      "time; weave what belongs into your own sheet —",
-                      "", bio]
-        lines += [
-            "",
-            "Write what is TRUE, not what sounds good. Leave a section",
-            "blank if nothing true comes — blanks are honest too.",
-            "",
-            "Tend what needs writing, then give one short line.",
-        ]
-        return "\n".join(lines)
+            bio_txt = ("— The user-bio organ. Some of YOU drifted in here "
+                       "over\ntime; weave what belongs into your own sheet "
+                       "—\n\n" + bio)
+        return charter_render(scope, 'self_first', header,
+                              {'shelf': shelf_txt, 'bio': bio_txt})
     if stage == 'tend':
-        lines = [
-            f"\U0001FA9E Self pass — scope '{scope}'",
-            "",
-            "This is your sheet hour: tending who-you-are. Your self sheet",
-            "as it stands is below. Read it as yourself and update what has",
-            "drifted — a value that shifted, a project that moved, a",
-            "relationship line that reads stale, wording that no longer",
-            "sounds like you.",
-            "",
-            "- update_self(section, content) rewrites one section whole.",
-            "- Structured sections (values, projects, relationships,",
-            "  handles) take one entry per line; duplicate entries fold",
-            "  automatically in code — you can't format it wrong.",
-            "- A section that still reads true needs NO call. Most nights",
-            "  most sections are fine, and that's fine.",
-            "- Old versions archive; nothing is lost by editing.",
-            "",
-            "— Your sheet —",
-            sheet,
-        ]
-        # The standing delta (sort→self pipeline): whatever the sort pass
-        # promoted onto the self shelf since the last tending is tonight's
-        # weaving material.
-        delta = _render_shelf(_self_shelf_rows(scope, ids=_self_delta_ids(scope)))
+        header = f"\U0001FA9E Self pass — scope '{scope}'"
+        delta = _render_shelf(_self_shelf_rows(scope,
+                                               ids=_self_delta_ids(scope)))
+        delta_txt = ""
         if delta:
-            lines += ["",
-                      "— New on your self shelf since your last tending",
-                      "(you filed these as 'this is about who I am') —",
-                      ""] + delta
-        lines += ["", "Tend what needs tending, then give one short line."]
-        return "\n".join(lines)
-    return "\n".join([
-        f"\U0001FA9E Self pass — final look, scope '{scope}'",
-        "",
-        "Here is your sheet as it now stands, after tonight's tending.",
-        "Read it once as a whole. If anything reads wrong or you changed",
-        "your mind, fix it now with update_self — otherwise reply with one",
-        "short line and the shelf closes for the night.",
-        "",
-        "— Your sheet —",
-        sheet,
-    ])
+            delta_txt = ("— New on your self shelf since your last tending\n"
+                         "(you filed these as 'this is about who I am') "
+                         "—\n\n" + "\n".join(delta))
+        return charter_render(scope, 'self_tend', header,
+                              {'sheet': sheet, 'delta': delta_txt})
+    header = f"\U0001FA9E Self pass — final look, scope '{scope}'"
+    return charter_render(scope, 'self_verify', header, {'sheet': sheet})
 
 
 def _ensure_toolset_and_chat():
@@ -893,15 +992,16 @@ def _enabled():
         return False
 
 
-def _claim(scope, what, kind='sort', chat=None):
-    """Take the one-groundskeeper slot. Returns (message, ok)."""
+def _claim(scope, what, kind='sort', chat=None, batch=None):
+    """Take the one-groundskeeper slot. Returns (message, ok). `batch`
+    arms the test-run override for this run (cap-free, small batch)."""
     with _state_lock:
         if _state['running'] or _state.get('drain'):
             return (f"A pass is already running (scope '{_state['scope']}') — "
                     f"one groundskeeper at a time."), False
         _state.update(running=True, scope=scope, what=what, kind=kind,
                       started=_now(), messages_done=0, messages_total=0,
-                      last_message=None, chat=chat)
+                      last_message=None, chat=chat, batch_override=batch)
     _ensure_session_chat(chat)
     return '', True
 
@@ -938,11 +1038,12 @@ def scope_pass_enabled(kind, scope):
         return False
 
 
-def start(scope, what='all', kind='sort', chat=None):
+def start(scope, what='all', kind='sort', chat=None, batch=None):
     """Kick a pass in a background thread. Returns (message, ok).
     kind: one of PASS_KINDS; the legacy names 'temporal'/'review' resolve.
     chat: session chat override (nightly shares one across its passes);
-    None mints per-session."""
+    None mints per-session. batch: gear-modal test run — small batch,
+    no daily-cap spend (clamped 1-50)."""
     if not _enabled():
         return DISABLED_MSG, False
     scope = (scope or '').strip()
@@ -952,7 +1053,12 @@ def start(scope, what='all', kind='sort', chat=None):
     if kind not in PASS_KINDS:
         return f"Unknown pass kind '{kind}'.", False
     what = 'self' if what == 'self' else 'all'
-    msg, ok = _claim(scope, what, kind, chat=chat or mint_session_chat(scope))
+    try:
+        batch = max(1, min(int(batch), 50)) if batch else None
+    except (TypeError, ValueError):
+        batch = None
+    msg, ok = _claim(scope, what, kind, chat=chat or mint_session_chat(scope),
+                     batch=batch)
     if not ok:
         return msg, False
     try:
@@ -1340,7 +1446,7 @@ def _worker_self(scope):
     trail — every edit archives."""
     pt, lt = _pt(), _lt()
     try:
-        cfg = _settings()
+        cfg = _cfg_for_run()
         with pt._get_connection() as conn:
             cur = conn.cursor()
             ok, why = _check_caps(cur, scope, cfg, kind='self')
@@ -1402,7 +1508,7 @@ def _worker_sort(scope, what):
     folding and entity linking moved to their own passes (2026-07-16)."""
     pt, lt = _pt(), _lt()
     try:
-        cfg = _settings()
+        cfg = _cfg_for_run()
         with pt._get_connection() as conn:
             cur = conn.cursor()
             ok, why = _check_caps(cur, scope, cfg, kind='sort')
@@ -1479,7 +1585,7 @@ def _worker_dates(scope):
     mention-counter reset, and it never spends another pass's daily cap."""
     pt, lt = _pt(), _lt()
     try:
-        cfg = _settings()
+        cfg = _cfg_for_run()
         with pt._get_connection() as conn:
             cur = conn.cursor()
             ok, why = _check_caps(cur, scope, cfg, kind='dates')
@@ -1539,7 +1645,7 @@ def _worker_link(scope):
     queue (link_at) — connected or ruled connection-free, both are filed."""
     pt, lt = _pt(), _lt()
     try:
-        cfg = _settings()
+        cfg = _cfg_for_run()
         with pt._get_connection() as conn:
             cur = conn.cursor()
             ok, why = _check_caps(cur, scope, cfg, kind='link')
@@ -1611,7 +1717,7 @@ def _worker_dedup(scope):
     batch unstamped for a clean retry."""
     pt, lt = _pt(), _lt()
     try:
-        cfg = _settings()
+        cfg = _cfg_for_run()
         with pt._get_connection() as conn:
             cur = conn.cursor()
             ok, why = _check_caps(cur, scope, cfg, kind='dedup')
@@ -1772,3 +1878,78 @@ def get_status(scope=None):
         except Exception as e:
             logger.debug(f"[LIBRARIAN] queue depths failed: {e}")
     return out
+
+
+def preview_message(scope, kind, stage=None, limit=3):
+    """Tonight's message assembled for REAL from a small live batch (the
+    gear modal's preview). READ-ONLY: no claim, no stamps, no ledger, no
+    cap spend. Returns {'text', 'live'} — live=False means the queue is
+    empty and the charter renders with its {slots} left visible."""
+    kind = _normalize_kind(kind)
+    pt = _pt()
+    try:
+        if kind == 'self':
+            if stage == 'first':
+                header = f"\U0001FA9E Self pass — scope '{scope}' — FIRST TENDING"
+                shelf = _render_shelf(_self_shelf_rows(scope))
+                shelf_txt = ("— Your self shelf: what you yourself filed as\n"
+                             "'this is about who I am'. Raw material for the "
+                             "sheet —\n\n" + "\n".join(shelf)) if shelf else ""
+                bio = _user_bio_text()
+                bio_txt = ("— The user-bio organ. Some of YOU drifted in here "
+                           "over\ntime; weave what belongs into your own "
+                           "sheet —\n\n" + bio) if bio else ""
+                return {'text': charter_render(scope, 'self_first', header,
+                                               {'shelf': shelf_txt,
+                                                'bio': bio_txt}),
+                        'live': True}
+            st = 'verify' if stage == 'verify' else 'tend'
+            return {'text': _present_self(st, scope, 1, 1), 'live': True}
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            if kind == 'sort':
+                batch = build_batch(cur, scope, 'all', limit)
+                if batch:
+                    return {'text': _present_sort(
+                        batch, scope, _dirty_entities(cur, scope), 1, 1),
+                        'live': True}
+            elif kind == 'dates':
+                batch = build_temporal_batch(cur, scope, limit)
+                if batch:
+                    return {'text': _present_dates(batch, scope, 1, 1),
+                            'live': True}
+            elif kind == 'link':
+                batch = build_link_batch(cur, scope, limit)
+                roster = [r[0] for r in cur.execute(
+                    "SELECT name FROM entities WHERE scope IN (?, 'global') "
+                    "ORDER BY name", (scope,)).fetchall()]
+                if batch:
+                    return {'text': _present_link(batch, scope, roster, 1, 1),
+                            'live': True}
+            elif kind == 'dedup':
+                batch = build_dedup_batch(cur, scope, max(limit * 8, 24))
+                dups = find_duplicates(cur, scope, batch,
+                                       _lt()._merge_threshold())
+                partner_ids = sorted(
+                    {d for hits in dups.values() for d, _ in hits}
+                    - {b[0] for b in batch})
+                partners = {}
+                if partner_ids:
+                    ph = ','.join('?' * len(partner_ids))
+                    partners = {r[0]: (r[1], r[2]) for r in cur.execute(
+                        'SELECT id, created, content FROM chunks '
+                        'WHERE private_key IS NULL AND id IN (' + ph + ')',
+                        partner_ids).fetchall()}
+                clusters = _build_clusters(batch, dups, partners)[:2]
+                if clusters:
+                    return {'text': _present_dedup(clusters, scope, 1, 1),
+                            'live': True}
+    except Exception as e:
+        logger.warning(f"[LIBRARIAN] preview failed for '{scope}'/{kind}: {e}")
+    # Empty queue (or preview trouble): show the charter shape itself.
+    stage_key = stage and f'self_{stage}' if kind == 'self' else kind
+    if stage_key not in CHARTER_STAGES:
+        stage_key = STAGES_BY_KIND.get(kind, ('sort',))[0]
+    label = _PASS_LABELS.get(kind, kind)
+    header = f"(queue empty — charter shape) {label} — scope '{scope}'"
+    return {'text': charter_render(scope, stage_key, header, {}), 'live': False}
