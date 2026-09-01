@@ -92,7 +92,9 @@ const PASSES = [
           input: 'Her live self sheet — identity, values, projects, relationships, voice, handles, origin — shown in full.',
           processing: 'Two rounds. First she tends: update the sections that no longer read true; a good section needs no call. Then she verifies: the updated sheet comes back, and she can still fix it. Code folds duplicate lines, and the wake-tools section can never be written.',
           output: 'An updated sheet. Every edit saves the old version into the sheet\'s history, so nothing is ever lost.',
-          tools: ['update_self(section, content) — rewrite one section whole'],
+          tools: ['update_self(section, content) — rewrite one section whole',
+                  'search_memory / get_recent_memories / read_self — check a line against her actual memories before rewriting it',
+                  'save_memory — the compression outflow: a line cut from the sheet lands as a memory instead of vanishing'],
       },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'self' } },

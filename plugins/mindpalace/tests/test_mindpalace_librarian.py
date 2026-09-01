@@ -899,3 +899,12 @@ def test_batch_override_dies_with_the_run(palace):
     eng._finish('test pass done')
     assert not eng._test_override_active()
     assert eng._cfg_for_run()['batch'] == eng._settings()['batch']
+
+
+def test_self_pass_toolset_is_read_set_plus_verbs():
+    """The sheet pass carries sort's READ set + save_memory (compression
+    outflow) + update_self — and never librarian_instructions (Krem's ask,
+    2026-08-31: she must be able to DO things while tending self)."""
+    assert set(eng.SELF_TOOLSET_FUNCTIONS) == {
+        'search_memory', 'get_recent_memories', 'read_self',
+        'save_memory', 'update_self'}

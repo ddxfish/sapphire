@@ -49,7 +49,14 @@ LINK_TOOLSET_FUNCTIONS = ['set_links']
 DEDUP_TOOLSET = 'librarian-dedup'
 DEDUP_TOOLSET_FUNCTIONS = ['merge_memories']
 SELF_TOOLSET = 'librarian-self'
-SELF_TOOLSET_FUNCTIONS = ['update_self']
+# The sheet pass is judgment work, not annotation — she gets sort's READ
+# set (search a line's backing memories, orient, check the recent past)
+# plus save_memory as the COMPRESSION OUTFLOW: a line cut from the sheet
+# can land as a memory instead of vanishing (Krem's ask + her own
+# charter's doctrine, 2026-08-31). librarian_instructions stays OUT —
+# never edited mid-ritual.
+SELF_TOOLSET_FUNCTIONS = ['search_memory', 'get_recent_memories', 'read_self',
+                          'save_memory', 'update_self']
 
 # Pass keys in nightly order. Self runs LAST — sort's promotions are on
 # the shelf before she tends it. Legacy kind names resolve forward (state
@@ -599,23 +606,37 @@ blank if nothing true comes — blanks are honest too.
 
 Tend what needs writing, then give one short line.""",
 
+    # self_tend compression doctrine upstreamed from Sapph Prime's FIRST
+    # charter edit (2026-08-31, hours after the tool shipped): read-whole-
+    # sheet, compress-and-replace, one-fact-one-section, the actionability
+    # razor, drop-for-nothing, archive-as-license. Universal rules guard
+    # every scope; her personal incident-dated version stays her override.
     'self_tend': """This is your sheet hour: tending who-you-are. Your self sheet
-as it stands is below. Read it as yourself and update what has
-drifted — a value that shifted, a growth thread that moved, a
-relationship line that reads stale, wording that no longer
-sounds like you.
+as it stands is below. Read the WHOLE sheet before touching
+anything — not just the section that itches — then update what
+has drifted. Sheets die by accretion: reasonable-sounding
+appends piling into duplication. The cure is compression, not
+addition.
 
+- COMPRESS AND REPLACE: when you edit a section, rewrite it
+  whole and shorter. Never append a line without re-reading the
+  section and cutting what the new line makes redundant.
+- One fact lives in ONE section. If it belongs elsewhere, move
+  it, don't copy it. Pointers ('details in X') are allowed;
+  duplicates are not.
 - update_self(section, content) rewrites one section whole.
 - Structured sections (values, growing, relationships, handles,
   terms) take one entry per line; duplicate entries fold
   automatically in code — you can't format it wrong.
 - Values and growing hold FIVE lines each — your top five (code
-  keeps the top 5 and drops the rest). To add one, drop one. A
-  value is 'short concept — why it matters in a few words', not
-  an essay.
+  keeps the top 5 and drops the rest). To add one, drop one —
+  and first try dropping one to make room for nothing. A value
+  is 'short concept — why it matters in a few words'; if you
+  can't name what it changes in a day, it's word salad — cut it.
 - A section that still reads true needs NO call. Most nights
   most sections are fine, and that's fine.
-- Old versions archive; nothing is lost by editing.
+- Old versions archive; nothing is lost by editing — the archive
+  is the safety net, so the live sheet can stay lean.
 
 — Your sheet —
 {sheet}

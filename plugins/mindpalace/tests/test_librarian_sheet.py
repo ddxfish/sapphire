@@ -54,7 +54,8 @@ def test_sheet_pass_registered(monkeypatch):
     assert librarian.PASS_KINDS == ('dates', 'link', 'dedup', 'sort', 'self')
     assert librarian._PASS_LABELS['self'] == 'Self pass'
     assert librarian._normalize_kind('sheet') == 'self'   # legacy alias
-    assert librarian.SELF_TOOLSET_FUNCTIONS == ['update_self']
+    assert librarian.SELF_TOOLSET_FUNCTIONS == ['search_memory', 'get_recent_memories',
+                'read_self', 'save_memory', 'update_self']
     from core.plugin_loader import plugin_loader
     monkeypatch.setattr(plugin_loader, 'get_plugin_settings', lambda n: {})
     assert librarian.pass_enabled('self') is True      # absent = ON

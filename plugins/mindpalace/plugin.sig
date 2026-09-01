@@ -23,7 +23,7 @@
     "tests/test_keyed_containment.py": "sha256:772b350624386d4f9e6e08c6fe4e59da83e080d7d99113b1b379d16beb89d8b6",
     "tests/test_librarian_drain.py": "sha256:b1cfcfd254880d0840375d6d88a453c0403410de7f3df9371d32a796810f5926",
     "tests/test_librarian_hardening.py": "sha256:05ae4d4fe5e366dc2bc06760174fc743f24161005c4b4586d96e300b0c30a3ab",
-    "tests/test_librarian_sheet.py": "sha256:84e6261a9b792f235918ebfed68371264d7517a9c41db837e8fad487206b1e10",
+    "tests/test_librarian_sheet.py": "sha256:ed65ec58b896a22517ab5838b7a97f2ebfcbc37d0da85c39fd8e9ce293f7b498",
     "tests/test_library.py": "sha256:020ce57cd58af6080e0f3bc506a1cd1c073f2e00637894557464be65af15cdf2",
     "tests/test_library_export.py": "sha256:cf972e1355fa5e748f9a3d9133dc4d29aaeff18994571d85283e85c6d88a62a5",
     "tests/test_mindpalace.py": "sha256:e96b30ccb16daad494f1c670cbedb817bae8e52e1b175cdceba9c000ef3ceeec",
@@ -33,7 +33,7 @@
     "tests/test_mindpalace_knowledge.py": "sha256:d1c95405ee4e45484049f89a7b4dae0463596e34d0ffebaa658858dfed727467",
     "tests/test_mindpalace_layers.py": "sha256:ff7a5bf036ab8e7404ad90b3d7f11c752ac7dfdcba76d80fc47194c9cb4dd9c1",
     "tests/test_mindpalace_ledger.py": "sha256:fdefeccee5d891ab4620d048738df7e86de86a3a9f819a7042cbc87e07ff73f2",
-    "tests/test_mindpalace_librarian.py": "sha256:59b4b3b1ab59f3762f448737b6549de2c282964ff73910df3b8e74c1773d505d",
+    "tests/test_mindpalace_librarian.py": "sha256:4a7942b27ec015b12bb94fbdb7a5bdbb1a024cacac0355ec1c33474f767d148c",
     "tests/test_mindpalace_maintenance.py": "sha256:7b5e08447811f2dff1493f96684f796fe6061a6d30c953dd49b64f9b34bbf48c",
     "tests/test_mindpalace_metadata.py": "sha256:719b22eecb0e4005fb15fa688178576f630b764dc848ac524a41bde655c4a7cf",
     "tests/test_mindpalace_self.py": "sha256:9e23cc366e67d36033f4066f7dd1fd135479d7f5e979e8de71a29fb59e1dc4c0",
@@ -54,7 +54,7 @@
     "tools/importance_report.py": "sha256:4443411245e56a0d6420af1748331736610809a2dd2c65beb868a37fa46c703d",
     "tools/layer_api.py": "sha256:4e54a5613540f13f60cd400ff33d8d9b36aa5b7f07432b5a54665887191ef855",
     "tools/ledger.py": "sha256:b375a4ccbc35055c70711da19a78d36e60bd49be3cd890b959579bf5fac17f30",
-    "tools/librarian.py": "sha256:54014db5719c7b840fa780c97c02ad3f0450e91bb799c7388943e842652cccf2",
+    "tools/librarian.py": "sha256:397b718010264d42e5222e0d322710e6de4f247b39e5237f1ce1100c4c563386",
     "tools/librarian_tools.py": "sha256:791b5c535c586807f4acfa95bfa5883c8e862644c22001ff51256858db076a5f",
     "tools/library.py": "sha256:21ddf3f16d085ed79d973abde8cc1a2add0b41b0552b2aad2e0747e9d52ef89c",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
@@ -67,5 +67,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "O1LU77ym09UdebrF/zc9jOE2Mr20+IoPVIUL78ZGZ8iVr0H0kDiwUG0uP0nluKKq4yycbPPs6o/Lddut69i8Dw=="
+  "signature": "Jia0aKeJ5DbjDlXjY+Gt25kzL0UEe/TNsAPZTecty6LQTOmwC/zQYMbSMxPMLDeJpb7JAHGT8/zN6eudEXapDQ=="
 }
