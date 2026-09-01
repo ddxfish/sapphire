@@ -5,6 +5,8 @@ import hashlib
 
 import requests
 
+from core import net
+
 CHUNK = 1024 * 1024
 
 
@@ -24,7 +26,7 @@ def _headers(acct, extra=None):
 
 
 def health(server_url, timeout=10):
-    r = requests.get(f"{server_url}/health", timeout=timeout)
+    r = net.get(f"{server_url}/health", timeout=timeout)
     r.raise_for_status()
     return r.json()
 
@@ -35,14 +37,14 @@ def upload(acct, blob_path, cadence, comment="", timeout=600):
     if comment:
         headers["X-Comment"] = comment
     with open(blob_path, "rb") as body:
-        r = requests.post(f"{acct['server_url']}/v1/backup", params={"cadence": cadence},
+        r = net.post(f"{acct['server_url']}/v1/backup", params={"cadence": cadence},
                           headers=headers, data=body, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
 
 def list_backups(acct, timeout=30):
-    r = requests.get(f"{acct['server_url']}/v1/backups", headers=_headers(acct), timeout=timeout)
+    r = net.get(f"{acct['server_url']}/v1/backups", headers=_headers(acct), timeout=timeout)
     r.raise_for_status()
     return r.json()
 
@@ -53,7 +55,7 @@ def download(acct, out_path, backup_id=None, cadence=None, timeout=600):
         url, params = f"{acct['server_url']}/v1/backup/{backup_id}", {}
     else:
         url, params = f"{acct['server_url']}/v1/backup/latest", ({"cadence": cadence} if cadence else {})
-    with requests.get(url, params=params, headers=_headers(acct), stream=True, timeout=timeout) as r:
+    with net.get(url, params=params, headers=_headers(acct), stream=True, timeout=timeout) as r:
         r.raise_for_status()
         expected = r.headers.get("X-Content-SHA256")
         h = hashlib.sha256()
@@ -68,6 +70,6 @@ def download(acct, out_path, backup_id=None, cadence=None, timeout=600):
 
 
 def delete(acct, backup_id, timeout=30):
-    r = requests.delete(f"{acct['server_url']}/v1/backup/{backup_id}", headers=_headers(acct), timeout=timeout)
+    r = net.delete(f"{acct['server_url']}/v1/backup/{backup_id}", headers=_headers(acct), timeout=timeout)
     r.raise_for_status()
     return r.json()

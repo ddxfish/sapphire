@@ -203,8 +203,9 @@ def execute(function_name, arguments, config=None, plugin_settings=None, credent
 def _call_sdserver(api_url, payload, timeout):
     """POST to sd-server's A1111-compatible txt2img. Returns image bytes or raises."""
     import requests
+    from core import net
     url = api_url.rstrip("/") + "/sdapi/v1/txt2img"
-    resp = requests.post(url, json=payload, timeout=timeout)
+    resp = net.post(url, json=payload, timeout=timeout)
     if resp.status_code != 200:
         raise RuntimeError(f"sd-server {resp.status_code}: {resp.text[:200]}")
     data = resp.json()

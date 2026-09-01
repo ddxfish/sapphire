@@ -1,6 +1,8 @@
 # Image Generation — SDXL scene rendering with character descriptions
 
 import requests
+
+from core import net
 import logging
 import json
 import os
@@ -117,7 +119,7 @@ def _call_sdxl_api(prompt, original_description, settings):
     logger.info(f"Sending SDXL request to {api_url}: {enhanced_prompt[:100]}...")
 
     try:
-        response = requests.post(f"{api_url}/generate", json=payload, timeout=120)
+        response = net.post(f"{api_url}/generate", json=payload, timeout=120)
 
         if response.status_code != 200:
             return f"SDXL API error: {response.status_code} - {response.text}", False, None

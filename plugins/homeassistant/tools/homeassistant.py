@@ -1,6 +1,9 @@
 # Home Assistant Integration — plugin tool
 
+from urllib.parse import urlsplit
 import requests
+
+from core import net
 import logging
 import json
 import os
@@ -286,6 +289,21 @@ def _load_settings():
         return DEFAULTS.copy()
 
 
+def _ha_direct_hosts():
+    # HA endpoint host -> proxy bypass registry (net facade, 2026-09-01).
+    try:
+        h = urlsplit(_load_settings().get('url') or '').hostname
+        return {h} if h else ()
+    except Exception:
+        return ()
+
+
+try:
+    from core.socks_proxy import register_direct_hosts as _rdh
+    _rdh(_ha_direct_hosts)
+except Exception as _reg_e:
+    logger.debug(f'direct-host registration skipped: {_reg_e}')
+
 def _get_token():
     """Get HA token from credentials manager."""
     try:
@@ -329,7 +347,7 @@ def _get_all_entities(settings: dict) -> dict:
     
     try:
         # Get all states
-        response = requests.get(f"{url}/api/states", headers=headers, timeout=15)
+        response = net.get(f"{url}/api/states", headers=headers, timeout=15)
         if response.status_code != 200:
             return {"error": f"HA API error: HTTP {response.status_code}"}
         
@@ -342,7 +360,7 @@ def _get_all_entities(settings: dict) -> dict:
         
         try:
             # Get all area names
-            template_resp = requests.post(
+            template_resp = net.post(
                 f"{url}/api/template",
                 headers=headers,
                 json={"template": "{% for area in areas() %}{{ area_name(area) }}||{% endfor %}"},
@@ -376,7 +394,7 @@ def _get_all_entities(settings: dict) -> dict:
                     
                     template = "||".join(template_parts)
                     
-                    resp = requests.post(
+                    resp = net.post(
                         f"{url}/api/template",
                         headers=headers,
                         json={"template": template},
@@ -452,7 +470,7 @@ def _call_ha_service(domain: str, service: str, data: dict, settings: dict, **_k
         return "No HA token configured", False
     
     try:
-        response = requests.post(
+        response = net.post(
             f"{url}/api/services/{domain}/{service}",
             headers=headers,
             json=data,
@@ -848,7 +866,7 @@ def _notify(message: str, title: str, settings: dict) -> tuple:
         endpoint = f"{url}/api/services/notify/{notify_service}"
         logger.info(f"HA notify: calling {endpoint}")
         
-        response = requests.post(
+        response = net.post(
             endpoint,
             headers=headers,
             json=service_data,
@@ -1051,7 +1069,7 @@ def _get_camera_image(entity_id: str, settings: dict):
         return "No HA token configured", False
 
     try:
-        response = requests.get(
+        response = net.get(
             f"{url}/api/camera_proxy/{entity_id}",
             headers=headers,
             timeout=15

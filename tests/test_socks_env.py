@@ -206,3 +206,41 @@ def test_status_reports_remote_dns(socks_on):
     st = sp.proxy_status()
     assert st["remote_dns"] is False
     assert st["dns_via_proxy"] is False
+
+
+# ── LAN belt + direct-host registry (net facade, 2026-09-01) ─────────────
+
+def test_no_proxy_lan_belt(socks_on):
+    """RFC1918 CIDRs + LAN suffixes always ride NO_PROXY while SOCKS is on
+    (the Prime blinds class: a remote proxy can't dial into the LAN)."""
+    sp.apply_proxy_env()
+    entries = os.environ["NO_PROXY"].split(",")
+    for e in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+              "169.254.0.0/16", ".local", ".lan", ".home.arpa"):
+        assert e in entries, e
+
+
+def test_no_proxy_includes_registered_direct_hosts(socks_on):
+    fn = lambda: {"sapphire-pi", "Camera-Hub."}
+    sp.register_direct_hosts(fn)
+    try:
+        sp.apply_proxy_env()
+        entries = os.environ["NO_PROXY"].split(",")
+        assert "sapphire-pi" in entries
+        assert "camera-hub" in entries        # normalized: lowercase, dot-stripped
+    finally:
+        sp._direct_host_providers.remove(fn)
+
+
+def test_direct_hosts_provider_failure_tolerated(socks_on):
+    bad = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    good = lambda: ["pi-two"]
+    sp.register_direct_hosts(bad)
+    sp.register_direct_hosts(good)
+    try:
+        assert "pi-two" in sp.direct_hosts()
+        sp.apply_proxy_env()                  # derivation survives the bad one
+        assert "pi-two" in os.environ["NO_PROXY"].split(",")
+    finally:
+        sp._direct_host_providers.remove(bad)
+        sp._direct_host_providers.remove(good)

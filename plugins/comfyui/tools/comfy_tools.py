@@ -219,6 +219,7 @@ def _exec_list_workflows():
 
 def _exec_generate(arguments, plugin_settings=None):
     import requests
+    from core import net
 
     prompt_text = arguments.get("prompt", "").strip()
     if not prompt_text:
@@ -255,12 +256,12 @@ def _exec_generate(arguments, plugin_settings=None):
     try:
         # Check if ComfyUI is running
         try:
-            requests.get(f"{comfy_url}/system_stats", timeout=3)
+            net.get(f"{comfy_url}/system_stats", timeout=3)
         except Exception:
             return f"ComfyUI not reachable at {comfy_url}. Make sure it's running.", False
 
         # Submit workflow
-        resp = requests.post(
+        resp = net.post(
             f"{comfy_url}/prompt",
             json={"prompt": workflow},
             timeout=10,
@@ -284,7 +285,7 @@ def _exec_generate(arguments, plugin_settings=None):
             time.sleep(poll_interval)
             elapsed += poll_interval
 
-            hist_resp = requests.get(f"{comfy_url}/history/{prompt_id}", timeout=10)
+            hist_resp = net.get(f"{comfy_url}/history/{prompt_id}", timeout=10)
             if hist_resp.status_code != 200:
                 continue
 
@@ -320,7 +321,7 @@ def _exec_generate(arguments, plugin_settings=None):
                 params = {"filename": filename, "type": img_type}
                 if subfolder:
                     params["subfolder"] = subfolder
-                img_resp = requests.get(f"{comfy_url}/view", params=params, timeout=30)
+                img_resp = net.get(f"{comfy_url}/view", params=params, timeout=30)
                 if img_resp.status_code == 200:
                     image_data = img_resp.content
                     break

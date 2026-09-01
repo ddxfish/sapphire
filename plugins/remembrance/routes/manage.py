@@ -126,6 +126,7 @@ def download_blob(backup_id=None, **_):
     write, so it never lands in user/ and can't cause a backup loop. The user
     decrypts locally with tools/decrypt_backup.py."""
     import requests
+    from core import net
     from fastapi.responses import JSONResponse, StreamingResponse
     from plugins.remembrance import ops
     if not backup_id:
@@ -134,7 +135,7 @@ def download_blob(backup_id=None, **_):
     if not acct:
         return JSONResponse({"ok": False, "error": "not configured"}, status_code=400)
     try:
-        r = requests.get(f"{acct['server_url']}/v1/backup/{backup_id}",
+        r = net.get(f"{acct['server_url']}/v1/backup/{backup_id}",
                          headers={"X-Tenant-Id": acct["tenant_id"], "X-Api-Key": acct["api_key"]},
                          stream=True, timeout=600)
         r.raise_for_status()

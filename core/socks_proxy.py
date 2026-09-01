@@ -180,6 +180,38 @@ def register_invalidator(fn):
         _invalidators.append(fn)
 
 
+# Direct-host registry (net facade, 2026-09-01): components register a
+# zero-arg callable returning hostnames they must reach WITHOUT the proxy
+# (LAN gear a remote proxy can't dial — the Prime blinds class). Consumed
+# by build_no_proxy() (the env belt for unmigrated raw-requests callers)
+# and core.net.classify() (the facade's lane pick). Providers are called
+# lazily on every derivation, so they should read live settings each time.
+_direct_host_providers = []
+
+
+def register_direct_hosts(fn):
+    """Register a zero-arg callable -> iterable of hostnames/IPs that must
+    always bypass the proxy. Idempotent per callable."""
+    if fn not in _direct_host_providers:
+        _direct_host_providers.append(fn)
+
+
+def direct_hosts() -> set:
+    """Union of all registered providers' hosts, normalized lowercase.
+    A failing provider is skipped — never let one plugin's bad settings
+    kill the derivation for everyone."""
+    hosts = set()
+    for fn in list(_direct_host_providers):
+        try:
+            for h in (fn() or ()):
+                h = str(h).strip().lower().rstrip('.')
+                if h:
+                    hosts.add(h)
+        except Exception as e:
+            logger.debug(f"direct-host provider {getattr(fn, '__name__', fn)} failed: {e}")
+    return hosts
+
+
 def _scheme() -> str:
     """socks5h (DNS via proxy — no local leak) unless the proxy cannot resolve
     names server-side: SOCKS_REMOTE_DNS=false falls back to socks5 (local
@@ -233,6 +265,15 @@ def build_no_proxy() -> str:
     routing is opted out) + user extras (SOCKS_NO_PROXY_EXTRA, for LAN gear
     like Home Assistant that core can't enumerate)."""
     entries = ['localhost', '127.0.0.1', '::1']
+    # LAN belt (2026-09-01, the Prime blinds class): a remote proxy can
+    # never reach these. CIDRs are honored by the requests lane for
+    # IPv4-literal URLs (requests/utils.py should_bypass_proxies); inert
+    # but harmless in httpx/urllib. Suffixes match in requests (endswith)
+    # AND httpx (wildcard mounts). Registered direct hosts cover LAN gear
+    # with real names (e.g. 'sapphire-pi') for unmigrated callers.
+    entries += ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+                '169.254.0.0/16', '.local', '.lan', '.home.arpa']
+    entries += sorted(direct_hosts())
     route_llm = bool(getattr(config, 'SOCKS_ROUTE_LLM', False))
     entries += sorted(_llm_hosts(include_cloud=not route_llm))
     extra = getattr(config, 'SOCKS_NO_PROXY_EXTRA', '') or ''

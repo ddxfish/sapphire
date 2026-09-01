@@ -33,6 +33,7 @@ async def test_connection(**kwargs):
     it's connected. Only a connection error / timeout is a real failure. (We don't
     assume a specific API path — builds differ; generation uses /sdapi/v1/txt2img.)"""
     import requests
+    from core import net
 
     request = kwargs.get("request")
     url = ""
@@ -50,7 +51,7 @@ async def test_connection(**kwargs):
     base = url.rstrip("/")
     try:
         # Any HTTP response means the host:port is alive and serving sd-server.
-        requests.get(base + "/", timeout=6)
+        net.get(base + "/", timeout=6)
         return {"success": True}
     except requests.exceptions.ConnectionError:
         return {"success": False, "error": "Could not connect (server down or wrong host/port?)"}
