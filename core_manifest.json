@@ -9,7 +9,7 @@
     "Dockerfile": "c59d556368c60e582e078f092f6c74d4c698fe9021df3b4d0a171137606c6a2b",
     "LICENSE": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
     "README.md": "a25278ca3aaf69ebc6dac74e3d027440233c0f4a60bbabbb5585a4dcfd2aeea4",
-    "VERSION": "219b022fce94fd54d095d807954ada0e922a361e6decfe5ce56f3ec44b56d482",
+    "VERSION": "7814c427ea0c33c2ccba4b42edbc3b01c12516f85492043fa647fc7967e5ee16",
     "config.py": "6bfc07eef0b8e33805cbf177587e087e4eb7a2459c13e0401d9f1821e8c1facb",
     "core/agents/__init__.py": "423d4b6f51e3573e3d381923a27376a1e27c746c0ac8b18125246ca7573b495c",
     "core/agents/base_worker.py": "ea803aef0414c2317866aa1203aa6361fa9e950abdcf459e396110405ea80645",
@@ -171,7 +171,7 @@
     "docs/AGENTS.md": "a262656224d518ec46ad7fbe4dae822618e48e43a4192c85356c4d101a081956",
     "docs/API.md": "b8f9dcb8181e83cd0c8f8816ffd86dd75107c7f1c280b4d335a7eb1bfa3287df",
     "docs/BACKUPS.md": "2fb87041d8d867dd1ce709a9a2123093356becca5bdf80eb5d39fd5938080f38",
-    "docs/CHANGELOG.md": "ba84ef1699fab05dfe9185776c7a71b315ea66f9dc2906ada2dad00e69344816",
+    "docs/CHANGELOG.md": "1015161a6346242bbe68cf13cf77ef34eec6c5036ee30453358c93395f1ab217",
     "docs/CONTINUITY.md": "f97ebbcb2fc5219a4d0e0e84e4b12861a62b3808efb7a3e6182e70980f6434fa",
     "docs/COSTS.md": "2d23cd40a11419bfef2abf2c5e41869ab62b86675a6d011fe475dff2ba26fa32",
     "docs/DAEMONS-WEBHOOKS.md": "2cdb547b02770805fc35924275c3841a6df3e182464c1ba4b62c3bbb2f2a0552",
@@ -1019,5 +1019,5 @@
     "tools/tts_benchmark.py": "991e395a4d093362da854dbb69610823bb54d0be295cfaf6e8bd6d3bb889d625",
     "tools/verify_chat_storage.py": "8e69ed4b9ed9641b6989848cdd0d17a7bfcfb1c1377bf352873bd2c383c5c9f5"
   },
-  "version": "2.12.5"
+  "version": "2.12.6"
 }
