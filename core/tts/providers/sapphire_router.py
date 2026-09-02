@@ -50,6 +50,11 @@ class SapphireRouterTTSProvider(BaseTTSProvider):
                 headers=headers,
                 timeout=30.0,
             )
+            if 300 <= resp.status_code < 400:
+                logger.error(f"Sapphire Router TTS: router redirected ({resp.status_code}) — "
+                             f"LAN redirects are refused by policy; check SAPPHIRE_ROUTER_URL "
+                             f"for a trailing-slash/path mismatch")
+                return None
             resp.raise_for_status()
             if resp.headers.get('content-type', '').startswith('audio/'):
                 return resp.content

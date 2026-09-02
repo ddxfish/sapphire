@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from urllib.parse import quote, urlsplit
 
 import config
@@ -14,7 +15,8 @@ from core.setup import get_socks_credentials, CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 
-_cached_session = None
+_auth_checked = False   # SOCKS auth pre-flight latch (C fold; reset on settings change)
+_env_lock = threading.Lock()   # apply_proxy_env is called from many threads (H6)
 
 
 class SocksAuthError(Exception):
@@ -27,8 +29,9 @@ def clear_session_cache():
     invalidators (httpx pools etc.). This is the one choke point every SOCKS
     settings change already calls (the N2 sites), so env + pools follow the
     session cache for free. SOCKS-for-all, 2026-08-31."""
-    global _cached_session
-    _cached_session = None
+    global _auth_checked
+    _auth_checked = False
+    _dh_cache_invalidate()
     try:
         apply_proxy_env()
     except Exception as e:
@@ -83,12 +86,9 @@ def get_session():
         SocksAuthError: If SOCKS5 auth fails after retry
         ValueError: If SOCKS5 enabled but credentials missing
     """
-    global _cached_session
+    global _auth_checked
 
-    if _cached_session:
-        return _cached_session
-
-    if config.SOCKS_ENABLED:
+    if config.SOCKS_ENABLED and not _auth_checked:
         username, password = get_socks_credentials()
 
         if not username or not password:
@@ -111,8 +111,7 @@ def get_session():
             _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
 
         logger.info(f"SOCKS5 enabled: {config.SOCKS_HOST}:{config.SOCKS_PORT}")
-    else:
-        logger.info("SOCKS5 disabled, using direct connection")
+        _auth_checked = True
 
     # C fold (2026-09-01): delegate to core.net's WAN browser session.
     # The process env (apply_proxy_env) is the single proxy source now
@@ -120,9 +119,11 @@ def get_session():
     # Chrome headers live in net._BROWSER_HEADERS. The SOCKS auth
     # pre-flight above is preserved (learn-once clear error on bad
     # creds). Plan: tmp/net-facade-plan.md
+    # H5 fix: LATCH, not cache — caching the session here raced
+    # net._invalidate and pinned a stale pool through a proxy the
+    # user had turned OFF. Only the auth pre-flight is memoized.
     from core import net
-    _cached_session = net.wan_session(profile='browser')
-    return _cached_session
+    return net.wan_session(profile='browser')
 
 # ============================================================================
 # SOCKS-for-all: process-wide proxy env (2026-08-31)
@@ -159,29 +160,71 @@ def register_invalidator(fn):
 # by build_no_proxy() (the env belt for unmigrated raw-requests callers)
 # and core.net.classify() (the facade's lane pick). Providers are called
 # lazily on every derivation, so they should read live settings each time.
-_direct_host_providers = []
+_direct_host_providers = {}   # owner -> zero-arg callable. OWNER-KEYED so a
+                              # plugin reload REPLACES its entry instead of
+                              # appending a stale closure (+1 per reload,
+                              # forever — longevity/day-ruiner find 2026-09-01)
+_dh_warned = set()            # owners warned this config cycle
+_dh_cache = set()
+_dh_cache_ts = 0.0
+_DH_TTL = 5.0                 # hot path: classify() consults per WAN request,
+                              # and providers read settings FILES each call
 
 
-def register_direct_hosts(fn):
-    """Register a zero-arg callable -> iterable of hostnames/IPs that must
-    always bypass the proxy. Idempotent per callable."""
-    if fn not in _direct_host_providers:
-        _direct_host_providers.append(fn)
+def _dh_cache_invalidate():
+    global _dh_cache, _dh_cache_ts
+    _dh_cache = set()
+    _dh_cache_ts = 0.0
+    _dh_warned.clear()
+
+
+def register_direct_hosts(fn, owner=None):
+    """Register a zero-arg callable -> iterable of hostname STRINGS that
+    must always bypass the proxy. Keyed by `owner` (plugin name): a
+    reload replaces, never accumulates. unload_plugin and the refusal
+    unwind call unregister_direct_hosts(owner)."""
+    _direct_host_providers[owner or getattr(fn, '__module__', repr(fn))] = fn
+    _dh_cache_invalidate()
+
+
+def unregister_direct_hosts(owner):
+    """Drop a plugin's provider (unload / refusal-unwind leg)."""
+    if _direct_host_providers.pop(owner, None) is not None:
+        _dh_cache_invalidate()
 
 
 def direct_hosts() -> set:
-    """Union of all registered providers' hosts, normalized lowercase.
-    A failing provider is skipped — never let one plugin's bad settings
-    kill the derivation for everyone."""
+    """Union of all providers' hosts, normalized lowercase, cached _DH_TTL
+    seconds. A failing provider is skipped — fail-closed, its hosts ride
+    the proxy — and WARNED once per config cycle (silence here caused a
+    6-minute outage once). A bare-string return counts as ONE host, never
+    iterated into characters (chaos F2: a string provider exploded into
+    single-char NO_PROXY entries that bypassed whole TLDs)."""
+    global _dh_cache, _dh_cache_ts
+    now = time.monotonic()
+    if now - _dh_cache_ts < _DH_TTL:
+        return _dh_cache
     hosts = set()
-    for fn in list(_direct_host_providers):
+    for owner, fn in list(_direct_host_providers.items()):
         try:
-            for h in (fn() or ()):
-                h = str(h).strip().lower().rstrip('.')
+            raw = fn() or ()
+            if isinstance(raw, (str, bytes)):
+                raw = (raw,)
+            for h in raw:
+                if not isinstance(h, str):
+                    if owner not in _dh_warned:
+                        _dh_warned.add(owner)
+                        logger.warning(f"direct-host provider '{owner}' yielded non-string {h!r} — skipped")
+                    continue
+                h = h.strip().lower().rstrip('.')
                 if h:
                     hosts.add(h)
         except Exception as e:
-            logger.debug(f"direct-host provider {getattr(fn, '__name__', fn)} failed: {e}")
+            if owner not in _dh_warned:
+                _dh_warned.add(owner)
+                logger.warning(f"direct-host provider '{owner}' failed — its hosts will ride the proxy: {e}")
+    _dh_cache = hosts
+    _dh_cache_ts = now
     return hosts
 
 
@@ -225,7 +268,14 @@ def _llm_hosts(include_cloud: bool) -> set:
     for key, cfg in provs.items():
         if not isinstance(cfg, dict):
             continue
-        host = urlsplit(cfg.get('base_url') or '').hostname
+        try:
+            host = urlsplit(cfg.get('base_url') or '').hostname
+        except ValueError as e:
+            # One malformed base_url aborting apply_proxy_env = env never
+            # stamped = every lane DIRECT while the UI says SOCKS on
+            # (day-ruiner CRIT, 2026-09-01). Skip the bad one, keep going.
+            logger.warning(f"LLM provider '{key}' has unparseable base_url — skipped in NO_PROXY: {e}")
+            continue
         if host and (include_cloud or _host_is_lan(host)):
             hosts.add(host)
         if include_cloud and key in _CORE_LLM_HOSTS:
@@ -289,8 +339,15 @@ def _push_network_load_error(msg: str, hint: str):
 
 def apply_proxy_env() -> None:
     """Stamp process-wide proxy env from settings (see module note above).
-    Called at boot (sapphire.py, before anything spawns or dials out) and on
-    every SOCKS settings change via clear_session_cache."""
+    Called at boot (sapphire.py, before anything spawns or dials out),
+    after plugin scan, and on every SOCKS settings change via
+    clear_session_cache. Serialized: six live call sites on different
+    threads could interleave a mixed env (H6)."""
+    with _env_lock:
+        _apply_proxy_env_inner()
+
+
+def _apply_proxy_env_inner() -> None:
     _env_warnings.clear()
     _drop_network_load_errors()
     if not getattr(config, 'SOCKS_ENABLED', False):
@@ -298,7 +355,13 @@ def apply_proxy_env() -> None:
             os.environ.pop(var, None)
             os.environ.pop(var.lower(), None)
         return
-    username, password = get_socks_credentials()
+    try:
+        username, password = get_socks_credentials()
+    except Exception as e:
+        # Fail-closed: unreadable creds -> stamp env WITHOUT auth (the
+        # proxy refuses = loud), never abort derivation (= fail-open).
+        logger.error(f"get_socks_credentials failed — stamping proxy env without auth: {e}")
+        username, password = '', ''
     auth = ''
     if username or password:
         auth = f"{quote(username or '', safe='')}:{quote(password or '', safe='')}@"
@@ -308,11 +371,14 @@ def apply_proxy_env() -> None:
             "fail until set (traffic never falls back to direct)")
     proxy = f"{_scheme()}://{auth}{config.SOCKS_HOST}:{config.SOCKS_PORT}"
     no_proxy = build_no_proxy()
+    # NO_PROXY FIRST: in the stamp window a belt-lane caller hitting LAN
+    # gear must see the bypass before it can see a proxy (H6 — reverse
+    # order reopened the blinds window for the raw-requests lane).
+    os.environ['NO_PROXY'] = no_proxy
+    os.environ['no_proxy'] = no_proxy
     for var in _PROXY_VARS:
         os.environ[var] = proxy
         os.environ[var.lower()] = proxy
-    os.environ['NO_PROXY'] = no_proxy
-    os.environ['no_proxy'] = no_proxy
     try:
         import socksio  # noqa: F401 — httpx's SOCKS backend
     except ImportError:

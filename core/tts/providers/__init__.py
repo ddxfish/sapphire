@@ -13,9 +13,16 @@ class TTSProviderRegistry(BaseProviderRegistry):
     def __init__(self):
         super().__init__('tts', 'TTS_PROVIDER')
         # Core providers
-        from .kokoro import KokoroTTSProvider
         from .null import NullTTSProvider
-        self.register_core('kokoro', KokoroTTSProvider, 'Kokoro (Local)', is_local=True)
+        # Guarded: a broken/missing provider module must degrade to
+        # "provider unavailable", never kill boot (day-ruiner CRIT,
+        # 2026-09-01: kokoro's `from core import net` made this registry
+        # a boot chokepoint). Null stays unguarded — it IS the fallback.
+        try:
+            from .kokoro import KokoroTTSProvider
+            self.register_core('kokoro', KokoroTTSProvider, 'Kokoro (Local)', is_local=True)
+        except Exception as e:
+            logger.error(f"[tts] core provider 'kokoro' unavailable — continuing without it: {e}")
         self.register_core('none', NullTTSProvider, 'None (disabled)', is_local=True)
 
     def create(self, key, **kwargs):

@@ -300,7 +300,7 @@ def _ha_direct_hosts():
 
 try:
     from core.socks_proxy import register_direct_hosts as _rdh
-    _rdh(_ha_direct_hosts)
+    _rdh(_ha_direct_hosts, owner='homeassistant')
 except Exception as _reg_e:
     logger.debug(f'direct-host registration skipped: {_reg_e}')
 

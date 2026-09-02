@@ -21,20 +21,34 @@ class STTProviderRegistry(BaseProviderRegistry):
         if self._core_registered:
             return
         self._core_registered = True
-        from core.stt.providers.faster_whisper import FasterWhisperProvider
-        from core.stt.providers.fireworks_whisper import FireworksWhisperProvider
-        from core.stt.providers.sapphire_router import SapphireRouterSTTProvider
         from core.stt.stt_null import NullWhisperClient
-        self.register_core('faster_whisper', FasterWhisperProvider, 'Faster Whisper (Local)',
-                          is_local=True)
-        self.register_core('fireworks_whisper', FireworksWhisperProvider, 'Fireworks Whisper (Cloud)',
-                          requires_api_key=True, api_key_env='STT_FIREWORKS_API_KEY',
-                          is_local=False)  # explicit — was implicit-False; the privacy gate reads this
+        # Each real provider guarded individually: a broken module (e.g.
+        # sapphire_router's `from core import net`) must cost ONE registry
+        # entry, never the boot — before this, a user on faster_whisper had
+        # boot gated on a module they never use (day-ruiner CRIT,
+        # 2026-09-01). Null stays unguarded — it IS the fallback.
+        try:
+            from core.stt.providers.faster_whisper import FasterWhisperProvider
+            self.register_core('faster_whisper', FasterWhisperProvider, 'Faster Whisper (Local)',
+                              is_local=True)
+        except Exception as e:
+            logger.error(f"[stt] core provider 'faster_whisper' unavailable: {e}")
+        try:
+            from core.stt.providers.fireworks_whisper import FireworksWhisperProvider
+            self.register_core('fireworks_whisper', FireworksWhisperProvider, 'Fireworks Whisper (Cloud)',
+                              requires_api_key=True, api_key_env='STT_FIREWORKS_API_KEY',
+                              is_local=False)  # explicit — was implicit-False; the privacy gate reads this
+        except Exception as e:
+            logger.error(f"[stt] core provider 'fireworks_whisper' unavailable: {e}")
         # Sapphire Router — managed-mode cloud STT. sapphire.py branches on
         # provider=='sapphire_router' but was never registered here, so flipping
         # STT_PROVIDER to it silently landed on NullWhisperClient. H6 fix.
-        self.register_core('sapphire_router', SapphireRouterSTTProvider, 'Sapphire Router (Managed)',
-                          is_local=False)
+        try:
+            from core.stt.providers.sapphire_router import SapphireRouterSTTProvider
+            self.register_core('sapphire_router', SapphireRouterSTTProvider, 'Sapphire Router (Managed)',
+                              is_local=False)
+        except Exception as e:
+            logger.error(f"[stt] core provider 'sapphire_router' unavailable: {e}")
         self.register_core('none', NullWhisperClient, 'None (disabled)', is_local=True)
 
     def get_all(self):

@@ -42,6 +42,11 @@ class SapphireRouterSTTProvider(BaseSTTProvider):
                     headers=headers,
                     timeout=30.0,
                 )
+            if 300 <= resp.status_code < 400:
+                logger.error(f"Sapphire Router STT: router redirected ({resp.status_code}) — "
+                             f"LAN redirects are refused by policy; check SAPPHIRE_ROUTER_URL "
+                             f"for a trailing-slash/path mismatch")
+                return None
             resp.raise_for_status()
             return resp.json().get('text', '').strip() or None
         except requests.exceptions.ConnectionError:

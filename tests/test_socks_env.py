@@ -222,25 +222,93 @@ def test_no_proxy_lan_belt(socks_on):
 
 def test_no_proxy_includes_registered_direct_hosts(socks_on):
     fn = lambda: {"sapphire-pi", "Camera-Hub."}
-    sp.register_direct_hosts(fn)
+    sp.register_direct_hosts(fn, owner='t-hosts')
     try:
         sp.apply_proxy_env()
         entries = os.environ["NO_PROXY"].split(",")
         assert "sapphire-pi" in entries
         assert "camera-hub" in entries        # normalized: lowercase, dot-stripped
     finally:
-        sp._direct_host_providers.remove(fn)
+        sp.unregister_direct_hosts('t-hosts')
 
 
 def test_direct_hosts_provider_failure_tolerated(socks_on):
     bad = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
     good = lambda: ["pi-two"]
-    sp.register_direct_hosts(bad)
-    sp.register_direct_hosts(good)
+    sp.register_direct_hosts(bad, owner='t-bad')
+    sp.register_direct_hosts(good, owner='t-good')
     try:
         assert "pi-two" in sp.direct_hosts()
         sp.apply_proxy_env()                  # derivation survives the bad one
         assert "pi-two" in os.environ["NO_PROXY"].split(",")
     finally:
-        sp._direct_host_providers.remove(bad)
-        sp._direct_host_providers.remove(good)
+        sp.unregister_direct_hosts('t-bad')
+        sp.unregister_direct_hosts('t-good')
+
+
+def test_direct_hosts_string_provider_counts_as_one(socks_on):
+    """Chaos F2: a bare-string return must be ONE host, never iterated
+    into single characters (which bypassed whole TLDs via endswith)."""
+    sp.register_direct_hosts(lambda: "Sapphire-Pi", owner='t-str')
+    try:
+        assert sp.direct_hosts() == {"sapphire-pi"}
+    finally:
+        sp.unregister_direct_hosts('t-str')
+
+
+def test_register_same_owner_replaces_not_accumulates(socks_on):
+    """Longevity find: plugin reload re-registers a NEW function object;
+    owner-keying must replace, not append a stale closure forever."""
+    sp.register_direct_hosts(lambda: {"a-host"}, owner='t-re')
+    sp.register_direct_hosts(lambda: {"b-host"}, owner='t-re')   # reload sim
+    try:
+        assert sp.direct_hosts() == {"b-host"}
+        assert list(sp._direct_host_providers).count('t-re') == 1
+    finally:
+        sp.unregister_direct_hosts('t-re')
+
+
+def test_bad_llm_base_url_never_aborts_derivation(socks_on):
+    """Day-ruiner CRIT: one malformed base_url raising out of
+    apply_proxy_env = env never stamped = every lane DIRECT while the
+    UI says SOCKS on. The bad provider is skipped; env still stamps."""
+    socks_on.setattr("core.settings_manager.settings", FakeSettings({
+        "LLM_CUSTOM_PROVIDERS": {
+            "broken": {"base_url": "http://[::1"},          # unparseable
+            "lanbox": {"base_url": "http://192.168.1.20:1234/v1"},
+        },
+    }))
+    sp.apply_proxy_env()                                    # must not raise
+    entries = os.environ["NO_PROXY"].split(",")
+    assert "192.168.1.20" in entries                        # good one survives
+    assert os.environ["ALL_PROXY"].startswith("socks5")     # env STAMPED
+
+
+def test_no_proxy_stamped_before_proxy_vars(socks_on, monkeypatch):
+    """H6: in the stamp window a belt-lane LAN call must see the bypass
+    before it can see a proxy. Record env-write order."""
+    order = []
+    real_setitem = os.environ.__class__.__setitem__
+    def spy(self, k, v):
+        order.append(k)
+        real_setitem(self, k, v)
+    monkeypatch.setattr(os.environ.__class__, '__setitem__', spy)
+    sp.apply_proxy_env()
+    keys = [k for k in order if k.upper() in ('NO_PROXY', 'ALL_PROXY')]
+    assert keys.index('NO_PROXY') < keys.index('ALL_PROXY')
+
+
+def test_auth_latch_resets_on_cache_clear(socks_on, monkeypatch):
+    """H5: get_session memoizes the AUTH CHECK (a latch), never the
+    session object — caching the session raced net._invalidate and
+    pinned a pool through a disabled proxy."""
+    calls = []
+    monkeypatch.setattr(sp, "_test_socks_auth",
+                        lambda *a, **k: calls.append(1) or True)
+    monkeypatch.setattr(sp, "_auth_checked", False)
+    s1 = sp.get_session()
+    s2 = sp.get_session()
+    assert len(calls) == 1 and s1 is s2       # latched, pooled
+    sp.clear_session_cache()
+    sp.get_session()
+    assert len(calls) == 2                    # re-checked exactly once

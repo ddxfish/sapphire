@@ -21,6 +21,13 @@ classify() is deliberately syntactic + registry — it NEVER resolves DNS
 socks5h promise, and would stall on dead DNS). Unknown shapes fail
 toward 'wan': the proxy lane is the safe default.
 
+Chaos-scout hardening (2026-09-01 hunt): dotless numeric/hex hosts
+('16843009' is 1.1.1.1 — glibc parses it with zero DNS) are decoded as
+IPv4 literals BEFORE the single-label rule so public IPs in disguise
+ride the proxy; unicode dot lookalikes count as dots (wan); zero-padded
+dotted quads ('192.168.001.005') are normalized; malformed URLs raise
+requests.exceptions.InvalidURL like the library this facade fronts.
+
 LAN redirects are refused by default (allow_redirects=False): a LAN
 device's 30x pointing at a WAN URL must not hop off-proxy silently. The
 caller sees the 30x response; pass allow_redirects=True to opt in.
@@ -31,7 +38,9 @@ The env belt (socks_proxy.apply_proxy_env) stays in force for raw
 `requests` callers that never adopt this facade — third-party plugins
 lose nothing. This module is the exact lane; the belt is the floor.
 """
+import ipaddress
 import logging
+import re
 import threading
 from urllib.parse import urlsplit
 
@@ -42,29 +51,78 @@ from core import socks_proxy
 logger = logging.getLogger(__name__)
 
 _LAN_SUFFIXES = ('.lan', '.home.arpa')   # .local/localhost live in _host_is_lan
+_UNICODE_DOTS = ('。', '．', '｡')   # 。 ． ｡ — IDNA maps to '.'
+_PADDED_V4 = re.compile(r'\d{1,3}(\.\d{1,3}){3}')
 
 
-def classify(host: str) -> str:
+def _dotless_ip(h: str):
+    """Decode a dotless IPv4 literal ('16843009', '0x08080808', octal
+    '017700000001') the way inet_aton does — WITHOUT touching DNS.
+    Returns an IPv4Address or None."""
+    try:
+        if h.startswith('0x'):
+            val = int(h, 16)
+        elif h.isdigit():
+            # inet_aton treats a leading zero as octal; match it so the
+            # lane matches where the socket actually connects.
+            val = int(h, 8) if (len(h) > 1 and h[0] == '0') else int(h)
+        else:
+            return None
+        if 0 <= val <= 0xFFFFFFFF:
+            return ipaddress.IPv4Address(val)
+    except ValueError:
+        pass
+    return None
+
+
+def classify(host) -> str:
     """'lan' (remote proxy can't reach it -> direct) or 'wan' (proxy env).
 
     Rules, in order: loopback/RFC1918/link-local literal IPs, *.local and
     localhost (via socks_proxy._host_is_lan), *.lan / *.home.arpa,
     single-label hostnames (no dot, e.g. 'sapphire-pi' — home-LAN
-    convention), registered direct hosts (socks_proxy.register_direct_hosts).
-    Everything else — every real FQDN — is 'wan'.
+    convention; dotless NUMERIC forms are decoded as IPv4 first),
+    registered direct hosts (socks_proxy.register_direct_hosts),
+    zero-padded dotted quads. Everything else — every real FQDN — is
+    'wan'. Non-string/empty input fails toward 'wan'.
     """
-    if not host:
+    if not isinstance(host, str) or not host:
         return 'wan'
     h = host.strip('[]').lower().rstrip('.')
+    for ud in _UNICODE_DOTS:
+        h = h.replace(ud, '.')
+    if not h:
+        return 'wan'
     if socks_proxy._host_is_lan(h):
         return 'lan'
     if h.endswith(_LAN_SUFFIXES):
         return 'lan'
     if '.' not in h and ':' not in h:
+        ip = _dotless_ip(h)
+        if ip is not None:
+            return 'lan' if ip.is_private else 'wan'
         return 'lan'
     if h in socks_proxy.direct_hosts():
         return 'lan'
+    if _PADDED_V4.fullmatch(h):
+        try:
+            ip = ipaddress.ip_address(
+                '.'.join(str(int(o)) for o in h.split('.')))
+            return 'lan' if ip.is_private else 'wan'
+        except ValueError:
+            pass
     return 'wan'
+
+
+def _lane_for_url(url) -> str:
+    """Lane for a full URL. Malformed URLs raise requests' InvalidURL
+    (a RequestException AND a ValueError) so existing except-clauses
+    written for the requests lane keep working."""
+    try:
+        return classify(urlsplit(url).hostname or '')
+    except (ValueError, AttributeError, TypeError) as e:
+        raise requests.exceptions.InvalidURL(
+            f'net: cannot parse URL {url!r}: {e}') from e
 
 
 # Chrome-ish headers for the 'browser' profile (bot-evasion for web
@@ -113,7 +171,7 @@ def session_for(url: str, profile: str = 'plain') -> requests.Session:
     """Pooled session for the lane this URL classifies into. For callers
     that loop (polling etc.). NOTE: a session is lane-fixed — don't reuse
     one across differently-classified URLs; call again per URL."""
-    return _pooled(classify(urlsplit(url).hostname or ''), profile)
+    return _pooled(_lane_for_url(url), profile)
 
 
 def wan_session(profile: str = 'browser') -> requests.Session:
@@ -125,11 +183,15 @@ def wan_session(profile: str = 'browser') -> requests.Session:
 
 
 def request(method: str, url: str, profile: str = 'plain', **kw) -> requests.Response:
-    """requests.request drop-in with the lane decision applied. Raises the
-    normal requests exceptions — existing except-clauses keep working."""
-    if classify(urlsplit(url).hostname or '') == 'lan':
+    """requests.request drop-in with the lane decision applied — ONCE
+    (a single classify feeds both the redirect rule and the session
+    pick; the old double-classify opened a TOCTOU where a provider
+    flake could hand out a LAN session with redirects enabled).
+    Raises the normal requests exceptions."""
+    lane = _lane_for_url(url)
+    if lane == 'lan':
         kw.setdefault('allow_redirects', False)
-    return session_for(url, profile).request(method, url, **kw)
+    return _pooled(lane, profile).request(method, url, **kw)
 
 
 def get(url: str, **kw) -> requests.Response:

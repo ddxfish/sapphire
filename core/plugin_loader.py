@@ -690,6 +690,11 @@ class PluginLoader:
                     _unreg_audit(name)
                 except Exception:
                     pass
+                try:
+                    from core.socks_proxy import unregister_direct_hosts as _unreg_dh
+                    _unreg_dh(name)
+                except Exception:
+                    pass
                 self._load_errors.append(refusal)
                 from core.event_bus import publish, Events
                 publish(Events.PLUGIN_LOAD_ERROR, refusal)
@@ -1052,6 +1057,15 @@ class PluginLoader:
                 unregister_plugin_widgets(name)
         except Exception as e:
             logger.warning(f"[PLUGINS] {name}: failed to unregister widgets: {e}")
+
+        # Direct-host providers (net facade): a not-loaded plugin must not
+        # keep steering global proxy policy from a dead closure — same
+        # rationale as the contacts/audit legs above. 2026-09-01.
+        try:
+            from core.socks_proxy import unregister_direct_hosts as _unreg_dh
+            _unreg_dh(name)
+        except Exception:
+            pass
 
         # Unregister scopes this plugin contributed so a later manifest edit
         # with a different default takes effect on re-register instead of

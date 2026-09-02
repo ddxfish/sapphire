@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 import pytest
+import requests
 
 from core import net
 from core import socks_proxy as sp
@@ -19,11 +20,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(autouse=True)
 def _clean_state():
-    """Sessions + registry are module globals — leave no residue."""
-    providers = list(sp._direct_host_providers)
+    """Sessions + registry + TTL cache are module globals — no residue."""
+    providers = dict(sp._direct_host_providers)
     net._invalidate()
+    sp._dh_cache_invalidate()
     yield
-    sp._direct_host_providers[:] = providers
+    sp._direct_host_providers.clear()
+    sp._direct_host_providers.update(providers)
+    sp._dh_cache_invalidate()
     net._invalidate()
 
 
@@ -46,6 +50,9 @@ LAN_HOSTS = [
     'homeassistant.local',
     'printer.lan',
     'box.home.arpa',
+    '3232235777',             # dotless decimal 192.168.1.1 — private, lan
+    '017700000001',           # dotless OCTAL 127.0.0.1 (inet_aton semantics)
+    '192.168.001.005',        # zero-padded private quad (win-scout F6)
 ]
 
 WAN_HOSTS = [
@@ -59,6 +66,11 @@ WAN_HOSTS = [
     'notlocal.localx',        # suffix near-miss
     'fe80::zz',               # invalid v6, has colon — not single-label
     '2001:4860:4860::8888',   # public v6
+    '16843009',               # dotless decimal 1.1.1.1 — chaos F1 CRIT
+    '0x08080808',             # dotless hex 8.8.8.8
+    'evil。com',              # unicode dot lookalike counts as a dot
+    '008.008.008.008',        # zero-padded PUBLIC quad
+    '.',                      # normalizes to empty — fail toward proxy
 ]
 
 
@@ -80,7 +92,7 @@ def test_classify_empty_fails_toward_proxy():
 
 def test_classify_registry_hit():
     fn = lambda: {'ha.mydomain.com'}          # FQDN-but-LAN (split DNS)
-    sp.register_direct_hosts(fn)
+    sp.register_direct_hosts(fn, owner='t-classify')
     assert net.classify('ha.mydomain.com') == 'lan'
     assert net.classify('other.mydomain.com') == 'wan'
 
@@ -94,6 +106,34 @@ def test_classify_never_resolves_dns(monkeypatch):
     monkeypatch.setattr(socket, 'gethostbyname', boom)
     for host in LAN_HOSTS + WAN_HOSTS:
         net.classify(host)
+
+
+def test_classify_bytes_fails_toward_proxy():
+    assert net.classify(b'sapphire-pi') == 'wan'
+
+
+def test_malformed_url_raises_requests_invalid_url():
+    """Chaos F3: bare ValueError/AttributeError leaked where requests
+    raised InvalidURL — callers' except RequestException must keep
+    working (InvalidURL subclasses RequestException AND ValueError)."""
+    for junk in ('http://[broken', 12345, ('http://x',)):
+        with pytest.raises(requests.exceptions.InvalidURL):
+            net.request('GET', junk)
+        with pytest.raises(requests.exceptions.InvalidURL):
+            net.session_for(junk)
+
+
+def test_request_classifies_exactly_once(monkeypatch):
+    """Chaos F4 TOCTOU: two classify calls could disagree mid-request
+    and hand out a LAN session with redirects enabled. One call now
+    feeds both the redirect rule and the session pick."""
+    calls = []
+    real = net.classify
+    monkeypatch.setattr(net, 'classify', lambda h: (calls.append(h), real(h))[1])
+    rec = _Recorder()
+    monkeypatch.setattr(net, '_pooled', lambda lane, profile: rec)
+    net.get('http://sapphire-pi:8090/x')
+    assert len(calls) == 1
 
 
 # ── lanes: session properties ───────────────────────────────────────────
@@ -141,19 +181,19 @@ class _Recorder:
 
 def test_lan_redirects_refused_by_default(monkeypatch):
     rec = _Recorder()
-    monkeypatch.setattr(net, 'session_for', lambda url, profile='plain': rec)
+    monkeypatch.setattr(net, '_pooled', lambda lane, profile='plain': rec)
     net.get('http://sapphire-pi:8090/audio/speak')
     assert rec.kw['allow_redirects'] is False
 
 def test_wan_redirects_untouched(monkeypatch):
     rec = _Recorder()
-    monkeypatch.setattr(net, 'session_for', lambda url, profile='plain': rec)
+    monkeypatch.setattr(net, '_pooled', lambda lane, profile='plain': rec)
     net.get('https://api.example.com/x')
     assert 'allow_redirects' not in rec.kw
 
 def test_lan_redirect_opt_in(monkeypatch):
     rec = _Recorder()
-    monkeypatch.setattr(net, 'session_for', lambda url, profile='plain': rec)
+    monkeypatch.setattr(net, '_pooled', lambda lane, profile='plain': rec)
     net.get('http://sapphire-pi:8090/x', allow_redirects=True)
     assert rec.kw['allow_redirects'] is True
 
