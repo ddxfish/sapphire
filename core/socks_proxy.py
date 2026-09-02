@@ -41,6 +41,15 @@ def clear_session_cache():
             fn()
         except Exception as e:
             logger.warning(f"proxy invalidator {getattr(fn, '__name__', fn)} failed: {e}")
+    # Re-probe on every proxy-config change: the boot probe's warnings live
+    # in _env_warnings, which apply_proxy_env() just cleared — without this,
+    # a broken proxy's warning vanished on the first settings save and never
+    # returned (truth decay, longevity scout). The probe is a daemon thread;
+    # it no-ops when SOCKS is off.
+    try:
+        start_boot_probe()
+    except Exception as e:
+        logger.debug(f"re-probe after cache clear failed to start: {e}")
     logger.info("Session cache cleared")
 
 
@@ -369,7 +378,32 @@ def _apply_proxy_env_inner() -> None:
         _env_warnings.append(
             "SOCKS enabled but credentials are missing — proxied requests will "
             "fail until set (traffic never falls back to direct)")
-    proxy = f"{_scheme()}://{auth}{config.SOCKS_HOST}:{config.SOCKS_PORT}"
+    host = str(getattr(config, 'SOCKS_HOST', '') or '').strip()
+    # A pasted 'socks5://host' or 'http://host' in the HOST field would nest
+    # into the proxy URL; strip any scheme and trailing slashes.
+    if '://' in host:
+        host = host.split('://', 1)[1]
+    host = host.strip('/')
+    try:
+        port = int(str(getattr(config, 'SOCKS_PORT', '') or '').strip())
+        if not (0 < port < 65536):
+            raise ValueError(f"out of range: {port}")
+    except (ValueError, TypeError) as e:
+        _env_warnings.append(
+            f"SOCKS_PORT invalid ({getattr(config, 'SOCKS_PORT', None)!r}: {e}) — "
+            f"proxy env NOT applied; set a port 1-65535 in Settings › Network")
+        for w in _env_warnings:
+            logger.warning(f"[PROXY] {w}")
+            _push_network_load_error(w, "Settings › Network")
+        return
+    if not host:
+        _env_warnings.append(
+            "SOCKS_HOST is empty — proxy env NOT applied; set a host in Settings › Network")
+        for w in _env_warnings:
+            logger.warning(f"[PROXY] {w}")
+            _push_network_load_error(w, "Settings › Network")
+        return
+    proxy = f"{_scheme()}://{auth}{host}:{port}"
     no_proxy = build_no_proxy()
     # NO_PROXY FIRST: in the stamp window a belt-lane caller hitting LAN
     # gear must see the bypass before it can see a proxy (H6 — reverse
@@ -493,6 +527,19 @@ def proxy_status() -> dict:
     except ImportError:
         httpx_socks = False
     remote_dns = bool(getattr(config, 'SOCKS_REMOTE_DNS', False))
+    # System-proxy honesty (windows scout F1): when SOCKS is OFF and the env
+    # is scrubbed, requests AND httpx fall through to urllib.getproxies(),
+    # which on Windows reads the WinINET registry (leftover corp/Fiddler/VPN
+    # proxy) and on any OS reads a shell-set HTTP(S)_PROXY. The trust strip
+    # must not claim "direct" while a system proxy silently carries traffic.
+    system_proxy = ''
+    if not enabled:
+        try:
+            import urllib.request as _u
+            sysp = _u.getproxies()
+            system_proxy = sysp.get('https') or sysp.get('http') or ''
+        except Exception:
+            system_proxy = ''
     return {
         'enabled': enabled,
         'route_llm': bool(getattr(config, 'SOCKS_ROUTE_LLM', False)),
@@ -501,5 +548,6 @@ def proxy_status() -> dict:
         'env_applied': bool(os.environ.get('ALL_PROXY')),
         'httpx_socks': httpx_socks,
         'no_proxy': [e for e in (os.environ.get('NO_PROXY') or '').split(',') if e],
+        'system_proxy': system_proxy,
         'warnings': list(_env_warnings),
     }

@@ -97,6 +97,15 @@ export default {
         try {
             const st = await fetchWithTimeout('/api/socks/status');
             if (!st.enabled) {
+                const warn = '<span style="color:var(--warning,#f59e0b)">\u25cf</span> ';
+                if (st.system_proxy) {
+                    strip.innerHTML = warn + 'SOCKS is off, but a <b>system proxy</b> is set (' +
+                        st.system_proxy.replace(/</g, '&lt;') + ') \u2014 requests AND httpx fall through ' +
+                        'to it, so traffic is <b>not direct</b>. On Windows this is the IE/WinINET ' +
+                        'registry proxy (leftover VPN/Fiddler/corp). Clear it in your OS network ' +
+                        'settings, or turn SOCKS on to override.';
+                    return;
+                }
                 strip.innerHTML = '<span style="color:var(--text-muted)">Proxy off \u2014 all traffic goes direct.</span>';
                 return;
             }

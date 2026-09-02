@@ -1,3 +1,7 @@
+# 2.12.6 - SOCKS v2
+- SOCKS has 5h or 5
+- Toggle remote dns and LLM through SOCKS
+- Allow local IPs without SOCKS
 # 2.12.5 - Privacy enhancement
 - Aggressive caching of resources (STT, TTS, embeddings, silero, CLIP, fonts)
 - Added 24 hour cache to plugin keys

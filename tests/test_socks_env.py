@@ -32,6 +32,9 @@ def _isolate(monkeypatch):
     keep = {v: os.environ.pop(v, None) for v in _ALL_VARS}
     monkeypatch.setattr(sp, "_drop_network_load_errors", lambda: None)
     monkeypatch.setattr(sp, "_push_network_load_error", lambda *a, **k: None)
+    # clear_session_cache() now re-probes; stub it so no test spawns a real
+    # proxy-dialing thread. The reprobe test overrides this with its own spy.
+    monkeypatch.setattr(sp, "start_boot_probe", lambda: None)
     sp._llm_hint_sent.clear()
     yield
     for v, val in keep.items():
@@ -296,6 +299,43 @@ def test_no_proxy_stamped_before_proxy_vars(socks_on, monkeypatch):
     sp.apply_proxy_env()
     keys = [k for k in order if k.upper() in ('NO_PROXY', 'ALL_PROXY')]
     assert keys.index('NO_PROXY') < keys.index('ALL_PROXY')
+
+
+def test_invalid_port_does_not_stamp_env(socks_on):
+    """Wave 2: a bad SOCKS_PORT stamped a dead ALL_PROXY while the strip
+    said env_applied=True. Now it refuses to stamp and warns."""
+    socks_on.setattr(config, "SOCKS_PORT", "not-a-port", raising=False)
+    sp.apply_proxy_env()
+    assert "ALL_PROXY" not in os.environ
+    assert any("SOCKS_PORT invalid" in w for w in sp._env_warnings)
+
+
+def test_scheme_pasted_in_host_is_stripped(socks_on):
+    """A 'socks5://proxy' pasted into the HOST field must not nest."""
+    socks_on.setattr(config, "SOCKS_HOST", "socks5://proxy.example", raising=False)
+    sp.apply_proxy_env()
+    assert os.environ["ALL_PROXY"].count("://") == 1
+    assert "proxy.example:1080" in os.environ["ALL_PROXY"]
+
+
+def test_status_reports_system_proxy_when_socks_off(monkeypatch):
+    """Windows scout F1: SOCKS off scrubs env, but requests+httpx fall
+    through to urllib.getproxies() (WinINET registry / shell HTTP_PROXY).
+    The strip must surface that instead of claiming 'direct'."""
+    monkeypatch.setattr(config, "SOCKS_ENABLED", False, raising=False)
+    monkeypatch.setattr("urllib.request.getproxies",
+                        lambda: {"https": "http://corp-proxy:8080"})
+    st = sp.proxy_status()
+    assert st["system_proxy"] == "http://corp-proxy:8080"
+
+
+def test_cache_clear_reprobes_when_enabled(socks_on, monkeypatch):
+    """Wave 2: boot-probe warnings were wiped by the first settings save
+    and never returned — a settings change must re-probe."""
+    probed = []
+    monkeypatch.setattr(sp, "start_boot_probe", lambda: probed.append(1))
+    sp.clear_session_cache()
+    assert probed == [1]
 
 
 def test_auth_latch_resets_on_cache_clear(socks_on, monkeypatch):

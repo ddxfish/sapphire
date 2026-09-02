@@ -8,6 +8,9 @@ import threading
 from pathlib import Path as _Path
 
 import numpy as np
+import requests
+
+from core import net
 import config
 
 logger = logging.getLogger(__name__)
@@ -211,10 +214,6 @@ class RemoteEmbedder:
         if not url:
             return None
         try:
-            client = _get_http_client()
-            if client is None:
-                logger.error("Remote embedding: httpx not installed")
-                return None
             from core.credentials_manager import credentials
             key = credentials.get_service_api_key('embedding') or getattr(config, 'EMBEDDING_API_KEY', '')
             headers = {}
@@ -222,8 +221,8 @@ class RemoteEmbedder:
                 headers['Authorization'] = f'Bearer {key}'
 
             prefixed = [f'{prefix}: {t}' for t in texts]
-            resp = client.post(url, json={'input': prefixed, 'model': EMBEDDING_MODEL},
-                               headers=headers, timeout=30.0)
+            resp = net.post(url, json={'input': prefixed, 'model': EMBEDDING_MODEL},
+                            headers=headers, timeout=30.0)
             resp.raise_for_status()
             data = resp.json().get('data', [])
             if not data:
@@ -276,15 +275,11 @@ class SapphireRouterEmbedder:
         if not url:
             return None
         try:
-            client = _get_http_client()
-            if client is None:
-                logger.error("Sapphire Router embeddings: httpx not installed")
-                return None
             headers = {'Content-Type': 'application/json'}
             tenant_id = self._get_tenant_id()
             if tenant_id:
                 headers['X-Tenant-ID'] = tenant_id
-            resp = client.post(
+            resp = net.post(
                 f'{url}/v1/embeddings/embed',
                 json={'texts': texts, 'prefix': prefix},
                 headers=headers,
@@ -306,8 +301,7 @@ class SapphireRouterEmbedder:
                 return result
             return None
         except Exception as e:
-            import httpx as _hx
-            if isinstance(e, _hx.ConnectError):
+            if isinstance(e, requests.exceptions.ConnectionError):
                 logger.error(f"Sapphire Router embeddings: cannot reach router at {url}")
             else:
                 logger.error(f"Sapphire Router embedding failed: {e}")
@@ -561,24 +555,13 @@ embedding_registry = EmbeddingRegistry()
 _embedder = None
 _embedder_lock = threading.Lock()
 
-# Shared httpx client for remote providers — reused across calls so we don't
-# burn TIME_WAIT connections on high-volume RAG ingest. Lazy-initialized since
-# httpx may not be available in minimal installs. Scout longevity finding #20.
-_shared_httpx_client = None
-_shared_httpx_lock = threading.Lock()
-
-
-def _get_http_client():
-    global _shared_httpx_client
-    if _shared_httpx_client is None:
-        with _shared_httpx_lock:
-            if _shared_httpx_client is None:
-                try:
-                    import httpx as _httpx
-                    _shared_httpx_client = _httpx.Client(timeout=30.0)
-                except ImportError:
-                    return None
-    return _shared_httpx_client
+# Remote/router embedding providers ride core.net (2026-09-01): the net
+# facade classifies a LAN embedding host (single-label or private IP) onto
+# the direct lane — the raw-httpx client was CIDR-blind so a LAN embedder
+# rode the proxy — and net's pooled session drops on every SOCKS change,
+# so flipping the proxy no longer leaves embedding traffic on the real IP
+# until restart (chaos/longevity scout finding, net-facade wave 2). Pooled
+# keep-alive preserves the TIME_WAIT benefit the old shared client gave.
 
 
 def get_embedder():

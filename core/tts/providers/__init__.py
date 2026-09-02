@@ -23,6 +23,16 @@ class TTSProviderRegistry(BaseProviderRegistry):
             self.register_core('kokoro', KokoroTTSProvider, 'Kokoro (Local)', is_local=True)
         except Exception as e:
             logger.error(f"[tts] core provider 'kokoro' unavailable — continuing without it: {e}")
+        # Sapphire Router — managed-mode cloud TTS. sapphire_router.py existed
+        # and carried a live provider but was never registered here, so
+        # TTS_PROVIDER='sapphire_router' silently fell to null (mirror of the
+        # STT H6 fix). Guarded like the others.
+        try:
+            from .sapphire_router import SapphireRouterTTSProvider
+            self.register_core('sapphire_router', SapphireRouterTTSProvider,
+                               'Sapphire Router (Managed)', is_local=False)
+        except Exception as e:
+            logger.error(f"[tts] core provider 'sapphire_router' unavailable: {e}")
         self.register_core('none', NullTTSProvider, 'None (disabled)', is_local=True)
 
     def create(self, key, **kwargs):

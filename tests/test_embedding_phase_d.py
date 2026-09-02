@@ -206,22 +206,17 @@ def test_memory_save_refuses_at_cap(tmp_path, monkeypatch):
 
 # ─── #20 Shared httpx client ─────────────────────────────────────────────
 
-def test_shared_httpx_client_cached():
-    """[REGRESSION_GUARD] _get_http_client returns the same client instance
-    on repeated calls — connection reuse for remote embedders."""
-    import core.embeddings as emb
-    # Reset the cached client so this test is deterministic
-    emb._shared_httpx_client = None
-    c1 = emb._get_http_client()
-    c2 = emb._get_http_client()
-    if c1 is not None:
-        assert c1 is c2, "httpx client must be singleton across calls"
-
-
-def test_remote_embedders_use_shared_client():
-    """[REGRESSION_GUARD] Both remote providers route through _get_http_client."""
+def test_remote_embedders_ride_net_facade():
+    """[REGRESSION_GUARD] Both remote embedders route through core.net —
+    NOT a raw shared httpx client. The old client was CIDR-blind (a LAN
+    embedder rode the proxy) and had no invalidator (SOCKS-flip left
+    real-IP egress until restart). net classifies LAN direct and its
+    pooled session drops on proxy change (net-facade wave 2)."""
     import core.embeddings as emb
     rem_src = inspect.getsource(emb.RemoteEmbedder.embed)
     rtr_src = inspect.getsource(emb.SapphireRouterEmbedder.embed)
-    assert '_get_http_client' in rem_src
-    assert '_get_http_client' in rtr_src
+    assert 'net.post' in rem_src and 'net.post' in rtr_src
+    # The CIDR-blind shared httpx apparatus must be gone.
+    assert not hasattr(emb, '_get_http_client')
+    assert not hasattr(emb, '_shared_httpx_client')
+    assert 'import httpx' not in inspect.getsource(emb)

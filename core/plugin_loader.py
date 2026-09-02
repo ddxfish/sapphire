@@ -299,6 +299,17 @@ class PluginLoader:
                                  HookEvent(metadata={"loaded": loaded, "reason": reason}))
         except Exception as e:
             logger.warning(f"[PLUGINS] plugins_ready ({reason}) dispatch failed: {e}")
+        # Re-derive the NO_PROXY belt now that this (re)load wave changed the
+        # set of registered direct hosts: unmigrated raw-requests plugins and
+        # daemon subprocesses (which inherit env at spawn) need late-added LAN
+        # gear in NO_PROXY. Migrated callers read direct_hosts() live and don't
+        # care. Boot's post-scan re-derive is now the scan-leg special case of
+        # this general rule (net-facade wave 2).
+        try:
+            from core.socks_proxy import apply_proxy_env
+            apply_proxy_env()
+        except Exception as e:
+            logger.debug(f"[PLUGINS] belt re-derive after plugins_ready failed: {e}")
 
     def _scan_dir(self, directory: Path, band: str, enabled_list: list, disabled_list: list = None):
         """Scan a directory for plugin.json manifests."""

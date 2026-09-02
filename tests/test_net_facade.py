@@ -169,6 +169,39 @@ def test_invalidator_registered_on_chokepoint():
     assert net._invalidate in sp._invalidators
 
 
+# ── cookie policy: plain lane stateless, browser lane bounded ───────────
+
+def _fake_cookie(name='c', domain='example.com'):
+    import http.cookiejar
+    return http.cookiejar.Cookie(
+        0, name, 'v', None, False, domain, True, domain.startswith('.'),
+        '/', False, False, None, True, None, None, {})
+
+
+def test_plain_profile_blocks_all_cookies():
+    # requests consults the policy's set_ok on response extraction — the
+    # plain lane refuses every cookie unconditionally.
+    s = net.session_for('https://api.github.com/x')
+    pol = s.cookies._policy
+    assert isinstance(pol, net._BlockAllCookies)
+    assert pol.set_ok(_fake_cookie('sess'), None) is False
+
+
+def test_browser_profile_bounds_cookie_jar(monkeypatch):
+    import http.cookiejar
+    # Isolate MY cap gate from the parent's standard checks.
+    monkeypatch.setattr(http.cookiejar.DefaultCookiePolicy, 'set_ok',
+                        lambda self, c, r: True)
+    monkeypatch.setattr(net, '_BROWSER_COOKIE_CAP', 3)
+    s = net.session_for('https://news.example/x', profile='browser')
+    pol = s.cookies._policy
+    assert isinstance(pol, net._CappedCookies)
+    for i in range(3):                                   # fill to cap
+        s.cookies.set_cookie(_fake_cookie(f'c{i}', f'site{i}.com'))
+    assert pol.set_ok(_fake_cookie('new', 'newsite.com'), None) is False  # growth blocked
+    assert pol.set_ok(_fake_cookie('c0', 'site0.com'), None) is True      # update allowed
+
+
 # ── redirect rule: LAN 30x must not hop off-proxy ───────────────────────
 
 class _Recorder:
@@ -212,6 +245,34 @@ _ALLOWED = {
 _CALL = re.compile(r'\brequests\.(get|post|put|patch|delete|head|request|Session)\s*\(')
 _ALIAS = re.compile(r'\bimport requests as (\w+)')
 _VERBS = r'\.(get|post|put|patch|delete|head|request|Session)\s*\('
+# root band (sapphire.py) is scanned too — a scout found the original guard
+# blind to it. interfaces/ is templates/JS, no HTTP callers.
+_BANDS = ('core', 'functions', 'plugins')
+
+# httpx is a SECOND lane the guard was blind to — it produced the
+# sapphire_router gap AND the embeddings twin (both LAN-capable, CIDR-blind).
+# These are the legitimate httpx users (cloud-only or their own async lane):
+_HTTPX_ALLOWED = {
+    'core/api_fastapi.py',                       # CDN fetch (cloud)
+    'core/routes/store.py',                      # store CDN (cloud)
+    'core/routes/videos.py',                     # video metadata (cloud)
+    'core/chat/llm_providers/openai_compat.py',  # LLM SDK lane (own pool + invalidator)
+    'core/stt/providers/fireworks_whisper.py',   # cloud STT SDK
+    'plugins/twilio-voice/daemon.py',            # out-of-process daemon
+    'plugins/elevenlabs/provider.py',            # cloud TTS SDK
+}
+_HTTPX_CALL = re.compile(r'\bhttpx\.(get|post|put|patch|delete|head|request|Client|AsyncClient|stream)\s*\(')
+
+
+def _iter_first_party():
+    for py in (ROOT / 'sapphire.py',):
+        if py.exists():
+            yield py, py.relative_to(ROOT).as_posix()
+    for band in _BANDS:
+        for py in (ROOT / band).rglob('*.py'):
+            if '__pycache__' in py.parts:
+                continue
+            yield py, py.relative_to(ROOT).as_posix()
 
 
 def test_no_raw_requests_outside_allowlist():
@@ -222,26 +283,44 @@ def test_no_raw_requests_outside_allowlist():
     those in routes/plugins.py, including HA test routes (the exact
     blinds class, hiding in an alias)."""
     offenders = []
-    for band in ('core', 'functions', 'plugins'):
-        for py in (ROOT / band).rglob('*.py'):
-            if '__pycache__' in py.parts:
-                continue
-            rel = py.relative_to(ROOT).as_posix()
-            if rel in _ALLOWED:
-                continue
-            try:
-                text = py.read_text(encoding='utf-8', errors='replace')
-            except OSError:
-                continue
-            hit = bool(_CALL.search(text))
-            if not hit:
-                for alias in set(_ALIAS.findall(text)):
-                    if re.search(r'\b' + re.escape(alias) + _VERBS, text):
-                        hit = True
-                        break
-            if hit:
-                offenders.append(rel)
+    for py, rel in _iter_first_party():
+        if rel in _ALLOWED:
+            continue
+        try:
+            text = py.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        hit = bool(_CALL.search(text))
+        if not hit:
+            for alias in set(_ALIAS.findall(text)):
+                if re.search(r'\b' + re.escape(alias) + _VERBS, text):
+                    hit = True
+                    break
+        if hit:
+            offenders.append(rel)
     assert not offenders, (
         f'raw requests.* calls outside core.net in: {offenders} — '
         f'use `from core import net` (tmp/net-facade-plan.md) or extend '
         f'the allowlist consciously')
+
+
+def test_no_raw_httpx_outside_allowlist():
+    """httpx is the lane that CIDR-blindly rode the proxy for LAN gear
+    (sapphire_router + embeddings twins). A new httpx caller to a
+    possibly-LAN endpoint must be conscious — cloud-only SDK lanes are
+    allowlisted; anything else routes through net or joins the list with
+    a reason."""
+    offenders = []
+    for py, rel in _iter_first_party():
+        if rel in _HTTPX_ALLOWED:
+            continue
+        try:
+            text = py.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        if _HTTPX_CALL.search(text):
+            offenders.append(rel)
+    assert not offenders, (
+        f'raw httpx.* calls outside the cloud-SDK allowlist in: {offenders} '
+        f'— a LAN-capable endpoint over httpx rides the proxy (CIDR-blind). '
+        f'Route through core.net or add to _HTTPX_ALLOWED with a reason')

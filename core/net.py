@@ -38,6 +38,7 @@ The env belt (socks_proxy.apply_proxy_env) stays in force for raw
 `requests` callers that never adopt this facade — third-party plugins
 lose nothing. This module is the exact lane; the belt is the floor.
 """
+import http.cookiejar
 import ipaddress
 import logging
 import re
@@ -148,6 +149,37 @@ _BROWSER_HEADERS = {
 _lock = threading.Lock()
 _sessions = {}          # (lane, profile) -> requests.Session
 
+# Cookie policy (longevity scout: the C fold left ONE process-wide jar with
+# no cap and no reset — every site the web tools ever touch deposited
+# cookies forever, ~4.4us/domain/request under a process-global lock, plus a
+# hostile page could poison it for the life of the process). API callers
+# (plain profile: github/store/gcal/wordpress/updater/geonames/embeddings)
+# need no cookies at all; web tools (browser profile) keep a BOUNDED jar.
+_BROWSER_COOKIE_CAP = 400
+
+
+class _BlockAllCookies(http.cookiejar.DefaultCookiePolicy):
+    """Refuse every Set-Cookie — the API lane is stateless."""
+    def set_ok(self, cookie, request):
+        return False
+
+
+class _CappedCookies(http.cookiejar.DefaultCookiePolicy):
+    """Stop storing new cookies once the jar hits the cap (existing cookies
+    still update). Bounds the per-request O(n) jar scan + poisoning blast."""
+    def __init__(self, jar, cap):
+        super().__init__()
+        self._jar = jar
+        self._cap = cap
+    def set_ok(self, cookie, request):
+        if not super().set_ok(cookie, request):
+            return False
+        # Allow updates to an already-known (domain,name); block growth past cap.
+        if len(self._jar) >= self._cap:
+            existing = self._jar._cookies.get(cookie.domain, {}).get(cookie.path, {})
+            return cookie.name in existing
+        return True
+
 
 def _make_session(lane: str, profile: str) -> requests.Session:
     s = requests.Session()
@@ -155,6 +187,9 @@ def _make_session(lane: str, profile: str) -> requests.Session:
         s.trust_env = False       # no env proxies, no .netrc, no env CA
     if profile == 'browser':
         s.headers.update(_BROWSER_HEADERS)
+        s.cookies.set_policy(_CappedCookies(s.cookies, _BROWSER_COOKIE_CAP))
+    else:
+        s.cookies.set_policy(_BlockAllCookies())
     return s
 
 

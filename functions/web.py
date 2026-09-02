@@ -170,7 +170,12 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
     except (SocksAuthError, requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
         # Stale session or transient failure — clear cache and retry once
         logger.warning(f"[WEB] DDG request failed ({type(e).__name__}), retrying with fresh session...")
-        clear_session_cache()
+        # Drop only net's pooled sessions (fresh connection pool) — NOT
+        # clear_session_cache(), which also re-derives proxy env and drops the
+        # LLM httpx pool mid-conversation for one flaky search (longevity/
+        # day-ruiner blast-radius finding, net-facade wave 2).
+        from core import net as _net
+        _net._invalidate()
         try:
             resp = get_session().get(url, timeout=12)
         except (SocksAuthError, ValueError) as e2:
