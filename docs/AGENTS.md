@@ -46,6 +46,20 @@ Spawns a Claude Code session for coding tasks. Requires `claude` CLI installed o
 - Three execution modes: strict (file ops only), standard (code + run), system_killer (unrestricted)
 - Sessions can be resumed
 
+## Privacy
+
+Agents respect the spawning chat's privacy. From a **private chat**, Claude Code agents are refused entirely — they run through a cloud service. LLM agents can still be spawned, but they inherit the privacy requirement: local providers only.
+
+## Persona and Scopes
+
+An LLM agent's `prompt` decides both its identity and its data access:
+
+- **`agent`** (the default) — a lean background worker. All mind scopes are "none": clean isolation.
+- **`self`** — inherits the spawning chat's current persona **identity only** (prompt, voice, toolset). Its scopes are deliberately stripped — "same identity, no data access".
+- **A persona name** (e.g. a specific profile) — the agent gets that persona in full, **including its scopes**.
+
+So if you want an agent that can touch a persona's memory, name the persona explicitly; `self` is for extending the current voice into a task without handing over the data keys.
+
 ## The Agent Bar
 
 Active agents show as colored pills above the chat input:
@@ -111,10 +125,14 @@ TOOLS:
 AGENT TYPES:
 - llm: background LLM + tool loop. spawn_args: model, toolset, prompt
   - prompt='agent' (default) = lean worker, no scopes, safe for automation
-  - prompt='self' = inherit current chat's persona + scopes
-  - prompt='<name>' = any persona name
+  - prompt='self' = inherit current chat's persona IDENTITY only (prompt/voice/toolset) — scopes are STRIPPED, no data access
+  - prompt='<name>' = any persona name — full inherit, INCLUDING that persona's scopes
 - claude_code: Claude Code CLI coding session. spawn_args: project_name, session_id
 - claude_code_plugin: Claude Code CLI writing a Sapphire plugin. spawn_args: plugin_name, capabilities, context, session_id
+
+PRIVACY:
+- Private chat: claude_code / claude_code_plugin spawns are REFUSED (cloud service); llm agents spawn with privacy_required (local providers only)
+- Unreadable privacy state fails closed (treated as private)
 
 DIRECTOR RULES (caller-side, for spawn_agent):
 - Call agent_options() first to see current available types — don't assume

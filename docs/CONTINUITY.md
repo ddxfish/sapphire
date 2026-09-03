@@ -22,27 +22,54 @@ Your AI doesn't have to wait for you to talk first. Continuity lets Sapphire wak
 3. AI responds using whatever prompt, tools, and voice you configured
 4. Optionally speaks the response out loud via TTS
 
-Tasks can run in the foreground (switches to that chat) or background (invisible, no UI change).
+The **Chat Name** field decides where that happens. Name a chat and the task runs inside it with saved history—she remembers previous runs, and you can read the conversation later. The UI never switches chats on its own. Leave it blank and the task runs in an invisible, ephemeral background context that leaves no chat behind.
+
+Time-based tasks are half the picture: Sapphire can also react to outside events—Discord messages, email, live phone calls, HTTP requests. Those lanes (daemons, realtime rules, webhooks) share the same task machinery and are covered in [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
 
 ## Task Fields
+
+**Schedule and firing**
 
 | Field | What it does |
 |-------|--------------|
 | **Name** | Label for the task. Shows in the list and activity log. |
-| **Schedule** | When to run (cron format—see below). |
+| **Schedule** | When to run (cron format—see below). Heartbeats use a simple interval ("beats every 30 minutes") instead. |
+| **Active hours** | Only fire inside an hour window—cron matches outside it are skipped. Overnight windows work (e.g. 8 PM–4 AM). |
 | **Chance %** | Probability the task actually fires. 100 = always, 50 = coin flip. Good for random variety. |
-| **Initial Message** | What gets sent to the AI when the task triggers. "Good morning!" or "Continue the story." |
-| **Chat Name** | Which chat to use. Blank = new dated chat each time. Filled = reuse same chat (keeps history). |
-| **Prompt** | Which persona/prompt preset to use. |
+| **Max runs** | Auto-disable after this many runs. 1 = one-shot task, 0 = unlimited. The editor shows progress toward the cap. |
+| **Delete after run** | Remove the task itself once it finishes its runs—for one-shots that should leave no trace. |
+
+**AI and chat**
+
+| Field | What it does |
+|-------|--------------|
+| **Persona** | Auto-fills prompt, voice, toolset, model, scopes, and more from a persona profile. You can still override individual settings. |
+| **Prompt** | Which prompt preset to use. |
 | **Toolset** | Which tools the AI can access. "none" disables tools entirely. |
 | **LLM Provider** | Which AI backend. "Auto" uses your default. |
 | **Model** | Specific model override (optional). |
-| **Memory Scope** | Which memory slot to read/write. "none" = no memory access. |
-| **Enable TTS** | Speak the response out loud. |
-| **Background** | Controlled by **Chat Name**: leave it blank for background mode (no UI switching), or name a chat for foreground mode. |
+| **Private** | Force this task onto local providers only. Auto-checked when the pinned prompt requires privacy. |
+| **Chat Name** | Blank = invisible background run, no chat saved. Filled = run in that chat and keep history. |
+| **Initial Message** | What gets sent to the AI when the task triggers. "Good morning!" or "Continue the story." |
+| **Inject datetime** | Add current date/time to the system prompt so the AI knows when it is. |
+
+**Voice**
+
+| Field | What it does |
+|-------|--------------|
+| **Speak on server speakers** | Play the response through TTS on the machine Sapphire runs on. |
+| **Play in browser** | Send the TTS audio to open browser tabs instead—one tab claims and plays it. |
+| **Voice / Pitch / Speed** | Override the TTS voice for this task. Pitch and speed range 0.5–2.0; blank = current defaults. |
+
+**Mind and limits**
+
+| Field | What it does |
+|-------|--------------|
+| **Mind scopes** | Per-task memory, knowledge, people, and goals scopes (plus any plugin scopes). Default "none"—isolated unless you say otherwise. |
+| **Context window** | Token limit for conversation history. 0 = app default. |
+| **Max parallel tools / Max tool rounds** | Per-task tool execution limits. 0 = app default. |
 
 If a task targets a private chat and the vault is locked, the Chat Name shows **🔒 locked vault** instead of the name — saving the task keeps the real target, or type a name to retarget. A task that fires at a sealed chat fails loudly rather than creating a plaintext chat with the same name. See [PRIVACY.md](PRIVACY.md).
-| **Inject datetime** | Add current date/time to the system prompt so the AI knows when it is. |
 
 ## Cron Basics
 
@@ -61,46 +88,59 @@ Use `*` for "any value". Use `*/N` for "every N". Use `1-5` for ranges (1=Monday
 
 ## The UI
 
-The **Triggers** view (sidebar) has two tabs:
+**Triggers** in the sidebar is a group of five views:
 
-**⏰ Time** — schedule-driven triggers: **Tasks** (cron-fired prompts) and **Heartbeats**. Toggle enabled/disabled, edit, run manually (▶), or delete. A timeline strip shows what's coming up next, with chance percentages.
+| View | What lives there |
+|------|------------------|
+| 💓 **Heartbeat** | Recurring self-pulses on a simple interval ("beats every 30 minutes"). Vitals cards plus a heartbeat timeline. |
+| 📅 **Scheduled** | Tasks at set times—one-off or recurring. Two columns: what **you** scheduled, and what **Sapphire** scheduled herself (via her `schedule_task` tool) or her plugins declared. |
+| 📡 **Daemons** | Event listeners (Discord, email, Telegram) that wake her when something happens. |
+| ⚡ **Realtime** | Live inbound session rules—phone lines she answers and holds open. |
+| 🔗 **Webhooks** | HTTP triggers so outside services can poke her. |
 
-**⚡ Events** — event-driven triggers: **Daemons** (long-running plugin event sources like Discord/email/Telegram) and **Webhooks** (external HTTP triggers). These fire on incoming events rather than the clock — see [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
+Heartbeat and Scheduled are the time-driven views this doc covers. Each item can be toggled, edited, exported, run manually (▶), or deleted, and a timeline strip shows what ran and what's coming up, with chance percentages. Daemons, Realtime, and Webhooks fire on incoming events rather than the clock—see [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
 
 ## Tips
 
 - Start with infrequent schedules while testing to avoid spam
-- Use "Run Now" button to test without waiting for the schedule
-- Background tasks are great for things you don't need to see
+- Use the ▶ Run now button to test without waiting for the schedule
+- Background tasks (blank Chat Name) are great for things you don't need to see
 - Combine with Home Assistant tools for smart home automation
 - Low chance % + frequent schedule = occasional surprises
+- Max runs 1 + Delete after run = a clean fire-and-forget reminder
 
 ## Reference for AI
 
-Continuity runs scheduled autonomous tasks. Access via the Triggers view in the sidebar.
+Continuity runs scheduled autonomous tasks. UI: **Triggers** nav group with five views — Heartbeat, Scheduled, Daemons, Realtime, Webhooks.
 
-TASK CREATION:
-- Open the Triggers view from the sidebar (⏰ Time tab)
-- Click "+ Add Task"
-- Set schedule (cron), initial message, prompt, toolset
-- Enable/disable TTS and background mode
+TASK CREATION (UI):
+- Triggers > Scheduled > "+ Task" (heartbeats: Triggers > Heartbeat > "+ Heartbeat")
+- Set schedule (cron or simple time picker), initial message, prompt, toolset; picking a Persona auto-fills prompt/voice/toolset/model/scopes
+- Accordions: AI, Chat, Voice, Mind (scopes), Execution Limits
+
+SELF-SCHEDULING (tool):
+- schedule_task(description, time) — time like '5pm'/'17:00' = one-shot that auto-deletes after firing; a 5-field cron string = recurring. AI-scheduled tasks are capped and appear in the Scheduled view's "Sapphire scheduled" column.
 
 KEY FIELDS:
-- type: task | heartbeat | daemon | webhook
-- schedule: cron format (minute hour day month weekday) — for time-based types
+- type: task | heartbeat | daemon | webhook. Realtime rules are daemon tasks whose event source is realtime — they gate live sessions instead of firing; see DAEMONS-WEBHOOKS.md
+- schedule: cron (minute hour day month weekday) — time-based types
 - chance: 1-100 probability to actually run
-- chat_target: blank = ephemeral, named = persistent chat; '__locked__' = target is a private chat in a sealed vault (display mask; saving keeps the real target)
-- background: blank chat_target = background (no UI switching)
-- memory_scope: which memory slot to use
-
-COMMON SCHEDULES:
-- "0 9 * * *" = 9 AM daily
-- "0 */2 * * *" = every 2 hours
-- "30 7 * * 1-5" = 7:30 AM weekdays
+- active_hours_start/end: hour integers; cron matches outside the window are skipped; overnight wrap supported (e.g. 20→4)
+- chat_target: blank = ephemeral background, named = persistent chat history (never switches the UI); '__locked__' = display mask for a private chat sealed in the locked vault (saving keeps the real target)
+- persona: persona name; resolved at run time to fill prompt/voice/toolset/model/scopes
+- initial_message: what the AI receives when the task fires
+- inject_datetime: true = date+time stamp in the system prompt; the string 'date' = day-only stamp (prompt-cache-friendly for multi-run sessions)
+- tts_enabled: server speakers; browser_tts: route audio to an open browser tab instead
+- voice / pitch / speed: TTS overrides; pitch/speed 0.5-2.0, null = current default
+- privacy_required: local providers only; auto-set when the pinned prompt requires privacy
+- context_limit / max_parallel_tools / max_tool_rounds: per-task execution limits, 0 = app default
+- max_runs: auto-disable after N runs (0 = unlimited); delete_after_run: delete the task once its runs finish
+- *_scope keys (memory_scope, knowledge_scope, ...): per-task mind scopes, default 'none'
 
 MANUAL TRIGGER:
-- Click ▶ button on any task to run immediately
+- ▶ Run now on any task in the Heartbeat/Scheduled views
 
 TROUBLESHOOTING:
-- Task not running: check enabled toggle, check cron syntax
+- Task not running: check enabled toggle, cron syntax, active-hours window
 - Skipped (chance): random roll failed, will try next scheduled time
+- Task went quiet after N runs: max_runs reached — it auto-disabled (editor shows runs done)

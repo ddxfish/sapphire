@@ -115,6 +115,16 @@ Schedule handlers use `def run(event)`. **Hook handlers do NOT** — they use th
 
 ## Note on Webhook Tasks
 
-Webhook tasks are created by users in the Schedule UI, not declared in plugin manifests. They trigger when an HTTP request hits `/api/events/webhook/{path}`. Every webhook task gets an auto-generated secret — callers must include it in the `x-webhook-secret` header.
+Webhook tasks are created by users in the Triggers UI (Webhooks), not declared in plugin manifests. They trigger when an HTTP request hits `/api/events/webhook/{path}`. Every webhook task gets an auto-generated secret — callers must include it in the `x-webhook-secret` header.
 
 For full webhook documentation, see [DAEMONS-WEBHOOKS.md](../DAEMONS-WEBHOOKS.md).
+
+## Reference for AI
+
+PLUGIN SCHEDULED TASKS:
+- Manifest: `capabilities.schedule` = [{name (required), cron (5-field, default "0 9 * * *"), handler (required, path relative to plugin dir), description (also becomes the task's initial_message), enabled (default true), chance (1-100, default 100), time_setting? (plugin-settings key holding "HH:MM" -> daily cron, falls back to `cron`), enabled_setting? (plugin-settings key holding a bool)}].
+- Tasks appear under Triggers (Scheduled); removed when the plugin unloads (disable/uninstall/hot-reload). Plugin tasks are re-registered from the manifest+settings on every boot — Triggers-UI edits to them do NOT persist; settings-linked fields are the durable knobs, and the loader re-syncs the live task on every plugin settings save.
+- Handler contract: the file must export `def run(event)`. event = {"system": VoiceChatSystem, "config": config module, "task": task dict, "plugin_state": PluginState}. Optional return value is logged to the schedule activity feed.
+- PluginState: `state.get(key, default)` / `state.save(key, value)` — persistent per-plugin key-value store.
+- Naming rule: `run(event)` is ONLY for schedule handlers. Hook handlers use the hook-point name (`def pre_chat(event)`, `def prompt_inject(event)`, ...) or `def handle(event)` as fallback — a hook handler named `run` silently fails to register.
+- Webhook tasks are user-created in Triggers (Webhooks), not manifest-declared: HTTP hits `/api/events/webhook/{path}` with the auto-generated secret in the `x-webhook-secret` header. Full docs: docs/DAEMONS-WEBHOOKS.md.

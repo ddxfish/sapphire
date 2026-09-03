@@ -34,12 +34,16 @@ Goals are scoped like the rest of the Mind section: each chat can see a differen
 
 ---
 
+With the Mind Palace plugin enabled, goals work differently (due dates, per-goal instructions, an in-progress status) — see [MIND-PALACE.md](MIND-PALACE.md).
+
+---
+
 ## Reference for AI
 
 Goal tracking with subtasks, priorities, and a progress journal.
 
 TOOLS:
-- create_goal(title, description?, priority?, parent_id?) — create a goal or subtask
+- create_goal(title, description?, priority?, parent_id?, permanent?) — create a goal or subtask (permanent=true: standing goal the AI cannot complete/delete)
 - list_goals(goal_id?, status?) — smart overview or detail view
 - update_goal(goal_id, title?, description?, status?, priority?, progress_note?) — modify + journal a note
 - delete_goal(goal_id, cascade?) — delete, optionally cascading to subtasks

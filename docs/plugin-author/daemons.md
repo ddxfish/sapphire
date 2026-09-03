@@ -64,10 +64,11 @@ Daemon thread (your code)
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique event identifier (used in `emit_daemon_event`) |
-| `label` | string | Yes | Human-readable name (shown in Schedule UI) |
+| `label` | string | Yes | Human-readable name (shown in the Triggers UI) |
 | `description` | string | No | Tooltip/help text |
 | `filter_fields` | array | No | Fields users can filter on when creating tasks |
-| `task_fields` | array | No | Per-task configuration fields shown in Schedule UI |
+| `task_fields` | array | No | Per-task configuration fields shown in the Triggers UI |
+| `realtime` | bool | No | Gate-only source — its events never fire one-shot tasks (see [Realtime sources](#realtime-sources-gate-only)) |
 
 ### Filter Fields
 
@@ -81,14 +82,35 @@ The scheduler ANDs all filters — every filter must match for the task to fire.
 
 ### Task Fields
 
-Task fields are per-task configuration shown in the Schedule UI when creating a daemon task. They support these types:
+Task fields are per-task configuration shown in the Triggers UI (Daemons) when creating a daemon task. They support these types:
 
 | Type | Description | Extra Properties |
 |------|-------------|-----------------|
-| `select` | Dropdown | `options` (static) or `dynamic` (API URL for async loading) |
+| `select` | Dropdown | `options` (static — strings or `{value, label}` objects) or `dynamic` (API URL for async loading) |
 | `boolean` | Toggle | `default` |
+| `number` | Number input | `min`, `max`, `default` |
+| `string` | Text input (the default for any other type) | `default`, `placeholder`; add `"widget": "password"` to mask the input |
+
+Every field also takes `key`, `label`, `required` (marks the field required), and `help` (rendered as a tooltip).
 
 The `dynamic` property fetches options from an API endpoint at render time — useful for account lists that change.
+
+### Realtime sources (gate-only)
+
+Declare `"realtime": true` on an event source when your daemon handles
+sessions **live** (a voice line, a persistent socket) rather than handing
+discrete events to the scheduler. For a realtime source, tasks are **gates,
+not triggers**: `emit_daemon_event()` deliberately fires nothing — a one-shot
+task would double-handle on top of your live session. Instead, your daemon
+reads its matching tasks to decide whether and how to answer:
+
+- `plugin_loader.active_daemon_accounts(source)` — which accounts are armed.
+- `plugin_loader.get_enabled_daemon_task(source, account, payload)` — the
+  winning task's config (chat target, persona, toolset). With a `payload`
+  (e.g. `{"caller": "+1555..."}`), selection is most-specific-wins: a task
+  whose filter matches beats the no-filter catch-all; a failing filter
+  excludes the task; no match returns `None` and the daemon should decline
+  the session.
 
 ---
 
@@ -291,6 +313,7 @@ DAEMON SYSTEM:
 - Reply handlers route LLM responses back to source platform
 - `active_daemon_accounts(source_name)` returns set of accounts with active tasks
 - Filter fields: AND-matched against event payload
-- Task fields: per-task config (select with static/dynamic options, boolean)
+- Task fields: per-task config — select (static `options` or `dynamic` API URL), boolean (`default`), number (`min`/`max`), string default (`placeholder`, `widget: "password"` masks); all take key/label/required/help
+- `realtime: true` on an event source = gate-only: `emit_daemon_event` fires NO tasks; the daemon reads gates via `active_daemon_accounts(source)` + `get_enabled_daemon_task(source, account, payload)` (most-specific filter wins, no match => decline the session)
 - Lifecycle: start on load, stop on unload, survives hot-reload
 - Images: add `"images": [{"data": <base64>, "media_type": "image/png"}]` to the payload — sent to vision-capable providers (gated on the provider's vision support), stored once in the chat DB via a marker (no per-turn replay bloat); max 8 images, 10 MB each, png/jpeg/gif/webp

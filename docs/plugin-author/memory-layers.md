@@ -46,7 +46,7 @@ Your source of truth stays yours. The palace holds a copy keyed by your
 
 | Field | Required | Meaning |
 |---|---|---|
-| `key` | yes | Lowercase identifier. Unique across plugins. The reserved core layers (`self`, `events`, `entities`, `knowledge`, `goals`) are refused. |
+| `key` | yes | Lowercase identifier — letters, digits, underscores only (must be a valid Python identifier, so no hyphens). Unique across plugins; the first registrant wins. The reserved core layers (`self`, `events`, `entities`, `knowledge`, `goals`) are refused. |
 | `label` | no | Display name (tab, chips). Defaults to the key, title-cased. |
 | `icon` | no | Emoji for the tab and flyout entry. |
 | `description` | no | One line shown in the AI's search tool description and on your tab. |
@@ -114,18 +114,53 @@ the database but vanish from every read path — search, browse, spider, tabs.
 Re-enable the plugin and they light back up. Nothing is deleted. (Deleting a
 whole scope deletes its plugin-layer rows too — scope deletion is total.)
 
-## Reference implementations
+## Minimal working example
 
-- `user/plugins/layer-demo/` — the minimal contract in two small files: a
-  manifest declaring a `lore` layer and one tool mirroring notes through
-  `layer_api.save`. Start here.
-- `user/plugins/note-vault/` — the full playbook, working for real: mirrors a
-  folder of markdown (bundled sample vault, or point `vault_path` at your own
-  notes) with hash-based reconciliation via `get_sources`, paragraph chunking,
-  removed-file cleanup, `force` re-weave after new entities, ledger etiquette
-  (a no-change sync writes zero ledger lines), and its own pytest suite
-  (`pytest user/plugins/note-vault/tests/`). Copy this shape for anything
-  Obsidian-like.
+The whole contract in two small files. The manifest declares the layer (plus
+however you trigger your sync — a tool, a schedule task, a daemon):
+
+```json
+{
+  "name": "lore-book",
+  "version": "0.1.0",
+  "description": "Mirrors lore.txt into the Mind Palace.",
+  "capabilities": {
+    "memory_layers": [
+      {"key": "lore", "label": "Lore", "icon": "📜",
+       "description": "World lore mirrored from lore.txt."}
+    ],
+    "tools": ["tools/lore_tools.py"]
+  }
+}
+```
+
+And the sync itself — reconcile by source, then re-mirror in one batch:
+
+```python
+def sync_lore(scope='default'):
+    try:
+        from plugins.mindpalace.tools import layer_api
+    except ImportError:
+        return "Mind Palace not active - nothing mirrored.", False
+
+    from pathlib import Path
+    src = Path(__file__).parent.parent / 'lore.txt'
+    paras = [p.strip() for p in src.read_text(encoding='utf-8').split('\n\n')]
+
+    layer_api.delete_by_source('lore', str(src), scope=scope)
+    items = [{'content': p[:512], 'source': str(src)} for p in paras if p]
+    ids, msg = layer_api.bulk_save(items, layer='lore', scope=scope)
+    return msg, True
+```
+
+Call it from a plugin tool's `execute()` (see [Tools](tools.md)), a
+[scheduled task](schedule.md), or a daemon loop. Search, the web tab,
+weaving, and embeddings all arrive free once the rows land.
+
+For a bigger sync, do the cheap diff first: stamp a content hash into
+`fields` at save time, read `get_sources()` on the next run, and skip
+sources whose hash didn't change — a no-change sync should write zero
+ledger lines.
 
 ## Gotchas
 
@@ -133,3 +168,18 @@ whole scope deletes its plugin-layer rows too — scope deletion is total.)
 - **Don't write the palace DB directly.** `layer_api` is the contract; raw SQL against `mind.db` will break across palace versions and skips the ledger, weaving, and FTS.
 - **`writable: false` still lets users edit.** The web tab lets the user delete/favorite your mirrored chunks — your next sync should tolerate missing rows (idempotent re-save by `source`).
 - **Sign after every edit** (`python tools/sign_plugin.py <your-plugin>`) like any plugin.
+
+## Reference for AI
+
+MEMORY LAYERS (plugin-declared Mind Palace layers):
+- Manifest: `capabilities.memory_layers` = [{key, label?, icon?, description?, librarian? (default false), writable? (default false), mode? ('mirror' only)}]. Key: lowercase valid identifier (no hyphens), unique across plugins, first registrant wins; reserved keys refused: self, events, entities, knowledge, goals. Registered at plugin load, unregistered at unload/disable; the AI's tool schemas update live both ways.
+- Requires the `mindpalace` plugin. Import lazily INSIDE functions: `from plugins.mindpalace.tools import layer_api` wrapped in try/except ImportError — never at module top level.
+- API (`plugins/mindpalace/tools/layer_api.py`):
+  - `save(content, layer, scope='default', label=None, fields=None, source=None) -> (chunk_id|None, message)` — full pipeline (inline embedding, FTS, entity weaving), one ledger line per call; single items only, never loops.
+  - `bulk_save(items, layer, scope='default') -> (ids, message)` — items = [{'content', 'label'?, 'fields'?, 'source'?}]; one transaction, embeddings deferred to the background sweep, ONE ledger summary line; empty/over-length items skipped and counted; very large batches are cut off by a runaway backstop.
+  - `delete_by_source(layer, source, scope='default') -> (count, message)` — reconciliation primitive; cleans graph edges; one ledger line.
+  - `get_sources(layer, scope='default') -> {source: {'count', 'fields'}}` — the cheap diff (stamp a content hash into fields at save time, compare here).
+  - `sync_note(layer, summary, scope='default', detail=None) -> bool` — one ledger line for an out-of-band event; one per sync run maximum.
+- Invariants: layer_api writes ONLY registered plugin layers (the palace's own layers are fenced); content capped at 512 chars per chunk; ledger etiquette = one line per sync run, never per item; plugin disabled => layer goes dark (rows kept, hidden from every read path) and re-enable relights; deleting a scope deletes its plugin-layer rows.
+- Scope: read the chat's memory scope via `core.chat.function_manager.scope_memory.get()`; on error return None and disable — never fall back to 'default'.
+- Never write mind.db directly; re-sign after any edit (`python tools/sign_plugin.py <plugin>`).

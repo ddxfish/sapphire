@@ -85,18 +85,49 @@ Inside each tool's schema dict:
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `is_local` | bool/str | `True` | `True` = runs locally, `"endpoint"` = calls external API, `False` = network required |
-| `network` | bool | `false` | Mark as network-dependent (tracked by function manager) |
+| `is_local` | bool/str | — (unset) | Locality declaration: `True` = touches only this machine or the LAN, `"endpoint"` = calls an external API, `False` = network required. **This flag gates private chats**: in a private chat only `is_local: True` tools run; `False`/`"endpoint"` are refused with a message to the AI, and an *unset* flag is refused too unless the user opts in (Settings > Privacy → allow unflagged tools). Declare it honestly on every tool |
+| `network` | bool | `false` | UI labeling: marks the tool as network-dependent so toolset lists and system status can show a "network tools" indicator. Informational — it doesn't block or route anything |
 | `hidden` | bool | `false` | Hide from the Toolsets UI and from `all`/module/custom selection. The tool still registers and executes; a saved toolset that names it resolves it normally. For internal verbs (e.g. gated sub-agent tools) that would clutter the picker |
 
 ```python
 TOOLS = [{
     "type": "function",
-    "is_local": "endpoint",   # calls Home Assistant API
-    "network": True,           # needs network access
+    "is_local": "endpoint",   # calls an external API — refused in private chats
+    "network": True,           # shown as a network tool in the UI
     "function": { ... }
 }]
 ```
+
+**Neither flag routes traffic.** Routing is decided by the network facade: when the SOCKS proxy is on, all WAN traffic from the process rides the proxy regardless of these flags, and LAN traffic goes direct. See [Networking from Plugins](#networking-from-plugins).
+
+---
+
+## Networking from Plugins
+
+Make HTTP calls through the network facade instead of bare `requests`:
+
+```python
+from core import net
+
+r = net.get(url, timeout=10)       # requests-shaped: get / post / put / delete / request
+s = net.session_for(url)           # pooled session for loops (lane-fixed — one per URL)
+s = net.wan_session()              # WAN-lane session when you have no URL yet (browser profile)
+```
+
+The facade classifies each URL's host as LAN or WAN — syntactically, without ever resolving DNS:
+
+- **LAN** (loopback, private-range IPs, `*.local` / `*.lan` / `*.home.arpa`, single-label hostnames, registered direct hosts) goes direct: no proxy, environment ignored. Redirects are refused by default on the LAN lane so a LAN device's 30x can't hop off-proxy silently — pass `allow_redirects=True` to opt in.
+- **WAN** (every real FQDN and public IP) honors the proxy environment: proxied while SOCKS is on, plain direct when it's off. Errors never fall back across lanes — a dead proxy fails loudly instead of leaking direct.
+
+If your plugin talks to LAN gear through a public-looking hostname (a DDNS name, an FQDN that resolves inside the house), register it so it classifies as LAN:
+
+```python
+from core.socks_proxy import register_direct_hosts
+
+register_direct_hosts(lambda: ["ha.my-house.example.net"], owner="my-plugin")
+```
+
+The provider is a zero-arg callable returning hostname strings, keyed by `owner` (use your plugin name) — re-registering replaces rather than accumulates, and core unregisters it when your plugin unloads. Raw `requests` callers still work (a process-wide proxy-environment belt covers them while SOCKS is on), but the facade is the exact lane; the belt is the floor.
 
 ---
 
@@ -225,6 +256,7 @@ state = plugin_loader.get_chat_state("my-plugin")
 state.put(chat, "save", {...})       # single slot per key
 state.get(chat, "save", default)
 state.append(chat, "journal", event) # ordered rows — O(1) append, returns seq
+state.append_many(chat, "journal", evs) # several rows in ONE transaction — all land or none; returns their seqs
 state.read_all(chat, "journal")      # every row for that key, in order
 state.replace(chat, "journal", rows) # atomic renumber (revert/rewrite)
 state.delete(chat, "journal")        # or delete(chat) for everything
@@ -295,3 +327,15 @@ def _invalidate(scope):
 ```
 
 Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](../TOOLS.md) for the user-facing tools guide.
+
+---
+
+## Reference for AI
+
+- Tool file exports: `ENABLED`, `EMOJI`, `AVAILABLE_FUNCTIONS`, `TOOLS`, `execute(function_name, arguments, config, plugin_settings=None, credentials=None)` → `(message: str, success: bool)`. Signature is inspected — declare 3, 4, or 5 params; extras are passed only if accepted. Optional `get_tools()` returns TOOLS-shaped schemas from current settings.
+- Schema flags: `is_local` `True|False|"endpoint"` gates PRIVATE chats only (True runs; False/"endpoint" refused; unset refused unless `PRIVATE_ALLOW_UNFLAGGED_TOOLS`); `network: true` = UI "network tools" labeling only; `hidden: true` = out of the Toolsets picker but still registered and callable. No flag routes traffic.
+- Networking: `from core import net` — `net.get/post/put/delete/request(url, ...)` (requests-shaped), `net.session_for(url)` (pooled, lane-fixed), `net.wan_session()` (WAN lane, browser profile). Host classification is syntactic, never resolves DNS: LAN = loopback / RFC1918 / link-local / `*.local` / `*.lan` / `*.home.arpa` / single-label names / registered direct hosts → direct, redirects refused by default; WAN = everything else → proxy env when SOCKS is on. Register LAN FQDNs: `core.socks_proxy.register_direct_hosts(zero_arg_callable, owner=plugin_name)`; keyed by owner (replace-on-reregister), auto-unregistered on plugin unload.
+- `get_tools()` live refresh: re-run on settings save; only `description`/`parameters` update in place; tool names never change; add/remove needs a reload. Keep a static `TOOLS` fallback.
+- PluginState (`plugin_loader.get_plugin_state(name)`): `get/save/delete/all/clear`; thread-safe; backed by `user/plugin_state/{name}.json`.
+- PluginChatState (`plugin_loader.get_chat_state(name)`): `put/get` (slot), `append` (returns seq), `append_many` (one transaction, all-or-none, returns seqs), `read_all`, `replace` (atomic renumber), `delete(chat[, key])`, `keys`, `get_all_chats(key)`, `meta`. Rows ride rename/vault/delete with the chat; on a hidden (sealed) chat reads return empty and writes RAISE. Rows survive a chat *clear* (register the `chat_cleared` hook to drop turn-anchored ones).
+- Scopes: `from core.chat.function_manager import scope_email` (etc.) — resolves via `__getattr__` against the scope registry; exists only while the owning plugin is loaded. `scope_rag` and `scope_private` are always present (core).

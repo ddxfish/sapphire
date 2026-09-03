@@ -185,6 +185,8 @@ sapphire/                         ← ~/sapphire (Linux/Mac) or %USERPROFILE%\sa
 
 These are normal folders on your machine. You can browse them, back them up, or move them to another computer.
 
+To restore a backup from `sapphire-backups/`, use the one-click restore in **Settings > Backup** — it works in Docker too (see [BACKUPS.md](BACKUPS.md)).
+
 ---
 
 ## Using LM Studio (Local LLM)
@@ -223,3 +225,7 @@ The TTS engine has automatic retry with backoff. If a single message fails, rege
 Check the logs for errors: `docker compose logs --tail 50`. Common causes:
 - Missing API keys (configure in docker-compose.yml or via the web UI)
 - Port 8073 already in use (change the port mapping in docker-compose.yml: `"8074:8073"`)
+
+## Reference for AI
+
+Docker install: image built from repo Dockerfile, CMD = main.py supervisor. docker-compose mounts three volumes (user data, backups, models cache); TZ + API-key + LMSTUDIO env vars pass through; extra_hosts maps host LLM servers. In-app Settings > Backup restore works in Docker (supervisor applies staged swap on restart). Data path answers: user/ rides the mounted volume — container replacement never loses it.

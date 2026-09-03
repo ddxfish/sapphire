@@ -76,3 +76,14 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
   "locked": ["setup-wizard", "backup", "continuity"]
 }
 ```
+
+## Reference for AI
+
+- Boot: `plugin_loader.scan()` reads `plugins/` (system band) + `user/plugins/` (user band); each manifest is validated and signature-checked; enabled plugins register hooks, tools, voice commands, routes, schedules; scheduler tasks defer until the scheduler initializes.
+- Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable loads immediately, disable unloads immediately; unsigned/tampered plugins return 403 and the toggle reverts.
+- Hot reload: `POST /api/plugins/{name}/reload`; a failed reload leaves the plugin unloaded — no half-loaded state. `SAPPHIRE_DEV=1` enables the file watcher (auto-reload on `.py`/`.json` changes, polled).
+- Rescan: `POST /api/plugins/rescan` → `{"added": [...], "removed": [...]}` without restart.
+- The `plugins_ready` hook fires after the boot scan AND after reload, rescan, and toggle-on — handlers must be idempotent (see hooks.md).
+- Error isolation: a hook handler exception is logged and skipped (next handler fires); tool execution errors are returned to the AI as error messages.
+- Chat-scoped rows (`plugin_loader.get_chat_state(name)`) are core-managed: carried through rename, encrypted on vault, deleted inside the chat-delete transaction BEFORE `chat_deleted` fires (no archive-on-delete possible from that hook). They survive a chat *clear*.
+- Key endpoints: `GET /api/webui/plugins` (list), `GET/PUT/DELETE /api/webui/plugins/{name}/settings`, `GET /plugin-web/{name}/{path}` (web assets), `/api/plugin/{name}/{path}` (custom routes, auth enforced).

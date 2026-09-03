@@ -79,7 +79,7 @@ Each capability is documented in its own guide:
 - [Widgets](widgets.md) — dashboard action-panel cards (rendered in Settings → Dashboard)
 - [Daemons](daemons.md) — long-running background threads with event sources (e.g. Telegram, Discord listeners)
 - [Services & Subprocesses](subprocesses.md) — declared subprocess servers, run by core (optionally in the plugin's own conda env)
-- Sidebar Accordion — inject custom HTML panels into the chat sidebar
+- [Sidebar Accordion](#sidebar-accordion) — inject a custom panel into the chat sidebar (documented below)
 
 ### Scopes
 
@@ -130,6 +130,30 @@ def _get_current_email_scope():
 The import resolves via `function_manager.__getattr__` — no need to import the ContextVar directly. The scope is automatically set by the chat pipeline before your tool's `execute()` is called.
 
 **Real example:** See `plugins/memory/plugin.json` for 4 scopes (memory, goal, knowledge, people) and `plugins/email/plugin.json` for the email scope.
+
+### Sidebar Accordion
+
+`capabilities.sidebar_accordion` adds a collapsible panel to the chat-view sidebar. It renders only while the plugin is enabled, and only on the chat surface — the Game Room renders core sections but not plugin accordions. Open/collapsed state persists across visits.
+
+```json
+"capabilities": {
+  "sidebar_accordion": {
+    "title": "Avatar",
+    "icon": "💎",
+    "content": "sidebar.html",
+    "script": "sidebar.js"
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `title` | No | Panel header text (falls back to the plugin name) |
+| `icon` | No | Emoji shown before the title |
+| `content` | No | HTML fragment file, resolved from the plugin's `web/` directory (served via `/plugin-web/{name}/{content}`) and injected as the panel body |
+| `script` | No | ES module in `web/`; if it exports `init(contentEl, pluginName)`, it's called once the panel is built |
+
+The HTML is guaranteed to be in the DOM before `init()` runs, so the script can query `contentEl` for nodes the fragment created. Bundled examples: `plugins/avatar`, `plugins/sd-server`.
 
 ### Cleanup Paths (Uninstall)
 
@@ -189,3 +213,13 @@ user/
       ssh.json
       image-gen.json
 ```
+
+## Reference for AI
+
+- Only `name` is required (unique; overrides folder name). Display title resolution: `short_display_name` → `display_name` → `short_name` → truncated first clause of `description` → `name`. Set `short_display_name` (2-4 words).
+- Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group), `default_enabled`, `priority` (int, lower fires first), `managed_hide`, `settingsUI` ("auto"|"plugin"|"core"|null), `pip_dependencies` (pip specifiers), `environment` ({python, pip, conda, channels} — dedicated conda env), `icon`/`emoji`, `url`, `author`, `version`.
+- `capabilities` keys: `hooks`, `voice_commands`, `tools`, `scopes`, `routes`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `prompts`, `web`, `daemon`, `services`, `app`, `themes`, `widgets`, `sidebar_accordion`, `cleanup_paths`. Each has its own guide page.
+- Scope entry: `{key (python identifier), label, endpoint, data_key?, value_field?, name_field?, label_template?, nav_target?, default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
+- `sidebar_accordion`: `{title?, icon?, content?, script?}` — files live in the plugin's `web/` dir, served at `/plugin-web/{name}/...`; script exports `init(contentEl, pluginName)`, called after the HTML fragment lands; chat surface only; renders only while the plugin is enabled.
+- `cleanup_paths`: relative to `user/`, namespace-restricted to `plugin_state/` (filename must start with the plugin name), `webui/plugins/`, or `plugins/{name}/`; anything else is REFUSED. Auto-cleanup already covers `plugin_state/{name}*`, `webui/plugins/{name}.json`, and the plugin dir.
+- Priority bands: system plugins 0-99, user plugins 100-199; within a band: 0-19 critical intercepts, 20-49 input modification, 50-79 context enrichment, 80-99 observation (shifted for user band).

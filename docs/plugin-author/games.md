@@ -2,7 +2,7 @@
 
 Ship a playable game as a plugin. The **Game Room** (system plugin `game-room`) is the host: it owns the Surface room, sessions, the talk rail, per-game settings, and Sapphire's sealed seat. Your plugin brings the game — an engine, a board module, and one manifest declaration. Core carries zero game code; if the host is disabled, your registration just holds harmlessly.
 
-Reference implementations: **`plugins/game-holdem`** (turn game, sealed seat) and **`game-darkhorse`** (free-mount real-time game).
+Reference implementations: **`plugins/game-holdem`** (turn game, sealed seat — ships with the app) and **game-darkhorse** (free-mount real-time game — lives in its own external repo and installs like any store plugin).
 
 ## Anatomy
 
@@ -78,7 +78,7 @@ safe_action(state) -> (action, args)               # fallback when the AI move i
 redact(state) -> dict                              # client-safe state (strip hidden info)
 ```
 
-`cfg` arrives from the per-game settings (see below). Engines predating `cfg` are called without it.
+`cfg` arrives from the per-game settings (see below). The host calls `new_session` with keyword args (`cfg`, plus `player_name` when the room configures one) — give every parameter a default. Engines predating `cfg` are called without it.
 
 **Seat set (only if `whose_turn` ever returns `'ai'`)** — the host runs her sealed one-shot seat:
 
@@ -123,7 +123,7 @@ Saved values are stored per *game*, plugin-wide — a player's house rules carry
 Loaded fresh on every room entry as an ES module from `/plugin-web/<your-plugin>/<entry_js>`. Two shapes:
 
 - **Turn game** — export `renderBoard`/`renderActions`; the shell owns all chrome (talk rail, composer, voice). Helpers arrive via `ctx` — don't import the shell. See `game-holdem/app/poker.js`.
-- **Free-mount** — export `{mount, unmount}`; you own the whole stage (canvas, input, your own sim loop). Server stays authoritative for setup and checkpoints. See `game-darkhorse/app/towerd.js`.
+- **Free-mount** — export `{mount, unmount}`; you own the whole stage (canvas, input, your own sim loop). Server stays authoritative for setup and checkpoints. See `app/towerd.js` in the external game-darkhorse repo.
 
 Load sibling assets relative to your own module so the path survives any rename:
 
@@ -148,3 +148,16 @@ const defs = await fetch(`${base}/defs.json`).then(r => r.json());
 4. Tile appears in the Game Room library; sessions create, play, save, resume.
 
 See [Publishing](publishing.md) to submit to the store, and [Stories](stories.md) if your idea is narrative rather than mechanical.
+
+## Reference for AI
+
+GAME PLUGINS (Game Room host):
+- Manifest: `capabilities.games` = [{id (required, [a-z0-9][a-z0-9_-]{0,32}, globally unique, stable FOREVER — saves and session chats key on it, first registrant wins), title, genre, desc, icon, surfaces (["room"] default and/or ["chat_sidebar"]), entry_js (room games: plugin-relative board module path), players, facts (bullet list, short), tile (art served at /plugin-web/<plugin>/<tile>)}].
+- Files: games/<id>/meta.json ({id, title, icon, desc, order}) + games/<id>/engine.py; board module at entry_js served as an ES module from /plugin-web/<plugin>/<entry_js>, loaded fresh on every room entry.
+- Engine core set: new_session(...)->state (host calls with kwargs cfg + optional player_name — default every param; state carries session{player_name, ai_name}, talk[], talk_seq), can_start(state)->str|None, start_round(state), whose_turn(state)->'player'|'ai'|None, apply_action(state, who, action, args) (raises IllegalAction), safe_action(state)->(action, args), redact(state)->dict (client-safe, strip hidden info). `import gameroom_core` inside engines gives add_talk + IllegalAction.
+- Seat set (required iff whose_turn can return 'ai'): legal_actions(state)->{'actions': [...], ...bounds}, CONTRACT (prompt block, {ai_name}/{opp_name} slots), build_user_msg(view)->str, validate_decision(data, view)->{'action','args','say'}|None, view_for_ai(state)->dict (MUST include my_name/opp_name/talk; MUST NOT include hidden opponent info — sealed-seat law). Invalid AI move -> safe_action fallback.
+- Banter set (recommended): BANTER_CONTRACT, view_between(state), build_banter_msg(view).
+- Per-game settings: export SETTINGS = [{key, label, type: text(+rows)|string|number|range(+min/max/step), tab?, default}]; saved per game plugin-wide (NOT chat-scoped, NOT vault-encrypted — no conversation content), arrives as cfg.
+- Sessions ARE chats: state stored as a chat-scoped row (key `game:<id>`) — keep state JSON-serializable; saves follow the chat (rename/private-encrypt/delete), survive plugin rename, never survive changing the game id. Private (vault-locked) session: host reads no state, refuses writes LOUDLY, AI seat fails closed.
+- Actions prefixed `_` are silent system verbs (checkpoints, state sync): no talk line, no AI turn. Real-time games checkpoint at natural boundaries; keep snapshots small.
+- Ship: sign (`python tools/sign_plugin.py <plugin>`), restart, expect log `[GAMES] Game registered: '<id>' from '<plugin>'`.

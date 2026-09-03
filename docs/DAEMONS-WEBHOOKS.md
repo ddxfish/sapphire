@@ -1,14 +1,16 @@
 # Daemons & Webhooks
 
-Sapphire can react to events from the outside world — Discord messages, incoming emails, Telegram chats, or HTTP requests from any service. This guide covers how to set them up.
+Sapphire can react to events from the outside world — Discord messages, incoming emails, Telegram chats, live phone calls, or HTTP requests from any service. This guide covers how to set them up.
 
 ## Quick Start
 
-1. Go to **Schedule** in the nav
-2. Click **+ New Task**
-3. Choose **Daemon** (for Discord/Email/Telegram) or **Webhook** (for HTTP)
+1. Open the **Triggers** group in the nav — it has five views: Heartbeat, Scheduled, Daemons, Realtime, Webhooks
+2. Go to **Daemons** (for Discord/Email/Telegram), **Realtime** (for live phone lines), or **Webhooks** (for HTTP)
+3. Click **+ Daemon** / **+ Realtime** / **+ Webhook**
 4. Configure the trigger and AI settings
 5. Save and enable
+
+(The Heartbeat and Scheduled views are time-driven — see [Continuity](CONTINUITY.md).)
 
 ---
 
@@ -85,7 +87,9 @@ Fires on emails with "invoice" in the subject from someone named "accounting".
 
 | Setting | Description |
 |---------|-------------|
-| Auto-reply in channel | Send the AI's response back to the Discord channel |
+| Bot Account | Which Discord bot this daemon listens on (required — only that bot connects) |
+| Auto-reply in channel | Send the AI's response back to the Discord channel. Off = listen-only (pipe to TTS, save to memory, act via tools without replying) |
+| Reply cooldown (seconds) | Minimum seconds between replies in the same channel. 0 = no limit; 60 = at most once a minute |
 
 ### Example: Server Helper Bot
 
@@ -139,7 +143,8 @@ Auto-reply: On
 
 | Setting | Description |
 |---------|-------------|
-| Auto-reply to sender | Send the AI's response as an email reply |
+| Email Account | Which email account this daemon monitors (required — only that account is polled) |
+| Auto-reply to sender | Send the AI's response as an email reply. Off = the AI still runs on incoming mail, but no reply goes out |
 
 ### Example: Auto-Reply to Support Emails
 
@@ -177,8 +182,8 @@ Knowledge scope: finances
 
 | Setting | Description |
 |---------|-------------|
-| Account | Which Telegram bot to listen on |
-| Reply Format | Plain text, Markdown, or HTML |
+| Account | Which Telegram account to listen on |
+| Reply Format | Plain Text, Markdown, HTML, Text + Voice Note, or Voice Note Only |
 
 ### Example: Personal Assistant on Telegram
 
@@ -190,6 +195,30 @@ Reply Format: Markdown
 Toolset: default
 Memory scope: personal
 ```
+
+---
+
+## Realtime
+
+Realtime rules are the live lane. Where a daemon task fires once per event ("a message arrived → run the AI once"), a Realtime rule is an **on/off switch** for a held-open inbound session — a phone call Sapphire answers and converses with in real time. Enabling the rule lets her pick up; no one-shot task ever fires for a realtime source. The rule *gates* the session and supplies its configuration.
+
+Realtime rules live in **Triggers → Realtime**. Under the hood they're stored as daemon tasks whose event source declares itself realtime, so the same account routing and filter matching applies — but the UI keeps the two lanes apart, and realtime rules only appear in the Realtime view.
+
+The **Twilio Voice** plugin ships the first realtime source: **Answer Phone Calls** on a Twilio number. Per-rule config lives on the rule itself:
+
+| Setting | Description |
+|---------|-------------|
+| Endpoint | Which line the rule answers (e.g. a Twilio number) |
+| Callers | Anyone, or an allowlist of numbers. Phone numbers match on their digit tail, so formatting doesn't matter |
+| Where the session runs | A saved chat (persistent — she remembers across calls), or an ephemeral per-caller chat that auto-clears after a set number of minutes |
+| Greeting | Spoken when the session connects |
+| Phone context | A per-turn invisible note so she knows she's on a live call — never saved, never seen by the caller |
+| Public line | Apply the conduct rails from the plugin's settings. Uncheck for a trusted line like your own number |
+| Toolset elevation | Optional spoken passphrase that unlocks a chosen toolset for the rest of the call |
+
+Rule selection is most-specific-wins: a rule whose caller filter matches the incoming call beats a catch-all rule with no filter — so you can pair a "just me" rule with an "everyone else" rule on the same number. A rule whose filter fails is excluded, and if no rule matches at all, the call is declined.
+
+Full phone setup — Twilio numbers, SIP, voices, ephemeral chats — lives in [PHONE-CALLS.md](PHONE-CALLS.md).
 
 ---
 
@@ -219,6 +248,8 @@ Webhooks let external services trigger Sapphire via HTTP. Any service that can s
 | POST/PUT | `application/json` | Parsed JSON object |
 | POST/PUT | anything else | Raw body text |
 | GET | — | Query parameters as JSON |
+
+Payloads are capped at **1 MB** — anything larger is rejected with HTTP 413.
 
 ### Example: GitHub Deploy Notification
 
@@ -349,3 +380,28 @@ Every daemon and webhook task has the same AI settings as scheduled tasks:
 - All filter keys are AND'd — every one must pass
 - Use `_contains` for partial matches instead of exact
 - Field names must match what the daemon emits (check the filter hints in the editor)
+
+## Reference for AI
+
+Event-driven triggers. UI: **Triggers** nav group — the Daemons, Realtime, and Webhooks views (Heartbeat/Scheduled are time-driven, see CONTINUITY.md).
+
+TYPES:
+- daemon: plugin event listener (Discord/email/Telegram). trigger_config: source, account, filter (JSON object), plus plugin-declared task fields (auto_reply, cooldown, reply_format, ...)
+- webhook: HTTP trigger at /api/events/webhook/{path}. trigger_config: path, method (GET/POST/PUT), secret (auto-generated on create)
+- realtime: a daemon task whose event source declares realtime:true (e.g. Twilio incoming_call). It GATES a live inbound session instead of firing a one-shot task — enabling the rule lets the daemon answer; per-rule config (endpoint/account, caller allowlist, saved vs ephemeral per-caller chat, greeting, phone context, public-line rails, toolset-elevation passphrase) lives on the rule. Rule selection is most-specific-wins (matching filter beats catch-all; no match = decline). Shown in the Realtime view, not Daemons. See PHONE-CALLS.md.
+
+FILTERS (trigger_config.filter):
+- exact match is case-insensitive; suffix _contains = substring; suffix _not = exclude; all keys AND'd
+- a comma-separated filter value is an allowlist (any entry matches); phone-shaped values compare on digit tail
+
+WEBHOOK:
+- auth: x-webhook-secret header, or GitHub-style HMAC x-hub-signature-256 (sha256=hex over raw body); secret shown in trigger config after creation
+- payload cap 1 MB (413 above); JSON bodies parsed, other bodies raw text, GET query params as JSON
+- success returns {"status": "triggered", ...}; unknown path/method or disabled task = 404
+
+LIMITS: 25 tasks total; 10 daemon; 10 webhook; 4 heartbeat.
+
+TROUBLESHOOTING:
+- try an empty filter {} first to confirm events arrive; filter field names must match the daemon's emitted fields
+- webhook path is case-sensitive and must match method
+- a realtime rule missing from Daemons is correct — realtime-source rules render only in the Realtime view

@@ -4,6 +4,8 @@ Sapphire can remember the people in your life — names, relationships, phone nu
 
 People are managed in the **Mind** view (brain icon) under the **People** tab.
 
+With the Mind Palace plugin enabled, People is replaced by **Entities** — people, places, and things, with kinds, templates, and cards; [MIND-PALACE.md](MIND-PALACE.md) covers it.
+
 <img width="50%" alt="sapphire-people" src="https://github.com/user-attachments/assets/77b1df57-a0cf-4666-8bfe-4dcb5ce96579" />
 
 ---

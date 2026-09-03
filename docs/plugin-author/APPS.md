@@ -182,3 +182,12 @@ Groups: `chat`, `personas`, `triggers`, `mind`, `settings`. An unrecognized grou
 - Your app inherits Sapphire's dark theme automatically
 - Keep your app self-contained — don't modify the nav rail or other views
 - Prefer `"nav": true` over DOM manipulation — it's cleaner and survives Sapphire updates
+
+## Reference for AI
+
+PLUGIN APPS:
+- Manifest: `capabilities.app` = {label (falls back to display_name), icon (falls back to plugin emoji), description, nav?}. Files: `app/index.js` (required) exporting `render(container)` and optional `cleanup()`; assets served at `/plugin-web/{name}/app/`.
+- `render(container)` receives a DOM element; may RETURN a teardown function — that closure wins over the module-level `cleanup()` export (prefer it when claiming shared DOM; the module is memoized across renders). `cleanup()` is called on navigate-away.
+- nav: absent = Apps grid tile; `true` = own navrail icon (max 3 promoted — overflow falls back to the grid); a group name string = entry in that group's flyout (no rail slot, uncapped). Valid groups: chat, personas, triggers, mind, settings — unknown/malformed falls back to a rail slot. URL hash: `#app-{plugin-name}` (bookmarkable); clicking the nav entry while inside a sub-route (#app-{name}/...) returns to the app home.
+- Apps run inline (not iframed) with full access to Sapphire modules: `/api/*` with session auth; `import { fetchWithTimeout } from '/static/shared/fetch.js'` (ABSOLUTE path — apps load from /plugin-web/, relative ../../ misses); `import * as eventBus from '/static/core/event-bus.js'` for SSE events; `import * as ui from '/static/ui.js'` for toasts; plugin settings via GET/PUT `/api/webui/plugins/{name}/settings` (PUT needs X-CSRF-Token from meta[name="csrf-token"]).
+- Rules: never inject nav items via DOM manipulation (use `nav` in the manifest); clean up intervals/sockets/listeners; use theme CSS variables; keep the app self-contained.

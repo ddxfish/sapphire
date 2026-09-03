@@ -4,9 +4,9 @@ Spice prevents stories from going stale and helps avoid loops or repetitive form
 
 ## How It Works
 
-1. Create spices in categories via the Spice Manager
-2. Enable/disable categories with checkboxes (applies globally)
-3. Enable spice for a chat in Chat Settings
+1. Create spices in categories via the **Spices** view (in the Persona group)
+2. Group categories into **spice sets** — each chat picks one set, and only that set's categories feed the pool
+3. Enable spice for a chat with the **Spice** toggle in the chat sidebar
 4. Each message, one random snippet reaches the AI — by default on the **ghost-message rail**, a labeled note inserted just before your input, visible to the AI but not to you
 5. Rotates every X messages based on your settings
 
@@ -20,19 +20,32 @@ Rule of thumb: cloud model with long chats → ghost message. Local model, or yo
 <img width="50%" alt="sapphire-spices" src="https://github.com/user-attachments/assets/f5563bed-7c5d-490a-9d18-c7f87339d9ef" />
 
 
+## Spice Sets
+
+A **spice set** is a named selection of categories — the Spices view is built around them. The left rail lists your sets; the right panel shows every category in the pool with a checkbox for whether it's **in the selected set**.
+
+- ✅ Checked categories are part of this set and contribute to its spice pool
+- ⬜ Unchecked categories are excluded from this set (they still exist in the pool for other sets)
+
+Checkbox changes save to the selected set automatically. Sapphire seeds starter sets — **default** 🌶️, **companion** 💜, and **professional** 💼 — and they're yours to edit or delete.
+
+**Working with sets:**
+
+- **Create** — the **+** button saves the current checkbox selection as a new set
+- **Delete** — removes the set (the categories and their spices stay in the pool)
+- **Emoji** — click the set's emoji (or *add emoji*) to pick a badge; it shows in dropdowns everywhere
+- **Export / Import** — sets travel as JSON files that carry their categories *with* the spices inside, so a shared set works on another install
+- **Activate** — stamps the set onto your current chat
+
+**Each chat picks its own set.** The chat sidebar has a **spice set** dropdown — switching chats applies that chat's set, so a storytelling chat and a work chat can run completely different pools. Personas can carry a spice set too, so activating a persona brings its flavor along.
+
 ## Quick Toggle
 
-The Spice dropdown in the Chat Settings gives quick access to spice:
+The **Spice** pill in the chat sidebar toggles spice on/off for the current chat only. Its label shows the rotation interval (e.g. `Spice · 3`), which you can change under the sidebar's System Prompt section.
 
-- **Hover** — Shows the current spice for last message
-- **Click** — Toggle spice on/off for this chat only
+## Category Management
 
-## Category Control
-
-Use the checkboxes next to each category to enable or disable entire categories globally. This affects all chats that have spice enabled.
-
-- ✅ Checked categories contribute to the spice pool
-- ⬜ Unchecked categories are excluded
+Categories and their spices are managed inline in the Spices view: **+ Category** creates one, and each category expands to add, edit, or delete individual spices. Categories can have their own emoji, and **Reload Pool** re-reads the spice pool from disk if you've edited the file by hand.
 
 ## Example Spices
 
@@ -61,26 +74,31 @@ Use the checkboxes next to each category to enable or disable entire categories 
 
 ## Reference for AI
 
-Spice injects random prompt snippets to prevent repetitive outputs.
+Spice injects random prompt snippets to prevent repetitive outputs. Spice SETS group categories; each chat picks a set.
 
 SETUP:
-1. Open Spice Manager (sidebar)
-2. Add snippets to categories
-3. Enable/disable categories with checkboxes (global)
-4. Enable spice in Chat Settings (per-chat)
-5. Set rotation interval
+1. Open the Spices view (Persona nav group)
+2. Add snippets to categories (+ Category, then + Spice inside it)
+3. Check categories into the selected spice set (checkbox = membership in that set, saves automatically)
+4. Pick the set per chat via the sidebar "spice set" dropdown (personas can carry a spice_set)
+5. Enable spice per chat with the sidebar Spice toggle; set rotation via spice turns
+
+SPICE SETS:
+- Set = named list of categories + optional emoji; built-in starters: default, companion, professional
+- Sets rail: + saves current checkboxes as a new set; delete removes the set only (pool keeps categories); export/import JSON carries categories with their spices
+- Activate stamps the set onto the current chat; switching chats applies that chat's set — the enabled pool follows the active chat
+- No global category toggle exists anymore — membership is always per-set
 
 QUICK ACCESS:
-- Spice dropdown input area
-- Hover: shows current spice
-- Click: toggle spice for this chat
+- Sidebar "Spice · N" pill: click toggles spice for this chat (N = rotation turns)
+- Sidebar "spice set" dropdown: which set this chat uses (↗ opens the Spices view)
 
 HOW IT WORKS:
-- One random snippet per interval; only enabled categories contribute to pool
+- One random snippet per interval; only the active chat's set categories contribute to the pool
 - Delivery picked by SPICE_DELIVERY (Settings > LLM > General, hot-reload, default 'ghost'):
   - 'ghost' — rides the ghost-message rail as a labeled line (since 2.6.4); system prompt stays cached
   - 'system' — appended to the system prompt unattributed; prompt changes each rotation, so cache-billed cloud models re-tokenize (free on local models)
-- Stored in user/prompts/prompt_spices.json
+- Spice pool stored in user/prompts/prompt_spices.json; sets in user/spice_sets/spice_sets.json (seeded from core defaults on first run, user file authoritative after)
 
 GOOD SPICES:
 - "Something unexpected happens" (vague, fits any scene)

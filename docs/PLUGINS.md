@@ -9,7 +9,14 @@ This documentation has been reorganized. See the **[Plugin Author Guide](plugin-
 |-------|--------------|
 | [Overview & Quick Start](plugin-author/README.md) | What plugins are, tools vs plugins, quick start, complete example |
 | [Manifest](plugin-author/manifest.md) | `plugin.json` reference — fields, priority bands, directory structure |
-| [Hooks](plugin-author/hooks.md) | All 20 hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
+| [Hooks](plugin-author/hooks.md) | All hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
+| [Examples](plugin-author/examples.md) | Copy-paste samples for every capability type |
+| [Daemons](plugin-author/daemons.md) | Event sources, reply handlers, realtime gates, task fields |
+| [Subprocesses](plugin-author/subprocesses.md) | ProcessManager and declared services |
+| [Apps](plugin-author/APPS.md) | Full-page plugin UIs promoted into the nav rail |
+| [Themes](plugin-author/THEMES.md) | Plugin themes and motions — CSS, settings, teardown |
+| [Memory Layers](plugin-author/memory-layers.md) | Plugins adding layers to the Mind Palace |
+| [Prompt Packs](plugin-author/prompts.md) | Shipping prompts with a plugin |
 | [Voice Commands](plugin-author/voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |
 | [Tools](plugin-author/tools.md) | Tool file format, schema flags, scopes, reading settings, plugin + chat-scoped state, privacy patterns |
 | [Routes](plugin-author/routes.md) | Custom HTTP endpoints — path params, auth enforcement, handler signature |

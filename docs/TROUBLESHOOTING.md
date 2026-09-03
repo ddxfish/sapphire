@@ -287,6 +287,18 @@ You'll need to re-run setup and reconfigure settings.
 - Output is a `.onnx` file. Drop it into `user/wakeword/models/` and pick it from the dropdown.
 - For phrase quality tips and threshold tuning, see the `openWakeWord` docs and issues — the Sapphire side is just a thin loader.
 
+## Voice & Conversation Issues
+
+Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest ones:
+
+**She hears herself / echoes in conversation mode**
+- Use headphones, or let the duplex echo-cancel tier engage (see VOICE.md — echo tiers)
+
+**Conversation mode connects but she is silent**
+- Conversation audio requires streaming TTS: Settings > TTS > streaming enabled AND a streaming-capable provider (Kokoro or Piper). Cloud TTS providers render on screen only.
+
+**Phone call problems** — see PHONE-CALLS.md's Quick Troubleshooting (403 on register, one-way audio, hangup issues).
+
 ## Prompt issues
 **If you broke your default prompts**
 - Settings > System tab
@@ -331,7 +343,14 @@ You'll need to re-run setup and reconfigure settings.
 - Sapphire backs up your data on a schedule — see [BACKUPS.md](BACKUPS.md) for what's covered and how to restore.
 - Manual integrity check (needs the sqlite3 CLI, Sapphire stopped): `sqlite3 user/history/sapphire_history.db "PRAGMA quick_check;"` — should print `ok`.
 
+**Chat opens but is read-only ("degraded")**
+- Some stored rows couldn't be read; repair it: Chat Manager -> the chat's 🔧 Repair button (see CHATS.md — degraded chats)
+
 ## LLM issues
+
+**Send refused: "Sapphire is still replying in this chat"**
+- One turn per chat: a stream is live (maybe another tab). Press Stop, then send (see CHATS.md)
+
 **LM Studio (simple) test failing**
 - Open LM studio, click Developer in lower left to show advanced options, click green Developer tab, toggle server on, load a model
 - Go back to Sapphire: Settings > LLM > LM Studio > test button
@@ -354,9 +373,8 @@ You'll need to re-run setup and reconfigure settings.
 - Check if the model you are on supports thinking
 
 **Claude prompt caching not working (always MISS)**
-- Spice changes system prompt every turn — disable if caching matters
-- Datetime injection also breaks cache
-- "State vars in prompt" breaks cache (changes on state updates)
+- Spice and datetime are NOT the cause — both ride the ghost rail and are cache-safe (see GHOST_MESSAGES.md)
+- Real cache breakers: switching prompts/personas mid-conversation, editing prompt pieces, anything that rewrites the actual system prompt between turns
 - Check logs for `[CACHE] Dynamic content detected - tools only, system prompt not cached`
 
 **Claude caching enabled but costs seem high**
@@ -364,16 +382,24 @@ You'll need to re-run setup and reconfigure settings.
 - Cache expires after TTL (5m default, can set to 1h)
 - If prompts change often, cache never gets reused
 
+## Network / Proxy Issues
+
+Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed reminder: with SOCKS on, a dead proxy means loud errors everywhere — nothing silently falls back to direct.
+
+**Everything network fails right after enabling SOCKS** — proxy down or wrong host/port (see NETWORK.md)
+**Every request dies "host unreachable" with SOCKS on** — your proxy has no server-side DNS; turn off "DNS via proxy" (NETWORK.md)
+**LLM works, web tools fail (or vice versa)** — the LLM lane is exempt by default; check the "What rides the proxy" strip in Settings > Network
+
 ## Tool/Function Issues
 
 **"No executor found for function"**
 - Function exists in toolset but Python file missing or has errors
-- Check `functions/` directory for the module
+- Check `functions/` (core tools) or the owning plugin's directory for the module
 - Look for import errors in logs
 
 **Web search returns no results**
 - Rate limited by DuckDuckGo. Wait and retry.
-- If using SOCKS proxy, verify it's working (see SOCKS.md)
+- If using the SOCKS proxy, verify it's working (see NETWORK.md)
 - Enable verbose tool debugging in settings for more logging
 
 ## Plugin Issues

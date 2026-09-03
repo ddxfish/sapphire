@@ -32,8 +32,8 @@ contribution:
 - weather: Light rain in the user's area.
 ```
 
-- The header is `_ENVELOPE_HEADER` (`ghost_messages.py:77`). It is the sentinel the
-  Claude provider greps for to find the cache boundary — do not change it lightly.
+- The header is `_ENVELOPE_HEADER` in `core/ghost_messages.py`. It is the sentinel
+  the Claude provider looks for to find the cache boundary — do not change it lightly.
 - Built-in `(core)` lines (Time, Spice) render bare (they self-label).
 - The per-chat operator box renders `- (operator): …`.
 - Each plugin's line renders `- <plugin_name>: …` — attribution is **automatic and
@@ -46,7 +46,8 @@ hidden instructions silently. That labeling is what separates a ghost message fr
 puppetry.
 
 **Message order** in the LLM payload: `[system, *history, ghost, new-user]`
-(`chat.py:526-528`). If nothing contributes, no ghost message is sent at all.
+(assembled in `_build_base_messages`). If nothing contributes, no ghost message is
+sent at all.
 
 ---
 
@@ -60,20 +61,20 @@ Driven by chat settings, zero plugin involvement:
   time in `USER_TIMEZONE`.
 - **Spice** — when `spice_enabled` is true (**default on**) and a spice is selected.
 
-Both are `(core)` contributions (`ghost_messages.py:131-140`).
+Both are `(core)` contributions, built in `core/ghost_messages.py`.
 
 ### 2. The per-chat "Ghost Message" box (operators / users)
 
 A free-text box in the chat **Settings sidebar → System Prompt accordion**, right
-under "Custom Context" (`interfaces/web/templates/index.html:379-382`, id
-`#sb-ghost-context`). Placeholder: *"Injected as a per-turn ghost message (empty =
-none)…"*
+under "Custom Context" (id `#sb-ghost-context`, in the chat surface module
+`interfaces/web/static/surface/chat-mode.js`). Placeholder: *"Injected as a per-turn
+ghost message (empty = none)…"*
 
-- **Setting key:** `ghost_context` (per-chat, stored in SQLite; default `""` at
-  `core/chat/history.py:32`).
-- **Saved via:** `PUT /api/chats/{name}/settings` (`core/routes/chat.py:855`). The
-  sidebar can only edit the **currently-open** chat (the endpoint rejects settings
-  writes to a non-active chat, `chat.py:866-867`).
+- **Setting key:** `ghost_context` (per-chat, stored in SQLite; default `""` in
+  `core/chat/history.py`).
+- **Saved via:** `PUT /api/chats/{name}/settings` in `core/routes/chat.py`. A write
+  to a non-active chat goes straight to storage (no live apply) — the same path
+  daemons use to configure chats they never activate.
 - **What it does:** whatever you type is injected **every turn** of that chat as
   `- (operator): <your text>`, invisible in the transcript, never persisted,
   cache-safe. It's a *fixed* line (unlike spice, which rotates) — same string every
@@ -123,7 +124,7 @@ def ghost_inject(event):
         event.ghost_text = f"{note} Mention only if it fits naturally."
 ```
 
-**Contract details** (all runner-enforced, `core/hooks.py:197-233`):
+**Contract details** (all runner-enforced in `core/hooks.py`):
 - The runner clears `ghost_text` and stamps the plugin's label **before** each
   handler, and captures `(plugin_name, ghost_text)` **after**. You set only
   `event.ghost_text` — never touch `ghost_label` or `ghost_contributions`
@@ -136,7 +137,7 @@ def ghost_inject(event):
 - The hook fires on a **fresh** `HookEvent` (not the `pre_chat` one). Only
   `input` and `metadata["system"]` are populated. `event.config` is **None** for
   this hook — import the `config` module directly if you need settings.
-- User-band plugins fire at priority 150 (after system-band contributors).
+- User-band plugins fire after system-band contributors (the user priority band).
 
 Re-sign after any manifest/code change: `python tools/sign_plugin.py plugins/<name>`.
 
@@ -152,8 +153,8 @@ invisible to the user, one specific pattern is a manipulation primitive and is
 > **+ invisible delivery** (inherent to ghost) **+ instructive/opinion-shaping
 > output** = manipulation.
 
-The canonical statement is in `core/hooks.py:34-38` and `ghost_messages.py:44-49`.
-This shape is named the "Vanta-shape" anti-pattern after exactly such a plugin.
+The canonical statement lives at the top of `core/hooks.py` and
+`core/ghost_messages.py`. This shape is named the "Vanta-shape" anti-pattern after exactly such a plugin.
 
 - **`event.input` is for awareness, not for matching against.** You may know what
   the user said to decide *whether* ambient context is relevant; you may **not**
@@ -184,7 +185,7 @@ ghost rail is encouraged.
   never renders in the transcript.
 - **Cache-safe on Claude.** The ghost sits *outside* the marked cache prefix, so its
   per-turn content never invalidates system/tools/history caching
-  (`claude.py:_apply_history_cache_control`). Non-Claude providers still get the
+  (`_apply_history_cache_control` in the Claude provider). Non-Claude providers still get the
   rail as a normal user message — it works everywhere, it just only *caches* on
   Claude-native.
 - **Per-context correct.** During an A1 per-stream turn (a conversation running in a
@@ -199,17 +200,15 @@ ghost rail is encouraged.
 | Concern | Location |
 | --- | --- |
 | Builder, envelope, sources, truncation | `core/ghost_messages.py` |
-| Envelope sentinel | `core/ghost_messages.py:77` |
-| Operator box read | `core/ghost_messages.py:146-148` |
-| Plugin hook fire + coercion + 2 KB cap | `core/ghost_messages.py:151-189` |
-| Hook attribution mechanic | `core/hooks.py:197-233` |
-| Anti-manipulation clause | `core/hooks.py:34-38` |
-| Build site (payload assembly) | `core/chat/chat.py:514-528` |
-| Claude cache-boundary placement | `core/chat/llm_providers/claude.py:639-700` |
-| Cache gate (why spice/datetime moved here) | `core/chat/llm_providers/claude.py:159-199` |
-| Sidebar "Ghost Message" box | `interfaces/web/templates/index.html:379-382` |
-| `ghost_context` default (`""`) | `core/chat/history.py:32` |
-| Hook loader (function-name resolution) | `core/plugin_loader.py:414-422, 689-700` |
+| Envelope sentinel | `_ENVELOPE_HEADER` in `core/ghost_messages.py` |
+| Operator box read + plugin hook fire + 2 KB cap | `build_ghost_message` in `core/ghost_messages.py` |
+| Hook attribution mechanic | `core/hooks.py` |
+| Anti-manipulation clause | top of `core/hooks.py` |
+| Build site (payload assembly) | `_build_base_messages` in `core/chat/chat.py` |
+| Claude cache-boundary placement | `_apply_history_cache_control` in `core/chat/llm_providers/claude.py` |
+| Sidebar "Ghost Message" box | `#sb-ghost-context` in `interfaces/web/static/surface/chat-mode.js` |
+| `ghost_context` default (`""`) | `core/chat/history.py` |
+| Hook loader (function-name resolution) | `core/plugin_loader.py` |
 | Plugin hook author guide | `docs/plugin-author/hooks.md` (ghost_inject section) |
 
 ---
@@ -246,3 +245,29 @@ handle = ghost_inject   # optional fallback alias
 Then `python tools/sign_plugin.py plugins/weather-ghost` and reload. The line will
 appear as `- weather-ghost: …` in the envelope, seen by the assistant, never by the
 user, never saved.
+
+---
+
+## Reference for AI
+
+Per-turn ephemeral context rail: one user-role message inserted right before the new user turn. Payload order [system, *history, ghost, new-user]. Never persisted (architectural — built into the payload list, never handed to history saves), never rendered to the user, sits outside Claude's cache prefix (cache-safe; other providers get it as a plain user message).
+
+ENVELOPE:
+- Header sentinel: "[System context from Sapphire's own app — not written by the user]" (_ENVELOPE_HEADER, core/ghost_messages.py)
+- One attributed line per source; attribution is runner-enforced (no label spoofing)
+
+SOURCES:
+- (core) Time — chat setting inject_datetime (default off); (core) Spice — spice_enabled (default on)
+- (operator) — per-chat ghost_context setting ("Ghost Message" box, chat surface sidebar); same line every turn, no length cap
+- <plugin> — ghost_inject hook: set event.ghost_text (string); errors isolated, non-strings coerced, 2 KB/plugin cap; event.config is None (import config directly)
+
+FILES:
+- core/ghost_messages.py — builder, envelope, truncation
+- core/hooks.py — runner, attribution, anti-manipulation clause
+- core/chat/chat.py (_build_base_messages) — payload assembly
+- core/chat/llm_providers/claude.py (_apply_history_cache_control) — cache boundary
+
+RULES:
+- Never fingerprint user text to deliver invisible instructive/opinion-shaping content (Vanta-shape — rejected at store review); event.input is awareness-only
+- ghost_context saves via PUT /api/chats/{name}/settings; non-active chats write straight to storage (no live apply)
+- Re-sign after plugin changes: python tools/sign_plugin.py plugins/<name>

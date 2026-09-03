@@ -152,6 +152,34 @@ class MyProvider(BaseTTSProvider):
 Optional methods:
 - `list_voices()` — return list of `{"voice_id": str, "name": str}` dicts for the voice picker
 
+**Streaming — `supports_streaming` + `generate_stream()`.** If your backend can
+produce audio incrementally, declare the flag and override the method:
+
+```python
+class MyProvider(BaseTTSProvider):
+    supports_streaming = True
+
+    def generate_stream(self, text: str, voice: str, speed: float, **kwargs):
+        """Yield self-contained, independently decodable audio blobs
+        (e.g. one complete OGG per chunk), in play order."""
+        for piece in self._backend_stream(text, voice, speed):
+            yield piece
+```
+
+The base class ships a fallback `generate_stream()` that just calls
+`generate()` once and yields the whole blob — so a provider without the flag
+still *works* when the user enables streaming TTS, it silently degrades to
+one-shot synthesis (no audio until the full clip is ready). Set
+`supports_streaming = True` only when you actually override the method: the
+TTS client reads the flag to decide whether to expect chunked semantics.
+
+**Pitch — `supports_pitch`.** Declare `supports_pitch = True` when your backend
+applies pitch at synthesis time; the client then passes `pitch=` as a kwarg to
+`generate()` / `generate_stream()` and expects the shift already applied.
+Without the flag, a user pitch setting falls back to the legacy client-side
+decode→resample→re-encode path (slower, lossier). It's strictly one or the
+other — an honest flag is what prevents a double shift.
+
 ### STT — `BaseSTTProvider`
 
 ```python
@@ -241,7 +269,7 @@ A provider that fails the canary is **disabled** at the registry level and Sapph
 
 Your plugin doesn't have to do anything special — this all works as long as your `PROVIDER_ID` is stable and your `embed()` contract is honored.
 
-**Reference implementations:** the built-in embedding providers in `core/embeddings/__init__.py` (`LocalEmbedder`, `RemoteEmbedder`) show the full pattern: lazy load, CPU/remote inference, L2-normalized, canary-clean output. For a plugin-shipped provider, see `user/plugins/embedder-minilm/` — a signed, working MiniLM provider plugin and the canonical example of the manifest + class contract.
+**Reference implementations:** the built-in embedding providers in `core/embeddings/__init__.py` (`LocalEmbedder`, `RemoteEmbedder`) show the full pattern: lazy load, CPU/remote inference, L2-normalized, canary-clean output. For a plugin-shipped provider, the manifest + class contract above is complete — pair a `capabilities.providers.embedding` entry with a class that honors the canary contract.
 
 **Gotchas:**
 - The registry calls your class's `__init__()` with no arguments. Lazy-load the model inside `available` or inside `embed()`, not in `__init__` — otherwise boot stalls on every restart.
@@ -360,5 +388,18 @@ If a provider plugin is the configured provider (e.g., `TTS_PROVIDER=elevenlabs`
 ## Examples
 
 - `plugins/elevenlabs/` — TTS provider with API key, model selection, voice picker
-- `user/plugins/embedder-minilm/` — a plugin-shipped embedding provider (manifest + provider class)
+- `plugins/piper/` — local TTS provider with `on_settings_saved` + `PLUGIN_NOTICE` download progress
 - `core/embeddings/__init__.py` — the built-in embedding providers (`LocalEmbedder`, `RemoteEmbedder`, etc.); study these for the swap + re-embed + provenance path.
+
+## Reference for AI
+
+PROVIDER PLUGINS (TTS / STT / embedding / LLM):
+- Manifest: `capabilities.providers.{tts|stt|embedding|llm}` = {key (unique id), display_name, entry (default provider.py), class_name, requires_api_key?, api_key_env?, is_local?}. `is_local: true` ONLY for fully on-device inference; absent = treated as cloud => private chats refuse the STT/TTS provider (fail-closed privacy gate). Extra fields pass through as registry metadata.
+- TTS: subclass `core.tts.providers.base.BaseTTSProvider`. Required: `generate(text, voice, speed, **kwargs) -> bytes|None`, `is_available() -> bool`. Class attrs: `audio_content_type` (default 'audio/ogg'), `SPEED_MIN`/`SPEED_MAX` (base defaults 0.5/2.5), `supports_streaming` (default False), `supports_pitch` (default False). Optional: `list_voices() -> [{"voice_id", "name"}]`. `generate_stream(text, voice, speed, **kwargs) -> Iterator[bytes]` must yield self-contained decodable blobs in play order; base default wraps generate() one-shot — set supports_streaming=True only with a real override, else streaming TTS silently degrades to one-shot. supports_pitch=True => client passes pitch= kwarg and provider shifts at synthesis; False => client-side resample fallback; never both.
+- STT: subclass `core.stt.providers.base.BaseSTTProvider`; implement `_transcribe_impl(audio_path) -> str|None` (NOT transcribe_file — the base wraps it and applies the Whisper hallucination filter exactly once) + `is_available()`.
+- Embedding: duck-typed contract, subclassing optional. Required members: `PROVIDER_ID` (stable string stamped on every stored vector — changing it orphans data until re-embed; include model version), `DIMENSION`, `available` (cheap property), `embed(texts, prefix='search_document') -> np.float32 array (N, D), rows L2-normalized, or None`. Register-time canary: shape (1, D), float32, finite, L2 norm within [0.90, 1.10] (warning band outside [0.95, 1.05]); failure disables the provider and boots NullEmbedder. `__init__()` is called with NO args — lazy-load models. Re-embed flow: GET /api/embedding/integrity, PUT /api/settings/batch with EMBEDDING_PROVIDER + confirm_embedding_swap, POST /api/embedding/reembed. Use `stamp_embedding(vec, embedder)` with an explicit instance.
+- LLM: subclass `core.chat.llm_providers.base.BaseProvider`: `health_check() -> bool`, `chat_completion(messages, tools=None, generation_params=None) -> LLMResponse`, `chat_completion_stream(...)`, `format_tool_result(tool_call_id, function_name, result) -> dict`.
+- Settings: `capabilities.settings` renders inline on the system settings page when the provider is selected; `"settingsUI": null` suppresses the separate plugin settings page. Read via `plugin_loader.get_plugin_settings(name)`.
+- Optional `on_settings_saved(plugin_name, settings)` on the active TTS/STT/embedder provider — fires after ANY plugin's settings save (filter by plugin_name), runs on the save path (do heavy work in a daemon thread), fully isolated, `settings` is a copy.
+- Toasts: `publish(Events.PLUGIN_NOTICE, {plugin, message, severity: info|success|warning|error})` — ephemeral, HTML-escaped, not replayed to new tabs.
+- Boot ordering: a configured provider from a not-yet-loaded plugin is re-checked and activated after all plugins load — no plugin code needed.

@@ -9,11 +9,20 @@ Plugin web UIs can import these from `/static/shared/`:
 | Module | Key Exports | Purpose |
 |--------|------------|---------|
 | `plugin-registry.js` | `registerPluginSettings(config)`, `unregisterPluginSettings(id)` | Register/remove settings tabs |
-| `plugins-api.js` | `listPlugins()`, `getSettings(name)`, `saveSettings(name, data)`, `resetSettings(name)`, `togglePlugin(name)` | Plugin backend API wrapper (auto-injects CSRF) |
+| `plugins-api.js` | **default export** object — `pluginsAPI.listPlugins()`, `.getSettings(name)`, `.saveSettings(name, data)`, `.resetSettings(name)`, `.togglePlugin(name)`, plus install / uninstall / revert / update-check helpers | Plugin backend API wrapper (auto-injects CSRF) |
 | `toast.js` | `showToast(msg, type, duration)`, `showActionToast(msg, label, callback, type, duration)` | Non-blocking notifications (`info`, `success`, `warning`, `error`) |
 | `modal.js` | `showModal(title, fields, onSave, opts)`, `showConfirm(msg, onConfirm)`, `showPrompt(title, label, default)`, `showHelpModal(title, text)`, `escapeHtml(str)` | Dialogs with auto form serialization |
 | `danger-confirm.js` | `showDangerConfirm(config)`, `showDangerBanner(container, msg)` | High-stakes type-to-confirm gates |
 | `fetch.js` | `fetchWithTimeout(url, opts, timeout)`, `sessionId` | Pre-configured fetch with CSRF, 401 redirect, timeout |
+
+All of these are **named exports** — except `plugins-api.js`, which exports a
+single default object:
+
+```javascript
+import { showToast } from '/static/shared/toast.js';        // named
+import pluginsAPI from '/static/shared/plugins-api.js';      // default
+const plugins = await pluginsAPI.listPlugins();
+```
 
 ## Modal Field Types
 
@@ -109,6 +118,8 @@ The module must export a `default` object with an `init()` method. It's loaded v
 | Event | Detail | Fires When |
 |-------|--------|------------|
 | `sapphire:tool_start` | `{id, name, args}` | A tool begins executing during chat streaming |
+| `sapphire:plugin_toggled` | the toggle API response — `{plugin, enabled, reload_required, ...}` | A plugin is toggled on/off in the UI (the app refreshes init data and reloads plugin scripts) |
+| `sapphire:plugin_updated` | `{plugin}` | A plugin is updated or reverted in place (the app drops that plugin's script cache and reloads it) |
 
 ### CSRF Headers
 
@@ -126,3 +137,14 @@ const res = await fetch('/api/my-endpoint', {
     body: JSON.stringify({ key: 'value' })
 });
 ```
+
+## Reference for AI
+
+PLUGIN WEB UI:
+- Shared modules at `/static/shared/` — named exports: `plugin-registry.js` (registerPluginSettings(config), unregisterPluginSettings(id)); `toast.js` (showToast(msg, type='info', duration=4000), showActionToast(msg, label, callback, type, duration); types info|success|warning|error); `modal.js` (showModal(title, fields, onSave, opts), showConfirm(msg, onConfirm), showPrompt(title, label, default), showHelpModal(title, text), escapeHtml(str)); `danger-confirm.js` (showDangerConfirm(config), showDangerBanner(container, msg)); `fetch.js` (fetchWithTimeout(url, opts, timeout), sessionId).
+- `plugins-api.js` is a DEFAULT export: `import pluginsAPI from '/static/shared/plugins-api.js'` — methods listPlugins, getConfig, togglePlugin, getSettings, saveSettings, resetSettings, installPlugin({url|file, force, expectedName}), uninstallPlugin, revertPlugin, checkUpdate; CSRF auto-injected.
+- showModal field types: text {id, label, value, readonly}, number, textarea {rows}, select {options, labels?, value}, checkboxes {options object, selected array -> returns array of keys}, html {value} (skipped in serialization).
+- Chat-view scripts: `web/main.js` per plugin, auto-loaded for enabled plugins via dynamic import with error isolation; must `export default { init() }`.
+- DOM events (document): `sapphire:tool_start` {id, name, args}; `sapphire:plugin_toggled` (toggle response {plugin, enabled, reload_required}); `sapphire:plugin_updated` {plugin} after in-place update/revert.
+- Theming: use CSS variables (--bg/--bg-secondary/--bg-tertiary/--bg-hover, --text/--text-secondary/--text-muted, --border/--border-light, --success/--warning/--error, --accent-blue, --trim, --space-xs..lg, --radius-sm..lg, --font-sm..lg). Inject scoped styles via a <style> element with a stable id.
+- Custom API calls need CSRF: header `X-CSRF-Token` from `meta[name="csrf-token"]`.

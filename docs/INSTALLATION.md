@@ -105,6 +105,8 @@ pip install -r install/requirements-wakeword.txt
 
 Enable each in Settings after installing, then restart.
 
+> **Note:** the minimal install lacks SOCKS proxy support for the LLM lane — if you plan to enable the SOCKS proxy, also run `pip install 'httpx[socks]'` (see [NETWORK.md](NETWORK.md)).
+
 ---
 
 ## LLM Backend

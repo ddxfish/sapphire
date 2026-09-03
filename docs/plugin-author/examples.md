@@ -96,7 +96,7 @@ def prompt_inject(event):
     event.context_parts.append("The user's favorite color is blue.")
 ```
 
-Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`, `chat_renamed`, `chat_deleted`, `chat_vaulted`, `plugins_ready`
+Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `on_wake`, `provider_switched`, `chat_renamed`, `chat_deleted`, `chat_cleared`, `chat_vaulted`, `plugins_ready` — plus the streaming TTS hooks. Full table with fields and semantics: [hooks.md](hooks.md)
 
 In a private chat your hooks are withheld unless the manifest declares top-level `"privacy_aware": true` — see [Private chats](hooks.md#private-chats--privacy_aware).
 
@@ -107,7 +107,7 @@ Key fields on HookEvent:
 - `event.ephemeral = True` — don't persist to chat history
 - `event.context_parts` — list of strings appended to system prompt
 - `event.stop_propagation = True` — prevent lower-priority hooks from firing
-- `event.metadata.get("system")` — access to VoiceChatSystem (pre_chat, post_chat, pre_execute only)
+- `event.metadata.get("system")` — access to VoiceChatSystem (stamped on most pipeline hooks: post_stt, pre_chat, ghost_inject, post_llm, post_chat, pre_execute, and the streaming TTS hooks — see the System Access table in [hooks.md](hooks.md))
 
 ---
 
@@ -427,3 +427,16 @@ def run(event):
     if state:
         state.save("last_run", "2026-04-12")
 ```
+
+---
+
+## Reference for AI
+
+- Tool file exports: `ENABLED` (bool), `EMOJI` (str), `AVAILABLE_FUNCTIONS` (list), `TOOLS` (OpenAI-style schemas), `execute(function_name, arguments, config[, plugin_settings[, credentials]])` → `(message: str, success: bool)`.
+- Hooks: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`. Full hook list, mutable fields, and system-access table: hooks.md.
+- Voice commands: `capabilities.voice_commands` = `[{triggers, match: exact|starts_with|contains|regex, bypass_llm, handler}]`; handler is a `pre_chat` function.
+- Providers: `capabilities.providers.{tts|stt|embedding|llm}` = `{key, display_name, entry, class_name, requires_api_key}`. TTS `generate()` returns audio bytes or None; WAV must be at 8000/12000/16000/24000/48000 Hz (resample 22050 → 24000); `list_voices()` returns `[{voice_id, name}]` where `voice_id` is the engine's real identifier.
+- Settings: `capabilities.settings` schema auto-renders (types string/number, widgets password/select/textarea, min/max/options/rows); read via `plugin_loader.get_plugin_settings('my-plugin')`.
+- Daemon: `capabilities.daemon` = `{entry, event_sources: [{name, label, description}]}`; entry exports `start(plugin_loader, settings)` / `stop()`; fire events via `plugin_loader.emit_daemon_event(name, json_string)` — they trigger continuity tasks.
+- Routes: `capabilities.routes` → `/api/plugin/{plugin-name}/{path}`; handler receives path params + `body`, `settings`, `credentials`, `query`, `request` as kwargs — end signatures with `**_`. Details: routes.md.
+- Schedule: `capabilities.schedule` = `[{name, cron, description, handler}]`; handler exports `run(event)` where event is a dict with `system`, `config`, `task`, `plugin_state`.

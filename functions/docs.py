@@ -67,6 +67,12 @@ def _get_available_docs() -> dict:
         # Normalize name: INSTALLATION.md -> installation
         name = md_file.stem.lower().replace("_", "-")
         docs[name] = md_file
+
+    # Plugin-author dev guides live one level down; the prefix avoids name
+    # collisions with user docs (signing, prompts, tools, routes...)
+    for md_file in (DOCS_DIR / "plugin-author").glob("*.md"):
+        name = "plugin-author/" + md_file.stem.lower().replace("_", "-")
+        docs[name] = md_file
     
     # Include README.md from project root
     readme_path = DOCS_DIR.parent / "README.md"
@@ -205,6 +211,12 @@ def _match_doc_name(query: str, available: dict) -> str | None:
     # Exact match
     if query in available:
         return query
+
+    # Exact basename of a prefixed doc ('hooks' -> 'plugin-author/hooks')
+    # before substring matching, which would hit 'daemons-webhooks' first
+    for name in available:
+        if "/" in name and name.split("/", 1)[1] == query:
+            return name
     
     # Partial match (query is substring of doc name)
     for name in available:
@@ -221,7 +233,13 @@ def _match_doc_name(query: str, available: dict) -> str | None:
 
 # Build dynamic tool description with available docs
 _available_docs = _get_available_docs()
-_doc_list = ", ".join(sorted(_available_docs.keys())) if _available_docs else "none found"
+# Keep the tool description compact: it rides every system prompt, so the
+# 20+ plugin-author guides are summarized rather than enumerated.
+_top_docs = sorted(k for k in _available_docs if not k.startswith("plugin-author/"))
+_pa_count = len(_available_docs) - len(_top_docs)
+_doc_list = ", ".join(_top_docs) if _top_docs else "none found"
+if _pa_count:
+    _doc_list += f", plus {_pa_count} plugin-author/* dev guides (e.g. plugin-author/hooks)"
 
 AVAILABLE_FUNCTIONS = ['search_help_docs']
 

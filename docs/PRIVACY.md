@@ -4,22 +4,24 @@ Sapphire has one vault, protected by one passphrase. While it's **unlocked**, pr
 
 Two kinds of things live in the vault: **prompts** you don't want sitting in plaintext, and **private chats** — whole conversations, encrypted message by message.
 
+This page covers privacy at rest; for the network-egress side (proxies, what leaves the machine), see [NETWORK.md](NETWORK.md).
+
 ---
 
-## Start here: the eyeball
+## Start here: the padlock
 
-The 👁 button sits in the chat sidebar, in the row with **+** and **🗑**. It does exactly one job: it toggles the vault.
+The 🔒 button sits in the chat sidebar, right-aligned in the row with **+** and **🗑**. It does exactly one job: it toggles the vault.
 
-| Eyeball | Meaning | Click does |
+| Padlock | Meaning | Click does |
 |---------|---------|-----------|
-| Plain | No vault yet | Asks you to pick a passphrase, then creates and unlocks it |
-| Plain | Vault exists, locked | Asks for your passphrase |
-| Blue | Vault unlocked — private mode armed | Locks the vault now |
-| Amber | You're standing in a private chat while the vault is sealed (rare) | Unlocks so you can see it |
+| 🔒 plain | No vault yet | Asks you to pick a passphrase, then creates and unlocks it |
+| 🔒 plain | Vault exists, locked | Asks for your passphrase |
+| 🔓 blue | Vault unlocked — private mode armed | Locks the vault now |
+| 🔒 amber | You're standing in a private chat while the vault is sealed (rare) | Unlocks so you can see it |
 
 **There is no key recovery.** A lost passphrase is a lost vault. Write it down somewhere safe.
 
-The eyeball never changes any individual chat's privacy — see below for how a chat becomes private.
+The padlock never changes any individual chat's privacy — see below for how a chat becomes private.
 
 ---
 
@@ -27,7 +29,7 @@ The eyeball never changes any individual chat's privacy — see below for how a 
 
 With the vault open, the moment you send a message in an ordinary chat, that chat is marked **private**. No dialog, no extra click.
 
-It's one-way from the eyeball's side: locking the vault doesn't un-mark anything. To release a chat, open **Chat Manager** and click the **🔓** on its row.
+It's one-way from the padlock's side: locking the vault doesn't un-mark anything. To release a chat, open **Chat Manager** and click the **🔓** on its row.
 
 **Never auto-marked:** game, story, and librarian chats (they belong to plugin surfaces), chats that are already private, and anything running in managed mode.
 
@@ -49,7 +51,7 @@ You can tell a private chat by the glow on the chat area border, the 🗝 next t
 
 ## Locking
 
-The vault locks when you click the blue eyeball, press **Lock now** in Settings → Privacy, or when it goes idle. Idle timeout is `VAULT_IDLE_MINUTES` (default 30, minimum 1); using the app resets the clock, and changing the setting applies to the running timer immediately.
+The vault locks when you click the blue open padlock, press **Lock now** in Settings → Privacy, or when it goes idle. Idle timeout is `VAULT_IDLE_MINUTES` (default 30, minimum 1); using the app resets the clock, and changing the setting applies to the running timer immediately.
 
 If you're sitting in a private chat when it locks, Sapphire moves you out first — to `default`, or the freshest ordinary chat, or a blank scratch chat if nothing else is safe. Your private chat isn't changed, just hidden until you unlock.
 
@@ -129,7 +131,7 @@ Plugin authors: see [Private chats & `privacy_aware`](plugin-author/hooks.md#pri
 One vault, one passphrase (`user/prompts/prompt_vault.enc`, scrypt + AES-256-GCM). Unlocked = private mode armed. Locked = sealed and invisible.
 
 VAULT LIFECYCLE:
-- Eyeball (chat sidebar) = vault toggle only: no vault → setup, locked → unlock, unlocked → lock
+- Padlock (chat sidebar; 🔒 sealed / 🔓 open, blue while armed, amber when standing in a private chat while sealed) = vault toggle only: no vault → setup, locked → unlock, unlocked → lock
 - Settings → Privacy: create / unlock / lock now / change passphrase; `VAULT_IDLE_MINUTES` (default 30, min 1)
 - Idle timer auto-locks; user activity resets it; rekey preserves lock state; no key recovery
 - Endpoints: POST /api/vault/setup | /unlock | /lock | /rekey | /move; state rides `vault` on GET /api/status

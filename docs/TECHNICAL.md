@@ -17,16 +17,18 @@ main.py (runner with restart loop)
     ├── Continuity (core/continuity/)
     │   ├── scheduler → cron-based task runner
     │   └── executor → context isolation, task execution
-    ├── TTS (core/tts/) → provider-based: Kokoro (core) + plugins
-    ├── STT (core/stt/) → provider-based: faster-whisper, fireworks-whisper (core) + plugins
+    ├── TTS (core/tts/) → provider-based: Kokoro, sapphire_router (core) + plugins (Piper, ElevenLabs, gTTS)
+    ├── STT (core/stt/) → provider-based: faster-whisper, fireworks-whisper, sapphire_router (core) + plugins
     ├── Wake Word (core/wakeword/) → thread (hot-toggleable)
+    ├── Conversation (core/conversation/) → true speech mode: engine, driver, manager
+    ├── Network Facade (core/net.py) → one LAN/WAN proxy decision point for outbound HTTP
     ├── Provider Registry (core/provider_registry.py) → TTS, STT, Embedding, LLM
     ├── Agents (core/agents/) → agent spawning, registry, lifecycle
     ├── FastAPI Server (core/api_fastapi.py + core/routes/) → 0.0.0.0:8073
     └── Event Bus (core/event_bus.py) → SSE pub/sub
 ```
 
-**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the TTS server as a subprocess via `ProcessManager`. STT runs as a thread. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE) on a single port. Everything else runs in the main process.
+**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the Kokoro TTS server as a subprocess via `ProcessManager` when that provider is selected. STT runs as a thread. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE) on a single port. Everything else runs in the main process.
 
 ---
 
@@ -112,31 +114,40 @@ user/settings.json           ← Your overrides
 Runtime config
 ```
 
-**Access pattern:** `import config` then `config.TTS_ENABLED`, `config.LLM_PROVIDERS`, etc.
+**Access pattern:** `import config` then `config.TTS_PROVIDER`, `config.LLM_PROVIDERS`, etc.
 
 ### Settings Categories
 
 | Category | Examples |
 |----------|----------|
-| identity | `DEFAULT_USERNAME`, `DEFAULT_AI_NAME` |
-| network | `SOCKS_ENABLED`, `SOCKS_HOST`, `SOCKS_PORT` |
-| privacy | `VAULT_IDLE_MINUTES`, `METRICS_ENABLED` |
-| features | `ALLOW_UNSIGNED_PLUGINS`, `STORE_ENABLED`, `METRICS_ENABLED` |
+| identity | `DEFAULT_USERNAME`, `DASHBOARD_DISPLAY_NAME`, `DEFAULT_PERSONA`, `USER_TIMEZONE` |
+| network | `SOCKS_ENABLED`, `SOCKS_HOST`, `SOCKS_PORT`, `SOCKS_TIMEOUT`, `SOCKS_ROUTE_LLM`, `SOCKS_REMOTE_DNS`, `SOCKS_NO_PROXY_EXTRA`, `UPDATE_CHECK_ENABLED` — see [NETWORK.md](NETWORK.md) |
+| privacy | `VAULT_IDLE_MINUTES`, `METRICS_ENABLED`, `PRIVATE_ALLOW_UNFLAGGED_TOOLS` |
 | wakeword | `WAKE_WORD_ENABLED`, `WAKEWORD_MODEL`, `WAKEWORD_THRESHOLD` |
-| stt | `STT_ENABLED`, `STT_MODEL_SIZE`, `STT_ENGINE` |
-| tts | `TTS_ENABLED`, `TTS_VOICE_NAME`, `TTS_SPEED`, `TTS_PITCH_SHIFT` |
-| llm | `LLM_PROVIDERS`, `LLM_FALLBACK_ORDER`, `LLM_MAX_HISTORY` |
+| stt | `STT_PROVIDER`, `STT_MODEL_SIZE`, `FASTER_WHISPER_*` |
+| recorder | `STT_VAD_ENABLED`, `RECORDER_*` (silence/VAD tuning), `CONVERSATION_*` (conversation-mode tuning) |
+| tts | `TTS_PROVIDER`, `TTS_SERVER_PORT`, `TTS_STREAMING_ENABLED` + `TTS_STREAMING_*` tuning |
+| llm | `LLM_PROVIDERS`, `LLM_CUSTOM_PROVIDERS`, `LLM_FALLBACK_ORDER`, `MODEL_GENERATION_PROFILES` |
 | audio | `AUDIO_INPUT_DEVICE`, `AUDIO_OUTPUT_DEVICE` |
-| tools | `MAX_TOOL_ITERATIONS`, `MAX_PARALLEL_TOOLS`, `TOOL_MAKER_VALIDATION` |
-| rag | `RAG_SIMILARITY_THRESHOLD` |
+| tools | `MAX_TOOL_ITERATIONS`, `MAX_PARALLEL_TOOLS`, `TOOL_RESULT_MAX_CHARS` |
+| embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_API_URL` |
+| rag / memory | `RAG_SIMILARITY_THRESHOLD`, `MEMORY_DEDUP_THRESHOLD` |
+| plugins | `ALLOW_UNSIGNED_PLUGINS`, `PLUGIN_KEYS_URL` |
+| store | `STORE_ENABLED`, `STORE_URL` |
+| server | `WEB_UI_HOST`, `WEB_UI_PORT`, `LOG_LEVEL` |
 | backups | `BACKUPS_ENABLED`, `BACKUPS_KEEP_DAILY`, etc. |
+
+Two things that look like settings but aren't:
+
+- `STT_ENABLED` / `TTS_ENABLED` are **derived** compatibility values, not stored keys — the settings manager computes them from `STT_PROVIDER` / `TTS_PROVIDER` (`true` when the provider isn't `none`). To turn a system on or off, set the provider.
+- **Voice, pitch, and speed are per-chat settings**, not global keys — they live in the chat sidebar's TTS (Voice) accordion and travel with each chat. See [VOICE.md](VOICE.md).
 
 ### Settings Reload Tiers
 
 | Tier | When Applied | Examples |
 |------|-------------|---------|
-| **Hot** | Immediate | Names, TTS voice/speed/pitch, LLM settings, SOCKS, vault idle timeout, generation params |
-| **Hot-toggle** | Runtime on/off | Wakeword, STT (no restart needed) |
+| **Hot** | Immediate | Names, LLM settings, SOCKS, vault idle timeout, generation params |
+| **Hot-toggle** | Runtime on/off | Wakeword, STT, TTS provider switch (no restart needed) |
 | **File-watched** | ~2s after save | settings.json, prompts/*.json, toolsets.json |
 | **Restart** | Exit code 42 | Port changes, model configs, code changes |
 
@@ -149,14 +160,14 @@ The settings manager tracks which changes need restart via `get_pending_restart_
 ```json
 {
   "LLM_PROVIDERS": {
-    "claude": { "provider": "claude", "model": "claude-sonnet-4-5", "enabled": false },
+    "claude": { "provider": "claude", "model": "claude-opus-4-8", "enabled": false },
     "openai": { "provider": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "enabled": false },
     "gemini": { "provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-2.5-flash", "enabled": false }
   },
   "LLM_CUSTOM_PROVIDERS": {
     "lmstudio": { "template": "openai", "base_url": "http://127.0.0.1:1234/v1", "is_local": true, "enabled": true }
   },
-  "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "gemini"]
+  "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "gemini", "openai"]
 }
 ```
 
@@ -272,11 +283,11 @@ python tools/sign_plugin.py --all          # sign all plugins in plugins/
 
 On plugin load (`core/plugin_verify.py`), the app:
 
-1. Loads `plugin.sig` and verifies the ed25519 signature against the baked-in public key
+1. Loads `plugin.sig` and verifies the ed25519 signature — against the baked-in official key first, then the authorized third-party keys list
 2. Re-hashes every file listed in the manifest and compares to the signed hashes
 3. Scans for any new files not in the manifest (injection detection)
 
-**Results:** `verified` (load), `unsigned` (load with warning if sideloading enabled, block if disabled), or `tampered` (always block).
+**Results:** `official` (signed with Sapphire's baked-in key), `verified_author` (signed by an authorized third-party key), `unsigned` (no `plugin.sig` — loads with a warning only when sideloading is enabled), or `failed` (signature doesn't match a trusted key, or files were modified — always blocked). Managed/Docker installs add a `validated` tier: unsigned plugins that pass strict file validation load without a signature. Full guide: [SIGNING.md](SIGNING.md).
 
 ### Cross-Platform Line Ending Normalization
 
@@ -290,7 +301,7 @@ Without this, a plugin signed on Linux (LF) would read as tampered on Windows if
 |---------|---------|--------|
 | `ALLOW_UNSIGNED_PLUGINS` | `false` | Allow unsigned plugins with sideloading confirmation |
 
-Default is `false` — only signed+verified plugins load, unsigned plugins are blocked entirely. Toggle on in Settings > Plugins (guarded by a danger dialog) to load unsigned plugins with a warning. Tampered plugins are blocked regardless.
+Default is `false` — only `official` and `verified_author` plugins load; unsigned plugins are blocked entirely (except the managed-mode `validated` lane above). Toggle on in Settings > Plugins (guarded by a danger dialog) to load unsigned plugins with a warning. `failed` plugins are blocked regardless.
 
 ---
 
@@ -306,28 +317,38 @@ Default is `false` — only signed+verified plugins load, unsigned plugins are b
 
 ## Component Services
 
+The user-facing guide for the whole voice stack (STT, TTS, wake word, conversation mode, echo tiers) is [VOICE.md](VOICE.md) — the notes below are the architecture view.
+
 ### TTS (Text-to-Speech)
 
 - Registry: `core/tts/providers/__init__.py` (provider registry)
 - Server: `core/tts/tts_server.py` (Kokoro, HTTP subprocess)
 - Client: `core/tts/tts_client.py`
-- Core providers: Kokoro (local), Null (disabled)
-- Plugin providers: ElevenLabs, gTTS (Google Translate), and any plugin-registered provider
+- Core providers: Kokoro (local), sapphire_router (managed), Null (disabled)
+- Plugin providers: Piper (local), ElevenLabs, gTTS (Google Translate), and any plugin-registered provider
 
-Started by `ProcessManager` if `TTS_ENABLED=true`. Auto-restarts on crash. Server auto-restarts at 3GB memory or 500 requests.
+The Kokoro subprocess is started by `ProcessManager` when the Kokoro provider is selected. Auto-restarts on crash. Server auto-restarts at 3GB memory or 500 requests.
 
-Kokoro: 17 voices (American and British, male and female). Pitch shifting via resampling, speed control via Kokoro parameter. Plugin providers appear in Settings → TTS → Provider dropdown.
+Kokoro: 28 voices (American and British, male and female). Voice, pitch, and speed are per-chat settings, not global keys. Pitch is native for Kokoro and Piper; providers without native pitch get it via resampling. Plugin providers appear in Settings → TTS → Provider dropdown.
+
+**Streaming TTS** (`core/tts/streaming.py` + `core/tts/stream_pump.py`): with `TTS_STREAMING_ENABLED` on and a streaming-capable provider (Kokoro, Piper), Sapphire synthesizes and starts speaking each chunk as the LLM finishes it, instead of waiting for the whole reply — this is also what gives Conversation mode its voice. Other providers fall back to whole-reply playback. Details and tuning: [VOICE.md](VOICE.md).
 
 ### STT (Speech-to-Text)
 
 - Registry: `core/stt/providers/__init__.py` (provider registry)
-- Server: `core/stt/server.py` (faster-whisper, loaded in main process)
 - Recorder: `core/stt/recorder.py` (adaptive VAD, silence detection)
 - Guard: `core/stt/utils.py` (shared `can_transcribe()` check)
-- Core providers: faster-whisper (local GPU/CPU), fireworks-whisper (cloud)
+- Core providers: faster-whisper (local GPU/CPU), fireworks-whisper (cloud), sapphire_router (managed)
 - Plugin providers: any plugin-registered STT provider
 
-Runs as thread if `STT_ENABLED=true`. Supports **hot-toggle** at runtime via `VoiceChatSystem.toggle_stt()`. GPU (CUDA) with CPU fallback.
+`core/stt/server.py` is a backwards-compat shim only — the faster-whisper implementation lives in `core/stt/providers/faster_whisper.py` and loads in the main process.
+
+Runs as a thread when an STT provider is selected. Supports **hot-toggle** at runtime via `VoiceChatSystem.toggle_stt()`. GPU (CUDA) with CPU fallback.
+
+### Conversation Mode
+
+- `core/conversation/` — the "true speech mode" subsystem: `engine.py` (pure turn-state machine: IDLE / USER_SPEAKING / RESPONDING, barge-in arming), `driver.py` (bridges STT → streaming chat → TTS sink; barge-in cancels generation and cuts audio), `manager.py` (lifecycle, wakeword fail-safe handoff), `vad.py` plus local / duplex / browser audio sources.
+- Audible replies require streaming TTS with a capable provider. Full guide: [VOICE.md](VOICE.md).
 
 ### Wake Word
 
@@ -390,13 +411,19 @@ Real-time UI updates via Server-Sent Events.
 
 ## Chat Sessions
 
-SQLite database `user/history/sapphire_history.db` (WAL mode):
+SQLite database `user/history/sapphire_history.db` (WAL mode). Storage is **rows-per-message**: each chat is a row in `chats`, and its messages live one-per-row in `chat_messages` keyed by `(chat_name, seq)`.
 
-```
-Schema: chats(name TEXT PRIMARY KEY, settings JSON, messages JSON, updated_at TEXT)
-```
+| Table | Holds |
+|-------|-------|
+| `chats` | One row per chat: settings JSON, `storage_format` (`blob` \| `rows`), timestamps, vault 🔒 marker |
+| `chat_messages` | One row per message: `chat_name`, `seq`, `role`, `message_json` |
+| `chat_messages_quarantine` | Unreadable message rows moved here verbatim by the repair tool |
+| `plugin_chat_data` | Chat-scoped plugin storage — rides rename/delete/vault with its chat |
+| `tool_images` | Images produced by tool calls, per chat |
 
-Each session has message history, per-chat settings (prompt, voice, toolset, LLM, spice, scopes), and metadata.
+Chats created before the rowify migration carry `storage_format='blob'` (messages as one JSON blob in the `chats` row) and are converted in place; a chat whose conversion hits a data-shape error latches `conversion_failed` and stays on blob.
+
+Each chat carries per-chat settings (prompt, voice, toolset, LLM, spice, scopes) in its `chats` row — the full per-chat model is in [CHATS.md](CHATS.md).
 
 ---
 
@@ -407,7 +434,7 @@ Each session has message history, per-chat settings (prompt, voice, toolset, LLM
 | `main.py` | Runner with restart loop |
 | `sapphire.py` | VoiceChatSystem entry point |
 | `config.py` | Settings proxy |
-| `core/api_fastapi.py` + `core/routes/` | FastAPI server (~250 endpoints across 13 route modules) |
+| `core/api_fastapi.py` + `core/routes/` | FastAPI server + route modules (endpoints: [API.md](API.md)) |
 | `core/auth.py` | Session auth, CSRF, rate limiting |
 | `core/ssl_utils.py` | Self-signed certificate generation |
 | `core/settings_manager.py` | Settings merge, file watcher, restart tiers |
@@ -422,7 +449,9 @@ Each session has message history, per-chat settings (prompt, voice, toolset, LLM
 | `core/provider_registry.py` | Base registry for TTS, STT, Embedding, LLM |
 | `core/agents/` | Agent spawning, registry, lifecycle |
 | `core/chat/function_manager.py` | Tool loading, scopes |
-| `core/chat/history.py` | Session management |
+| `core/chat/history.py` | Chat session storage (rows-per-message SQLite) |
+| `core/conversation/` | Conversation mode — engine, driver, manager |
+| `core/net.py` | Network facade — single LAN/WAN proxy decision point ([NETWORK.md](NETWORK.md)) |
 | `core/continuity/scheduler.py` | Cron-based task scheduler |
 | `core/audio/device_manager.py` | Audio device handling |
 | `plugins/memory/tools/knowledge_tools.py` | Knowledge base + people |
@@ -438,9 +467,11 @@ Sapphire architecture for troubleshooting and development.
 PROCESSES:
 - main.py: Runner with restart loop (exit 42 = restart)
 - sapphire.py: Core VoiceChatSystem
-- core/api_fastapi.py + core/routes/: FastAPI server (port 8073, HTTPS, ~250 endpoints)
-- TTS server: Kokoro HTTP subprocess (port 5012, if enabled)
-- STT: Faster-whisper thread in main process
+- core/api_fastapi.py + core/routes/: FastAPI server (port 8073, HTTPS)
+- TTS server: Kokoro HTTP subprocess (port 5012, when the kokoro provider is selected)
+- STT: provider thread in main process (faster-whisper / fireworks-whisper / sapphire_router; core/stt/server.py is a compat shim)
+- Conversation mode: core/conversation/ (engine=turn-state machine, driver=STT->stream->TTS, manager=lifecycle+wakeword handoff) — see docs/VOICE.md
+- Network: core/net.py facade — one LAN/WAN proxy decision point; LAN lane direct (trust_env off), WAN lane env-honoring/SOCKS — see docs/NETWORK.md
 
 PORTS:
 - 8073: FastAPI server (HTTPS, all routes)
@@ -458,7 +489,7 @@ LLM PROVIDERS:
 - Core: claude, openai, gemini (in LLM_PROVIDERS)
 - Custom: lmstudio default (in LLM_CUSTOM_PROVIDERS), user can add more
 - Plugin-provided: any plugin can register LLM providers via capabilities.providers
-- LLM_FALLBACK_ORDER controls Auto mode (default: lmstudio, claude, gemini)
+- LLM_FALLBACK_ORDER controls Auto mode (default: lmstudio, claude, gemini, openai)
 - Per-chat override via session settings
 - API keys: ~/.config/sapphire/credentials.json or env vars
 - Private chats only reach providers marked is_local (auto filters; explicit non-local raises)
@@ -477,17 +508,28 @@ CREDENTIALS:
 - Not in user/ directory, not in backups
 - Sensitive fields Fernet-encrypted (machine identity key)
 
+SETTINGS:
+- Real keys live in core/settings_defaults.json, overridden by user/settings.json
+- STT_ENABLED / TTS_ENABLED are DERIVED compat values (true when STT_PROVIDER / TTS_PROVIDER != 'none') — never write them, set the provider
+- Voice/pitch/speed: PER-CHAT settings (chat sidebar), no global keys
+- Network: SOCKS_ENABLED/HOST/PORT/TIMEOUT, SOCKS_ROUTE_LLM, SOCKS_REMOTE_DNS, SOCKS_NO_PROXY_EXTRA, UPDATE_CHECK_ENABLED (docs/NETWORK.md)
+- Streaming TTS: TTS_STREAMING_ENABLED + TTS_STREAMING_* tuning (docs/VOICE.md)
+
+PLUGIN SIGNING (docs/SIGNING.md):
+- Tiers: official (baked-in key) / verified_author (authorized third-party key) / unsigned / failed (tampered — always blocked)
+- ALLOW_UNSIGNED_PLUGINS=false default: only official + verified_author load; managed installs add 'validated' (strict file validation)
+
 HOT RELOAD:
 - Settings/prompts/toolsets: ~2s after file change
 - Wakeword/STT: hot-toggle on/off at runtime
-- TTS: hot-stop/start via ProcessManager
+- TTS: hot provider switch; Kokoro subprocess start/stop via ProcessManager
 - LLM settings, SOCKS, vault idle timeout: immediate
 - Ports, models, code: require restart
 
-API: See docs/API.md for all ~250 endpoints
+API: See docs/API.md for the full endpoint list
 
 DATABASES:
-- user/history/sapphire_history.db: chats
+- user/history/sapphire_history.db: chats (settings + storage_format blob|rows), chat_messages (one row per message), chat_messages_quarantine, plugin_chat_data, tool_images
 - user/memory.db: memories, memories_fts, memory_scopes
 - user/knowledge.db: people, knowledge_tabs, knowledge_entries, knowledge_fts
 - user/goals.db: goals, progress_journal

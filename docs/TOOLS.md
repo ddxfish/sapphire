@@ -31,22 +31,24 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 
 | Tool | Module | What it does |
 |------|--------|--------------|
-| `save_memory` | memory.py | Store info to long-term memory (labeled, embedded) |
-| `search_memory` | memory.py | Semantic + keyword search across memories |
-| `get_recent_memories` | memory.py | Get latest memories, optionally by label |
-| `delete_memory` | memory.py | Remove memory by ID |
-| `save_person` | knowledge.py | Save/update contact info (upsert by name) |
-| `save_knowledge` | knowledge.py | Store reference data in categories (auto-chunks) |
-| `search_knowledge` | knowledge.py | Search people + knowledge + RAG documents |
-| `delete_knowledge` | knowledge.py | Delete AI-created entries or categories |
-| `create_goal` | goals.py | Create goal or subtask with priority |
-| `list_goals` | goals.py | Overview or detailed view of goals |
-| `update_goal` | goals.py | Modify goal fields, log progress notes |
-| `delete_goal` | goals.py | Delete goal with optional subtask cascade |
+| `save_memory` | memory_tools.py | Store info to long-term memory (labeled, embedded) |
+| `search_memory` | memory_tools.py | Semantic + keyword search across memories |
+| `get_recent_memories` | memory_tools.py | Get latest memories, optionally by label |
+| `delete_memory` | memory_tools.py | Remove memory by ID |
+| `save_person` | knowledge_tools.py | Save/update contact info (upsert by name) |
+| `save_knowledge` | knowledge_tools.py | Store reference data in categories (auto-chunks) |
+| `search_knowledge` | knowledge_tools.py | Search people + knowledge + RAG documents |
+| `delete_knowledge` | knowledge_tools.py | Delete AI-created entries or categories |
+| `create_goal` | goals_tools.py | Create goal or subtask with priority |
+| `list_goals` | goals_tools.py | Overview or detailed view of goals |
+| `update_goal` | goals_tools.py | Modify goal fields, log progress notes |
+| `delete_goal` | goals_tools.py | Delete goal with optional subtask cascade |
 | `notepad_read` | notepad.py | Read scratch notepad with line numbers |
 | `notepad_append_lines` | notepad.py | Add lines to notepad |
 | `notepad_delete_lines` | notepad.py | Delete specific lines |
 | `notepad_insert_line` | notepad.py | Insert line at position |
+
+> **Mind Palace note:** when the Mind Palace memory engine is enabled, it swaps in its own memory tool surface — the same core verbs plus `update_memory` and layered saves. The rows above describe the classic memory plugin.
 
 ### Web & Research
 
@@ -64,18 +66,22 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 
 | Tool | Module | What it does |
 |------|--------|--------------|
-| `view_prompt` | meta.py | View current or named system prompt |
-| `switch_prompt` | meta.py | Switch to a different prompt preset |
-| `edit_prompt` | meta.py | Replace monolith prompt content |
-| `set_piece` | meta.py | Set/add assembled prompt component |
-| `remove_piece` | meta.py | Remove from emotions/extras list |
-| `create_piece` | meta.py | Create new prompt piece and activate |
-| `list_pieces` | meta.py | List available pieces for a component |
+| `prompt_view` | meta.py | View current or named system prompt |
+| `prompt_switch` | meta.py | Switch to a different prompt preset |
+| `prompt_edit` | meta.py | Edit the active monolith prompt (exact text replacement) |
+| `prompt_create` | meta.py | Create a new named prompt (does not activate it) |
+| `prompt_pieces` | meta.py | Manage assembled prompt pieces — one action-based tool (list/view/set/remove/create/delete, with optional temporary activation) |
 | `reset_chat` | meta.py | Clear chat history |
 | `change_username` | meta.py | Update username setting |
-| `set_tts_voice` | meta.py | Change TTS voice |
+| `set_voice` | meta.py | Change TTS voice, speed, and pitch |
+| `set_motion` | meta.py | Set an ambient motion animation behind the chat |
+| `set_scene` | scene.py | Set the chat scene background from your library |
+| `switch_model` | meta.py | Switch its own LLM from the configured roster (settings-gated) |
+| `switch_toolset` | meta.py | Switch its own active toolset (settings-gated) |
 | `list_tools` | meta.py | List enabled or all tools |
 | `get_time` | clock plugin | Current date/time (the clock plugin also adds set_timer, set_stopwatch, set_alarm) |
+
+> **Settings gates:** `switch_model` and `switch_toolset` are hidden from the AI entirely until you enable `AI_MODEL_SWITCH_ENABLED` / `AI_TOOLSET_SWITCH_ENABLED` in Settings > Tools. Both default off — a fresh install's AI can't switch its own model or toolset until you opt in.
 
 ### Tool Creation
 
@@ -101,10 +107,14 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 | `ha_set_switch` | homeassistant.py | Toggle switch on/off |
 | `ha_notify` | homeassistant.py | Send phone notification |
 | `ha_house_status` | homeassistant.py | Home status snapshot |
-| `generate_scene_image` | image.py | Generate SDXL image from description |
+| `ha_get_camera_image` | homeassistant.py | Grab a camera snapshot |
+| `generate_scene_image` | image_tool.py | Generate SDXL image from description |
 | `get_inbox` | email_tool.py | Fetch recent emails |
 | `read_email` | email_tool.py | Read email by index |
+| `search_emails` | email_tool.py | Search the mailbox |
 | `archive_emails` | email_tool.py | Archive emails |
+| `delete_emails` | email_tool.py | Delete emails |
+| `forward_email` | email_tool.py | Forward an email to a whitelisted contact |
 | `get_recipients` | email_tool.py | List whitelisted contacts (IDs only) |
 | `send_email` | email_tool.py | Send to whitelisted contact |
 | `get_wallet` | bitcoin_tool.py | Check wallet balance |
@@ -132,13 +142,13 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 
 ### Where Tools Live
 
-Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. A small number of standalone tools remain in `functions/` (web, meta, ai).
+Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, meta/self-modification, ai, network, notepad, docs, scene, schedule).
 
 | Path | Purpose | Git Tracked |
 |------|---------|-------------|
 | `plugins/memory/tools/` | Memory, knowledge, goals, people tools | Yes |
-| `plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents) | Yes |
-| `functions/` | Standalone tools (web search, meta, ai) | Yes |
+| `plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents, calendar, image-gen, clock, ...) | Yes |
+| `functions/` | Standalone tools (web, meta, ai, network, notepad, docs, scene, schedule) | Yes |
 | `user/plugins/*/tools/` | AI-created tool plugins | No |
 
 ### Enable/Disable
@@ -174,7 +184,7 @@ For full plugin development (tools + hooks + voice commands + schedules + web UI
 
 ## Troubleshooting
 
-- **Tool not working**: Check it's in the active toolset (Settings > Toolsets or chat sidebar)
+- **Tool not working**: Check it's in the active toolset (the Toolsets view in the Persona nav group, or the chat sidebar's toolset field)
 - **"No executor"**: Tool file missing or has import errors — check logs
 - **Network tools failing**: Check SOCKS proxy settings if enabled
 - **AI-created tool not loading**: Call `tool_load()` after `tool_save()`, or use Rescan in Settings > Plugins
@@ -183,20 +193,22 @@ For full plugin development (tools + hooks + voice commands + schedules + web UI
 
 Tools are functions the AI calls to interact with systems — web search, memory, device control.
 
-TOOL MODULES (19 listed, 75+ functions):
+TOOL MODULES:
 - memory_tools.py (plugins/memory): save_memory, search_memory, get_recent_memories, delete_memory
 - knowledge_tools.py (plugins/memory): save_person, save_knowledge, search_knowledge, delete_knowledge
 - goals_tools.py (plugins/memory): create_goal, list_goals, update_goal, delete_goal
+- Mind Palace engine (when enabled) swaps in its own memory tool surface: same core verbs plus update_memory(memory_id, ...), layered saves
 - web.py: web_search, get_website, get_wikipedia, research_topic, get_site_links, get_images
 - ai.py: ask_claude
-- meta.py: view_prompt, switch_prompt, edit_prompt, set_piece, remove_piece, create_piece, list_pieces, reset_chat, change_username, set_tts_voice, list_tools
+- meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools]
+- scene.py: set_scene(name) — chat scene background, 'none' clears
 - toolmaker.py: tool_save, tool_read, tool_load
-- homeassistant.py: 13 HA control functions (incl. ha_get_camera_image)
-- image.py: generate_scene_image
+- homeassistant.py: ha_list_scenes_and_scripts, ha_activate, ha_list_areas, ha_area_light, ha_area_color, ha_get_thermostat, ha_set_thermostat, ha_list_lights_and_switches, ha_set_light, ha_set_switch, ha_notify, ha_house_status, ha_get_camera_image
+- image_tool.py (plugins/image-gen): generate_scene_image
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
 - agents plugin: agent_options, spawn_agent, check_agents, recall_agent, dismiss_agent
 - schedule_tool.py: schedule_task
-- email_tool.py: get_inbox, read_email, archive_emails, get_recipients, send_email
+- email_tool.py: get_inbox, read_email, search_emails, archive_emails, delete_emails, forward_email, get_recipients, send_email
 - bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions
 - ssh_tool.py: ssh_get_servers, ssh_run_command
 - calendar.py (plugins/google-calendar): calendar_today, calendar_range, calendar_add, calendar_delete

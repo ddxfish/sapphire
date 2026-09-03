@@ -24,7 +24,7 @@ Use them for instant reactions: stop playback, toggle modes, trigger macros, con
 |-------|-------------|
 | `triggers` | Phrases to match (case-insensitive) |
 | `match` | `exact`, `starts_with`, `contains`, or `regex` |
-| `bypass_llm` | If true, gets highest priority (0-19) |
+| `bypass_llm` | If true, runs at the top of the plugin's priority band — 0–19 for bundled plugins, top of the user band for installed plugins |
 | `handler` | Path to handler file |
 
 Multiple voice commands per plugin is fine — they're an array.
@@ -151,6 +151,16 @@ def pre_chat(event):
 
 ## How It Works Internally
 
-Voice commands are registered as `pre_chat` hooks with the highest priority band (0-19 when `bypass_llm: true`). When the user speaks or types, the hook runner checks triggers before the message reaches the LLM. If a trigger matches, the handler fires and — with `skip_llm = True` — the AI never sees the input.
+Voice commands are registered as `pre_chat` hooks. With `bypass_llm: true` they're promoted to the top of their plugin's priority band (0–19 for bundled plugins; user-installed plugins are capped at the top of the user band, so bundled commands still win). When the user speaks or types, the hook runner checks triggers before the message reaches the LLM. If a trigger matches, the handler fires and — with `skip_llm = True` — the AI never sees the input.
 
 This means voice commands always win over the AI. They're the fastest path through the pipeline.
+
+## Reference for AI
+
+VOICE COMMANDS:
+- Manifest: `capabilities.voice_commands` = [{triggers: [phrases], match: "exact"|"starts_with"|"contains"|"regex" (default exact, case-insensitive), bypass_llm: bool, handler: path, description?}]. Multiple entries per plugin fine.
+- Registered as pre_chat hooks with trigger pre-filtering; bypass_llm promotes to the top of the plugin's priority band (0-19 bundled; user-installed plugins cap at the top of the user band).
+- Handler: `def pre_chat(event)` (or `def handle(event)` fallback — never `run`). Pattern to fully handle without the AI: `event.skip_llm = True` (don't send to LLM), `event.ephemeral = True` (don't save to history), `event.response = "..."` (shown/spoken), `event.stop_propagation = True` (skip lower-priority hooks).
+- System access: `event.metadata.get("system")` -> VoiceChatSystem (tts.stop(), set_voice, set_speed, cancel_generation, toggle_wakeword...). Guard with hasattr — components may be None.
+- Plugin state across commands: `plugin_loader.get_plugin_state(name)` .get/.save.
+- Matching fires before the LLM ever sees the input — voice commands always win over the AI.

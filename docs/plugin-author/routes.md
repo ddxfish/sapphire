@@ -39,19 +39,31 @@ def handle_capture(request_id, body=None, settings=None, **_) -> dict:
     """
     Injected keyword args (declare only what you need, then **_):
         request_id:  path param extracted from {request_id}
-        body:        parsed JSON body (POST/PUT; empty dict for GET/DELETE)
+        body:        parsed JSON body (POST/PUT/DELETE — yes, DELETE bodies
+                     are parsed; empty dict for GET, multipart, or non-object JSON)
         settings:    plugin settings from user/webui/plugins/{name}.json
         credentials: the credentials manager (resolve secrets server-side)
         query:       dict of URL query-string params
         request:     the raw Starlette Request object
 
     Returns:
-        dict (auto-serialized to JSON) or a FastAPI Response object
+        dict (JSON, HTTP 200), a (dict, status_code) tuple, or a
+        FastAPI/Starlette Response object
     """
     return {"status": "ok"}
 ```
 
 Path parameters arrive as keyword arguments matching the `{name}` in your path pattern. Because `body`, `settings`, `credentials`, `query`, and `request` are **always** passed, your handler must accept them by name or swallow them with `**_`.
+
+## Return Values
+
+A handler can return any of:
+
+- **`dict`** — serialized to JSON with HTTP 200
+- **`(dict, status_code)` tuple** — serialized to JSON with that status code. This is how you return errors: `return {"error": "no such item"}, 404`. The tuple only unpacks when it has exactly two elements and the second is an `int`
+- **A FastAPI/Starlette `Response` object** — passed through untouched (files, custom headers, streaming)
+
+Without the tuple convention a `(dict, 404)` return would serialize as a JSON *array* with HTTP 200 — the framework unpacks it so error statuses actually reach the client.
 
 ## Security
 
@@ -120,7 +132,19 @@ def handle_capture(request_id: str, body: dict, **_) -> dict:
 
 ## Notes
 
+- Request bodies are parsed for POST, PUT, **and DELETE** (multipart is left for the handler to read from `request` directly; a non-object JSON body arrives as `{}`)
 - Routes are registered on plugin load and removed on unload
 - Hot reload (`POST /api/plugins/{name}/reload`) re-registers routes
 - Handlers can be sync or async — async handlers are awaited directly, sync handlers run in a threadpool
 - Path parameters only match single path segments (no slashes)
+
+## Reference for AI
+
+- Declare: `capabilities.routes` = `[{method: GET|POST|PUT|DELETE (default GET), path (supports {param}, single-segment match only), handler: "file.py:function" (default function: handle)}]`. Mounted at `/api/plugin/{plugin_name}/{path}`.
+- Handler kwargs ALWAYS passed: every path param + `body` + `settings` + `credentials` + `query` + `request` — end the signature with `**_` or the first request raises TypeError.
+- `body`: parsed JSON dict for POST/PUT/DELETE (DELETE bodies ARE parsed — confirm tokens ride them); `{}` for GET, multipart requests, unparseable JSON, or a non-object JSON body.
+- Returns: `dict` → JSON 200; `(dict, int)` 2-tuple → JSON with that status code; `Response` object → passed through; anything else → FastAPI default serialization.
+- Sync handlers run in a threadpool; async handlers are awaited directly.
+- Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET / 30 non-GET per minute per plugin.
+- Bearer opt-in: `user/plugin_state/{plugin}_mcp_key.json` = `{"key": "..."}` lets a matching `Authorization: Bearer` header bypass session login (rate-bucketed by token hash). Additive only — session CSRF can't be weakened.
+- Routes register on load, drop on unload, re-register on hot reload.

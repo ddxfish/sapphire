@@ -1,3 +1,6 @@
+# 2.12.7 - Full Docs Makeover
+- Complete docs overhaul, 50+ docs
+- Added plugin docs search for AI tool search_help_docs
 # 2.12.6 - SOCKS v2
 - SOCKS has 5h or 5
 - Toggle remote dns and LLM through SOCKS
@@ -533,3 +536,6 @@
 # 1.0 - Public release
 ## December 2025
 - first release after a year of development
+## Reference for AI
+
+Release history, newest first. For current behavior always trust the feature docs over old entries here — this file records what changed and when, not what is true now.

@@ -82,3 +82,13 @@ Component types: `character`, `location`, `relationship`, `goals`, `format`,
   hands off to `default` loudly (log + event) — no silent stale prompt.
 - Prefix your names (`myplugin_dread`, not `dread`) — cross-pack collisions
   go to the first registrant and are logged, not merged.
+
+## Reference for AI
+
+PROMPT PACKS:
+- Manifest: `capabilities.prompts` = {monoliths?: path, pieces?: path, kind?: "user"|"internal"|"story"}. Paths relative to the plugin dir; files are signed content (edit -> re-sign). Either or both files.
+- kind: "user" (default) = visible in Prompts UI/pickers/AI prompt tools, badged with the plugin name; "internal" = hidden from pickers but resolvable by name; "story" = reserved for rendered story prompts (engine-stamped). Unknown kind coerces to "user" WITH a boot warning (fail-open to visible). A monolith entry may override the pack kind with its own "kind".
+- monoliths.json: {name: {content, privacy_required}} — plain string values normalized to the object form. {ai_name}/{user_name} templates work in content.
+- pieces.json: {"components": {type: {key: text}}, "scenario_presets": {name: {component: value}}}. Component types: character, location, relationship, goals, format, scenario, extras, emotions.
+- Mirror-only invariants: pack prompts merge at read time, never written to user/prompts/*.json; a same-name USER prompt/piece shadows the pack's (UI edits save a user copy that wins; deleting it reveals the pack's again); pack prompts are delete-refused while the plugin is enabled; disabling the plugin makes them vanish (dark, not deleted); an ACTIVE pack prompt hands off to `default` loudly (log + event) on disable.
+- Prefix names (`myplugin_dread`) — cross-pack collisions go to the first registrant and are logged, not merged.

@@ -159,3 +159,15 @@ bug, which shipped in eight plugins by copy-paste before being caught).
 | GET | `/api/webui/plugins/{name}/settings` | Read settings |
 | PUT | `/api/webui/plugins/{name}/settings` | Save settings |
 | DELETE | `/api/webui/plugins/{name}/settings` | Reset to defaults |
+
+## Reference for AI
+
+PLUGIN SETTINGS:
+- Manifest: `capabilities.settings` = [{key (required, unique in plugin), type (required: string|number|boolean|list), label (required), default (required), help?, widget? (textarea|password|select|radio|button), options? ([{label, value}] for select/radio), placeholder?, confirm?, tab?}].
+- Widget inference when omitted: string->text, string+options->select, number->spinner, boolean->toggle, type "textarea"->textarea, type "password"->password, list->chips with add row.
+- `tab` groups fields; untagged fields land on "General" (first); tab strip renders only with 2+ groups.
+- List fields save as a JSON array of strings; optional dropdown add row via options_endpoint (API URL), data_key (picks array from response; omit if response IS the array), value_field (default "name"; rows may be plain strings). Added values are filtered from the dropdown.
+- `confirm` on any field: {values: [...], title, warnings: [...], buttonLabel} — danger dialog when a listed value is selected.
+- Storage: user/webui/plugins/{name}.json. Python read: `plugin_loader.get_plugin_settings(name)` (stored values merged over manifest defaults). REST: GET/PUT/DELETE `/api/webui/plugins/{name}/settings` (DELETE = reset to defaults).
+- Custom JS settings UI: `capabilities.web.settingsUI: "plugin"` + `web/index.js` served at /plugin-web/{name}/index.js; `export default {name, init(container), destroy()}` calling registerPluginSettings({id, name, icon, helpText, render(container, settings), load, save, getSettings(container)}).
+- Global Save contract: getSettings+save wire the panel to the Settings view's global Save button. Panels that persist through their OWN buttons must OMIT both (the global button then hides for that tab). NEVER register stub getSettings/save — it reports "saved" while writing nothing.

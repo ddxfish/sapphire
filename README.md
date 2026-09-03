@@ -29,17 +29,18 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 ## Features
 
 **Persona**
-- **Personas** - [PERSONAS.md](docs/PERSONAS.md) 11 built-in personalities that bundle prompt, voice, tools, model. Built to add your own.
-- **Voice** - Wake word, STT, TTS, and adaptive VAD. Hands-free with any mic and speaker shows up in web UI.
+- **Personas** - [PERSONAS.md](docs/PERSONAS.md) 12 built-in personalities that bundle prompt, voice, tools, model. Built to add your own.
+- **Voice** - [VOICE.md](docs/VOICE.md) Wake word, STT, TTS, streaming speech, and hands-free conversation mode with barge-in.
 - **Prompts** - [PROMPTS.md](docs/PROMPTS.md) Assembled prompts let you swap one section like location or emotions for dynamic feels.
 - **Spice** - [SPICE.md](docs/SPICE.md) Random prompt snippets injected each reply to keep things unpredictable.
 - **Self-Modification** - The AI edits its own prompt and swaps personality pieces and emotions mid-conversation.
 - **Tool Maker** - [TOOLMAKER.md](docs/TOOLMAKER.md) The AI writes, validates, and installs new tools with their own settings page at runtime.
 
 **Mind**
-- **Memory** - Semantic vector search across 100K+ labeled entries.
+- **Memory** - [MEMORY.md](docs/MEMORY.md) Semantic vector search across 100K+ labeled entries.
+- **Mind Palace** - [MIND-PALACE.md](docs/MIND-PALACE.md) Opt-in layered memory engine with a librarian that tends it nightly.
 - **Knowledge** - [KNOWLEDGE.md](docs/KNOWLEDGE.md) Organized categories with file upload, auto-chunking, and vector search.
-- **Goals** - Hierarchical with priority and a timestamped progress journal.
+- **Goals** - [GOALS.md](docs/GOALS.md) Hierarchical with priority and a timestamped progress journal.
 - **People** - [PEOPLE.md](docs/PEOPLE.md) Contact book with privacy-first email. The AI never sees addresses, only recipient IDs.
 - **Heartbeat** - [CONTINUITY.md](docs/CONTINUITY.md) Cron-scheduled autonomous tasks. Morning greetings, dream mode, alarms, random check-ins.
 - **Research** - Multi-page web research with site crawling and summarization.
@@ -58,6 +59,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - **Image Gen** - ComfyUI API access.
 - **Claude Code** - Sapphire can use your existing Claude Code to make apps.
 - **ElevenLabs** - Switch from local Kokoro TTS to ElevenLabs.
+- **Phone Calls** - [PHONE-CALLS.md](docs/PHONE-CALLS.md) A real phone number over Twilio SIP — she answers, converses, and calls whitelisted contacts.
 - **Images** - Sapphire can read images with vision model and display images in chat.
 - **3D Avatar** - Supports rigged GLB avatar files with animation tracks. 
 
@@ -69,8 +71,12 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - **Avatar** - 3D animated avatar with environment scenes and SSE-driven reactions.
 - **Import/Export** - [IMPORT-EXPORT.md](docs/IMPORT-EXPORT.md) Share personas, prompts, toolsets, and more as JSON files.
 - **Dashboard** - [DASHBOARD.md](docs/DASHBOARD.md) Token metrics, auto-updater, system controls.
-- **Cloud** (optional) - Claude, GPT, Gemini, Fireworks, Ollama, or any OpenAI/Anthropic-compatible endpoint. Local-first by default.
-- **Privacy** - One toggle blocks all cloud connections. Fully local, nothing leaves your machine.
+- **Cloud** (optional) - Claude, GPT, Gemini, Fireworks, or any OpenAI/Anthropic-compatible endpoint (Ollama and LM Studio plug in as local endpoints). Local-first by default.
+- **Privacy** - [PRIVACY.md](docs/PRIVACY.md) One toggle blocks all cloud connections. Fully local, nothing leaves your machine.
+- **Network** - [NETWORK.md](docs/NETWORK.md) SOCKS proxy routing with a LAN/WAN split and an honest what-rides-the-proxy strip.
+- **Game Room** - [GAME-ROOM.md](docs/GAME-ROOM.md) Card games and interactive stories played inside chats — the chat is the save.
+- **Chats** - [CHATS.md](docs/CHATS.md) Each chat carries its own prompt, tools, voice, and memory scopes; archive, trim, compress, repair.
+- **Appearance** - [APPEARANCE.md](docs/APPEARANCE.md) Themes, fonts, background scenes, and ambient motion — global and per-chat.
 - **Plugins** - [PLUGINS.md](docs/PLUGINS.md) Hooks, tools, voice commands, providers, daemons, apps, themes — install from GitHub in one click.
 - **Desktop/Mobile/Voice** - Run on your local browser, open the same chat to your phone, then finish it on your mic.
 - **65+ Tools** - [TOOLS.md](docs/TOOLS.md) Web search, Wikipedia, notes, and more. Mix and match via [TOOLSETS.md](docs/TOOLSETS.md).
@@ -181,7 +187,11 @@ Or use the in-app update button in Settings → Dashboard. See [INSTALLATION.md 
 | [Installation](docs/INSTALLATION.md) | Setup guide, systemd service |
 | [Quick Start](docs/QUICK-START.md) | First persona, LLM setup, integrations |
 | [Plugin Author Guide](docs/plugin-author/README.md) | Build plugins with hooks, tools, providers, apps, themes |
-| [API](docs/API.md) | All ~280 REST endpoints |
+| [API](docs/API.md) | The REST API surface |
+| [Voice](docs/VOICE.md) | STT, TTS, wake word, conversation mode |
+| [Network](docs/NETWORK.md) | SOCKS proxy, LAN/WAN split, egress guarantees |
+| [Mastery Guide](docs/MASTERY-GUIDE.md) | The skill ladder through every system |
+| [Changelog](docs/CHANGELOG.md) | Release history |
 | [Backups](docs/BACKUPS.md) | Automatic and manual backup system |
 | [Docker](docs/DOCKER.md) | Container deployment with GPU support |
 | [Technical](docs/TECHNICAL.md) | Architecture and internals |

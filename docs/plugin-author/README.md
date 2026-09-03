@@ -32,13 +32,16 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | Guide | What's Inside |
 |-------|--------------|
 | [Manifest](manifest.md) | `plugin.json` reference — fields, priority bands, directory structure |
-| [Hooks](hooks.md) | All 20 hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
+| [Hooks](hooks.md) | All hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
 | [Voice Commands](voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |
 | [Tools](tools.md) | Tool file format, schema flags, scopes, reading settings, plugin + chat-scoped state, privacy patterns |
 | [Routes](routes.md) | Custom HTTP endpoints — path params, auth enforcement, handler signature |
 | [Schedule](schedule.md) | Cron tasks — manifest fields, handler contract, examples |
 | [Daemons](daemons.md) | Background event listeners — Telegram, Discord, Email, custom sources |
 | [Subprocesses](subprocesses.md) | Running & supervising external programs — ProcessManager lifecycle, process-group cleanup, advanced async helper |
+| [Providers](providers.md) | Custom TTS, STT, Embedding, LLM backends — base classes, manifest, lifecycle |
+| [Memory Layers](memory-layers.md) | Plugins adding layers to the Mind Palace |
+| [Prompt Packs](prompts.md) | Shipping prompts with a plugin |
 | [Widgets](widgets.md) | Dashboard panels — manifest, render contract, settings schema, sample plugin |
 | [Games](games.md) | Game Room games — engine contract, sealed seat, board modules, sessions-are-chats |
 | [Stories](stories.md) | Story packs — rooms, referee, dice, sealed blanks, identity modes, backdrops |
