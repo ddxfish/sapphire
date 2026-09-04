@@ -169,11 +169,12 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "reset_chat",
-            "description": "Clear chat history. Start fresh.",
+            "description": "Clear chat history. Start fresh. Without chat_name this resets the chat you're speaking in; a background task (no chat) must name its target.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "reason": {"type": "string", "description": "Reason"}
+                    "reason": {"type": "string", "description": "Reason"},
+                    "chat_name": {"type": "string", "description": "Reset this chat by name instead of the current one"}
                 },
                 "required": ["reason"]
             }
@@ -803,6 +804,10 @@ def _set_voice(args):
     speed_max = float(getattr(provider, 'SPEED_MAX', 2.0) or 2.0)
 
     sm = system.llm_chat.session_manager
+    # Captured with the settings read (R5 intent): if a vault eviction
+    # retargets the active chat before the write below, refuse the stamp
+    # instead of writing the landing chat.
+    _intended = sm._effective_chat_name()
     current = sm.get_chat_settings() or {}
     name = (args.get('name') or '').strip()
     speed = args.get('speed')
@@ -835,7 +840,7 @@ def _set_voice(args):
     if pitch is not None:
         updates['pitch'] = round(min(max(float(pitch), PITCH_MIN), PITCH_MAX), 2)
 
-    if not sm.update_chat_settings(updates):
+    if not sm.update_chat_settings(updates, expected_active=_intended):
         return "Failed to update chat settings.", False
     # Apply ONLY the keys we changed. _apply_chat_settings(full dict) would
     # also re-apply prompt/scopes/spice/toolset — snapping a live toolset
@@ -864,11 +869,54 @@ def _reset_chat(args):
     if not reason:
         return "A reason is required.", False
 
-    logger.info(f"AI INITIATED CHAT RESET - Reason: {reason}")
-    sm = _system().llm_chat.session_manager
-    sm.clear()  # clears + persists the EFFECTIVE chat and publishes CHAT_CLEARED
-    prompts.clear_transients()
-    return f"Chat reset. Reason: {reason}", True
+    system = _system()
+    sm = system.llm_chat.session_manager
+    chat_name = (args.get('chat_name') or '').strip()
+
+    _ov = None
+    try:
+        from core.chat.stream_brain import get_override
+        _ov = get_override()
+    except Exception:
+        pass
+
+    if not chat_name:
+        if _ov and _ov.get('ephemeral'):
+            # Background task with no chat: the old behavior wiped whatever
+            # chat the OPERATOR had open. Honest AIX instead.
+            return ("You're not in a chat right now (background task) — "
+                    "nothing was reset. Name the target instead: "
+                    "reset_chat(chat_name='...', reason='...').", False)
+        logger.info(f"AI INITIATED CHAT RESET - Reason: {reason}")
+        sm.clear()  # clears + persists the EFFECTIVE chat and publishes CHAT_CLEARED
+        if not _ov:
+            # Transient TTL prompt pieces are process-GLOBAL and ride the
+            # operator's live prompt — only an operator-lane reset clears
+            # them. A daemon's reset of its own chat used to kill the
+            # operator's mood pieces too (pre-existing wart, closed here).
+            prompts.clear_transients()
+        return f"Chat reset. Reason: {reason}", True
+
+    # Named target: ride the by-name primitive — vault-gated (a sealed chat
+    # behaves as nonexistent) and live-call-refusing, same rules as the
+    # Chat Manager's bulk clear.
+    from core.chat.history import sanitize_chat_name
+    name = sanitize_chat_name(chat_name)
+    try:
+        # Same source the Chat Manager's bulk ops consult (routes/chat.py
+        # _live_call_chats) — read directly, a functions module must not
+        # import a routes module (circular from a cold start).
+        _mgr = getattr(system, "_conversation_manager", None)
+        if _mgr and name in _mgr.external_chats():
+            return (f"Chat '{name}' belongs to a live phone call — "
+                    f"not resetting it mid-call.", False)
+    except Exception:
+        pass
+    logger.info(f"AI INITIATED CHAT RESET of '{name}' - Reason: {reason}")
+    if not sm.clear_chat(name):
+        return (f"Couldn't reset '{name}' — it doesn't exist (or is "
+                f"sealed in a locked vault).", False)
+    return f"Chat '{name}' reset. Reason: {reason}", True
 
 
 def _change_username(args):
@@ -1018,6 +1066,15 @@ def _switch_toolset(args):
         _ov = get_override()
     except Exception:
         pass
+    if _ov and _ov.get("ephemeral"):
+        # Chatless background turn: no chat to stamp, and the fall-through
+        # below is a LIVE palette swap on the operator (the M11 class).
+        return ("You're not in a chat right now (background task) — toolset "
+                "unchanged. This turn's tools were set by the task.", False)
+    # Captured BEFORE the reads below — if a vault eviction retargets the
+    # active chat mid-turn, the write refuses instead of stamping the
+    # landing chat (R5 intent).
+    _intended = system.llm_chat.session_manager._effective_chat_name()
     if _ov and _ov.get("chat"):
         if not system.llm_chat.session_manager.update_chat_settings({"toolset": match}):
             return "Failed to update chat settings.", False
@@ -1036,7 +1093,12 @@ def _switch_toolset(args):
     except Exception:
         pass
     fm.update_enabled_functions([match], extra_toolsets=extras)
-    system.llm_chat.session_manager.update_chat_settings({"toolset": match})
+    # A refused stamp (active chat changed mid-turn — eviction) is safe to
+    # report and stop: the eviction's switch-means-apply re-applies the
+    # landing chat's own toolset, so the runtime heals on its own.
+    if not system.llm_chat.session_manager.update_chat_settings(
+            {"toolset": match}, expected_active=_intended):
+        return "Active chat changed mid-switch — toolset not saved.", False
     publish(Events.TOOLSET_CHANGED, {"name": match})
     logger.info(f"AI switched toolset to: {match}")
 
@@ -1053,6 +1115,8 @@ def _set_motion(args):
 
     system = _system()
     sm = system.llm_chat.session_manager
+    # R5 intent — see _set_voice.
+    _intended = sm._effective_chat_name()
     motions = collect_motions()
     current = (sm.get_chat_settings() or {}).get('motion', '')
 
@@ -1084,7 +1148,7 @@ def _set_motion(args):
             return f"Motion '{name}' not found. Available: {menu}.", False
 
     # Per-chat override (merges; resolution = chat > user's global pick > theme).
-    if not sm.update_chat_settings({"motion": target}):
+    if not sm.update_chat_settings({"motion": target}, expected_active=_intended):
         return "Failed to update chat settings.", False
     # Tell the frontend to apply it live. `chat` is load-bearing: without it
     # a background-lane call (phone/cron/agent) repainted whatever chat the

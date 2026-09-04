@@ -319,6 +319,31 @@ class StreamingChat:
                 except Exception:
                     pass
                 self._stamp_private_if_unlocked()
+
+            # NULL ROOM (2026-09-03): a mode:limbo chat ('backrooms') is the
+            # vault-eviction holding room — a pointer parking space, not a
+            # conversation. It only ever hosts the active pointer when EVERY
+            # chat is private and sealed, so anything said in it is by
+            # construction the continuation of a private life in a plaintext
+            # row (the talk-stamp skips mode chats). Refuse the turn — same
+            # yield-refusal shape as the vault gates above; the outer finally
+            # handles end_streaming/AI_TYPING_END. After the A1 install so a
+            # stream pinned to the room reads its mode through the override.
+            try:
+                _mode = (self.main_chat.session_manager.get_chat_settings()
+                         or {}).get('mode')
+            except Exception:
+                _mode = None
+            if _mode == 'limbo':
+                logger.info("[LIMBO] turn refused — mode:limbo is a null room")
+                _refusal = ("🔒 Everything you have is in the vault right "
+                            "now. This is just a holding room — create a "
+                            "new chat (or unlock the vault) to talk.")
+                yield {"type": "content", "text": _refusal}
+                yield {"type": "final", "text": _refusal,
+                       "cancelled": False, "error": True}
+                return
+
             # Spice rail AFTER the A1 override install: before this, a phone
             # turn's spice cadence read the OPERATOR'S chat settings and turn
             # count (the ContextVar wasn't set yet) and could rewrite the

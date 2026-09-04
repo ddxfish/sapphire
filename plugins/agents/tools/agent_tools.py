@@ -284,10 +284,13 @@ def _create_llm_worker():
                     self.chat_name,
                     privacy_required=bool(self._privacy_required))
             else:
-                _override = {
-                    "settings": {"private_chat": bool(self._privacy_required)},
-                    "system_prompt": "", "tools": None,
-                }
+                # Chatless agent: full ephemeral carrier (2026-09-03). The
+                # old settings-only stub was HALF a fix — _effective_chat_
+                # name() still fell through to the operator's active chat,
+                # so a chatless agent's reset_chat/switch_toolset landed on
+                # whatever the user had open (M11 through the front door).
+                _override = sm.make_ephemeral_override(
+                    privacy_required=bool(self._privacy_required))
             _brain_token = stream_brain.set_override(_override)
             try:
                 raw = ctx.run(self.mission)

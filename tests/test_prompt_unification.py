@@ -291,8 +291,10 @@ class TestActivateStreamAware:
                    return_value={'chat': 'phone-1'}):
             ok, msg = prompt_crud.activate_prompt('costume', system)
         assert ok is True
+        # expected_active rides along (R5 intent, 2026-09-03): a vault
+        # eviction retargeting the stream's chat mid-activation must refuse.
         system.llm_chat.session_manager.update_chat_settings.assert_called_once_with(
-            {'prompt': 'costume'})
+            {'prompt': 'costume'}, expected_active='phone-1')
         system.llm_chat.set_system_prompt.assert_not_called()
 
     def test_no_override_full_activation(self):

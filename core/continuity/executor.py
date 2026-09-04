@@ -427,7 +427,22 @@ class ContinuityExecutor:
                 _ev_images = task.get("_event_images")
 
                 try:
-                    response = ctx.run(msg, images=_ev_images)
+                    # Ephemeral carrier (2026-09-03): this lane has NO target
+                    # chat, and without an override every "this chat" seam a
+                    # tool touches (reset_chat, prompt_switch, switch_toolset,
+                    # switch_model, hook privacy resolvers, token metrics)
+                    # fell through to the OPERATOR'S live chat. The carrier
+                    # makes chatlessness first-class: writers refuse loudly,
+                    # readers see the task's declared settings. Same span
+                    # discipline as the foreground lane — ctx.run only.
+                    from core.chat import stream_brain
+                    _brain_token = stream_brain.set_override(
+                        self.system.llm_chat.session_manager
+                            .make_ephemeral_override(task_settings))
+                    try:
+                        response = ctx.run(msg, images=_ev_images)
+                    finally:
+                        stream_brain.reset_override(_brain_token)
 
                     if response_cb and response:
                         # Same egress rule as the foreground lane: a

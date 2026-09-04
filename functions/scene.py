@@ -91,7 +91,11 @@ def execute(function_name, arguments, config=None):
             return "Could not reach the chat to set the scene.", False
         # Per-chat override (merges; resolution = chat > persona > none).
         sm = system.llm_chat.session_manager
-        if not sm.update_chat_settings({"background": target}):
+        # R5 intent: if a vault eviction retargets the active chat before
+        # the write, refuse the stamp instead of writing the landing chat.
+        _intended = sm._effective_chat_name()
+        if not sm.update_chat_settings({"background": target},
+                                       expected_active=_intended):
             return "Failed to update chat settings.", False
         # Tell the frontend to re-render #chatbg live. `chat` is load-bearing:
         # without it a background-lane call repainted the operator's open

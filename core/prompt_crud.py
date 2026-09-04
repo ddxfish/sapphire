@@ -776,13 +776,25 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
         _o = get_override()
         stream_chat = _o.get('chat') if _o else None
     except Exception:
+        _o = None
         stream_chat = None
+    if _o and _o.get('ephemeral'):
+        # Chatless background turn: no chat to costume, and the operator
+        # branch below is a LIVE recostume of the user's open chat.
+        return False, ("You're not in a chat right now (background task) — "
+                       "prompt unchanged")
     if stream_chat and stream_chat != system.llm_chat.session_manager.get_active_chat_name():
         # update_chat_settings routes to the effective (stream) chat.
-        system.llm_chat.session_manager.update_chat_settings({"prompt": name})
+        system.llm_chat.session_manager.update_chat_settings(
+            {"prompt": name}, expected_active=stream_chat)
         return True, f"Activated '{name}' for chat '{stream_chat}' (takes effect next turn)"
 
     content = data.get('content') if isinstance(data, dict) else str(data)
+    # R5 intent: captured before the live snapshot — if a vault eviction
+    # retargets the active chat mid-activation, the stamp refuses (the
+    # eviction's switch-means-apply re-applies the landing chat's own
+    # prompt, so the live snapshot below heals on its own).
+    _active = system.llm_chat.session_manager.get_active_chat_name()
     # Pieces BEFORE the live snapshot (C-5): a preset that fails validation
     # aborts here with the previous prompt AND both trackers untouched —
     # no half-activated chimera.
@@ -792,7 +804,10 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
                            f"aborted, previous prompt kept")
     system.llm_chat.set_system_prompt(content)
     prompt_state.set_active_preset_name(name)
-    system.llm_chat.session_manager.update_chat_settings({"prompt": name})
+    if not system.llm_chat.session_manager.update_chat_settings(
+            {"prompt": name}, expected_active=_active):
+        return False, (f"Active chat changed mid-activation — '{name}' not "
+                       f"stamped")
     return True, f"Activated '{name}'"
 
 

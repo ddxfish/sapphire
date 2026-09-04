@@ -509,11 +509,18 @@ async def get_current_toolset(request: Request, _=Depends(require_login), system
 async def activate_toolset(toolset_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Activate a toolset. The active chat's extra_toolsets ride along —
     a by-name-only re-apply strips them from the enabled set (2026-08-03)."""
-    extras = (system.llm_chat.session_manager.get_chat_settings() or {}).get('extra_toolsets') or None
+    sm = system.llm_chat.session_manager
+    # R5 intent, persist FIRST: if a vault eviction retargets the active
+    # chat between this request and the write, refuse before touching the
+    # runtime palette — a refusal leaves nothing half-applied.
+    _active = sm.get_active_chat_name()
+    extras = (sm.get_chat_settings() or {}).get('extra_toolsets') or None
+    if not sm.update_chat_settings({"toolset": toolset_name},
+                                   expected_active=_active):
+        raise HTTPException(status_code=409,
+                            detail="Active chat changed — toolset not applied")
     system.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
     publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
-    # Persist to chat settings so it survives restart
-    system.llm_chat.session_manager.update_chat_settings({"toolset": toolset_name})
     return {"status": "success", "toolset": toolset_name}
 
 
@@ -977,9 +984,15 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
     # private_chat through the switch (the eyeball is the only thing that
     # flips it). A persona's stored flag is ignored either direction.
     session_manager = system.llm_chat.session_manager
+    # R5 intent: a vault eviction between this request and the write must
+    # refuse — a persona payload must never merge into the landing chat.
+    _active = session_manager.get_active_chat_name()
     current = session_manager.get_chat_settings() or {}
     settings["private_chat"] = bool(current.get("private_chat", False))
-    session_manager.update_chat_settings(settings)
+    if not session_manager.update_chat_settings(settings,
+                                                expected_active=_active):
+        raise HTTPException(status_code=409,
+                            detail="Active chat changed — persona not applied")
 
     # Apply all settings (prompt, toolset, voice, spice set, scopes, state engine)
     _apply_chat_settings(system, settings)
@@ -1345,6 +1358,15 @@ async def activate_spice_set(set_name: str, request: Request, _=Depends(require_
     if not spice_set_manager.set_exists(set_name):
         raise HTTPException(status_code=404, detail="Spice set not found")
 
+    # R5 intent, chat stamp FIRST: a refused write (vault eviction retargeted
+    # the active chat mid-request) aborts before the global spice state flips
+    # — nothing half-applied.
+    sm = system.llm_chat.session_manager
+    if not sm.update_chat_settings({"spice_set": set_name},
+                                   expected_active=sm.get_active_chat_name()):
+        raise HTTPException(status_code=409,
+                            detail="Active chat changed — spice set not applied")
+
     categories = spice_set_manager.get_categories(set_name)
     all_cats = set(prompts.prompt_manager.spices.keys())
     disabled = all_cats - set(categories)
@@ -1353,7 +1375,6 @@ async def activate_spice_set(set_name: str, request: Request, _=Depends(require_
     prompts.invalidate_spice_picks()
 
     spice_set_manager.active_name = set_name
-    system.llm_chat.session_manager.update_chat_settings({"spice_set": set_name})
     publish(Events.SPICE_CHANGED, {"spice_set": set_name})
     return {"status": "success", "spice_set": set_name}
 

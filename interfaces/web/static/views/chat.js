@@ -478,7 +478,10 @@ async function steerOffGameChat() {
         const data = await api.fetchChatList();
         const active = (data.chats || []).find(c => c.name === data.active_chat);
         if (!active || active.mode !== 'game') return;
-        const target = (data.chats || []).find(c => c.mode !== 'game' && !c.archived);
+        // !c.mode, not just !=='game' — the picker's filter. mode:limbo
+        // ('backrooms', freshest after its landing wipe bumps updated_at)
+        // must never be the steer target.
+        const target = (data.chats || []).find(c => !c.mode && !c.archived);
         if (!target || getIsProc()) return;
         const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
         if (!chatSelect) return;

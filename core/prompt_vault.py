@@ -495,6 +495,14 @@ def lock(reason="") -> bool:
         pass
     _handoff_active(gone)      # outside _lock — calls into the prompt system
     _handoff_active_chat()     # vaulted chats: evict a private active chat
+    # Transient TTL prompt pieces are process-GLOBAL and survive the seal —
+    # a mood set during a private session would ride the eviction landing
+    # chat's prompt until its TTL expired. Sealing drops them.
+    try:
+        from core import prompts as _prompts
+        _prompts.clear_transients()
+    except Exception:
+        pass
     _fire_plugin_hook("vault_locked")
     _publish("vault_changed")
     return True

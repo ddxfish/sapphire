@@ -1590,6 +1590,17 @@ class ChatSessionManager:
         # active one). For an override we persist messages ONLY — the target chat's
         # settings/markers are owned elsewhere (the daemon/reaper) and must not be
         # clobbered on every turn. For the active chat, behavior is unchanged.
+        try:
+            from core.chat.stream_brain import is_ephemeral
+            if is_ephemeral():
+                # Chatless turn: the scratch history persists nowhere by
+                # design. Without this, the '' name fell to the missing-row
+                # drop below with a scary "chat was deleted" warning.
+                logger.debug("[EPHEMERAL] save skipped — chatless turn "
+                             "persists nothing")
+                return False
+        except ImportError:
+            pass
         eff_chat = self._effective_chat()
         eff_name = self._effective_chat_name()
         is_override = eff_chat is not self.current_chat
@@ -2015,7 +2026,22 @@ class ChatSessionManager:
         self._rows_degraded.pop(chat_name, None)
         self._degraded_toasted.discard(chat_name)
         if chat_name == self.active_chat_name:
-            self.clear()
+            # By-name clear of the active chat is EXPLICIT intent — suspend
+            # any stream-brain override so clear() operates on the chat that
+            # was NAMED. Without this, a daemon pinned to its own chat (or an
+            # ephemeral background turn) calling clear_chat('default') wiped
+            # its own override history instead — or was refused by the
+            # ephemeral guard — while this branch still returned True.
+            try:
+                from core.chat import stream_brain
+                _tok = stream_brain.set_override(None)
+            except Exception:
+                _tok = None
+            try:
+                self.clear()
+            finally:
+                if _tok is not None:
+                    stream_brain.reset_override(_tok)
             return True
         try:
             with self._lock, self._get_connection() as conn:
@@ -3235,7 +3261,13 @@ class ChatSessionManager:
         which is where boot eviction would put you anyway."""
         marker = self.history_dir / ".active_chat"
         try:
-            if self.current_settings.get('private_chat'):
+            if self.current_settings.get('private_chat') \
+                    or self.current_settings.get('mode') == 'limbo':
+                # Limbo (the vault-eviction holding room) blanks too: a
+                # saved 'backrooms' marker made restarts land you back in
+                # the null room even after unlocking. Blank → boot lands on
+                # default; if default is still sealed, boot eviction
+                # re-derives the right landing anyway.
                 marker.write_text("", encoding='utf-8')
             else:
                 marker.write_text(chat_name, encoding='utf-8')
@@ -3345,13 +3377,31 @@ class ChatSessionManager:
                     logger.warning("[VAULT] backrooms creation failed — "
                                    "staying (sealed)")
                     return None
+                # NULL ROOM (2026-09-03): limbo is a pointer parking space,
+                # not a conversation — chat_streaming refuses every turn in
+                # a mode:limbo chat. The quarantine stamp (toolset 'none')
+                # is belt-and-suspenders on top of that refusal; it also
+                # overwrites whatever loadout create_chat's user defaults
+                # stamped at creation (the old full-toolset trench coat).
                 self.set_named_chat_settings('backrooms', {
                     'mode': 'limbo', 'private_display_name': 'New Chat',
-                    'private_chat': False}, touch_updated=False)
+                    'private_chat': False, 'toolset': 'none'},
+                    touch_updated=False)
                 target = 'backrooms'
                 wipe_landing = True
             if wipe_landing:
-                self.clear_named_chat_messages(target)
+                # clear_chat-grade wipe, not just messages: tool_images and
+                # chat-scoped plugin rows accumulated across landings before
+                # (residue streams the messages-only wipe never touched).
+                self.clear_chat(target)
+                try:
+                    with self._get_connection() as conn:
+                        conn.execute(
+                            "DELETE FROM plugin_chat_data WHERE chat_name = ?",
+                            (target,))
+                        conn.commit()
+                except Exception:
+                    pass
             if not self.set_active_chat(target):
                 logger.warning("[VAULT] private-active eviction FAILED "
                                "(streaming?) — staying")
@@ -3738,6 +3788,12 @@ class ChatSessionManager:
             o = get_override()
             if o and o.get("chat"):
                 return o["chat"]
+            if o and o.get("ephemeral"):
+                # Chatless turn (background task / chatless agent): there is
+                # no name to resolve. '' — falsy, still a str — NEVER the
+                # operator's active chat (the fall-through below is the hole
+                # the ephemeral carrier exists to close).
+                return ''
         except Exception:
             pass
         return self.active_chat_name
@@ -3795,6 +3851,27 @@ class ChatSessionManager:
         except Exception:
             hist.messages = []
         return {"chat": chat_name, "settings": settings,
+                "system_prompt": "", "tools": None, "history": hist}
+
+    def make_ephemeral_override(self, task_settings: Optional[Dict[str, Any]] = None,
+                                privacy_required: bool = False) -> Dict[str, Any]:
+        """Full stream-brain carrier for a turn with NO chat at all — a
+        background continuity task or a chatless agent. Absence-of-a-chat
+        used to be unrepresentable: every seam's fallback was the operator's
+        live chat, so a background reset_chat/prompt_switch/switch_toolset
+        landed on whatever the user had open. This carrier makes it a
+        first-class state: chat writers refuse loudly (update_chat_settings,
+        clear, _save_current_chat), _effective_chat_name() resolves '', and
+        settings readers (hook privacy resolver, TTS gate, meta tools) see
+        the TASK's declared world instead of the operator's. The scratch
+        history keeps _effective_chat() off the active singleton; nothing
+        it accumulates persists."""
+        settings = dict(task_settings) if task_settings else {}
+        settings["private_chat"] = bool(privacy_required
+                                        or settings.get("privacy_required")
+                                        or settings.get("private_chat"))
+        hist = ConversationHistory(max_history=self.max_history)
+        return {"chat": None, "ephemeral": True, "settings": settings,
                 "system_prompt": "", "tools": None, "history": hist}
 
     def get_messages_for_llm(self, reserved_tokens: int = 0, provider: str = None) -> List[Dict[str, str]]:
@@ -4145,6 +4222,18 @@ class ChatSessionManager:
         # ONE lock hold for the whole wipe (race scout 2026-07-09 #1: the
         # unlocked gap let a concurrent continuity append survive a privacy
         # clear). RLock — the nested _save_current_chat lock re-enters fine.
+        try:
+            from core.chat.stream_brain import is_ephemeral
+            if is_ephemeral():
+                # Chatless turn: nothing of ours to clear, and the name
+                # fall-through would wipe rows-state/publish under the
+                # operator's name. reset_chat's no-arg lane refuses with a
+                # message before reaching here; this is the belt.
+                logger.warning("[EPHEMERAL] clear() refused — this turn has "
+                               "no chat (background task)")
+                return
+        except ImportError:
+            pass
         with self._lock:
             eff_chat = self._effective_chat()
             eff_name = self._effective_chat_name()
@@ -4208,9 +4297,17 @@ class ChatSessionManager:
         chats deposit as '__private__' (totals/summaries unaffected; nothing
         groups by chat today). Fail-closed: an unreadable answer masks."""
         try:
-            if self.get_chat_settings().get('private_chat'):
+            s = self.get_chat_settings()
+            if s.get('private_chat'):
                 return '__private__'
-            return self._effective_chat_name()
+            if s.get('mode') == 'limbo':
+                # The vault-eviction holding room: its rows named 'backrooms'
+                # forever were an audit trail of every eviction. (Turns are
+                # refused there now, so this is belt-and-suspenders.)
+                return '__limbo__'
+            # Chatless (ephemeral) turn: _effective_chat_name() is '' —
+            # deposit under an honest label, not an empty string.
+            return self._effective_chat_name() or '__background__'
         except Exception:
             return '__private__'
 
@@ -4262,6 +4359,14 @@ class ChatSessionManager:
                 _ov = get_override()
             except Exception:
                 pass
+            if _ov and _ov.get("ephemeral"):
+                # Chatless turn: there is no chat to write. Falling through
+                # to the active-chat branch below is exactly the background→
+                # operator spill the carrier closes. Refuse loudly.
+                logger.warning(
+                    f"[EPHEMERAL] settings write refused — this turn has no "
+                    f"chat (background task); keys={sorted(settings.keys())}")
+                return False
             if _ov and _ov.get("chat"):
                 # Override active — merge into the stream's own chat via a direct DB
                 # write, and keep this turn's in-memory snapshot in sync.
