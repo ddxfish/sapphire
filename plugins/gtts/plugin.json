@@ -15,7 +15,8 @@
         "key": "gtts",
         "display_name": "Google Translate (Free)",
         "entry": "provider.py",
-        "class_name": "GoogleTranslateTTSProvider"
+        "class_name": "GoogleTranslateTTSProvider",
+        "is_local": false
       }
     }
   }

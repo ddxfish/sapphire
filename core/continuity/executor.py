@@ -430,8 +430,13 @@ class ContinuityExecutor:
                     response = ctx.run(msg, images=_ev_images)
 
                     if response_cb and response:
-                        try: response_cb(response)
-                        except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
+                        # Same egress rule as the foreground lane: a
+                        # privacy_required task's response stays local.
+                        if bool(task_settings.get("privacy_required")):
+                            logger.info("[Continuity] reply callback suppressed — task requires privacy")
+                        else:
+                            try: response_cb(response)
+                            except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                     if response:
                         # P3-T5 (background/ephemeral path — no target chat):
@@ -763,8 +768,14 @@ class ContinuityExecutor:
                     })
 
                 if response_cb and response:
-                    try: response_cb(response)
-                    except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
+                    # Reply callbacks are egress (Discord/Telegram/email posts).
+                    # A private target chat's response must not leave the
+                    # machine — same rule the TTS gate below enforces.
+                    if bool(chat_settings.get("private_chat")) or bool(task_settings.get("privacy_required")):
+                        logger.info("[Continuity] reply callback suppressed — target chat is private")
+                    else:
+                        try: response_cb(response)
+                        except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                 if response:
                     # P3-T5: TTS evaluates the TASK's chat, not the operator's

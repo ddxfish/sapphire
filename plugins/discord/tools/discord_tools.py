@@ -36,6 +36,7 @@ def increment_send_count(account_name: str):
 TOOLS = [
     {
         "type": "function",
+        "is_local": False,
         "function": {
             "name": "discord_get_servers",
             "description": "List Discord servers (guilds) the bot is in, with their channels.",
@@ -44,6 +45,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": False,
         "function": {
             "name": "discord_read_messages",
             "description": "Read recent messages from a Discord channel.",
@@ -66,6 +68,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": False,
         "function": {
             "name": "discord_send_message",
             "description": "Send a Discord message. Omit channel = reply to triggering channel.",

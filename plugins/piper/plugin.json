@@ -15,7 +15,8 @@
         "key": "piper",
         "display_name": "Piper (Local, fast-CPU)",
         "entry": "provider.py",
-        "class_name": "PiperTTSProvider"
+        "class_name": "PiperTTSProvider",
+        "is_local": true
       }
     },
     "settings": [

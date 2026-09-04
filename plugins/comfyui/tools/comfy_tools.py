@@ -23,6 +23,7 @@ WORKFLOW_DIR = PROJECT_ROOT / "user" / "comfyui" / "workflows"
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "comfy_generate",
             "description": (
@@ -60,6 +61,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "comfy_list_workflows",
             "description": "List available ComfyUI workflows. Use this to see what workflows are installed before generating.",

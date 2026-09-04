@@ -7,8 +7,8 @@
     "plugin.json": "sha256:1e5da49b8780c6a2e3507cd683cde0eaa1f64e1fc83bf48da248b4fac1a4b89f",
     "routes/accounts.py": "sha256:9bbafd000f716245f52089a66467296e08221285389ff13386b2679dffd23872",
     "tests/test_auto_reply_gate.py": "sha256:80106c2b400d398fbed0099130b7b2e0b7598294f6f0c76b7707bc953a248281",
-    "tools/discord_tools.py": "sha256:bda7604110b1192d5b55fb34217011b783110df509359db4a7bbd6d9302dbe15",
+    "tools/discord_tools.py": "sha256:7d9684a6cefce9f3852578779156f3b50ee9b8a4e97367f762c263362c1ef810",
     "web/index.js": "sha256:bacd1a5ef958ac9fe560f02d0dd08f7362210c00da8af17d826c1283472b810b"
   },
-  "signature": "YWDrwXYl13N3cP/BwCELBu9x1SL9TUIFmpzhzbntJXPl7d+npUdf/QBtWoQFnfF26Rv52Sj8noMFc7pgNzs0Bw=="
+  "signature": "SKKPJYRv4jseoAIGhHplsK+3WeiBjgoYb3nTjMnzmBoKh81ZiD912SseOu0cGNZTlcPdgrGYI4Uvg8icWa+0Cg=="
 }

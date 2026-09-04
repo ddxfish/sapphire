@@ -16,6 +16,7 @@
         "display_name": "ElevenLabs (Cloud)",
         "entry": "provider.py",
         "class_name": "ElevenLabsTTSProvider",
+        "is_local": false,
         "requires_api_key": true,
         "api_key_env": "TTS_ELEVENLABS_API_KEY"
       }
