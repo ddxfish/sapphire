@@ -110,7 +110,9 @@ def get_user_defaults() -> Dict[str, Any]:
     user_defaults_path = Path(__file__).parent.parent.parent / "user" / "settings" / "chat_defaults.json"
     if user_defaults_path.exists():
         try:
-            with open(user_defaults_path, 'r', encoding='utf-8') as f:
+            # utf-8-sig: a Notepad-added BOM must not silently revert the
+            # user's chat defaults to factory (plugin-BOM class, S8-9).
+            with open(user_defaults_path, 'r', encoding='utf-8-sig') as f:
                 user_defaults = json.load(f)
             merged.update(user_defaults)
             logger.debug(f"Applied user chat defaults from {user_defaults_path}")
@@ -1220,6 +1222,15 @@ class ChatSessionManager:
                     CREATE INDEX IF NOT EXISTS idx_plugin_chat_data_chat
                     ON plugin_chat_data(chat_name)
                 """)
+                # tool_images is a BLOB table queried by chat_name from the
+                # Chat Manager (correlated per-chat subquery), vault, clear,
+                # delete and the orphan prune — without this every one of
+                # those is a full scan over megabyte rows (hunt 2026-09-04
+                # S3-01; the frontend's 15s stats timeout was the scar).
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_tool_images_chat
+                    ON tool_images(chat_name)
+                """)
 
                 # F2 Wave 4 (2026-08-17): repair quarantine — unreadable
                 # message rows move here VERBATIM (ciphertext stays
@@ -2019,6 +2030,11 @@ class ChatSessionManager:
             # Vault hunt G2: the one by-name op that lacked this gate — a
             # sealed chat must be indestructible by stale name (bulk-clear
             # clicked across an idle-lock). Hidden = nonexistent, even here.
+            return False
+        if self._is_streaming and chat_name == self.active_chat_name:
+            # Same guard rename/revert carry — a mid-turn wipe of the chat
+            # being streamed is torn state (hunt 2026-09-04 S5-02).
+            logger.info(f"clear_chat('{chat_name}') refused — chat is mid-stream")
             return False
         # F2 latch escape hatch: clear is ALLOWED on a degraded chat (the
         # user explicitly discards it) and unlatches — pop BEFORE the wipe
@@ -4822,9 +4838,15 @@ class ChatSessionManager:
         it's a cascade-correctness fix. 2026-06-13.
         """
         self._ensure_db()
+        # '' is the ephemeral sentinel, not "default to active": a background
+        # turn's image has no durable home — an orphan row would never cascade
+        # with any chat. None keeps the old default-to-active contract.
+        owner = chat_name if chat_name is not None else self.active_chat_name
+        if not owner:
+            logger.info(f"Tool image '{image_id}' dropped — no owning chat (background turn)")
+            return False
         try:
             with self._get_connection() as conn:
-                owner = chat_name or self.active_chat_name
                 # Vaulted owner chat: the image bytes encrypt like its rows
                 # (Krem's point 4 — the render nobody has to see). Stored as
                 # the '@enc1:' string; the BLOB column keeps what it's given.

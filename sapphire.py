@@ -552,10 +552,15 @@ class VoiceChatSystem:
         from core.wakeword.wakeword_null import NullAudioRecorder, NullWakeWordDetector
 
         if enabled:
-            # Already real? Just resume listening
+            # Already real? Just resume listening — but verify the mic
+            # actually opened: this branch used to return True by
+            # construction, green checkbox on a deaf Sapphire (S7-2).
             if not isinstance(self.wake_detector, NullWakeWordDetector):
                 logger.info("Wakeword already initialized, resuming")
-                self.wake_word_recorder.start_recording()
+                ok = self.wake_word_recorder.start_recording()
+                if ok is False or getattr(self.wake_word_recorder, 'stream', None) is None:
+                    logger.error("Wakeword resume failed — mic did not open")
+                    return False
                 self.wake_detector.start_listening()
                 return True
 

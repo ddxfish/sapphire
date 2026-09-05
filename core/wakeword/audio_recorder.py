@@ -94,10 +94,13 @@ class AudioRecorder:
         self._needs_stereo_downmix = device_config.needs_stereo_downmix
 
     def start_recording(self):
-        """Open audio input stream. Retries once with device re-resolution on failure."""
+        """Open audio input stream. Retries once with device re-resolution on
+        failure. Returns True when a stream is open, False otherwise — the
+        resume lane in toggle_wakeword reported success on a dead mic because
+        every failure here was voiceless (hunt 2026-09-04 S7-2)."""
         if not self.available:
             logger.warning("Cannot start recording - no audio device available")
-            return
+            return False
 
         # _stream_lock: two unlocked concurrent opens both passed the None
         # check, both opened an InputStream, and the attribute kept only the
@@ -108,7 +111,7 @@ class AudioRecorder:
         with self._stream_lock:
             if self.stream is not None:
                 logger.debug("Stream already open")
-                return
+                return True
 
             try:
                 self._open_audio_stream()
@@ -127,10 +130,11 @@ class AudioRecorder:
                         self._apply_device_config(new_config)
                         try:
                             self._open_audio_stream()
-                            return
+                            return True
                         except Exception as e2:
                             logger.error(f"Wakeword retry also failed: {classify_audio_error(e2)}")
                 self.stream = None
+            return self.stream is not None
 
     def _open_audio_stream(self):
         """Open the underlying sd.InputStream. Raises on failure."""

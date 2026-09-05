@@ -45,7 +45,9 @@ async def agent_status(chat: str = Query('', description="Filter by chat name"),
     system = get_system()
     if not hasattr(system, 'agent_manager'):
         return {"agents": []}
-    return {"agents": system.agent_manager.check_all(chat_name=chat)}
+    # '' (the query default) = unfiltered, matching the old route contract;
+    # check_all itself now treats '' as the chatless-agents filter.
+    return {"agents": system.agent_manager.check_all(chat_name=chat or None)}
 
 
 @router.get("/api/agents/providers")

@@ -790,24 +790,25 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
         return True, f"Activated '{name}' for chat '{stream_chat}' (takes effect next turn)"
 
     content = data.get('content') if isinstance(data, dict) else str(data)
-    # R5 intent: captured before the live snapshot — if a vault eviction
-    # retargets the active chat mid-activation, the stamp refuses (the
-    # eviction's switch-means-apply re-applies the landing chat's own
-    # prompt, so the live snapshot below heals on its own).
-    _active = system.llm_chat.session_manager.get_active_chat_name()
-    # Pieces BEFORE the live snapshot (C-5): a preset that fails validation
-    # aborts here with the previous prompt AND both trackers untouched —
-    # no half-activated chimera.
+    _sm = system.llm_chat.session_manager
+    # Stamp FIRST (hunt 2026-09-04 S5-08): the old order ran the live
+    # recostume, then the refusable write — a refused stamp (vault eviction
+    # retargeted the active chat) left the landing chat WEARING an unstamped
+    # persona while reporting failure. Refusal now precedes every mutation.
+    _active = _sm.get_active_chat_name()
+    _prev = (_sm.get_chat_settings() or {}).get('prompt') or 'default'
+    if not _sm.update_chat_settings({"prompt": name}, expected_active=_active):
+        return False, (f"Active chat changed mid-activation — '{name}' not "
+                       f"applied")
+    # C-5 still holds: a preset that fails validation aborts with the live
+    # prompt AND tracker untouched — and now restores the stamp it took.
     if name in getattr(prompt_manager, 'scenario_presets', {}):
         if not prompt_state.apply_scenario(name):
+            _sm.update_chat_settings({"prompt": _prev}, expected_active=_active)
             return False, (f"Preset '{name}' failed validation — activation "
                            f"aborted, previous prompt kept")
     system.llm_chat.set_system_prompt(content)
     prompt_state.set_active_preset_name(name)
-    if not system.llm_chat.session_manager.update_chat_settings(
-            {"prompt": name}, expected_active=_active):
-        return False, (f"Active chat changed mid-activation — '{name}' not "
-                       f"stamped")
     return True, f"Activated '{name}'"
 
 

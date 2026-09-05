@@ -576,7 +576,15 @@ class PluginLoader:
         manifest = info["manifest"]
         plugin_dir = info["path"]
         band = info["band"]
-        base_priority = manifest.get("priority", 50)
+        try:
+            base_priority = int(manifest.get("priority", 50))
+        except (TypeError, ValueError):
+            # A non-int priority ("50", null) used to ride into the hook
+            # registry and blow up fire()'s sort INSIDE the lock, on every
+            # turn, forever (hunt 2026-09-04 S2-01). Coerce or default.
+            logger.warning(f"[PLUGINS] {name}: manifest priority "
+                           f"{manifest.get('priority')!r} is not an int — using 50")
+            base_priority = 50
 
         # Version-skew shout — warns loudly, never blocks
         self._warn_min_core_version(name, manifest)

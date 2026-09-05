@@ -286,7 +286,10 @@ async def event_stream(request: Request, replay: str = 'false', _=Depends(requir
     async def generate():
         bus = get_event_bus()
         async for event in bus.async_subscribe(replay=do_replay):
-            yield f"data: {json.dumps(event)}\n\n"
+            # default=str: one publisher passing a datetime/Path/set must
+            # not tear down the SSE channel (and re-kill every replay
+            # subscriber from the ring) — hunt 2026-09-04 S2-03.
+            yield f"data: {json.dumps(event, default=str)}\n\n"
 
     return StreamingResponse(
         generate(),

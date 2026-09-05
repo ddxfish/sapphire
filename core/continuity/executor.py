@@ -458,7 +458,12 @@ class ContinuityExecutor:
                         # privacy_required is the carrier; local-only TTS via
                         # the same gate a private chat uses.
                         if browser_tts:
-                            publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
+                            # Same gate as the foreground twin: a privacy-required
+                            # task's text never rides SSE to every open tab.
+                            if bool(task_settings.get("privacy_required")):
+                                logger.info("[Continuity] browser TTS skipped — task requires privacy")
+                            else:
+                                publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
                         elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
                             from core.voice_privacy import tts_gate_reason
                             _gate = tts_gate_reason(

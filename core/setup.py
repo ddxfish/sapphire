@@ -412,38 +412,9 @@ def reset_chat_defaults() -> bool:
         return False
 
 
-def ensure_chat_database() -> bool:
-    """
-    Ensure SQLite chat database exists and is initialized.
-    Called at startup to bootstrap the database.
-    Returns True if database is ready, False on error.
-    """
-    import sqlite3
-    
-    db_dir = Path(__file__).parent.parent / 'user' / 'history'
-    db_path = db_dir / 'sapphire_history.db'
-    
-    try:
-        db_dir.mkdir(parents=True, exist_ok=True)
-        
-        conn = sqlite3.connect(str(db_path), timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chats (
-                name TEXT PRIMARY KEY,
-                settings TEXT NOT NULL,
-                messages TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"Chat database ready at {db_path}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to ensure chat database: {e}")
-        return False
+# ensure_chat_database() was deleted 2026-09-04 (hunt S6-6/S8-8): zero
+# callers, and it carried its OWN pre-rowify copy of the chats schema —
+# a revival hazard one stray import away from seeding an old-schema DB.
+# history.py _init_db is the one true schema.
 
 

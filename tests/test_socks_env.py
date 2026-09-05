@@ -58,13 +58,22 @@ def socks_on(monkeypatch):
     return monkeypatch
 
 
-def test_disabled_scrubs_env(monkeypatch):
+def test_disabled_scrubs_proxies_keeps_no_proxy_belt(monkeypatch):
+    """SOCKS off: every *_PROXY var is scrubbed, but the NO_PROXY belt stays
+    stamped — on Windows, an env with no proxy vars at ALL makes urllib fall
+    back to the WinINET registry proxy with zero bypass entries, sending LAN
+    gear through a corporate proxy (hunt 2026-09-04 S4-01)."""
     monkeypatch.setattr(config, "SOCKS_ENABLED", False, raising=False)
     os.environ["ALL_PROXY"] = "socks5h://stale:1080"
     os.environ["no_proxy"] = "stale"
     sp.apply_proxy_env()
-    for v in _ALL_VARS:
-        assert v not in os.environ, v
+    for base in sp._PROXY_VARS:
+        assert base not in os.environ, base
+        assert base.lower() not in os.environ, base.lower()
+    # Belt re-derived (not the stale value), present in both cases
+    assert "127.0.0.1" in os.environ.get("NO_PROXY", "")
+    assert os.environ.get("no_proxy") == os.environ.get("NO_PROXY")
+    assert "stale" not in os.environ["NO_PROXY"]
 
 
 def test_enabled_stamps_socks5h_with_quoted_creds(socks_on):

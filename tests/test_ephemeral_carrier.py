@@ -226,6 +226,27 @@ class TestResetChatTool:
         msg, ok = self._run(sm, {"reason": "x", "chat_name": "ghost"})
         assert ok is False
 
+    def test_named_target_is_operator_active_ephemeral_refuses(self, sm):
+        """Hunt 2026-09-04 S5-02: the named lane must not reach the chat the
+        user has OPEN from a chatless background turn — that's the original
+        blast-radius CRIT through the front door."""
+        sm.set_active_chat("pub")
+        _ephemeral(sm)
+        msg, ok = self._run(sm, {"reason": "x", "chat_name": "pub"})
+        assert ok is False and "open right now" in msg
+        stream_brain.set_override(None)
+        assert len(sm.read_chat_messages("pub")) == 2
+
+    def test_named_target_other_chat_ephemeral_still_clears(self, sm):
+        """Managing a NON-open chat by name from a background task stays
+        legal (deliberate design: named intent is real intent)."""
+        sm.set_active_chat("other")
+        _ephemeral(sm)
+        msg, ok = self._run(sm, {"reason": "x", "chat_name": "pub"})
+        assert ok is True
+        stream_brain.set_override(None)
+        assert sm.read_chat_messages("pub") == []
+
     def test_named_target_live_call_refuses(self, sm):
         msg, ok = self._run(sm, {"reason": "x", "chat_name": "pub"},
                             live_calls={"pub"})
@@ -257,6 +278,105 @@ class TestIdiomFlips:
             ok, msg = prompt_crud.activate_prompt("x", sys_mock)
         assert ok is False and "not in a chat" in msg
         sys_mock.llm_chat.set_system_prompt.assert_not_called()
+
+
+# ─── hunt 2026-09-04 Wave F: the falsy-sentinel seams ───────────────────────
+
+class TestFalsySentinelSeams:
+    """'' is the ephemeral sentinel — but it's FALSY, and any
+    `chat_name or active` fallback collapses it back to the operator's
+    open chat (S5-04/S5-06 class). These pin the seams that were caught."""
+
+    def test_save_tool_image_refuses_blank_owner(self, sm):
+        sm.set_active_chat("pub")
+        assert sm.save_tool_image("i1.jpg", b"\x00", chat_name="") is False
+        with sm._get_connection() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM tool_images").fetchone()[0]
+        assert n == 0, "blank-owner image must not land on ANY chat"
+
+    def test_save_tool_image_none_still_defaults_to_active(self, sm):
+        sm.set_active_chat("pub")
+        assert sm.save_tool_image("i2.jpg", b"\x00") is True
+        with sm._get_connection() as conn:
+            row = conn.execute(
+                "SELECT chat_name FROM tool_images WHERE id='i2.jpg'").fetchone()
+        assert row[0] == "pub"
+
+    def _mgr(self):
+        import threading
+        from core.agents.manager import AgentManager
+        m = AgentManager.__new__(AgentManager)
+        m._lock = threading.RLock()
+        a1 = MagicMock()
+        a1.chat_name = "pub"
+        a1.to_dict.return_value = {"chat_name": "pub"}
+        a2 = MagicMock()
+        a2.chat_name = ""
+        a2.to_dict.return_value = {"chat_name": ""}
+        m._agents = {"1": a1, "2": a2}
+        return m
+
+    def test_check_all_default_lists_all(self):
+        assert len(self._mgr().check_all()) == 2
+
+    def test_check_all_blank_filters_to_chatless_only(self):
+        """The ephemeral lane's '' must NOT mean 'no filter' — a background
+        turn sees only its own chatless spawns, never private chats'
+        agents (S5-06)."""
+        got = self._mgr().check_all(chat_name="")
+        assert [d["chat_name"] for d in got] == [""]
+
+    def test_check_all_named_filters(self):
+        got = self._mgr().check_all(chat_name="pub")
+        assert [d["chat_name"] for d in got] == ["pub"]
+
+
+class TestWriteFirstReorders:
+    """S5-07/S5-08: live state must never flip before the refusable stamp."""
+
+    def test_switch_toolset_refused_stamp_leaves_palette_untouched(self, sm):
+        from functions import meta
+        sys_mock = _meta_system(sm)
+        sys_mock.llm_chat.function_manager.get_available_toolsets.return_value = ["all"]
+        sm.set_active_chat("pub")
+        from core.toolsets import toolset_manager as _tsm
+        with patch.object(meta, "_system", return_value=sys_mock), \
+             patch.object(_tsm, "get_toolset_names", return_value=["all"]), \
+             patch.object(sm, "update_chat_settings", return_value=False):
+            msg, ok = meta._switch_toolset({"name": "all"})
+        assert ok is False
+        sys_mock.llm_chat.function_manager.update_enabled_functions.assert_not_called()
+
+    def test_activate_prompt_refused_stamp_leaves_live_untouched(self, sm):
+        from core import prompt_crud
+        sm.set_active_chat("pub")
+        sys_mock = _meta_system(sm)
+        with patch.object(prompt_crud, "get_prompt",
+                          return_value={"content": "You are X"}), \
+             patch.object(sm, "update_chat_settings", return_value=False):
+            ok, msg = prompt_crud.activate_prompt("x", sys_mock)
+        assert ok is False
+        sys_mock.llm_chat.set_system_prompt.assert_not_called()
+
+
+class TestClearChatStreamGuard:
+    def test_clear_chat_refuses_mid_stream_active(self, sm):
+        """S5-02 rider: the guard rename/revert carry, now on clear_chat."""
+        sm.set_active_chat("pub")
+        sm._is_streaming = True
+        try:
+            assert sm.clear_chat("pub") is False
+            assert len(sm.read_chat_messages("pub")) == 2
+        finally:
+            sm._is_streaming = False
+
+    def test_clear_chat_other_chat_fine_mid_stream(self, sm):
+        sm.set_active_chat("other")
+        sm._is_streaming = True
+        try:
+            assert sm.clear_chat("pub") is True
+        finally:
+            sm._is_streaming = False
 
 
 # ─── null-room limbo ────────────────────────────────────────────────────────

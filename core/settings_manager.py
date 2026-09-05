@@ -303,6 +303,20 @@ class SettingsManager:
                     val = int(val)
                 self._config[key] = val
 
+        # LMSTUDIO_BASE_URL: the Docker/compose contract (docs/DOCKER.md
+        # documents it as THE way to point a container at a host LM Studio)
+        # — it was documented but read nowhere (hunt 2026-09-04 S8-1).
+        # Runtime-only: env is re-applied every boot, never persisted.
+        _lms = os.environ.get('LMSTUDIO_BASE_URL')
+        if _lms:
+            try:
+                _prov = self._config.get('LLM_PROVIDERS') or {}
+                if 'lmstudio' in _prov:
+                    _prov['lmstudio']['base_url'] = _lms
+                    logger.info(f"LMSTUDIO_BASE_URL override applied: {_lms}")
+            except Exception as e:
+                logger.warning(f"LMSTUDIO_BASE_URL override failed: {e}")
+
         # Derive STT_ENABLED from STT_PROVIDER for backwards compatibility
         stt_provider = self._config.get('STT_PROVIDER', 'none')
         self._config['STT_ENABLED'] = bool(stt_provider and stt_provider != 'none')

@@ -397,7 +397,10 @@ async def import_vcf(request: Request, _=Depends(require_login)):
             if current.get('name'):
                 cards.append(current)
             current = {}
-        elif not current and not isinstance(current, dict):
+        elif not current:
+            # Property line outside any BEGIN:VCARD (concatenated/hand-edited
+            # exports) — the old `and not isinstance` guard was always False,
+            # so these crashed the whole import with a KeyError→500 (S1-04).
             continue
         else:
             # Strip type params: "TEL;TYPE=CELL:+1234" -> key=TEL, val=+1234

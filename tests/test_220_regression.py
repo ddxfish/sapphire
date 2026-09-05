@@ -726,17 +726,22 @@ class TestProviderSwitchSafety:
         assert client.speed == 1.8
         assert isinstance(client.speed, (int, float))
 
-    def test_unknown_embedding_provider_falls_back_to_null(self):
-        """If you ask for a provider that doesn't exist, we must NOT crash —
-        we fall back to NullEmbedder so the rest of the app keeps running."""
-        from core.embeddings import (NullEmbedder, get_embedder,
-                                     switch_embedding_provider)
+    def test_unknown_embedding_provider_raises_and_keeps_old(self):
+        """Contract updated by hunt 2026-09-04 S7-1: a SWITCH to a provider
+        that doesn't exist (or fails to init) RAISES and keeps the previous
+        embedder, so the Settings routes report failure instead of toasting
+        success over a silent NullEmbedder. Boot-time get_embedder() still
+        soft-falls — only the deliberate switch is loud."""
+        import pytest
+        from core.embeddings import get_embedder, switch_embedding_provider
 
         switch_embedding_provider('local')
-        assert get_embedder() is not None
+        before = get_embedder()
+        assert before is not None
 
-        switch_embedding_provider('nonexistent_provider')
-        assert isinstance(get_embedder(), NullEmbedder)
+        with pytest.raises(RuntimeError):
+            switch_embedding_provider('nonexistent_provider')
+        assert get_embedder() is before
 
 
 # =============================================================================

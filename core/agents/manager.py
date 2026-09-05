@@ -118,11 +118,16 @@ class AgentManager:
                     f"mission {len(mission)} chars")
         return {'id': agent_id, 'name': name}
 
-    def check_all(self, chat_name='') -> list:
-        """Return status of agents, optionally filtered by chat."""
+    def check_all(self, chat_name=None) -> list:
+        """Return status of agents, optionally filtered by chat.
+
+        None = no filter (UI/internal). '' filters to CHATLESS agents — the
+        ephemeral background lane passes its '' sentinel and must see only
+        its own spawns, never every chat's agents (hunt 2026-09-04 S5-06).
+        """
         with self._lock:
             agents = self._agents.values()
-            if chat_name:
+            if chat_name is not None:
                 agents = [a for a in agents if a.chat_name == chat_name]
             return [a.to_dict() for a in agents]
 

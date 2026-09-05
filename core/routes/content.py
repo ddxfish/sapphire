@@ -1360,10 +1360,12 @@ async def activate_spice_set(set_name: str, request: Request, _=Depends(require_
 
     # R5 intent, chat stamp FIRST: a refused write (vault eviction retargeted
     # the active chat mid-request) aborts before the global spice state flips
-    # — nothing half-applied.
+    # — nothing half-applied. Captured at entry, not inline — an inline
+    # capture makes the guard zero-width (hunt 2026-09-04 S5-12).
     sm = system.llm_chat.session_manager
+    _active = sm.get_active_chat_name()
     if not sm.update_chat_settings({"spice_set": set_name},
-                                   expected_active=sm.get_active_chat_name()):
+                                   expected_active=_active):
         raise HTTPException(status_code=409,
                             detail="Active chat changed — spice set not applied")
 

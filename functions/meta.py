@@ -902,6 +902,12 @@ def _reset_chat(args):
     # Chat Manager's bulk clear.
     from core.chat.history import sanitize_chat_name
     name = sanitize_chat_name(chat_name)
+    if _ov and _ov.get('ephemeral') and name == sm.get_active_chat_name():
+        # A chatless background turn may reset a chat it was told to manage,
+        # but never the operator's OPEN chat — that's the original blast-
+        # radius CRIT through the named front door (hunt 2026-09-04 S5-02).
+        return (f"'{name}' is the chat the user has open right now — "
+                f"background tasks can't reset it.", False)
     try:
         # Same source the Chat Manager's bulk ops consult (routes/chat.py
         # _live_call_chats) — read directly, a functions module must not
@@ -1083,6 +1089,14 @@ def _switch_toolset(args):
         logger.info(f"AI switched toolset to '{match}' for chat '{_ov['chat']}'")
         return f"Switched to toolset '{match}' for this chat (applies from its next turn).", True
 
+    # Write-first, matching the route twin (content.py activate_toolset):
+    # a refused stamp (active chat changed mid-turn — eviction) aborts
+    # BEFORE the live palette flips, so nothing needs healing. The old
+    # apply-then-write order left the runtime wearing the requested set
+    # over the landing chat's settings (hunt 2026-09-04 S5-07).
+    if not system.llm_chat.session_manager.update_chat_settings(
+            {"toolset": match}, expected_active=_intended):
+        return "Active chat changed mid-switch — toolset not saved.", False
     # The chat's extra_toolsets stay on across a deliberate toolset switch —
     # settings still claim them (the "include story tools" checkbox), so the
     # runtime must keep matching (extras-decay site #9, 2026-08-05).
@@ -1093,12 +1107,6 @@ def _switch_toolset(args):
     except Exception:
         pass
     fm.update_enabled_functions([match], extra_toolsets=extras)
-    # A refused stamp (active chat changed mid-turn — eviction) is safe to
-    # report and stop: the eviction's switch-means-apply re-applies the
-    # landing chat's own toolset, so the runtime heals on its own.
-    if not system.llm_chat.session_manager.update_chat_settings(
-            {"toolset": match}, expected_active=_intended):
-        return "Active chat changed mid-switch — toolset not saved.", False
     publish(Events.TOOLSET_CHANGED, {"name": match})
     logger.info(f"AI switched toolset to: {match}")
 

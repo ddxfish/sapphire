@@ -37,7 +37,9 @@ def test_get_agents_status_no_filter_returns_all(client, mock_system):
     mock_system.agent_manager.check_all.return_value = []
     r = c.get('/api/agents/status')
     assert r.status_code == 200
-    mock_system.agent_manager.check_all.assert_called_once_with(chat_name='')
+    # Hunt 2026-09-04 S5-06: '' now means the CHATLESS filter inside
+    # check_all; the route translates its '' query default to None (= all).
+    mock_system.agent_manager.check_all.assert_called_once_with(chat_name=None)
 
 
 def test_get_agents_status_missing_agent_manager(client, mock_system):

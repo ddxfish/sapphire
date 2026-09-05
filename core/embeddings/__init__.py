@@ -593,7 +593,20 @@ def switch_embedding_provider(provider_name):
         pass  # reembed module unavailable — proceed
     with _embedder_lock:
         logger.info(f"Switching embedding provider to: {provider_name}")
-        _embedder = embedding_registry.create(provider_name or 'none')
+        _new = embedding_registry.create(provider_name or 'none')
+        if _new is None or (isinstance(_new, NullEmbedder)
+                            and (provider_name or 'none') != 'none'):
+            # create() launders every failure into a NullEmbedder (unknown
+            # key, constructor raise, canary fail) — a silent no-vectors
+            # world the Settings UI toasted as success and persisted to
+            # disk, broken at every future boot (hunt 2026-09-04 S7-1:
+            # the 2026-08-15 registry lie's third lane; STT/TTS callers
+            # were fixed, embeddings never was). Keep the old embedder,
+            # raise so both switch routes catch and report honestly.
+            raise RuntimeError(
+                f"Embedding provider '{provider_name}' failed to initialize "
+                f"(fell back to null) — keeping the previous provider.")
+        _embedder = _new
     # Reset backfill flag so new provider can re-embed missing memories
     try:
         import plugins.memory.tools.memory_tools as mem

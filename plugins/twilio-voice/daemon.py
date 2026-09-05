@@ -257,6 +257,15 @@ def place_call(to_number, to_name, goal, origin_chat, ephemeral=True,
         if ob and time.time() < ob["deadline"]:
             return False, "Another outbound call is already being placed on this line."
 
+    if not (origin_chat or '').strip() and not ephemeral:
+        # Chatless background turn ('' sentinel): ephemeral=false means "run
+        # the call in THIS chat" — there is no this-chat, and the falsy name
+        # would fall through to the operator's open chat with a one-way
+        # private stamp (hunt 2026-09-04 S5-01, the outbound twin of the
+        # inbound B1 gate). Side-chat calls remain available.
+        return False, ("This background turn has no chat to host the call in — "
+                       "place it with ephemeral=true (isolated side chat) instead.")
+
     chat = origin_chat
     if ephemeral:
         chat = _setup_outbound_chat(system, scope, to_number, prompt, origin_chat,
@@ -690,6 +699,14 @@ def _report_back(system, origin_chat, report):
     answer with its OWN persona/toolset/scopes, as if the report were typed
     into it. Falls back to a plain user-role history write when the executor
     is unavailable or the origin chat hosts a live call (A2 write race)."""
+    if not (origin_chat or '').strip():
+        # Background-placed call ('' origin sentinel): a blank chat_target
+        # routes the report into an ephemeral run whose reply is discarded —
+        # a vacuum pretending to be the durable record (hunt 2026-09-04
+        # S5-05). Log the report so SOMETHING survives, and say so.
+        logger.info("[TWILIO] call placed from a chatless background turn — "
+                    f"no origin chat for the report-back. Report was: {report[:500]}")
+        return
     def _fallback():
         try:
             system.llm_chat.session_manager.append_messages_to_chat(

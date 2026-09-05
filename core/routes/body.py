@@ -245,7 +245,7 @@ async def body_events_stream(
                 payload = _to_body_event(event)
                 if payload is None:
                     continue
-                yield f"data: {json.dumps(payload)}\n\n"
+                yield f"data: {json.dumps(payload, default=str)}\n\n"
         finally:
             logger.info("[body/events] subscriber disconnected")
 

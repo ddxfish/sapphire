@@ -360,9 +360,25 @@ def _apply_proxy_env_inner() -> None:
     _env_warnings.clear()
     _drop_network_load_errors()
     if not getattr(config, 'SOCKS_ENABLED', False):
-        for var in _PROXY_VARS + ('NO_PROXY',):
+        for var in _PROXY_VARS:
             os.environ.pop(var, None)
             os.environ.pop(var.lower(), None)
+        # Keep the NO_PROXY belt stamped even with SOCKS off: on Windows,
+        # urllib's getproxies() falls back to the WinINET REGISTRY proxy
+        # only when the environment carries no *_proxy value at all — and
+        # the registry lane ships ZERO bypass entries, so LAN gear (Ollama,
+        # LM Studio, Home Assistant) rides a corporate proxy: the blinds-
+        # outage class (hunt 2026-09-04 S4-01). A present NO_PROXY keeps
+        # requests AND httpx on env derivation with the LAN belt intact.
+        # Explicit proxying stays available via SOCKS — facade doctrine.
+        try:
+            no_proxy = build_no_proxy()
+            os.environ['NO_PROXY'] = no_proxy
+            os.environ['no_proxy'] = no_proxy
+        except Exception as e:
+            logger.warning(f"NO_PROXY belt derivation failed on SOCKS-off: {e}")
+            os.environ.pop('NO_PROXY', None)
+            os.environ.pop('no_proxy', None)
         return
     try:
         username, password = get_socks_credentials()
