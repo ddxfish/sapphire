@@ -4,7 +4,7 @@ Audio recorder with adaptive VAD for speech-to-text.
 Uses the unified audio subsystem for device management.
 """
 
-import sounddevice as sd
+from core.audio.backend import sd
 import soundfile as sf
 import numpy as np
 from typing import Optional

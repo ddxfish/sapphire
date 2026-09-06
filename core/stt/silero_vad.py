@@ -222,7 +222,7 @@ def run_voice_test(duration_s: float = 5.0) -> dict:
     Used by the "Test my voice" button to let users tune STT_VAD_SPEECH_THRESHOLD
     against their actual voice. Does NOT use the recorder's capture loop —
     direct mic→silero→score path so there's no silent-timeout interference."""
-    import sounddevice as sd
+    from core.audio.backend import sd
     from core.audio import get_device_manager, convert_to_mono, resample_audio
 
     if not is_available():

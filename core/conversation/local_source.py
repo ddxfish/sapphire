@@ -16,7 +16,7 @@ import logging
 import threading
 
 import numpy as np
-import sounddevice as sd
+from core.audio.backend import sd
 
 from core.audio import get_device_manager, convert_to_mono, resample_audio
 

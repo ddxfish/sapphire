@@ -1,5 +1,5 @@
 import numpy as np
-import sounddevice as sd
+from core.audio.backend import sd
 import threading
 import os
 import time

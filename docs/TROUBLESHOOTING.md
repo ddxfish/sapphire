@@ -253,6 +253,14 @@ You'll need to re-run setup and reconfigure settings.
 - Test system audio: `aplay /usr/share/sounds/alsa/Front_Center.wav`
 - Check PulseAudio/PipeWire is running
 
+**Boot toast says "Local audio unavailable" / Settings > Audio shows no devices (headless box, VM, server)**
+- PortAudio needs a running PulseAudio/PipeWire server, and Ubuntu 26.04's PortAudio refuses to start without one
+- Sapphire still boots and browser voice works. This only affects a speaker/mic plugged into the Sapphire machine itself
+- To give her local audio: `sudo apt install pipewire-audio`, then `systemctl --user enable --now pipewire.socket pipewire-pulse.socket wireplumber.service`
+- Add your user to the `audio` group (`sudo usermod -aG audio $USER`, then log out and in). A lingering session with no console login has no device access otherwise
+- No restart needed once the server is up: open Settings > Audio and the devices re-detect
+- Bluetooth speaker on a headless box: WirePlumber only enables Bluetooth for an active seat by default. Put `wireplumber.profiles = { main = { monitor.bluez.seat-monitoring = disabled } }` in a file under `~/.config/wireplumber/wireplumber.conf.d/` and restart wireplumber
+
 **STT not transcribing**
 - Check STT is enabled in Settings > STT
 - For GPU: verify CUDA is working (`nvidia-smi`)

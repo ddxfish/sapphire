@@ -118,6 +118,11 @@ class VoiceChatSystem:
             tts_provider = 'kokoro'
         self._init_tts_provider(tts_provider, base_dir)
 
+        # Audio backend detached (no sound server / no libportaudio)? Land it
+        # in the boot-errors lane so the UI toasts it -- boot used to die here.
+        from core.audio import backend as _audio_backend
+        _audio_backend.publish_boot_error()
+
         self.llm_chat = LLMChat(self.history, system=self)
 
         # Vaulted chats Phase 3 (ruling F2): hook runner resolves each fire's

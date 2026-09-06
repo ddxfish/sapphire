@@ -8,7 +8,7 @@ resampling if the device doesn't support native 16kHz.
 """
 
 import numpy as np
-import sounddevice as sd
+from core.audio.backend import sd
 import logging
 import threading
 

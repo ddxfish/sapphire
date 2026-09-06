@@ -9,7 +9,7 @@ import config
 import re
 import gc
 import numpy as np
-import sounddevice as sd
+from core.audio.backend import sd
 import soundfile as sf
 from core.event_bus import publish, Events
 

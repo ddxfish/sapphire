@@ -246,6 +246,7 @@ async def clear_restore_result(request: Request, _=Depends(require_login)):
 async def get_audio_devices(request: Request, _=Depends(require_login)):
     """Get audio devices."""
     from core.audio import get_device_manager
+    from core.audio import backend as _audio_backend
     dm = get_device_manager()
     devices = dm.query_devices(force_refresh=True)
 
@@ -264,6 +265,8 @@ async def get_audio_devices(request: Request, _=Depends(require_login)):
         'output': output_devices,
         'configured_input': getattr(config, 'AUDIO_INPUT_DEVICE', None),
         'configured_output': getattr(config, 'AUDIO_OUTPUT_DEVICE', None),
+        # None when PortAudio is up; the detached reason otherwise (headless/VM, no sound server)
+        'backend_error': _audio_backend.error(),
     }
 
 
@@ -357,7 +360,7 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
 
     def _test_output():
         import numpy as np
-        import sounddevice as sd
+        from core.audio.backend import sd
 
         # Pause wakeword stream to avoid audio device conflict
         listener_stopped, wakeword_paused = _quiesce_wakeword(system)
