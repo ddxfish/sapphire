@@ -276,7 +276,17 @@ async def tts_status(request: Request, _=Depends(require_login), system=Depends(
 
 @router.post("/api/tts/stop")
 async def tts_stop(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Stop TTS playback (tts_client + the conversation-mode sink)."""
+    """Stop TTS playback (tts_client + the conversation-mode sink).
+
+    Optional body {"stream_id"}: the streaming-TTS pump the browser is
+    hearing — mutes exactly that one. Without it the mute is chat-scoped but
+    reaches only pumps that have started (LLMChat.stop_tts_streams)."""
+    try:
+        _body = await request.json()
+    except Exception:
+        _body = {}
+    _sid = _body.get("stream_id") if isinstance(_body, dict) else None
+    _sid = str(_sid) if _sid else None
     system.tts.stop()
     # Phase I isolation: this button belongs to the WEB UI — everything it stops
     # must be scoped to the operator's surface. Unscoped, it muted ALL streams,
@@ -299,7 +309,11 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
     except Exception:
         _ext = set()
     try:
-        if _active and _active in _ext:
+        if _sid:
+            # Precise: the browser named the pump it's hearing. Phone-call
+            # chats stay excluded — their pumps never reach a browser.
+            system.llm_chat.stop_tts_streams(stream_id=_sid, exclude_chats=_ext)
+        elif _active and _active in _ext:
             logger.info(f"[TTS-STOP] '{_active}' belongs to a live phone call — web stop leaves it alone")
         else:
             # Mirror /api/cancel: an unscoped stop (_active None) must still

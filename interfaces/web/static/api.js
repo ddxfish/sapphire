@@ -539,7 +539,13 @@ export const toggleSpice = async (chatName, enabled) => {
 
 // Local TTS control (server-side speaker playback)
 export const getTtsStatus = () => fetchWithTimeout('/api/tts/status', {}, 2000);
-export const stopLocalTts = () => fetchWithTimeout('/api/tts/stop', { method: 'POST' }, 2000);
+// streamId: the streaming-TTS pump the browser is hearing — the server mutes
+// exactly that one (never the next turn still thinking). 2026-09-08.
+export const stopLocalTts = (streamId = null) => fetchWithTimeout('/api/tts/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(streamId ? { stream_id: streamId } : {})
+}, 2000);
 
 // Image upload
 export const uploadImage = async (file) => {

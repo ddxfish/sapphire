@@ -350,14 +350,35 @@ class LLMChat:
             s.cancel_flag = True
         return len(targets)
 
-    def stop_tts_streams(self, chat_name=None, exclude_chats=None):
+    def stop_tts_streams(self, chat_name=None, exclude_chats=None, stream_id=None):
         """Mute the VOICE on active streams (left-button "stop TTS") WITHOUT
         cancelling generation — the LLM keeps writing, only this message's audio
-        stops. Mirrors cancel_streams' targeting. Returns count of streams muted.
+        stops. Returns count of streams muted.
+
+        stream_id: the streaming-TTS pump the browser is hearing (every
+        tts_stream_start carries one) — mute exactly that pump, wherever it
+        is registered. Without it: chat-scoped like cancel_streams, but only
+        pumps that have STARTED. The ⏹ means "stop the voice I'm hearing";
+        it used to also mute the NEXT turn while it was still thinking (its
+        pump existed, unstarted) — that turn then streamed in silent and fell
+        back to a whole-blob at the end. 2026-09-08.
         """
         with self._streams_lock:
-            ids = self._target_stream_ids(chat_name, exclude_chats)
-            targets = [self._streams_by_id[i] for i in ids if i in self._streams_by_id]
+            if stream_id:
+                targets = []
+                for chat, ids in self._streams_by_chat.items():
+                    if exclude_chats and chat in exclude_chats:
+                        continue
+                    for i in ids:
+                        s = self._streams_by_id.get(i)
+                        pump = getattr(s, "tts_pump", None)
+                        if s is not None and getattr(pump, "_stream_id", None) == stream_id:
+                            targets.append(s)
+            else:
+                ids = self._target_stream_ids(chat_name, exclude_chats)
+                targets = [self._streams_by_id[i] for i in ids if i in self._streams_by_id]
+                targets = [s for s in targets
+                           if getattr(getattr(s, "tts_pump", None), "_stream_started", False)]
         for s in targets:
             try:
                 s.stop_tts()
