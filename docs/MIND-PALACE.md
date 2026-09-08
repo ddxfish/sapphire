@@ -119,7 +119,8 @@ Wipes and layer clears live in **Admin → Danger**, each gated by typing the sc
 Mind Palace = opt-in v3 memory engine (plugin `mindpalace`); mutually exclusive with plugin `memory` (same tool names; second engine refuses to load). Data: one palace DB per install under user/memory/; layers: events/self/entities/knowledge/goals; connection graph. Classic DBs opened read-only; palace-era rows invisible to classic (no reverse export). Scopes keep names across engines; per-chat scope in sidebar Mind section.
 
 TOOLS (palace surface):
-- save_memory / search_memory / get_recent_memories / update_memory / delete_memory — over-cap saves TRIM at last whitespace + return receipt with dropped text (see MEMORY.md)
+- save_memory / search_memory / get_recent_memories / update_memory / delete_memory — over-cap saves TRIM at last whitespace + return receipt with dropped text (see MEMORY.md); entity= resolves nicknames to the card, a partial overlap saves + asks "did you mean"
+- list_entities(kind?, limit?) — read-only roster (name/kind/nicknames/fact count; with a kind, that kind's filled-in fields). Merge/delete stay UI-only.
 - read_self(section?, depth?) = wake-up call: sheet + wake tools + recent ledger; update_self edits sheet (edits archived); read_ledger
 - librarian_instructions(stage, instructions) — edit own per-scope charter awake; '' restores default; stages: dates, link, dedup, sort, self_first, self_tend, self_verify; NOT available during passes (instructions change between rituals, never mid-ritual)
 - Pass-time verbs (librarian toolset): atomize_memory, merge_memories, promote_memory, prune_memory, set_links, set_event_dates, mark_processed; run_librarian starts a pass

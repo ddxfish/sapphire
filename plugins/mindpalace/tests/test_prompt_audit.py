@@ -420,3 +420,59 @@ def test_reason_event_ignores_stale_rows(palace):
                'actor': 'user', 'reason': 'way too late'})
     rows = _rows('s22')
     assert all(r['action'] != 'noted' for r in rows)       # ✏ is the old-row path
+
+
+# ─── vault events (2026-09-08) ───────────────────────────────────────────────
+# Krem moved a ton of prompts into the vault; Sapph's ledger showed 120 ×
+# 'prompt piece "None" (None) deleted'. The nameless vault event fell through
+# to the component path, where None == None matched every assembled watch.
+
+def _vault(item, name=None, ct=None, key=None, action='saved'):
+    e = {'kind': 'vault', 'action': action, 'item': item, 'actor': 'user'}
+    if name:
+        e['name'] = name
+    if ct:
+        e['comp_type'] = ct
+    if key:
+        e['key'] = key
+    return e
+
+
+def test_vault_prompt_move_lands_only_where_that_prompt_is_watched(palace, monkeypatch):
+    from core import prompts
+    monkeypatch.setattr(prompts, 'get_prompt', lambda n: {
+        'type': 'assembled', 'components': {'emotions': ['happy']}})
+    pt.set_scope_resident('v1', prompt='sapph-first')      # an assembled watch
+    pt.set_scope_resident('v2', prompt='other-prompt')
+    _edit_and_flush(_vault('monolith', name='other-prompt'),
+                    _vault('preset', name='third'))
+    assert _rows('v1', layer='prompt') == [], "someone else's prompts are not her evidence"
+    rows = _rows('v2', layer='prompt')
+    assert len(rows) == 1
+    assert rows[0]['target'] == 'vault/monolith/other-prompt'
+    assert rows[0]['summary'] == 'prompt "other-prompt" saved in the vault: no reason given'
+    assert 'None' not in rows[0]['summary']
+
+
+def test_vault_piece_move_uses_containment_and_honest_wording(palace, monkeypatch):
+    from core import prompts
+    monkeypatch.setattr(prompts, 'get_prompt', lambda n: {
+        'type': 'assembled', 'components': {'emotions': ['happy']}})
+    pt.set_scope_resident('v3', prompt='sapph-first')
+    _edit_and_flush(_vault('piece', ct='emotions', key='happy'),
+                    _vault('piece', ct='emotions', key='sad'),           # not hers
+                    _vault('piece', ct='emotions', key='happy', action='deleted'))
+    rows = _rows('v3', layer='prompt')
+    assert [r['summary'] for r in rows] == [
+        'prompt piece "happy" (emotions) saved in the vault: no reason given',
+        'prompt piece "happy" (emotions) deleted from the vault: no reason given']
+    assert [r['action'] for r in rows] == ['saved', 'removed']
+
+
+def test_keyless_component_event_never_matches(palace, monkeypatch):
+    from core import prompts
+    monkeypatch.setattr(prompts, 'get_prompt', lambda n: {
+        'type': 'assembled', 'components': {'emotions': ['happy']}})
+    pt.set_scope_resident('v4', prompt='sapph-first')
+    _edit_and_flush({'kind': 'component', 'before': 'a', 'after': '', 'actor': 'user'})
+    assert _rows('v4', layer='prompt') == []

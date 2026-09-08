@@ -94,6 +94,7 @@ AVAILABLE_FUNCTIONS = [
     'get_recent_memories',
     'update_memory',
     'delete_memory',
+    'list_entities',
 ]
 
 TOOLS = [
@@ -220,6 +221,38 @@ TOOLS = [
                         "description": "Gating word — pass to include private rows saved with this word."
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "list_entities",
+            # Read-only roster (2026-09-08). She had no way to see everyone
+            # at once, so near-duplicates ('bander username' beside Krem,
+            # nickname bander) got minted. Merge/delete stay UI-only.
+            "description": (
+                "Your roster of entities (people, places, things, events) in "
+                "this memory scope — see everyone at once before saving a fact "
+                "to one. Default: every kind, one brief line each (name, kind, "
+                "nicknames, fact count). Pass kind='person' (or place/thing/"
+                "event/other) for the fuller card of that kind: relationship, "
+                "birthday, and the other filled-in fields."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "One kind (person, place, thing, event, other) — shows its fuller card. Omit for the brief roster of all kinds."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entities to list (default 50)"
+                    }
+                },
+                "required": []
             }
         }
     },
@@ -1162,6 +1195,102 @@ def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
         return False
 
 
+def _resolve_entity_name(name: str, scope: str) -> tuple:
+    """(canonical_name, receipt_note) for a save's entity= parameter.
+
+    Exact name OR nickname → that entity's canonical name: a nickname on the
+    card is the user saying "same person", so entity='bander' lands on Krem
+    instead of minting a twin. A NEW name that merely contains a known
+    name/nickname ('bander username') stays new — the note asks "did you
+    mean …?" with that entity's nicknames so she can re-save under the right
+    name, and the People tab can merge. Never blocks the save (2026-09-08)."""
+    try:
+        from plugins.mindpalace.tools import metadata as md
+        with _get_connection() as conn:
+            arows = md.entity_aliases(conn.cursor(), scope)
+        amap = md.alias_map(arows)
+        pair = amap.get(name.lower())
+        if pair:
+            canon = pair[1]
+            if canon.lower() != name.lower():
+                return canon, f" '{name}' is a nickname of {canon} — saved under {canon}."
+            return canon, ''
+        hits = md.match_entities(name, [a for _, _, a in arows])
+        seen, cands = set(), []
+        for h in hits:
+            p = amap.get(h.lower())
+            if not p or p[0] in seen:
+                continue
+            seen.add(p[0])
+            nicks = [a for eid, c, a in arows if eid == p[0] and a != c]
+            cands.append(p[1] + (f" (nicknames {', '.join(nicks)})" if nicks else ''))
+        if cands:
+            return name, (f" New entity '{name}' created. Did you mean "
+                          f"{' or '.join(cands[:3])}? If so, save under that "
+                          f"name; the People tab can merge the two.")
+        return name, ''
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] entity name resolution skipped: {e}")
+        return name, ''
+
+
+def _list_entities(scope: str, kind: str = None, limit: int = 50) -> tuple:
+    """Roster for the AI. Brief line per entity across all kinds; with a
+    kind, that kind's filled-in template fields too. Read-only — merge and
+    delete stay UI verbs."""
+    try:
+        from plugins.mindpalace.tools import templates as tpl
+        kind = (kind or '').strip().lower() or None
+        kinds = tpl.valid_kinds()
+        if kind and kind not in kinds:
+            return f"Unknown kind '{kind}'. Kinds: {', '.join(sorted(kinds))}.", False
+        try:
+            limit = max(1, min(int(limit or 50), 200))
+        except (TypeError, ValueError):
+            limit = 50
+        with _get_connection() as conn:
+            q = ("SELECT e.id, e.name, e.kind, e.meta, e.mentions, "
+                 "(SELECT COUNT(*) FROM chunks c WHERE c.entity_id = e.id) "
+                 "FROM entities e WHERE e.scope IN (?, 'global')")
+            params = [scope]
+            if kind:
+                q += " AND LOWER(COALESCE(e.kind, '')) = ?"
+                params.append(kind)
+            q += " ORDER BY e.mentions DESC, e.name COLLATE NOCASE LIMIT ?"
+            params.append(limit + 1)
+            rows = conn.execute(q, params).fetchall()
+        more = len(rows) > limit
+        rows = rows[:limit]
+        if not rows:
+            return (f"No {kind + ' ' if kind else ''}entities in this scope yet."), True
+        fields = []
+        if kind:
+            t = tpl.get_templates().get(kind) or {}
+            fields = [(f['key'], f['label']) for f in t.get('fields', [])
+                      if f.get('type') != 'bool' and f.get('key') != 'nicknames']
+        lines = [f"{len(rows)}{'+' if more else ''} {kind + ' ' if kind else ''}"
+                 f"entit{'y' if len(rows) == 1 and not more else 'ies'} in this scope:"]
+        for eid, name, ekind, meta_raw, mentions, nfacts in rows:
+            try:
+                f = (json.loads(meta_raw or '{}') or {}).get('fields') or {}
+            except Exception:
+                f = {}
+            nicks = ' '.join(str(f.get('nicknames') or '').split())
+            head = name + (f" ({ekind})" if ekind and not kind else '')
+            bits = ([f"aka {nicks}"] if nicks else []) + [f"{nfacts} fact{'s' if nfacts != 1 else ''}"]
+            lines.append(f"• {head} — {', '.join(bits)}")
+            for key, label in fields:
+                val = ' '.join(str(f.get(key) or '').split())
+                if val and val.lower() not in ('false', 'none'):
+                    lines.append(f"    {label}: {val[:160]}{'…' if len(val) > 160 else ''}")
+        if more:
+            lines.append(f"…more not shown — raise limit (max 200).")
+        return "\n".join(lines), True
+    except Exception as e:
+        logger.error(f"[MINDPALACE] list_entities failed: {e}")
+        return f"Failed to list entities: {e}", False
+
+
 def upsert_entity(cursor, name: str, scope: str, kind: str = None) -> int:
     """Find-or-create an entity by (name NOCASE, scope) on an open cursor.
     Returns entity id. Shared with import_tools."""
@@ -1380,6 +1509,9 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         entity = entity.strip() if (entity and entity.strip()) else None
         if layer == 'entities' and not entity:
             return "Saving to the entities layer requires an entity name (person/place/thing).", False
+        entity_note = ''
+        if layer == 'entities':
+            entity, entity_note = _resolve_entity_name(entity, scope)
         if layer == 'knowledge':
             # v3: knowledge lives in the Library. Her save contract keeps
             # working — label (or the first words) titles the note. No 512
@@ -1532,7 +1664,7 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         logger.info(f"[MINDPALACE] Stored chunk {chunk_id} ({layer}) in scope '{scope}'")
         if dropped:
             logger.info(f"[MINDPALACE] save trimmed {len(dropped)} chars over cap (chunk {chunk_id})")
-        note = self_note + (_trim_note(dropped, chunk_id) if dropped else '')
+        note = self_note + entity_note + (_trim_note(dropped, chunk_id) if dropped else '')
         msg = f"Memory saved ({', '.join(bits)})"
         return (f"{msg}.{note}" if note else msg), True
 
@@ -2170,6 +2302,9 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
                 return err, False
             return _delete_memory(memory_id, scope,
                                   private_key=arguments.get("private_key"))
+        elif function_name == "list_entities":
+            return _list_entities(scope, kind=arguments.get("kind"),
+                                  limit=arguments.get("limit", 50))
         else:
             return f"Unknown mind palace function: {function_name}", False
     except Exception as e:

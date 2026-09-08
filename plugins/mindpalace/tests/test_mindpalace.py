@@ -687,3 +687,75 @@ def test_update_memory_in_schema():
     mod = importlib.import_module('plugins.mindpalace.tools.palace_tools')
     assert 'update_memory' in mod.AVAILABLE_FUNCTIONS
     assert any(t['function']['name'] == 'update_memory' for t in mod.TOOLS)
+
+
+# ─── entity resolution + roster (2026-09-08) ────────────────────────────────
+# 'bander username' got minted beside Krem (nickname bander). Now an exact
+# nickname resolves to the card, a partial overlap saves but asks "did you
+# mean", and list_entities shows her everyone at once.
+
+def _make_person(palace, name, nicknames='', **fields):
+    import json as _json
+    msg, ok = palace._save_memory(f"{name} exists.", scope="default",
+                                  layer="entities", entity=name)
+    assert ok, msg
+    conn = _connect(palace)
+    try:
+        f = dict(fields)
+        if nicknames:
+            f['nicknames'] = nicknames
+        conn.execute("UPDATE entities SET kind = 'person', meta = ? "
+                     "WHERE name = ? COLLATE NOCASE", (_json.dumps({'fields': f}), name))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _entity_names(palace):
+    conn = _connect(palace)
+    try:
+        return sorted(r[0] for r in conn.execute("SELECT name FROM entities").fetchall())
+    finally:
+        conn.close()
+
+
+def test_exact_nickname_resolves_to_the_card(palace):
+    _make_person(palace, "Krem", nicknames="bander, fishy", relationship="creator")
+    msg, ok = palace._save_memory("Username on the box is bander.", scope="default",
+                                  layer="entities", entity="bander")
+    assert ok and "saved under Krem" in msg and "entity: Krem" in msg
+    assert _entity_names(palace) == ["Krem"], "a nickname must never mint a twin"
+
+
+def test_partial_overlap_creates_but_asks_did_you_mean(palace):
+    _make_person(palace, "Krem", nicknames="bander, fishy")
+    msg, ok = palace._save_memory("Username 'bander' = Sarton", scope="default",
+                                  layer="entities", entity="bander username")
+    assert ok, msg                                   # never refuses the save
+    assert "New entity 'bander username' created" in msg
+    assert "Did you mean Krem (nicknames bander, fishy)?" in msg
+    assert _entity_names(palace) == ["Krem", "bander username"]
+
+
+def test_unrelated_name_gets_no_suggestion(palace):
+    _make_person(palace, "Krem", nicknames="bander")
+    msg, ok = palace._save_memory("Sudo is the dog.", scope="default",
+                                  layer="entities", entity="Sudo")
+    assert ok and "Did you mean" not in msg
+
+
+def test_list_entities_brief_then_kind_card(palace):
+    _make_person(palace, "Krem", nicknames="bander, fishy", relationship="creator")
+    palace._save_memory("The lake house.", scope="default", layer="entities",
+                        entity="Lake House")
+    brief, ok = palace._list_entities("default")
+    assert ok, brief
+    assert "Krem (person) — aka bander, fishy, 1 fact" in brief
+    assert "Lake House — 1 fact" in brief and "Relationship" not in brief
+    card, ok = palace._list_entities("default", kind="person")
+    assert ok and "Krem — aka bander, fishy, 1 fact" in card
+    assert "Relationship: creator" in card and "Lake House" not in card
+    bad, ok = palace._list_entities("default", kind="dragon")
+    assert not ok and "Unknown kind" in bad
+    assert "list_entities" in palace.AVAILABLE_FUNCTIONS
+    assert any(t['function']['name'] == 'list_entities' for t in palace.TOOLS)

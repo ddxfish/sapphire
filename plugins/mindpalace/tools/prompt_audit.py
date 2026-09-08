@@ -90,7 +90,23 @@ def _covers(watched, event):
                 p = prompts.get_prompt(watched)
                 return bool(p) and p.get('type') == 'assembled'
             return False
-        # Component content edit: does the watched preset contain the piece?
+        if kind == 'vault':
+            # Names-only vault mutations (core.prompt_vault._audit_row). A
+            # whole prompt: hers iff it IS the watched name. A piece: hers
+            # iff her preset contains it — same containment as an edit.
+            # Before this branch a vault event fell through to the component
+            # path below, where a nameless key matched a nameless lookup and
+            # 120 of Krem's moves landed in her ledger (2026-09-08).
+            item = event.get('item')
+            if item in ('monolith', 'preset'):
+                return event.get('name') == watched
+            if item != 'piece':
+                return False
+        # Component content edit (or vault piece): does the watched preset
+        # contain the piece? An event that names no piece is not
+        # "unanswerable" — it's not about her. Never a vacuous None == None.
+        if not event.get('comp_type') or not event.get('key'):
+            return False
         p = prompts.get_prompt(watched)
         if not p:
             return True                      # unknown prompt → over-log
@@ -99,7 +115,7 @@ def _covers(watched, event):
         v = (p.get('components') or {}).get(event.get('comp_type'))
         if isinstance(v, (list, tuple)):
             return event.get('key') in v
-        return v == event.get('key')
+        return v is not None and v == event.get('key')
     except Exception:
         return True                          # over-log beats under-log
 
@@ -115,6 +131,17 @@ def _describe(event):
         if not (event.get('before') or ''):
             return 'saved', f'monolith/{name}', f'prompt "{name}" created'
         return 'edited', f'monolith/{name}', f'prompt "{name}" edited'
+    if kind == 'vault':
+        # Names only, never content: mind.db is plaintext. 'saved' covers
+        # both a move-in and an in-vault edit (the vault can't diff).
+        item, act = event.get('item'), event.get('action')
+        verb = {'saved': 'saved in the vault', 'deleted': 'deleted from the vault',
+                'restored': 'restored in the vault'}.get(act, f'{act or "changed"} (vault)')
+        action = 'saved' if act == 'saved' else ('removed' if act == 'deleted' else (act or 'edited'))
+        if item == 'piece':
+            return action, f'vault/{ct}/{key}', f'prompt piece "{key}" ({ct}) {verb}'
+        name = event.get('name')
+        return action, f'vault/{item}/{name}', f'prompt "{name}" {verb}'
     if kind == 'activation':
         pname = event.get('prompt') or 'current prompt'
         tgt = f'activation/{ct}/{key}'
