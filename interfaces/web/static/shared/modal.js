@@ -165,8 +165,13 @@ export function showModal(title, fields, onSave = null, options = {}) {
   overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
   setupModalClose(overlay, close);
   
-  // Save handler
-  overlay.querySelector('.modal-save')?.addEventListener('click', () => {
+  // Save handler. An onSave that returns a promise keeps the modal OPEN
+  // (save button disabled, "Working…") until it settles — a bulk vault
+  // move used to vanish the modal instantly and run five minutes blind
+  // (2026-09-08). Sync handlers close immediately as before.
+  overlay.querySelector('.modal-save')?.addEventListener('click', (ev) => {
+    const saveBtn = ev.currentTarget;
+    if (saveBtn.disabled) return;
     const data = {};
     fields.forEach(field => {
       if (field.type === 'html') return;
@@ -179,7 +184,14 @@ export function showModal(title, fields, onSave = null, options = {}) {
         if (el) data[field.id] = el.value;
       }
     });
-    onSave(data);
+    const r = onSave(data);
+    if (r && typeof r.then === 'function') {
+      const label = saveBtn.textContent;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Working…';
+      r.finally(() => { saveBtn.disabled = false; saveBtn.textContent = label; close(); });
+      return;
+    }
     close();
   });
   

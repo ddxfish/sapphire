@@ -19,6 +19,14 @@ export const vaultLock = () => post('/api/vault/lock');
 export const vaultRekey = (current, newKey) => post('/api/vault/rekey', { current, new: newKey });
 // {kind:'prompt', name, direction:'in'|'out'} or {kind:'piece', comp_type, key, direction}
 export const vaultMove = (payload) => post('/api/vault/move', payload);
+// {direction, items:[{kind:'piece',comp_type,key} | {kind:'prompt',name}]} →
+// {moved, failed, results:[{item, ok, msg}]}. One request, one SSE event.
+// A big batch rewrites the vault per item on the server — give it minutes.
+export const vaultMoveBatch = (payload) => fetchWithTimeout('/api/vault/move-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+}, 10 * 60 * 1000);
 
 // Authoritative state off the standing /api/status channel.
 // null = server UNREACHABLE — never conflate that with "no vault exists"

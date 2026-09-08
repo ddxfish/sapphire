@@ -105,6 +105,33 @@ def _stock_prompt_names():
     return _STOCK_PROMPT_NAMES
 
 
+_STOCK_PIECE_KEYS = None
+
+
+def _stock_piece_keys():
+    """{type: [keys]} of pieces that ship with Sapphire (core/prompt_defaults/
+    prompt_pieces.json `components`). Shipped pieces are merged INTO the user
+    store at boot, so nothing at runtime can tell them from user-authored
+    ones — this is the only source. Drives the modals' 'Custom' quick-select
+    (same name-based rule as the roster's Core/Custom: an edited shipped
+    piece still counts as shipped). Cached; the file is static at runtime."""
+    global _STOCK_PIECE_KEYS
+    if _STOCK_PIECE_KEYS is None:
+        out = {}
+        path = Path(PROJECT_ROOT) / 'core' / 'prompt_defaults' / 'prompt_pieces.json'
+        try:
+            comps = json.loads(path.read_text(encoding='utf-8')).get('components', {}) or {}
+            for ctype, entries in comps.items():
+                if isinstance(ctype, str) and isinstance(entries, dict):
+                    keys = sorted(k for k in entries if isinstance(k, str) and not k.startswith('_'))
+                    if keys:
+                        out[ctype] = keys
+        except Exception as e:
+            logger.warning(f"stock piece keys: prompt_pieces.json unreadable ({e})")
+        _STOCK_PIECE_KEYS = out
+    return _STOCK_PIECE_KEYS
+
+
 @router.post("/api/prompts/reload")
 async def reload_prompts(request: Request, _=Depends(require_login)):
     """Reload prompts from disk."""
@@ -145,7 +172,9 @@ async def get_prompt_components(request: Request, _=Depends(require_login)):
     return {"components": visible,
             "sources": {k: v for k, v in sources.items() if v},
             "vault_pieces": {k: v for k, v in vault_pieces.items() if v},
-            "hidden_keys": {k: v for k, v in hidden_keys.items() if v}}
+            "hidden_keys": {k: v for k, v in hidden_keys.items() if v},
+            # Shipped piece keys — the modals' 'Custom' selector (2026-09-08).
+            "stock_pieces": _stock_piece_keys()}
 
 
 # Registered BEFORE /api/prompts/{name} — the path-param route swallows any

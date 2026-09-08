@@ -18,7 +18,9 @@ export async function getComponentsWithSources() {
            vault_pieces: data.vault_pieces || {},
            // Hidden pack piece NAMES (engine scaffolding) — membership
            // checks only: a ref to one still renders, so it isn't "missing".
-           hidden_keys: data.hidden_keys || {} };
+           hidden_keys: data.hidden_keys || {},
+           // Shipped piece keys ({type: [keys]}) — the modals' 'Custom' selector.
+           stock_pieces: data.stock_pieces || {} };
 }
 
 export async function listPrompts() {

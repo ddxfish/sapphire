@@ -29,6 +29,7 @@ let checkedPrompts = new Set();  // prompt names picked in roster multi-check
 let lastToggledPrompt = null;    // shift-click range anchor (plain clicks move it)
 let lastShiftRange = null;       // names the previous shift-click applied — replaced, not stacked
 let stockNames = new Set();      // prompts shipped in core/prompt_defaults (roster 'Core' selector)
+let stockPieces = {};            // {type: Set(keys)} — pieces shipped in core/prompt_defaults (modals' 'Custom')
 let viewVisible = false;
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
@@ -154,6 +155,16 @@ function noteVaultRouted(type, key, res) {
 let busBound = false;
 let pendingRefresh = false;
 let promptSaveInFlight = false;  // debounced prompt save scheduled/awaiting
+// This tab's OWN vault moves echo back as vault_changed a beat later; the
+// handler already applied them locally, so the echo is skipped while this
+// window is open (2026-09-08 — a bulk move's echoes each reloaded the whole
+// view, throttling the batch to one item per two seconds).
+let echoQuietUntil = 0;
+const quietEcho = (ms = 2000) => { echoQuietUntil = Date.now() + ms; };
+// Paint-sequence guard: a slower /api/prompts response must never overwrite
+// a newer one (the roster painted pre-batch state with no 🗝 and no error).
+let _loadSeq = 0;
+let _busRefreshInFlight = false, _busRefreshAgain = false;
 
 const _editableFocused = () => {
     const ae = document.activeElement;
@@ -163,16 +174,27 @@ const _editableFocused = () => {
 
 async function doBusRefresh() {
     pendingRefresh = false;
-    await loadAll();
-    if (selected && !prompts.find(p => p.name === selected)) {
-        // Selection vanished (vault locked / deleted elsewhere) —
-        // drop the editor rather than editing a ghost.
-        selected = activePromptName || (prompts[0]?.name ?? null);
-        selectedData = selected ? (promptDetails[selected] || null) : null;
-        openAccordion = null;
-        editTarget = {};
+    // Coalesce: one load in flight; events that land meanwhile run ONE more.
+    if (_busRefreshInFlight) { _busRefreshAgain = true; return; }
+    _busRefreshInFlight = true;
+    try {
+        do {
+            _busRefreshAgain = false;
+            const applied = await loadAll();
+            if (!applied) continue;   // superseded or failed — nothing new to paint
+            if (selected && !prompts.find(p => p.name === selected)) {
+                // Selection vanished (vault locked / deleted elsewhere) —
+                // drop the editor rather than editing a ghost.
+                selected = activePromptName || (prompts[0]?.name ?? null);
+                selectedData = selected ? (promptDetails[selected] || null) : null;
+                openAccordion = null;
+                editTarget = {};
+            }
+            render();
+        } while (_busRefreshAgain);
+    } finally {
+        _busRefreshInFlight = false;
     }
-    render();
 }
 
 function bindBus() {
@@ -182,6 +204,7 @@ function bindBus() {
         const refreshIfVisible = (data) => {
             if (!viewVisible) return;
             if (data?.action === 'loaded') return;  // activation side effect
+            if (data?.action === 'vault_changed' && Date.now() < echoQuietUntil) return;  // our own move
             // In-flight guard (Bobby bug, 2026-08-18): while a debounced
             // prompt save is pending, a bus refresh would re-fetch the OLD
             // server copy, replace selectedData, and the debounce would then
@@ -205,9 +228,14 @@ function bindBus() {
 }
 
 // ── Data ──
+// Returns true when this load's data was applied; false when a newer load
+// superseded it or a fetch failed (the caller must NOT paint in either case —
+// painting stale state showed a finished vault batch as "nothing moved").
 async function loadAll() {
+    const seq = ++_loadSeq;
     try {
         const [pList, compData] = await Promise.all([listPrompts(), getComponentsWithSources()]);
+        if (seq !== _loadSeq) return false;
         prompts = (pList || []).sort((a, b) => a.name.localeCompare(b.name));
         components = compData.components || {};
         componentSources = compData.sources || {};
@@ -218,6 +246,8 @@ async function loadAll() {
             Object.entries(compData.vault_pieces || {}).map(([t, keys]) => [t, new Set(keys)]));
         vaultState = pList?.vaultState || { exists: false, unlocked: false };
         stockNames = new Set(pList?.stock || []);
+        stockPieces = Object.fromEntries(
+            Object.entries(compData.stock_pieces || {}).map(([t, keys]) => [t, new Set(keys)]));
 
         const active = prompts.find(p => p.active);
         activePromptName = active?.name || null;
@@ -227,6 +257,7 @@ async function loadAll() {
 
         // Fetch details for all prompts in parallel (for sidebar meta)
         const results = await Promise.allSettled(prompts.map(p => getPrompt(p.name)));
+        if (seq !== _loadSeq) return false;
         results.forEach((r, i) => {
             if (r.status === 'fulfilled' && r.value) {
                 promptDetails[prompts[i].name] = r.value;
@@ -246,16 +277,24 @@ async function loadAll() {
         } else if (selected) {
             try { selectedData = await getPrompt(selected); } catch { selectedData = null; }
         }
+        return true;
     } catch (e) {
         console.warn('Prompts load failed:', e);
+        if (seq === _loadSeq) ui.showToast('Prompts refresh failed — showing the last good list', 'warning');
+        return false;
     }
 }
 
 // ── Main Render ──
 function render() {
     if (!container) return;
-    // Full re-render resets the left roster's scroll to the top — carry it over.
+    // Full re-render resets every scroll to the top — carry them over. The
+    // roster was already saved; the editor pane wasn't (`.pr-content` below
+    // 1440px, `.pr-body` above — only one is non-zero at a time), so each
+    // piece toggle / vault move yanked the pieces list to the top (2026-09-08).
     const listScroll = container.querySelector('.panel-list-items')?.scrollTop || 0;
+    const contentScroll = container.querySelector('.pr-content')?.scrollTop || 0;
+    const bodyScroll = container.querySelector('.pr-body')?.scrollTop || 0;
 
     container.innerHTML = `
         ${renderSectionTabs(PERSONA_TABS, 'prompts', helpPills('Prompts', { video: 'JxgNAk4Y2qI', doc: 'PROMPTS.md', inline: true }))}
@@ -347,6 +386,10 @@ function render() {
     bindEvents();
     const listEl = container.querySelector('.panel-list-items');
     if (listEl) listEl.scrollTop = listScroll;
+    const contentEl = container.querySelector('.pr-content');
+    if (contentEl && contentScroll) contentEl.scrollTop = contentScroll;
+    const bodyEl = container.querySelector('.pr-body');
+    if (bodyEl && bodyScroll) bodyEl.scrollTop = bodyScroll;
 }
 
 
@@ -637,14 +680,16 @@ function bindEvents() {
         if (!checkedPrompts.size) { ui.showToast('Nothing selected', 'info'); return; }
         openBulkVaultModal({
             names: [...checkedPrompts], direction,
-            componentSources, vaultPieces, vaultNames,
+            componentSources, vaultPieces, vaultNames, stockPieces, stockNames,
+            details: promptDetails,
+            onStart: () => quietEcho(15 * 60 * 1000),   // the batch's one echo is ours
             onDone: async () => {
+                quietEcho();                           // …and so is a straggler
                 rosterCheck = false;
                 checkedPrompts = new Set();
                 lastToggledPrompt = null;
                 lastShiftRange = null;
-                await loadAll();
-                render();
+                if (await loadAll()) render();
             },
         });
     };
@@ -652,8 +697,8 @@ function bindEvents() {
     layout.querySelector('#pr-vault-out')?.addEventListener('click', () => openBulkVault('out'));
     layout.querySelector('#pr-cleanup')?.addEventListener('click', () => {
         openCleanupModal({
-            components, componentSources, vaultPieces,
-            onDone: async () => { await loadAll(); render(); },
+            components, componentSources, vaultPieces, stockPieces,
+            onDone: async () => { if (await loadAll()) render(); },
         });
     });
 
@@ -1103,6 +1148,7 @@ function bindAccordionBodyEvents(body, type) {
         }
         try {
             const { vaultMove } = await import('../shared/vault-api.js');
+            quietEcho();   // the SSE echo of THIS move is ours — skip it
             const res = await vaultMove({ kind: 'piece', comp_type: type, key,
                                           direction: goingIn ? 'in' : 'out' });
             ui.showToast(res?.message || 'Moved', 'success');
@@ -1111,8 +1157,13 @@ function bindAccordionBodyEvents(body, type) {
             e.target.checked = !goingIn;
             return;
         }
-        await loadAll();
-        render();
+        // Surgical: the response is the truth for this one piece — badge it
+        // locally and rebuild only its accordion (the 🗝 lives in the header
+        // value, the option list, and the chip labels — all inside it).
+        // Before: loadAll() + full render(), then the echo did it twice more.
+        if (!vaultPieces[type]) vaultPieces[type] = new Set();
+        if (goingIn) vaultPieces[type].add(key); else vaultPieces[type].delete(key);
+        renderAccordionBody(type);
     });
 
     // Action buttons
@@ -1268,14 +1319,14 @@ async function afterPromptDelete() {
 // pieces move to the restorable trash alongside the record delete.
 async function deleteCurrentPrompt() {
     if (!selected) return;
-    openDeleteModal({ names: [selected], componentSources, vaultPieces,
-                      onDone: afterPromptDelete });
+    openDeleteModal({ names: [selected], componentSources, vaultPieces, stockPieces,
+                      details: promptDetails, onDone: afterPromptDelete });
 }
 
 function bulkDeletePrompts() {
     if (!checkedPrompts.size) return;
-    openDeleteModal({ names: [...checkedPrompts], componentSources, vaultPieces,
-                      onDone: afterPromptDelete });
+    openDeleteModal({ names: [...checkedPrompts], componentSources, vaultPieces, stockPieces,
+                      details: promptDetails, onDone: afterPromptDelete });
 }
 
 // ── Definition CRUD ──

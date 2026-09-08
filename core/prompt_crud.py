@@ -509,8 +509,9 @@ def is_vault_prompt(name: str) -> bool:
 # move itself is names-only in the ledger (the vault side's own row tells
 # the story); past ledger history of a moved-in prompt is history.
 
-def move_prompt_to_vault(name: str) -> tuple[bool, str]:
-    """Regular store → vault. Privacy becomes True by construction."""
+def move_prompt_to_vault(name: str, publish: bool = True) -> tuple[bool, str]:
+    """Regular store → vault. Privacy becomes True by construction.
+    publish=False: caller batches many moves and publishes once (move_batch)."""
     from core import prompt_vault
     if not prompt_vault.vault_unlocked():
         return False, VAULT_LOCKED_MSG
@@ -543,12 +544,13 @@ def move_prompt_to_vault(name: str) -> tuple[bool, str]:
     # stamp the refs index only if something actually references it.
     if _vault_name_still_referenced(name):
         prompt_vault.refs_stamp(name)
-    _publish_vault_changed()
+    if publish:
+        _publish_vault_changed()
     logger.info(f"Moved prompt '{name}' into the vault")
     return True, f"Moved '{name}' into the vault"
 
 
-def move_prompt_from_vault(name: str) -> tuple[bool, str]:
+def move_prompt_from_vault(name: str, publish: bool = True) -> tuple[bool, str]:
     """Vault → regular store. Leaving the vault CLEARS privacy_required
     (Krem's ruling 2026-08-12: vault membership IS the privacy bit)."""
     from core import prompt_vault
@@ -587,12 +589,13 @@ def move_prompt_from_vault(name: str) -> tuple[bool, str]:
     if not ok:
         return False, (f"Copied out, but the vault-side delete failed ({code}) — "
                        f"the regular copy shadows the vault copy")
-    _publish_vault_changed()
+    if publish:
+        _publish_vault_changed()
     logger.info(f"Moved prompt '{name}' out of the vault")
     return True, f"Moved '{name}' to the regular store (now public — privacy flag cleared)"
 
 
-def move_piece_to_vault(comp_type: str, key: str) -> tuple[bool, str]:
+def move_piece_to_vault(comp_type: str, key: str, publish: bool = True) -> tuple[bool, str]:
     from core import prompt_vault
     if not prompt_vault.vault_unlocked():
         return False, VAULT_LOCKED_MSG
@@ -609,12 +612,13 @@ def move_piece_to_vault(comp_type: str, key: str) -> tuple[bool, str]:
     if not saved:
         return False, (f"'{comp_type}/{key}' is in the vault, but the regular-store "
                        f"delete failed to persist — the plaintext copy still shadows it")
-    _publish_vault_changed(components=True)
+    if publish:
+        _publish_vault_changed(components=True)
     logger.info(f"Moved piece '{comp_type}/{key}' into the vault")
     return True, f"Moved '{comp_type}/{key}' into the vault"
 
 
-def move_piece_from_vault(comp_type: str, key: str) -> tuple[bool, str]:
+def move_piece_from_vault(comp_type: str, key: str, publish: bool = True) -> tuple[bool, str]:
     from core import prompt_vault
     if not prompt_vault.vault_unlocked():
         return False, VAULT_LOCKED_MSG
@@ -635,9 +639,52 @@ def move_piece_from_vault(comp_type: str, key: str) -> tuple[bool, str]:
     if not ok:
         return False, (f"Copied out, but the vault-side delete failed ({code}) — "
                        f"the regular copy shadows the vault copy")
-    _publish_vault_changed(components=True)
+    if publish:
+        _publish_vault_changed(components=True)
     logger.info(f"Moved piece '{comp_type}/{key}' out of the vault")
     return True, f"Moved '{comp_type}/{key}' to the regular store (plaintext)"
+
+
+def move_batch(direction: str, items: list) -> dict:
+    """Bulk store toggle (the roster's multi-check Move In/Out). Runs the
+    per-item movers — same battle-tested paths, same write-before-delete
+    sequencing — with their per-item SSE publish OFF, then publishes ONCE.
+    Before this the client looped /api/vault/move and every success fired an
+    event that made the same tab reload the whole Prompts view (N fetches),
+    throttling a 150-item batch to ~1 item / 2s, blind, for five minutes
+    (Krem, 2026-09-08). Pieces first, then prompts (a prompt's move never
+    cascades its pieces). Returns per-item receipts; a mid-batch seal (idle
+    timer / another tab) stops the loop instead of 100 identical refusals."""
+    from core import prompt_vault
+    if not prompt_vault.vault_unlocked():
+        return {'moved': 0, 'failed': len(items), 'locked': True,
+                'results': [{'item': it, 'ok': False, 'msg': VAULT_LOCKED_MSG} for it in items]}
+    order = sorted(items, key=lambda it: 0 if it.get('kind') == 'piece' else 1)
+    results, moved, any_piece = [], 0, False
+    for i, it in enumerate(order):
+        kind = it.get('kind')
+        try:
+            if kind == 'piece':
+                fn = move_piece_to_vault if direction == 'in' else move_piece_from_vault
+                ok, msg = fn(str(it.get('comp_type') or ''), str(it.get('key') or ''), publish=False)
+                any_piece = True
+            elif kind == 'prompt':
+                fn = move_prompt_to_vault if direction == 'in' else move_prompt_from_vault
+                ok, msg = fn(str(it.get('name') or ''), publish=False)
+            else:
+                ok, msg = False, "kind must be 'prompt' or 'piece'"
+        except Exception as e:
+            logger.error(f"Vault batch item failed {it}: {e}", exc_info=True)
+            ok, msg = False, str(e)
+        results.append({'item': it, 'ok': bool(ok), 'msg': msg})
+        moved += 1 if ok else 0
+        if msg == VAULT_LOCKED_MSG:
+            results.extend({'item': rest, 'ok': False, 'msg': VAULT_LOCKED_MSG}
+                           for rest in order[i + 1:])
+            break
+    _publish_vault_changed(components=any_piece)
+    logger.info(f"Vault batch ({direction}): {moved} moved, {len(results) - moved} failed")
+    return {'moved': moved, 'failed': len(results) - moved, 'results': results}
 
 
 def _publish_vault_changed(components=False):

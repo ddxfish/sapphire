@@ -123,6 +123,30 @@ async def vault_move(request: Request, _=Depends(require_login)):
     raise HTTPException(status_code=400, detail=msg)
 
 
+@router.post("/api/vault/move-batch")
+async def vault_move_batch(request: Request, _=Depends(require_login)):
+    """Bulk store toggle: {direction, items:[{kind:'piece',comp_type,key} |
+    {kind:'prompt',name}]} → per-item receipts, ONE change event at the end.
+    Runs in the threadpool — a 150-item batch rewrites the vault per item
+    and must not hold the event loop (2026-09-08)."""
+    _managed_guard()
+    data = await request.json()
+    direction = data.get('direction')
+    items = data.get('items')
+    if direction not in ('in', 'out'):
+        raise HTTPException(status_code=400, detail="direction must be 'in' or 'out'")
+    if not isinstance(items, list) or not items or len(items) > 2000:
+        raise HTTPException(status_code=400, detail="items must be a non-empty list (max 2000)")
+    if not all(isinstance(it, dict) and it.get('kind') in ('prompt', 'piece') for it in items):
+        raise HTTPException(status_code=400, detail="each item needs kind 'prompt' or 'piece'")
+    from starlette.concurrency import run_in_threadpool
+    from core import prompt_crud
+    result = await run_in_threadpool(prompt_crud.move_batch, direction, items)
+    if result.get('locked'):
+        raise HTTPException(status_code=409, detail=prompt_crud.VAULT_LOCKED_MSG)
+    return result
+
+
 @router.post("/api/vault/lock")
 async def vault_lock(_=Depends(require_login)):
     """Lock NOW. Synchronous by contract (phase 0b): active-preset handoff

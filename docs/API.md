@@ -199,6 +199,7 @@ Vault state (`{exists, unlocked}`) rides the top-level `vault` key on `GET /api/
 | POST | `/api/vault/lock` | Lock now — synchronous; evicts a private active chat first |
 | POST | `/api/vault/rekey` | Change the passphrase (needs the current one; lock state preserved) |
 | POST | `/api/vault/move` | Move a prompt or piece in/out of the vault |
+| POST | `/api/vault/move-batch` | Move many at once (`{direction, items:[{kind:'prompt',name}|{kind:'piece',comp_type,key}]}`) — one request, per-item receipts, one change event; 409 if the vault is locked |
 
 Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. Membership changes need the vault unlocked (403 otherwise); while sealed, private chats answer as nonexistent on every by-name route.
 

@@ -7,23 +7,15 @@
 // banner says to unlock once. The unlock-time reconcile restores any
 // trashed piece a vault prompt still references, as the last net.
 import { showModal } from '../shared/modal.js';
+import { openChecklist, listHTML, wireList, checkedRows, esc, GENERIC_TYPES } from '../shared/checklist-modal.js';
 import { getPrompt, deletePrompt, getPieceUsage, stripDanglers,
          trashPieces, restorePieces, purgeTrash, listTrash } from '../shared/prompt-api.js';
 import * as ui from '../ui.js';
 
-function esc(s) {
-    if (s == null) return '';
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+// Rows, sections, filters (All/None/Main/Custom) and their wiring live in
+// shared/checklist-modal.js since 2026-09-08 — this file builds row objects
+// and decides what each modal does with the checked ones.
 
-const ROW_STYLE = 'display:flex;gap:8px;align-items:center;padding:3px 0;font-size:var(--font-xs)';
-const BADGE_STYLE = 'opacity:0.75;margin-left:auto;white-space:nowrap';
-const LINK_STYLE = 'color:var(--accent);cursor:pointer;text-decoration:underline';
-// Library-chip sections — the Main preset keeps these (same split as the
-// prompt editor's Main: generic extras/emotions aren't junk when unused).
-const GENERIC_TYPES = ['extras', 'emotions'];
 // Canonical section order — MUST match the editor's accordion order
 // (SINGLE_TYPES then MULTI_TYPES in prompts.js). Unknown types sort after.
 const TYPE_ORDER = ['character', 'location', 'goals', 'relationship',
@@ -35,59 +27,24 @@ const typeRank = t => {
 const byCanonical = (a, b) =>
     typeRank(a.type) - typeRank(b.type)
     || a.type.localeCompare(b.type) || a.key.localeCompare(b.key);
+const byTypeSections = (rows, extra = {}) => {
+    const byType = {};
+    rows.forEach(r => (byType[r.type] = byType[r.type] || []).push(r));
+    return Object.keys(byType)
+        .sort((a, b) => typeRank(a) - typeRank(b) || a.localeCompare(b))
+        .map(t => ({ id: t, rows: byType[t], ...extra }));
+};
 
-function presetsHTML() {
-    return `
-        <div style="display:flex;gap:12px;align-items:center;font-size:var(--font-xs);margin:4px 0">
-            <span>Select:</span>
-            <span class="pc-preset" data-preset="all" style="${LINK_STYLE}">All</span>
-            <span class="pc-preset" data-preset="none" style="${LINK_STYLE}">None</span>
-            <span class="pc-preset" data-preset="main" style="${LINK_STYLE}"
-                  title="Everything except extras and emotions">Main</span>
-        </div>`;
-}
-
-// Flat-list preset wiring (delete + bulk-vault modals — no sections, rows
-// carry data-type). Disabled rows (already in destination) never join.
-function wireFlatPresets(scope) {
-    scope.querySelectorAll('.pc-preset').forEach(p =>
-        p.addEventListener('click', () => {
-            const mode = p.dataset.preset;
-            scope.querySelectorAll('.pc-row:not([data-flag]):not(:disabled)').forEach(cb => {
-                cb.checked = mode === 'all' ? true
-                    : mode === 'none' ? false
-                    : !GENERIC_TYPES.includes(cb.dataset.type);
-            });
-        }));
-}
-
+// A piece row for the delete / orphan lists: usage badges, vault flags.
 function pieceRow(r) {
     const badges = [];
     if (r.isVaultPiece) badges.push('\u{1F5DD} vault piece — trashed inside the vault');
     if (r.vaultFlag) badges.push('\u{1F5DD} used by a vault prompt');
     if (r.users?.length) badges.push(`in ${r.users.length} other prompt${r.users.length > 1 ? 's' : ''}`);
     else if (!r.vaultFlag) badges.push('only used here');
-    return `
-        <label style="${ROW_STYLE}" title="${esc((r.users || []).join(', '))}">
-            <input type="checkbox" class="pc-row" data-type="${esc(r.type)}"
-                   data-key="${esc(r.key)}"${r.vaultFlag ? ' data-flag="1"' : ''} ${r.checked ? 'checked' : ''}>
-            <span>${esc(r.type)}/${esc(r.key)}</span>
-            <span style="${BADGE_STYLE}">${badges.join(' · ')}</span>
-        </label>`;
-}
-
-// Section header checkboxes mirror their rows: checked = every selectable
-// row on, indeterminate = some. Vault-flagged rows never join bulk gestures
-// (section toggles, presets) — they stay individually clickable only.
-function syncSectionChecks(scope) {
-    scope.querySelectorAll('.pc-sec').forEach(sec => {
-        const rows = [...sec.querySelectorAll('.pc-row:not([data-flag])')];
-        const head = sec.querySelector('.pc-sec-check');
-        if (!head) return;
-        const on = rows.filter(r => r.checked).length;
-        head.checked = rows.length > 0 && on === rows.length;
-        head.indeterminate = on > 0 && on < rows.length;
-    });
+    return { type: r.type, key: r.key, checked: !!r.checked, flag: !!r.vaultFlag,
+             stock: !!r.stock, pack: !!r.pack, badges,
+             title: (r.users || []).join(', ') };
 }
 
 function vaultBanner(vault) {
@@ -103,73 +60,10 @@ function vaultBanner(vault) {
         vault once to build the index.</p>`;
 }
 
-function checkedRows(element) {
-    return [...element.querySelectorAll('.pc-row:checked')]
-        .map(cb => ({ type: cb.dataset.type, key: cb.dataset.key,
-                      store: cb.dataset.store || 'plain' }));
-}
-
-// Shared sectioned list: accordions per section (collapsed, with counts),
-// a header checkbox driving every selectable row inside, and the
-// All/None/Main presets (Main skips the generic extras/emotions).
-function sectionedHTML(byType, rowFn) {
-    const types = Object.keys(byType)
-        .sort((a, b) => typeRank(a) - typeRank(b) || a.localeCompare(b));
-    return `
-        ${presetsHTML()}
-        <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-            ${types.map(t => `
-            <div class="pc-sec" data-type="${esc(t)}">
-                <div class="pc-sec-head" style="display:flex;gap:8px;align-items:center;cursor:pointer;padding:4px 0;font-size:var(--font-xs)">
-                    <input type="checkbox" class="pc-sec-check" title="Check/uncheck every ${esc(t)} piece">
-                    <b>${esc(t)}</b><span style="opacity:0.7">(${byType[t].length})</span>
-                    <span class="pc-sec-arrow" style="margin-left:auto">▸</span>
-                </div>
-                <div class="pc-sec-body" style="display:none;padding-left:20px">
-                    ${byType[t].map(rowFn).join('')}
-                </div>
-            </div>`).join('')}
-        </div>`;
-}
-
-function wireSections(body) {
-    body.querySelectorAll('.pc-sec-head').forEach(head => {
-        head.addEventListener('click', e => {
-            if (e.target.classList.contains('pc-sec-check')) return;
-            const bd = head.parentElement.querySelector('.pc-sec-body');
-            const open = bd.style.display !== 'none';
-            bd.style.display = open ? 'none' : '';
-            head.querySelector('.pc-sec-arrow').textContent = open ? '▸' : '▾';
-        });
-    });
-    body.querySelectorAll('.pc-sec-check').forEach(cb => {
-        cb.addEventListener('click', e => e.stopPropagation());
-        cb.addEventListener('change', () => {
-            cb.closest('.pc-sec').querySelectorAll('.pc-row:not([data-flag])')
-                .forEach(r => { r.checked = cb.checked; });
-            syncSectionChecks(body);
-        });
-    });
-    body.querySelectorAll('.pc-row').forEach(r =>
-        r.addEventListener('change', () => syncSectionChecks(body)));
-    body.querySelectorAll('.pc-preset').forEach(p =>
-        p.addEventListener('click', () => {
-            const mode = p.dataset.preset;
-            body.querySelectorAll('.pc-sec').forEach(sec => {
-                const want = mode === 'all' ? true
-                    : mode === 'none' ? false
-                    : !GENERIC_TYPES.includes(sec.dataset.type);
-                sec.querySelectorAll('.pc-row:not([data-flag])')
-                    .forEach(r => { r.checked = want; });
-            });
-            syncSectionChecks(body);
-        }));
-    syncSectionChecks(body);
-}
-
 // ── proper delete (single prompt or roster bulk) ──
 
-export async function openDeleteModal({ names, componentSources, vaultPieces, onDone }) {
+export async function openDeleteModal({ names, componentSources, vaultPieces, stockPieces,
+                                        details, onDone }) {
     let usageResp;
     try { usageResp = await getPieceUsage(); }
     catch (e) { ui.showToast('Could not load the usage index', 'error'); return; }
@@ -180,8 +74,8 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
 
     const pieces = new Map();
     for (const name of names) {
-        let p = null;
-        try { p = await getPrompt(name); } catch { /* deleted elsewhere */ }
+        let p = details?.[name] || null;   // the view already fetched every prompt
+        if (!p) { try { p = await getPrompt(name); } catch { /* deleted elsewhere */ } }
         if (p?.type !== 'assembled' || !p.components) continue;
         for (const [type, val] of Object.entries(p.components)) {
             if (type.startsWith('_')) continue;
@@ -197,22 +91,22 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
         const isVaultPiece = !!vaultPieces?.[type]?.has?.(key);
         const vaultFlag = (vaultRef[type] || []).includes(key);
         return { type, key, users, isVaultPiece, vaultFlag,
+                 stock: !!stockPieces?.[type]?.has?.(key),
                  checked: !users.length && !vaultFlag && !lockedNoData };
-    }).sort(byCanonical);
+    }).sort(byCanonical).map(pieceRow);
 
     const title = names.length > 1 ? `Delete ${names.length} prompts` : `Delete "${names[0]}"`;
-    const html = `
-        <p style="font-size:var(--font-xs)">The prompt record${names.length > 1 ? 's' : ''}
-        (${names.map(esc).join(', ')}) will be deleted. Checked pieces below move to the
-        piece <b>trash</b> (restorable); unchecked pieces stay.</p>
-        ${vaultBanner(vault)}
-        ${rows.length ? `${presetsHTML()}
-        <div style="max-height:40vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-            ${rows.map(pieceRow).join('')}
-        </div>` : '<p style="font-size:var(--font-xs);opacity:0.7">No deletable pieces (monolith or pack-owned pieces only).</p>'}
-    `;
-    const modal = showModal(title, [{ type: 'html', value: html }], async () => {
-        const chosen = checkedRows(modal.element);
+    const modal = openChecklist({
+        title, wide: true, saveLabel: 'Delete',
+        intro: `The prompt record${names.length > 1 ? 's' : ''} (${names.map(esc).join(', ')}) `
+             + `will be deleted. Checked pieces below move to the piece <b>trash</b> `
+             + `(restorable); unchecked pieces stay.`,
+        banner: vaultBanner(vault) + (rows.length ? ''
+            : '<p style="font-size:var(--font-xs);opacity:0.7">No deletable pieces (monolith or pack-owned pieces only).</p>'),
+        sections: rows.length ? [{ id: 'pieces', flat: true, rows }] : [],
+        filters: ['all', 'none', 'main', 'custom'],
+        maxHeight: '40vh',
+        onSave: async (chosen) => {
         let moved = 0;
         const failed = [];
         if (chosen.length) {
@@ -234,13 +128,14 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
         if (failed.length) ui.showToast(`${msg} · ${failed.length} failed — ${failed[0]}`, 'error');
         else ui.showToast(msg, 'success');
         onDone?.();
-    }, { wide: true, saveLabel: 'Delete' });
-    wireFlatPresets(modal.element);
+        },
+    });
+    void modal;
 }
 
 // ── cleanup modal (menu → tool views, one modal, no stacking) ──
 
-export async function openCleanupModal({ components, componentSources, vaultPieces, onDone }) {
+export async function openCleanupModal({ components, componentSources, vaultPieces, stockPieces, onDone }) {
     let usageResp, trash;
     try {
         usageResp = await getPieceUsage();
@@ -265,6 +160,7 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
             if ((usage[type]?.[key] || []).length) continue; // in use
             const vaultFlag = (vaultRef[type] || []).includes(key);
             orphans.push({ type, key, users: [], vaultFlag,
+                           stock: !!stockPieces?.[type]?.has?.(key),
                            checked: !vaultFlag && !lockedNoData });
         }
     }
@@ -342,16 +238,15 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
     };
 
     const orphanView = () => {
-        const byType = {};
-        orphans.forEach(r => (byType[r.type] = byType[r.type] || []).push(r));
         body.innerHTML = `
             ${vaultBanner(vault)}
-            ${sectionedHTML(byType, pieceRow)}
+            ${listHTML({ sections: byTypeSections(orphans.map(pieceRow)),
+                         filters: ['all', 'none', 'main', 'custom'] })}
             <div style="display:flex;gap:8px;margin-top:8px">
                 <button class="btn-sm" id="pc-orphan-go">Move checked to trash</button>
                 <button class="btn-sm" id="pc-back">Back</button>
             </div>`;
-        wireSections(body);
+        wireList(body);
         body.querySelector('#pc-back').addEventListener('click', () => refresh());
         body.querySelector('#pc-orphan-go').addEventListener('click', async () => {
             const chosen = checkedRows(body);
@@ -368,28 +263,24 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
         });
     };
 
-    const trashRow = it => `
-        <label style="${ROW_STYLE}">
-            <input type="checkbox" class="pc-row" data-type="${esc(it.type)}"
-                   data-key="${esc(it.key)}" data-store="${esc(it.store || 'plain')}">
-            <span>${esc(it.type)}/${esc(it.key)}${it.store === 'vault' ? ' \u{1F5DD}' : ''}</span>
-            <span style="${BADGE_STYLE}">${it.deleted_at ? new Date(it.deleted_at * 1000).toLocaleString() : ''}</span>
-        </label>`;
+    const trashRow = it => ({
+        type: it.type, key: it.key, data: { store: it.store || 'plain' },
+        label: `${esc(it.type)}/${esc(it.key)}${it.store === 'vault' ? ' \u{1F5DD}' : ''}`,
+        badges: [it.deleted_at ? new Date(it.deleted_at * 1000).toLocaleString() : ''],
+    });
 
     const trashView = () => {
-        const byType = {};
-        trash.forEach(it => (byType[it.type] = byType[it.type] || []).push(it));
         body.innerHTML = `
             ${vault.exists && !vault.unlocked ? `<p style="font-size:var(--font-xs);color:#f59e0b;margin:4px 0">
                 \u{1F5DD} Vault locked — vault-piece trash (if any) stays sealed and
                 hidden until unlock; Empty trash can't touch it.</p>` : ''}
-            ${sectionedHTML(byType, trashRow)}
+            ${listHTML({ sections: byTypeSections(trash.map(trashRow)), filters: ['all', 'none', 'main'] })}
             <div style="display:flex;gap:8px;margin-top:8px">
                 <button class="btn-sm" id="pc-restore">Restore checked</button>
                 <button class="btn-sm danger" id="pc-purge">Empty trash</button>
                 <button class="btn-sm" id="pc-back">Back</button>
             </div>`;
-        wireSections(body);
+        wireList(body);
         body.querySelector('#pc-back').addEventListener('click', () => refresh());
         body.querySelector('#pc-restore').addEventListener('click', async () => {
             const chosen = checkedRows(body);
@@ -433,6 +324,7 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
                 if (!stillLive(type, key)) continue;
                 const vaultFlag = (vr[type] || []).includes(key);
                 orphans.push({ type, key, users: [], vaultFlag,
+                               stock: !!stockPieces?.[type]?.has?.(key),
                                checked: !vaultFlag && !lockedNoData });
             }
         }
@@ -443,17 +335,21 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
     menu();
 }
 
-// ── bulk vault move (roster multi-check 🗝) ──────────────────────────────
-// One modal, one direction: the master prompt records on top, then the
-// UNION of their non-pack pieces in canonical order (a piece shared by two
-// selected prompts appears once — moving it serves both; Krem's ruling
-// 2026-08-19). Defaults to the Main preset: records + story pieces checked,
-// generic extras/emotions left. Rows already in the destination render
-// disabled. Rides /api/vault/move sequentially — same battle-tested lane
-// as the editor's per-prompt Select & move.
+// ── bulk vault move (roster multi-check 🗝) ─────────────────────────────
+// One modal, one direction. One SECTION per selected prompt: its record row
+// first, then every piece it uses — so what's going in is visible where it
+// matters (17 prompt rows used to push the pieces below the fold of one
+// flat box, and a prompt-kind move never cascades pieces server-side, so a
+// scrolled-past piece meant a half-move; Krem 2026-09-08). A piece shared by
+// two selected prompts appears under both, mirrored as one logical row.
+// Plugin-pack pieces and pieces already in the destination render disabled
+// with a badge — nothing is silently skipped. Main preset by default:
+// records + story pieces checked, generic extras/emotions left. ONE batch
+// request (/api/vault/move-batch); the modal stays open until it resolves.
 
 export async function openBulkVaultModal({ names, direction = 'in',
-        componentSources, vaultPieces, vaultNames, onDone }) {
+        componentSources, vaultPieces, vaultNames, stockPieces, stockNames,
+        details, onStart, onDone }) {
     const goingIn = direction === 'in';
     let usageResp;
     try { usageResp = await getPieceUsage(); }
@@ -463,85 +359,103 @@ export async function openBulkVaultModal({ names, direction = 'in',
         ui.showToast('The vault is locked — unlock it to move prompts', 'error');
         return;
     }
-
-    const pieces = new Map();
-    for (const name of names) {
-        let p = null;
-        try { p = await getPrompt(name); } catch { continue; }
-        if (p?.type !== 'assembled' || !p.components) continue;
-        for (const [type, val] of Object.entries(p.components)) {
-            if (type.startsWith('_')) continue;
-            const keys = Array.isArray(val) ? val : (val ? [val] : []);
-            for (const k of keys) {
-                if (!k || componentSources?.[type]?.[k]) continue;
-                pieces.set(`${type} ${k}`, { type, key: k });
+    const already = goingIn ? 'already in vault' : 'already plaintext';
+    const sections = [];
+    const seenPieces = new Set();
+    let nPieces = 0, nAlready = 0, nPack = 0;
+    for (const name of names.slice().sort()) {
+        let p = details?.[name] || null;   // the view already fetched every prompt
+        if (!p) { try { p = await getPrompt(name); } catch { /* deleted elsewhere */ } }
+        const recMovable = goingIn ? !vaultNames?.has?.(name) : !!vaultNames?.has?.(name);
+        const rows = [{
+            type: '__prompt', key: name, data: { kind: 'prompt' },
+            label: `<b>${esc(name)}</b> — prompt record`,
+            stock: !!stockNames?.has?.(name),
+            checked: recMovable, disabled: !recMovable,
+            badges: [recMovable ? '' : already],
+        }];
+        const pieceObjs = [];
+        if (p?.type === 'assembled' && p.components) {
+            for (const [type, val] of Object.entries(p.components)) {
+                if (type.startsWith('_')) continue;
+                const keys = Array.isArray(val) ? val : (val ? [val] : []);
+                for (const key of keys) {
+                    if (!key) continue;
+                    const pack = componentSources?.[type]?.[key];
+                    const inVault = !!vaultPieces?.[type]?.has?.(key);
+                    const movable = !pack && (goingIn ? !inVault : inVault);
+                    const others = (usage[type]?.[key] || []).filter(n => n !== name);
+                    const alsoSelected = others.filter(n => names.includes(n));
+                    const outside = others.filter(n => !names.includes(n));
+                    const badges = [];
+                    if (pack) badges.push(`🧩 ${esc(pack)} — plugin piece, can't move`);
+                    else if (!movable) badges.push(already);
+                    if (alsoSelected.length) badges.push(`also under ${alsoSelected.map(esc).join(', ')}`);
+                    if (outside.length) badges.push(`in ${outside.length} other prompt${outside.length > 1 ? 's' : ''}`);
+                    pieceObjs.push({
+                        type, key, data: { kind: 'piece' },
+                        stock: !!stockPieces?.[type]?.has?.(key), pack: !!pack,
+                        checked: movable && !GENERIC_TYPES.includes(type),
+                        disabled: !movable, badges, title: others.join(', '),
+                    });
+                    const id = `${type} ${key}`;
+                    if (!seenPieces.has(id)) {
+                        seenPieces.add(id);
+                        nPieces++;
+                        if (pack) nPack++; else if (!movable) nAlready++;
+                    }
+                }
             }
         }
+        pieceObjs.sort(byCanonical);
+        sections.push({ id: `prompt:${name}`, name, open: true,
+                        label: `<b>${esc(name)}</b>`, rows: rows.concat(pieceObjs) });
     }
-    const rows = [...pieces.values()].map(({ type, key }) => {
-        const inVault = !!vaultPieces?.[type]?.has?.(key);
-        const movable = goingIn ? !inVault : inVault;
-        const users = (usage[type]?.[key] || []).filter(n => !names.includes(n));
-        return { type, key, users, movable,
-                 checked: movable && !GENERIC_TYPES.includes(type) };
-    }).sort(byCanonical);
-
-    const already = goingIn ? 'already in vault' : 'already plaintext';
-    const promptRows = names.slice().sort().map(name => {
-        const movable = goingIn ? !vaultNames?.has?.(name) : !!vaultNames?.has?.(name);
-        return `
-        <label style="${ROW_STYLE}">
-            <input type="checkbox" class="pc-row" data-kind="prompt" data-type="__prompt"
-                   data-key="${esc(name)}" ${movable ? 'checked' : 'disabled'}>
-            <span><b>${esc(name)}</b> — prompt</span>
-            <span style="${BADGE_STYLE}">${movable ? '' : already}</span>
-        </label>`;
-    }).join('');
-    const pieceRows = rows.map(r => `
-        <label style="${ROW_STYLE}" title="${esc((r.users || []).join(', '))}">
-            <input type="checkbox" class="pc-row" data-kind="piece" data-type="${esc(r.type)}"
-                   data-key="${esc(r.key)}" ${r.movable ? '' : 'disabled'} ${r.checked ? 'checked' : ''}>
-            <span>${esc(r.type)}/${esc(r.key)}</span>
-            <span style="${BADGE_STYLE}">${r.movable
-                ? (r.users.length ? `in ${r.users.length} other prompt${r.users.length > 1 ? 's' : ''}` : '')
-                : already}</span>
-        </label>`).join('');
-
-    const title = goingIn ? `Move ${names.length} prompt${names.length > 1 ? 's' : ''} to the vault`
-                          : `Move ${names.length} prompt${names.length > 1 ? 's' : ''} to plaintext`;
-    const html = `
-        <p style="font-size:var(--font-xs)">${goingIn
-            ? 'Checked items are encrypted into the vault. Pieces are shared — ' +
-              'moving one vault-routes it for every prompt using it.'
-            : 'Checked items are written to the regular store as plaintext on disk.'}</p>
-        ${presetsHTML()}
-        <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-            ${promptRows}
-            ${pieceRows}
-        </div>`;
-    const modal = showModal(title, [{ type: 'html', value: html }], async () => {
-        const chosen = [...modal.element.querySelectorAll('.pc-row:checked')]
-            .map(cb => ({ kind: cb.dataset.kind, type: cb.dataset.type, key: cb.dataset.key }));
-        if (!chosen.length) { ui.showToast('Nothing checked', 'info'); return; }
-        const { vaultMove } = await import('../shared/vault-api.js');
-        let moved = 0;
-        const failed = [];
-        for (const c of chosen.filter(c => c.kind === 'piece')) {
+    const plural = names.length > 1 ? 's' : '';
+    const intro = (goingIn
+        ? 'Checked items are encrypted into the vault. Pieces are shared — moving one vault-routes it for every prompt using it.'
+        : 'Checked items are written to the regular store as plaintext on disk.')
+        + ` <span style="opacity:0.75">${names.length} prompt${plural} · ${nPieces} piece${nPieces === 1 ? '' : 's'}`
+        + (nAlready ? ` (${nAlready} ${already})` : '')
+        + (nPack ? ` (${nPack} plugin-owned)` : '') + '</span>';
+    const title = goingIn ? `Move ${names.length} prompt${plural} + pieces to the vault`
+                          : `Move ${names.length} prompt${plural} + pieces to plaintext`;
+    openChecklist({
+        title, intro, sections, mirrorDuplicates: true, wide: true,
+        filters: ['all', 'none', 'main', 'custom'],
+        saveLabel: goingIn ? 'Move to vault' : 'Move to plaintext',
+        onSave: async (chosen) => {
+            if (!chosen.length) { ui.showToast('Nothing checked', 'info'); return; }
+            // ONE request: the server runs the same per-item movers and publishes
+            // one change event at the end. The old client loop fired one request
+            // per item and every success echoed back as a whole-view reload —
+            // 150 items took five minutes with the modal already gone (2026-09-08).
+            // showModal keeps this modal open ("Working…") until we resolve.
+            const items = chosen.map(c => c.kind === 'piece'
+                ? { kind: 'piece', comp_type: c.type, key: c.key }
+                : { kind: 'prompt', name: c.key });
+            const dest = goingIn ? 'the vault' : 'plaintext';
+            onStart?.();
+            let res;
             try {
-                await vaultMove({ kind: 'piece', comp_type: c.type, key: c.key, direction });
-                moved++;
-            } catch (e) { failed.push(`${c.type}/${c.key}: ${e?.message || 'failed'}`); }
-        }
-        for (const c of chosen.filter(c => c.kind === 'prompt')) {
-            try {
-                await vaultMove({ kind: 'prompt', name: c.key, direction });
-                moved++;
-            } catch (e) { failed.push(`${c.key}: ${e?.message || 'failed'}`); }
-        }
-        const dest = goingIn ? 'the vault' : 'plaintext';
-        if (failed.length) ui.showToast(`Moved ${moved} to ${dest} · ${failed.length} failed — ${failed[0]}`, 'error');
-        else ui.showToast(`Moved ${moved} to ${dest}`, 'success');
-        onDone?.();
-    }, { wide: true, saveLabel: goingIn ? 'Move to vault' : 'Move to plaintext' });
-    wireFlatPresets(modal.element);
+                const { vaultMoveBatch } = await import('../shared/vault-api.js');
+                res = await vaultMoveBatch({ direction, items });
+            } catch (e) {
+                ui.showToast(`Move failed: ${e?.message || 'request failed'}`, 'error');
+                onDone?.();
+                return;
+            }
+            const failed = (res?.results || []).filter(r => !r.ok);
+            const label = r => r.item.kind === 'piece' ? `${r.item.comp_type}/${r.item.key}` : r.item.name;
+            if (failed.length) {
+                const shown = failed.slice(0, 3).map(r => `${label(r)}: ${r.msg}`).join(' · ');
+                ui.showToast(`Moved ${res.moved} to ${dest} · ${failed.length} failed — ${shown}`
+                             + (failed.length > 3 ? ` (+${failed.length - 3} more, see the log)` : ''), 'error', 12000);
+                console.warn('[vault] batch failures:', failed);
+            } else {
+                ui.showToast(`Moved ${res?.moved ?? items.length} to ${dest}`, 'success');
+            }
+            onDone?.();
+        },
+    });
 }
