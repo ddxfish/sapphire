@@ -351,7 +351,9 @@ let _ttsStreamQueue = [];    // [{ blob, pause_after_ms, index, text, boundary }
 let _ttsStreamPlayer = null;
 let _ttsStreamUrl = null;
 let _ttsStreamEnded = false; // server sent tts_stream_end (no more chunks coming)
-let _ttsStreamSawChunk = false; // any chunk arrived this turn? signals send-handlers to skip legacy audioFn
+// (The old `_ttsStreamSawChunk` "skip the whole-blob fallback" flag is gone —
+// the server reports `tts_streamed` on llm_done. It was wiped by the mic ⏹,
+// so a stop mid-speech re-spoke the whole reply from the top. 2026-09-08.)
 // True once at least one chunk's play() promise has resolved (i.e. audio
 // actually started playing) within the current generation. Drives the
 // "chunks arrived but nothing ever played" toast — without it, the .catch
@@ -630,11 +632,8 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, paus
     }
     if (!_ttsStats) _ttsStats = _newTtsStats();  // defensive: chunk before start
     _ttsStats.received++;
-    // Decode + Audio() build can throw on bad base64 or unsupported codec.
-    // Build the blob/URL/audio element BEFORE setting sawChunk — otherwise
-    // a malformed first chunk crashes the decode, sawChunk stays true, and
-    // send-handlers skips the legacy fallback → total silent failure with
-    // no audible output. 2026-05-18 herring-table #9.
+    // Decode + Audio() build can throw on bad base64 or unsupported codec —
+    // a failed chunk is counted in the black-box and skipped, never queued.
     let blob, url, audio;
     try {
         blob = _b64ToBlob(audio_b64, content_type);
@@ -653,10 +652,9 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, paus
             _ttsStats.fails.push({ idx: index, outcome: 'decode-error', detail: e?.message });
         }
         if (url) { try { URL.revokeObjectURL(url); } catch {} }
-        return;  // sawChunk NOT set — legacy fallback can still fire
+        return;
     }
     if (_ttsStats) _ttsStats.decoded++;
-    _ttsStreamSawChunk = true;
     _ttsStreamQueue.push({
         audio, url, blob,
         pause_after_ms: pause_after_ms || 0,
@@ -692,9 +690,13 @@ export const startTtsStream = (data = {}) => {
     _ttsStreamGen += 1;
     _ttsStreamQueue = [];
     _ttsStreamEnded = false;
-    _ttsStreamSawChunk = false;
     _ttsStreamAnyPlayed = false;
     _ttsStats = _newTtsStats();  // fresh black-box for this turn
+    // The pump is live from its first push — that's the mic ⏹'s real
+    // lifetime, not the first decoded chunk. On a slow CPU the gap between
+    // the two is the whole synth; ⏹ pressed inside it mutes the pump so
+    // nothing ever plays. endTtsStream / _ttsStreamStop clear it.
+    isStreaming = true;
     // Don't clear _ttsStreamActive — first chunk arrival kicks playback.
 };
 
@@ -720,10 +722,6 @@ export const endTtsStream = (data = {}) => {
     }
 };
 
-/** True if any chunk arrived in the current turn — send-handlers uses this
- * to skip the legacy end-of-stream audioFn(prose) fallback. */
-export const ttsStreamSawChunk = () => _ttsStreamSawChunk;
-
 const _ttsStreamStop = () => {
     _ttsStreamGen += 1;       // any in-flight setTimeout / callbacks become no-ops
     // Dispose preloaded audio elements in the queue too — they hold blob
@@ -732,7 +730,6 @@ const _ttsStreamStop = () => {
     _ttsStreamQueue = [];
     _ttsStreamEnded = true;
     _ttsStreamActive = false;
-    _ttsStreamSawChunk = false;
     _ttsStreamAnyPlayed = false;
     _stoppedStreamId = _currentStreamId || _stoppedStreamId;  // drop its in-flight stragglers
     _currentStreamId = null;  // herring #5 — no stream is current after stop

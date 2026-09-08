@@ -64,6 +64,11 @@ class StreamingChat:
         # domain; the LLM has its own Stop button.
         self.tts_stopped = False
         self.tts_pump = None
+        # LLM half of the turn is over (history row + metrics written); only
+        # the streaming-TTS drain may still be running. begin_stream(exclusive)
+        # stops counting a stream as live once this is set. See _emit_llm_done.
+        self.llm_done = False
+        self._typing_ended = False
         self.ephemeral = False
         self.is_streaming = False
         # Name of the chat currently streaming — lets /api/cancel refuse to
@@ -113,6 +118,25 @@ class StreamingChat:
                 p._skip_turn = True
             except Exception as e:
                 logger.warning(f"[STREAMING] stop_tts failed: {e}")
+
+    def _emit_llm_done(self, tts_pump):
+        """The LLM half of the turn is over — history row written, metrics
+        saved. Returns the wire event. The audio tail (flush_and_close) can
+        take seconds on a slow CPU and nothing that isn't audio should wait
+        on it: the browser flips Stop→Send + paints metrics on this event,
+        mirror tabs + avatar get AI_TYPING_END now (once — the finally covers
+        cancel/error exits), and begin_stream(exclusive) stops counting this
+        stream as live. `tts_streamed` = the pump ran this turn (streamed,
+        user-muted, plugin-skipped alike); False only when no pump ever
+        started — the ONE case the browser falls back to whole-blob playback.
+        Every clean-exit `done` on the wire is preceded by exactly one of
+        these. 2026-09-08, record tmp/llm-done-split-plan.md."""
+        self.llm_done = True
+        if not self._typing_ended:
+            self._typing_ended = True
+            publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
+        return {"type": "llm_done",
+                "tts_streamed": bool(getattr(tts_pump, "_stream_started", False))}
 
     def _stamp_private_if_unlocked(self):
         """Streaming-lane wrapper — see stamp_private_if_unlocked below."""
@@ -247,6 +271,7 @@ class StreamingChat:
                                 "in flight and the active chat changed. "
                                 "Please resend.")
                     yield {"type": "content", "text": _refusal}
+                    yield self._emit_llm_done(tts_pump)
                     yield {"type": "final", "text": _refusal,
                            "cancelled": False, "error": True}
                     return
@@ -261,6 +286,7 @@ class StreamingChat:
                                     "private — unlock the vault to continue "
                                     "here.")
                         yield {"type": "content", "text": _refusal}
+                        yield self._emit_llm_done(tts_pump)
                         yield {"type": "final", "text": _refusal,
                                "cancelled": False, "error": True}
                         return
@@ -340,6 +366,7 @@ class StreamingChat:
                             "now. This is just a holding room — create a "
                             "new chat (or unlock the vault) to talk.")
                 yield {"type": "content", "text": _refusal}
+                yield self._emit_llm_done(tts_pump)
                 yield {"type": "final", "text": _refusal,
                        "cancelled": False, "error": True}
                 return
@@ -364,9 +391,9 @@ class StreamingChat:
                         else:
                             self.ephemeral = True
                         yield {"type": "content", "text": response}
+                    yield self._emit_llm_done(tts_pump)   # publishes AI_TYPING_END
                     yield {"type": "final", "text": response,
                            "cancelled": False, "error": False}
-                    publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
                     self.is_streaming = False
                     return
                 user_input = hook_event.input  # may have been mutated
@@ -1051,6 +1078,11 @@ class StreamingChat:
                             config=config, metadata={"system": self.main_chat.system}
                         ))
 
+                    # The turn's history is complete — tell the wire BEFORE the
+                    # audio drain below, which blocks on synth (seconds on a
+                    # slow CPU; the whole reply in paragraph split mode).
+                    yield self._emit_llm_done(tts_pump)
+
                     # Flush remaining audio chunks (blocks on synth) + tts_stream_end
                     for tts_ev in tts_pump.flush_and_close():
                         yield tts_ev
@@ -1223,6 +1255,8 @@ class StreamingChat:
                         config=config, metadata={"system": self.main_chat.system}
                     ))
 
+                yield self._emit_llm_done(tts_pump)
+
                 # Flush streaming TTS for the forced-final path too.
                 for tts_ev in tts_pump.flush_and_close():
                     yield tts_ev
@@ -1236,6 +1270,8 @@ class StreamingChat:
                 self.main_chat.session_manager.add_assistant_final(error_msg)
                 _forced_text, _forced_error = error_msg, True
 
+            if not self.llm_done:   # the except path above saved its row too
+                yield self._emit_llm_done(tts_pump)
             yield {"type": "final", "text": _forced_text,
                    "cancelled": False, "error": _forced_error}
 
@@ -1329,4 +1365,8 @@ class StreamingChat:
                 except Exception:
                     pass
             self.main_chat.session_manager.end_streaming()
-            publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
+            # Clean exits already published this at llm_done; cancel/error
+            # exits land here.
+            if not self._typing_ended:
+                self._typing_ended = True
+                publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})

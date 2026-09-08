@@ -178,6 +178,11 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                             yield f"data: {json.dumps({'type': 'reload'})}\n\n"
                         elif event_type == "notice":
                             yield f"data: {json.dumps({'type': 'notice', 'message': event.get('message', ''), 'severity': event.get('severity', 'warning')})}\n\n"
+                        elif event_type == "llm_done":
+                            # LLM half over, history row written — the browser
+                            # flips Stop→Send + paints metrics on this; the
+                            # streaming-TTS tail follows on the same body.
+                            yield f"data: {json.dumps(event)}\n\n"
                         elif event_type == "final":
                             # Terminal blob for blocking consumers (LLMChat.chat)
                             # — SSE clients already streamed the content; don't

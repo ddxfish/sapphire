@@ -165,7 +165,7 @@ export const setChatArchived = (name, archived) => fetchWithTimeout(`/api/chats/
 
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
-    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
+    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLlmDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
     
     if (data.type === 'stream_started') {
         if (onStreamStarted) onStreamStarted();
@@ -248,88 +248,142 @@ const processSSEData = (data, handlers) => {
         return { gotContent: true };
     }
     
+    // LLM half of the turn is over (history row + metrics written server-
+    // side). The body stays open for the streaming-TTS tail — see _readTurn.
+    if (data.type === 'llm_done') {
+        if (onLlmDone) onLlmDone(data);
+        return { llmDone: true };
+    }
+
     if (data.done) {
         console.log('[SSE] Done received');
-        if (onDone) onDone(data.ephemeral || false);
+        if (onDone) onDone(data.ephemeral || false, data);
         return { shouldReturn: true, isDone: true };
     }
     
     return {};
 };
 
-export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) => {
-    onChunk = _wrapChunkWithAvatarScan(onChunk);
-    let reader = null;
+// ---------------------------------------------------------------------------
+// /api/chat/stream reader — ONE loop for send / regen / continue.
+//
+// The awaited promise settles at `llm_done`: the LLM half of the turn is
+// over and the server has already written the history row (metrics
+// included). Everything after that on the wire is the streaming-TTS tail —
+// tts_chunk events arriving as synth finishes, which on a slow CPU can be
+// the whole reply's worth of seconds. The tail drains DETACHED: the caller
+// gets Send + metrics back at the last word; audio keeps arriving through
+// the same event-bus dispatches audio.js already listens to. Belts: a
+// `done` with no llm_done before it settles the turn too (tts_streamed
+// unknown → whole-blob lane, the old behavior); a body that closes or
+// faults mid-tail finalizes the audio queue so the mic ⏹ can't stick.
+// 2026-09-08, record tmp/llm-done-split-plan.md.
+// ---------------------------------------------------------------------------
+const _readTurn = async (reader, handlers, onTurnDone, onError) => {
+    const decoder = new TextDecoder();
+    let buffer = '', gotContent = false, turnDone = false;
+    const finishTurn = (data = {}) => {
+        if (turnDone) return;
+        turnDone = true;
+        onTurnDone(data.ephemeral || false, { ttsStreamed: !!data.tts_streamed });
+    };
+    handlers.onLlmDone = finishTurn;
+    handlers.onDone = (_ephemeral, data) => finishTurn(data);
     try {
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        const res = await fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ text, prefill, skip_user_message: true }),
-            signal
-        });
-        
-        if (!res.ok) {
-            if (res.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            const err = await res.json().catch(() => ({}));
-            return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
-        }
-        
-        reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '', gotContent = false;
-        
-        const handlers = {
-            onChunk,
-            onToolStart,
-            onToolEnd,
-            onStreamStarted,
-            onIterationStart,
-            onReload: () => setTimeout(() => window.location.reload(), 500),
-            onDone: (ephemeral) => onComplete(ephemeral),
-            onLegacyChunk: onChunk
-        };
-        
         while (true) {
             const { done, value } = await reader.read();
-            if (done) return gotContent ? onComplete(false) : onError(new Error("No content"));
-            
+            if (done) {
+                if (turnDone) { dispatch('tts_stream_end', {}); return; }   // tail closed without `done`
+                return gotContent ? finishTurn() : onError(new Error("No content"));
+            }
+
             buffer += decoder.decode(value, { stream: true });
             // split(/\r?\n/) handles both LF (uvicorn default) and CRLF
             // (some Win-side proxies normalize). Herring-table #17.
             const lines = buffer.split(/\r?\n/);
             buffer = lines.pop();
-            
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-                        // Same two-shape normalization as streamChat below
-                        if (data.type === 'error' || (data.error && !data.type)) {
-                            return (await reader.cancel(), onError(new Error(data.error || data.text || 'Stream error')));
-                        }
 
-                        const result = processSSEData(data, handlers);
-                        if (result.gotContent) gotContent = true;
-                        if (result.shouldReturn) {
-                            await reader.cancel();
-                            return;
-                        }
-                    } catch (parseErr) {
-                        console.error('[SSE] Parse error:', parseErr, 'Line:', line);
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                let data;
+                try { data = JSON.parse(line.slice(6)); }
+                catch (parseErr) { console.error('[SSE] Parse error:', parseErr, 'Line:', line); continue; }
+                // Two error shapes on the wire: {"error": msg} (route
+                // except-handlers, no type field) and {"type":"error",
+                // "text":...} (in-stream refusals like the private-
+                // prompt gate). Both must reach onError or the refusal
+                // is silently swallowed and the caller takes the
+                // success path. The !data.type guard keeps tool_end
+                // (which carries an error:bool flag) off this path.
+                if (data.type === 'error' || (data.error && !data.type)) {
+                    const msg = data.error || data.text || 'Stream error';
+                    if (turnDone) {
+                        // Tail fault: the turn is complete, only audio was lost.
+                        dispatch('chat_notice', { message: `TTS tail failed: ${msg}`, severity: 'warning' });
+                        dispatch('tts_stream_end', {});
+                        return;
                     }
+                    return onError(new Error(msg));
                 }
+                const result = processSSEData(data, handlers);
+                if (result.gotContent) gotContent = true;
+                if (result.shouldReturn) return;
             }
         }
     } catch (e) {
+        if (turnDone) { dispatch('tts_stream_end', {}); return; }   // dropped mid-tail: audio only
         onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
     } finally {
-        if (reader) try { await reader.cancel(); } catch {}
+        try { await reader.cancel(); } catch {}
     }
 };
+
+const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
+                                   onToolStart = null, onToolEnd = null,
+                                   onStreamStarted = null, onIterationStart = null }) => {
+    onChunk = _wrapChunkWithAvatarScan(onChunk);
+    let res;
+    try {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        res = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify(body),
+            signal
+        });
+    } catch (e) {
+        return onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
+    }
+    if (!res.ok) {
+        if (res.status === 401) {
+            window.location.href = '/login';
+            return;
+        }
+        const err = await res.json().catch(() => ({}));
+        return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
+    }
+    const handlers = {
+        onChunk,
+        onToolStart,
+        onToolEnd,
+        onStreamStarted,
+        onIterationStart,
+        onReload: () => setTimeout(() => window.location.reload(), 500),
+        onLegacyChunk: onChunk
+    };
+    // Settle at llm_done (or error / no-content / reload); the read loop
+    // itself runs on to the end of the body for the audio tail.
+    await new Promise((settle) => {
+        _readTurn(res.body.getReader(), handlers,
+                  (ephemeral, meta) => { onComplete(ephemeral, meta); settle(); },
+                  (e, code) => { onError(e, code); settle(); })
+            .finally(settle);
+    });
+};
+
+export const streamChatContinue = (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) =>
+    _streamTurn({ text, prefill, skip_user_message: true },
+                { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
 
 // Avatar tag scanner — wraps onChunk to detect <<avatar: trackname>> in streamed responses
 // Reads strip_tags setting from avatar plugin state (cached on page load)
@@ -419,89 +473,12 @@ function _wrapChunkWithAvatarScan(onChunk) {
     };
 }
 
-export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
-    onChunk = _wrapChunkWithAvatarScan(onChunk);
-    let reader = null;
-    try {
-        const body = { text };
-        if (prefill) body.prefill = prefill;
-        if (images && images.length > 0) body.images = images;
-        if (files && files.length > 0) body.files = files;
-        
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        const res = await fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify(body),
-            signal
-        });
-        
-        if (!res.ok) {
-            if (res.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            const err = await res.json().catch(() => ({}));
-            return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
-        }
-        
-        reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '', gotContent = false;
-        
-        const handlers = {
-            onChunk,
-            onToolStart,
-            onToolEnd,
-            onStreamStarted,
-            onIterationStart,
-            onReload: () => setTimeout(() => window.location.reload(), 500),
-            onDone: (ephemeral) => onComplete(ephemeral),
-            onLegacyChunk: onChunk
-        };
-        
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) return gotContent ? onComplete(false) : onError(new Error("No content"));
-            
-            buffer += decoder.decode(value, { stream: true });
-            // split(/\r?\n/) handles both LF (uvicorn default) and CRLF
-            // (some Win-side proxies normalize). Herring-table #17.
-            const lines = buffer.split(/\r?\n/);
-            buffer = lines.pop();
-            
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-                        // Two error shapes on the wire: {"error": msg} (route
-                        // except-handlers, no type field) and {"type":"error",
-                        // "text":...} (in-stream refusals like the private-
-                        // prompt gate). Both must reach onError or the refusal
-                        // is silently swallowed and the caller takes the
-                        // success path. The !data.type guard keeps tool_end
-                        // (which carries an error:bool flag) off this path.
-                        if (data.type === 'error' || (data.error && !data.type)) {
-                            return (await reader.cancel(), onError(new Error(data.error || data.text || 'Stream error')));
-                        }
-
-                        const result = processSSEData(data, handlers);
-                        if (result.gotContent) gotContent = true;
-                        if (result.shouldReturn) {
-                            await reader.cancel();
-                            return;
-                        }
-                    } catch (parseErr) {
-                        console.error('[SSE] Parse error:', parseErr, 'Line:', line);
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
-    } finally {
-        if (reader) try { await reader.cancel(); } catch {}
-    }
+export const streamChat = (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
+    const body = { text };
+    if (prefill) body.prefill = prefill;
+    if (images && images.length > 0) body.images = images;
+    if (files && files.length > 0) body.files = files;
+    return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
 };
 
 export const fetchAudio = async (text, signal = null, opts = null) => {

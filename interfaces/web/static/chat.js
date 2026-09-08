@@ -145,12 +145,13 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                     ui.hideStatus();
                 }
             },
-            async (ephemeral) => {
+            async (ephemeral, { ttsStreamed = false } = {}) => {
+                const myStreamId = ui.getCurrentStreamId();   // see handleRegen
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Stream completed but cancellation in progress - skipping finishStreaming');
                     return;
                 }
-                
+
                 // Ephemeral responses: just clean up, no TTS or history swap
                 if (ephemeral) {
                     console.log('[EPHEMERAL] Module response - skipping TTS and swap');
@@ -158,29 +159,17 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                     if (refreshFn) await refreshFn(false);
                     return;
                 }
-                
+
                 if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;  // streaming TTS already played it
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+                    // Whole-blob playback ONLY when the server's streaming-TTS
+                    // pump never ran this turn (see send-handlers.handleSend).
+                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                        const el = document.querySelector('.message.assistant:last-child .message-content');
+                        if (el) audioFn(ui.extractProseText(el));
+                    }
                 }
             },
             async (e, statusCode) => {
@@ -301,7 +290,11 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     ui.hideStatus();
                 }
             },
-            async (ephemeral) => {
+            async (ephemeral, { ttsStreamed = false } = {}) => {
+                // Captured synchronously: at llm_done this is OUR stream. Send
+                // returns during finishStreaming's sleep (llm-done split), so
+                // a newer turn can bump the id before the fallback below runs.
+                const myStreamId = ui.getCurrentStreamId();
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Regen completed but cancellation in progress - skipping finishStreaming');
                     return;
@@ -320,24 +313,12 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;  // streaming TTS already played it
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+                    // Whole-blob playback ONLY when the server's streaming-TTS
+                    // pump never ran this turn (see send-handlers.handleSend).
+                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                        const el = document.querySelector('.message.assistant:last-child .message-content');
+                        if (el) audioFn(ui.extractProseText(el));
+                    }
                 }
             },
             async (e, statusCode) => {
@@ -551,7 +532,8 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                     ui.hideStatus();
                 }
             },
-            async (ephemeral) => {
+            async (ephemeral, { ttsStreamed = false } = {}) => {
+                const myStreamId = ui.getCurrentStreamId();   // see handleRegen
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Continue completed but cancellation in progress - skipping finishStreaming');
                     return;
@@ -570,24 +552,12 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;  // streaming TTS already played it
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+                    // Whole-blob playback ONLY when the server's streaming-TTS
+                    // pump never ran this turn (see send-handlers.handleSend).
+                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                        const el = document.querySelector('.message.assistant:last-child .message-content');
+                        if (el) audioFn(ui.extractProseText(el));
+                    }
                 }
             },
             async (e, statusCode) => {

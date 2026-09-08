@@ -284,18 +284,33 @@ class LLMChat:
                 chat_name = self.session_manager.get_active_chat_name() or ''
             except Exception:
                 chat_name = ''
+        tails = []
         with self._streams_lock:
             if exclusive:
-                live = [i for i in self._streams_by_chat.get(chat_name, set())
-                        if i in self._streams_by_id
-                        and not self._streams_by_id[i].cancel_flag]
+                # A stream past llm_done is an audio tail: its history row is
+                # written, only the streaming-TTS drain is still running. It
+                # doesn't occupy the chat (2026-09-08, llm-done split) — the
+                # new turn preempts it below.
+                mine = [self._streams_by_id[i]
+                        for i in self._streams_by_chat.get(chat_name, set())
+                        if i in self._streams_by_id]
+                live = [s for s in mine if not s.cancel_flag and not s.llm_done]
                 if live:
                     logger.info(f"begin_stream: refused — chat '{chat_name}' "
                                 f"has {len(live)} live stream(s)")
                     raise ChatBusy(chat_name)
+                tails = [s for s in mine if s.llm_done and not s.cancel_flag]
             self._streams_by_id[sid] = stream
             self._streams_by_chat.setdefault(chat_name, set()).add(sid)
         stream.active_chat_name = chat_name
+        # The browser already drops the old tail's chunks (stream_id mismatch
+        # on the new tts_stream_start); mute the pump too so a slow CPU
+        # doesn't keep synthesizing audio nobody will play. Outside the lock:
+        # stop_tts is two bool writes.
+        for t in tails:
+            t.stop_tts()
+        if tails:
+            logger.info(f"begin_stream: muted {len(tails)} audio tail(s) on '{chat_name}'")
         return stream, sid, chat_name
 
     def end_stream(self, stream_id, chat_name):

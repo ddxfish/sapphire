@@ -91,7 +91,7 @@ export async function handleSend() {
                     ui.hideStatus();
                 }
             },
-            async (ephemeral) => {
+            async (ephemeral, { ttsStreamed = false } = {}) => {
                 if (getIsCancelling()) {
                     console.log('Stream completed but cancellation in progress - skipping finishStreaming');
                     return;
@@ -108,36 +108,18 @@ export async function handleSend() {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // If brain-side streaming TTS already started during the
-                    // stream, skip the legacy whole-blob fetch — chunks are
-                    // already playing.
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;
-                        // Turn superseded before this fired — user hit Stop
-                        // (handleStop → cancelStreaming) or sent/replayed again
-                        // (startStreaming). Both bump the stream id, so
-                        // streamStillMine() goes false. Without this, the legacy
-                        // whole-blob audio starts AFTER a Stop, requiring a
-                        // second Stop. The regular (non-streaming) path is the
-                        // common case here, so this has to be rock solid.
-                        // 2026-05-28.
-                        if (!streamStillMine()) return;
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+                    // Whole-blob playback ONLY when the server's streaming-TTS
+                    // pump never ran this turn (streaming off / provider can't
+                    // stream / privacy gate) — the server says so on llm_done.
+                    // The old browser-side "did a chunk arrive" flag was wiped
+                    // by the mic ⏹, so a stop mid-speech re-spoke the whole
+                    // reply from the top (slow-CPU VM, 2026-09-08).
+                    // streamStillMine: Send is back during finishStreaming's
+                    // sleep now; a new turn bumps the stream id and owns audio.
+                    if (!ttsStreamed && audioFn && streamStillMine()) {
+                        const el = document.querySelector('.message.assistant:last-child .message-content');
+                        if (el) audioFn(ui.extractProseText(el));
+                    }
                 }
             },
             async (e, statusCode) => {
