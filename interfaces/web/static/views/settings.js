@@ -26,6 +26,7 @@ import videosTab from './settings-tabs/videos-tab.js';
 import storeTab from './settings-tabs/store-tab.js';
 
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
 
@@ -367,8 +368,16 @@ function createCtx() {
             return key in pendingChanges ? pendingChanges[key] : settings[key];
         },
         async refreshTab() {
+            // Same as a tab switch: a field the user typed in but never
+            // blurred only reaches pendingChanges on 'change' — flush first or
+            // the repaint drops it (20 call sites; DOM-refresh hunt 2026-09-08).
+            flushCurrentInputs();
+            // A refresh is the SAME tab — keep the user's scroll (a switch
+            // goes through renderTabContent directly and lands at the top).
+            const restoreScroll = snapScroll(container?.querySelector('#settings-content'));
             await loadData();
             renderTabContent();
+            restoreScroll();
         },
         // For async completions (env-build polls etc.): refreshTab() re-renders
         // whatever tab is CURRENTLY active, wiping its unsaved edits — gate on
@@ -376,7 +385,20 @@ function createCtx() {
         isTabActive(id) { return activeTab === id; },
         loadPluginTab,
         syncDynamicTabs,
-        refreshSidebar() { render(); }
+        // A plugin toggle with a settings UI adds/removes its nav tab. Repaint
+        // the NAV only — the old full render() tore the plugin list down under
+        // the user (scroll lost; plugins.js' in-place row update then ran on a
+        // detached node). DOM-refresh hunt 2026-09-08.
+        refreshSidebar() {
+            const tabs = getAllTabs();
+            const wasOpen = !!container?.querySelector('.settings-plugin-group')?.open;
+            const sb = container?.querySelector('.settings-sidebar');
+            if (sb) sb.innerHTML = renderSidebarItems(tabs);
+            const grp = container?.querySelector('.settings-plugin-group');
+            if (grp && wasOpen) grp.open = true;
+            const mm = container?.querySelector('#settings-mobile-menu');
+            if (mm) mm.innerHTML = renderMobileItems(tabs);
+        }
     };
 }
 
@@ -553,9 +575,15 @@ function renderAccordion(id, keys, title = 'Advanced Settings') {
 
 // ── Events ──
 
+let _shellNavBound = false;
 function bindShellEvents() {
-    // Navigate to a specific tab programmatically (used by plugin gear icons)
-    container.addEventListener('settings-navigate', e => {
+    // Navigate to a specific tab programmatically (used by plugin gear icons).
+    // Bound ONCE: `container` is the persistent #view-settings and render()
+    // runs on every visit — this listener stacked per visit, so a gear click
+    // ran renderTabContent N times (and N provider-tab second paints).
+    // DOM-refresh hunt 2026-09-08. The other shell listeners sit on nodes
+    // render() replaces, so they don't stack.
+    if (!_shellNavBound) container.addEventListener('settings-navigate', e => {
         const tabId = e.detail?.tab;
         if (!tabId) return;
         flushCurrentInputs();
@@ -575,6 +603,7 @@ function bindShellEvents() {
         if (desc) desc.textContent = meta.description || '';
         renderTabContent();
     });
+    _shellNavBound = true;
 
     // Sidebar nav
     container.querySelector('.settings-sidebar')?.addEventListener('click', e => {

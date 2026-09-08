@@ -9,6 +9,7 @@ import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../sh
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'memory';
@@ -82,6 +83,9 @@ async function renderList() {
     }
     const chunks = data.chunks || [];
 
+    // Carry focus + caret + scroll across the rebuild (DOM-refresh hunt
+    // 2026-09-08): this paints on her background saves too.
+    const restoreFocus = snapFocus(el), restoreScroll = snapScroll(el);
     el.innerHTML = `
         <div class="ui-rows">
             <div class="ui-row">
@@ -118,11 +122,8 @@ async function renderList() {
             renderList();
         }, 300);
     });
-    // Keep focus through the re-render when typing
-    if (_search && document.activeElement === document.body) {
-        searchBox?.focus();
-        searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
-    }
+    restoreScroll();
+    restoreFocus();
     el.querySelector('#pal-mem-add')?.addEventListener('click', showAddModal);
     bindTransfer(el, 'events', () => scope, ui, renderList);
     el.querySelector('#pal-mem-more')?.addEventListener('click', () => {

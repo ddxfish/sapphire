@@ -2,6 +2,8 @@
 - Password reset in Settings > System
 - Cancel running daemon
 - save_memory definition and return to discourage redo on trims
+- Removed a ton of full DOM refreshes stealing cursor
+- Move prompts into vault in batch, redid prompt modal handler
 # 2.12.7 - Full Docs Makeover
 - Complete docs overhaul, 50+ docs
 - Added plugin docs search for AI tool search_help_docs

@@ -8,6 +8,7 @@ import { MIND_TABS, csrfHeaders, escHtml, escAttr, scopeForChatTab, subscribeMin
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const SCOPE_KEY = 'people_scope';
 const DOMAIN = 'people';
@@ -59,6 +60,7 @@ async function renderPeople() {
     const data = await resp.json();
     const people = data.people || [];
 
+    const restoreScroll = snapScroll(el);   // DOM-refresh hunt 2026-09-08
     el.innerHTML = `
         <div class="mind-toolbar">
             <button class="mind-btn" id="mind-add-person">+ Add Person</button>
@@ -86,6 +88,7 @@ async function renderPeople() {
             `).join('')}
         </div>` : '<div class="mind-empty">No contacts saved</div>'}
     `;
+    restoreScroll();
 
     el.querySelector('#mind-add-person')?.addEventListener('click', () => showPersonModal());
 

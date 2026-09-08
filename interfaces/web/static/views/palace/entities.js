@@ -10,6 +10,7 @@ import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from 
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'people';
@@ -96,6 +97,8 @@ async function renderEntities() {
     const pill = (val, label, n) => n || val === '' ?
         `<button class="ui-pill ${_kindFilter === val ? 'ui-pill-on' : ''}" data-kind="${val}">${label} ${n}</button>` : '';
 
+    // Carry focus + caret + scroll across the rebuild (DOM-refresh hunt 2026-09-08).
+    const restoreFocus = snapFocus(el), restoreScroll = snapScroll(el);
     el.innerHTML = `
         <div class="ui-rows">
             <div class="ui-row">
@@ -134,10 +137,8 @@ async function renderEntities() {
         clearTimeout(_qTimer);
         _qTimer = setTimeout(() => { _q = searchBox.value.trim().toLowerCase(); renderEntities(); }, 250);
     });
-    if (_q && document.activeElement === document.body) {
-        searchBox?.focus();
-        searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
-    }
+    restoreScroll();
+    restoreFocus();
     el.querySelectorAll('[data-kind]').forEach(btn => {
         btn.addEventListener('click', () => { _kindFilter = btn.dataset.kind; renderEntities(); });
     });

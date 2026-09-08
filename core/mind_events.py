@@ -12,6 +12,8 @@ Usage:
 """
 import logging
 
+from core.request_context import session_origin
+
 logger = logging.getLogger(__name__)
 
 _VALID_DOMAINS = {'memory', 'goal', 'knowledge', 'people'}
@@ -33,6 +35,9 @@ def publish_mind_changed(domain: str, scope: str, action: str) -> None:
             "domain": domain,
             "scope": scope,
             "action": action,
+            # The tab that made the change skips its own echo (None from
+            # tools / cron / librarian — those must reach every tab).
+            "origin": session_origin.get(),
         })
     except Exception as e:
         logger.debug(f"MIND_CHANGED publish failed ({domain}/{scope}/{action}): {e}")

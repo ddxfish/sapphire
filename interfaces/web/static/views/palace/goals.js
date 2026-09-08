@@ -13,6 +13,7 @@ import { escHtml, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../sh
 import { showModal, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'goal';   // mind_events domain (singular — matches the publisher)
@@ -162,6 +163,8 @@ async function renderList() {
         `<button class="ui-pill ${_status === val ? 'ui-pill-on' : ''}" data-status="${val}">${label}</button>`;
     const sortOpt = (val, label) =>
         `<option value="${val}" ${_sort === val ? 'selected' : ''}>${label}</option>`;
+    // Carry focus + caret + scroll across the rebuild (DOM-refresh hunt 2026-09-08).
+    const restoreFocus = snapFocus(el), restoreScroll = snapScroll(el);
     el.innerHTML = `
         <div class="ui-rows">
             <div class="ui-row">
@@ -188,10 +191,8 @@ async function renderList() {
         clearTimeout(_qTimer);
         _qTimer = setTimeout(() => { _q = searchBox.value.trim().toLowerCase(); renderList(); }, 250);
     });
-    if (_q && document.activeElement === document.body) {
-        searchBox?.focus();
-        searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
-    }
+    restoreScroll();
+    restoreFocus();
     el.querySelectorAll('[data-status]').forEach(btn => {
         btn.addEventListener('click', () => { _status = btn.dataset.status; renderList(); });
     });

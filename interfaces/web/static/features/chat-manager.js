@@ -72,6 +72,7 @@ export async function handleChatChange() {
 
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
         await updateScene();
 
         // Use settings from activate response
@@ -146,6 +147,7 @@ export async function handleDeleteChat() {
         chatSelect.value = 'default';
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
     } catch (e) {
         console.error('Failed to delete chat:', e);
         alert(`Failed to delete chat: ${e.message}`);
@@ -162,6 +164,7 @@ export async function handleClearChat() {
         await api.clearChat();
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
         ui.showToast('Chat cleared', 'success');
     } catch (e) {
         console.error('Failed to clear chat:', e);
@@ -216,6 +219,7 @@ export async function handleImportFile(e) {
         await api.importChat(messages);
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
         ui.showToast(`Imported ${messages.length} messages`, 'success');
     } catch (e) {
         console.error('Failed to import chat:', e);

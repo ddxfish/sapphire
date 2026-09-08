@@ -6,6 +6,7 @@ import { csrfHeaders, escHtml, escAttr } from './mind-common.js';
 import { showExportDialog, showImportDialog } from './import-export.js';
 import { setupModalClose } from './modal.js';
 import * as ui from '../ui.js';
+import { snapScroll } from './dom-guard.js';
 
 export async function renderKnowledge(el, tabType, scope) {
     const isAI = tabType === 'ai';
@@ -13,6 +14,14 @@ export async function renderKnowledge(el, tabType, scope) {
     if (!resp.ok) { el.innerHTML = '<div class="mind-empty">Failed to load</div>'; return; }
     const data = await resp.json();
     const tabs = data.tabs || [];
+
+    // Carry scroll + which categories the user had open across the rebuild
+    // (this paints on her save_knowledge and every librarian pass — every
+    // open accordion collapsed and its lazy entries reverted to "Click to
+    // load"). DOM-refresh hunt 2026-09-08; idiom from views/heartbeat.js.
+    const restoreScroll = snapScroll(el);
+    const openIds = [...el.querySelectorAll('details.mind-accordion[open] .mind-tab-entries')]
+        .map(d => d.dataset.tabId);
 
     el.innerHTML = `
         <div class="mind-toolbar">
@@ -221,6 +230,12 @@ export async function renderKnowledge(el, tabType, scope) {
             await loadEntries(inner, parseInt(inner.dataset.tabId), inner.dataset.type, scope);
         });
     });
+    // Re-open what was open (setting .open fires 'toggle' → entries reload).
+    for (const id of openIds) {
+        const det = el.querySelector(`.mind-tab-entries[data-tab-id="${id}"]`)?.closest('details');
+        if (det) det.open = true;
+    }
+    restoreScroll();
 }
 
 async function loadEntries(inner, tabId, tabType, scope) {

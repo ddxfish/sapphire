@@ -14,6 +14,7 @@ import { handleChatChange, populateChatDropdown } from '../features/chat-manager
 import { getIsProc } from '../core/state.js';
 import { switchView } from '../core/router.js';
 import { vaultStatus } from '../shared/vault-api.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 let container = null;
 let chats = [];
@@ -187,6 +188,7 @@ function render() {
     const visNames = new Set(vis.map(c => c.name));
     for (const s of [...selected]) if (!visNames.has(s)) selected.delete(s);
 
+    const restoreScroll = snapScroll(list);   // DOM-refresh hunt 2026-09-08 (vault_changed repaints)
     list.innerHTML = vis.map(c => {
         const checked = selected.has(c.name) ? 'checked' : '';
         // Game/story chats: the transcript is the tale and journal msg_index
@@ -223,6 +225,7 @@ function render() {
     if (!vis.length) {
         list.innerHTML = `<tr><td colspan="8" class="cm-hint" style="text-align:center; padding:24px">${searching ? 'No chats match' : 'Nothing here yet'}</td></tr>`;
     }
+    restoreScroll();
 
     const bar = container.querySelector('#cm-bulkbar');
     const n = selected.size;

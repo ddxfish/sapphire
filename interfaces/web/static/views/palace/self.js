@@ -8,6 +8,7 @@ import { helpPills } from '../../features/video-link.js';
 import { renderScopeSidebar, bindScopeSidebar } from '../../shared/scope-sidebar.js';
 import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
+import { deferWhileEditing, snapScroll } from '../../shared/dom-guard.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
@@ -25,6 +26,13 @@ let scope = 'default';
 let scopes = [];
 let unsub = null;
 let _saveTimers = {};
+// The librarian-pass poll leg's sheet repaint, held by the same predicate the
+// SSE leg uses (any self card focused — buttons included — or a save pending);
+// catches up on focusout (DOM-refresh hunt 2026-09-08).
+const softSheet = deferWhileEditing(() => container, () => renderSheet(), {
+    busy: () => !!container?.querySelector('.palace-self-card:focus-within')
+        || !!Object.keys(_saveTimers).length,
+});
 let _localBoxes = [];   // client-side boxes not yet persisted
 
 export default {
@@ -100,6 +108,7 @@ async function renderSheet() {
         : sectionCard({ section: b.section, title: `[${b.section}]`, hint: 'custom box — saves when you write',
                         mode: 'hand', custom: true, content: '', width: 'third', history_count: 0 });
 
+    const restoreScroll = snapScroll(el);   // DOM-refresh hunt 2026-09-08
     el.innerHTML = `
         ${dashboardCard(data.dashboard)}
         <div class="palace-self-grid">
@@ -119,6 +128,7 @@ async function renderSheet() {
             <div id="pal-upcoming" style="flex:2 1 0;min-width:280px;overflow-wrap:anywhere">${upcomingCard(data.dashboard)}</div>
         </div>
     `;
+    restoreScroll();
     bindCards(el);
     bindLibrarian(el);
     bindTransfer(el, 'self', () => scope, ui, renderSheet);
@@ -567,7 +577,10 @@ async function refreshLibStatus(el, { poll = false } = {}) {
         _libTimer = setTimeout(() => refreshLibStatus(el, { poll: true }), 3000);
     } else if (poll) {
         ui.showToast(st.current?.last_message || 'Librarian pass finished', 'success');
-        renderSheet();
+        // Same hold as the SSE leg above: never rebuild the sheet under a
+        // half-typed card or a pending save; catch up on focusout
+        // (DOM-refresh hunt 2026-09-08 — this leg was unconditional).
+        softSheet();
     } else {
         // Resident's summary line — the most recent of the per-pass rows.
         // Operating the passes lives in Mind → Admin.

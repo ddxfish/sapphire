@@ -5,6 +5,11 @@ import { listPersonas, getPersona, createPersona, updatePersona, deletePersona,
          avatarUrl, avatarImg, avatarFallback } from '../shared/persona-api.js';
 import { confirmPersonaImport, extractBundleFromPng } from '../shared/persona-import-confirm.js';
 import { PERSONA_TABS } from '../shared/persona-tabs.js';
+import { deferWhileEditing, snapScroll } from '../shared/dom-guard.js';
+
+// Rename's roster repaint, held while the user is typing elsewhere in the
+// editor (DOM-refresh hunt 2026-09-08).
+const softRender = deferWhileEditing(() => container, () => render());
 import { mountScenePicker } from '../shared/scene-picker.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
@@ -156,6 +161,10 @@ function render() {
     const s = selectedData?.settings || {};
     const isActive = selectedData?.name === getCurrentPersona();
 
+    // Picking a persona re-renders the whole view — carry the roster's and
+    // the editor's scroll (both are inner scrollers) so a long list doesn't
+    // snap to the top on every click. DOM-refresh hunt 2026-09-08.
+    const restoreScroll = snapScroll(container, ['.panel-list-items', '.view-body']);
     container.innerHTML = `
         ${renderSectionTabs(PERSONA_TABS, 'personas', helpPills('Personas', { video: '5kqW-o35OU4', doc: 'PERSONAS.md', inline: true }))}
         <div class="two-panel">
@@ -184,6 +193,7 @@ function render() {
             </div>
         </div>
     `;
+    restoreScroll();
 
     bindSectionTabs(container);
 
@@ -883,7 +893,10 @@ function debouncedSave() {
             if (data.name && data.name !== selectedName) {
                 selectedName = data.name.replace(/\s+/g, '_').toLowerCase();
                 await loadData();
-                render();
+                // Rename repaints the roster — but the user has usually tabbed on
+                // to the tagline by now; a full render() here yanked the cursor.
+                // Deferred until they leave the field (DOM-refresh hunt 2026-09-08).
+                softRender();
             } else {
                 selectedData.tagline = data.tagline;
                 selectedData.settings = data.settings;

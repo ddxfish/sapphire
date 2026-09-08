@@ -2,6 +2,7 @@
 // five sibling views (memories / people / knowledge / ai-knowledge / goals).
 // Factored out of the old monolithic views/mind.js.
 import { on as onBusEvent, Events as BusEvents } from '../core/event-bus.js';
+import { deferWhileEditing } from './dom-guard.js';
 
 // Tab strip config (consumed by section-tabs/section-header). Tab ids === view ids.
 export const MIND_TABS = [
@@ -63,10 +64,16 @@ export async function scopeForChatTab(scopeKey) {
 // Per-view SSE: re-render when MIND_CHANGED fires for THIS domain + current scope,
 // while the view is visible. Returns an unsubscribe fn (call it on hide()).
 export function subscribeMindDomain(domain, getScope, isVisible, onChange) {
+    // Focus guard (DOM-refresh hunt 2026-09-08): Sapphire saves memories in
+    // the background mid-turn, so this fires while the user may be typing in
+    // a filter box or an inline edit — nine of ten subscribers rebuilt their
+    // view under the cursor. Held while any editable has focus; catches up on
+    // focusout. One guard here covers every subscriber.
+    const soft = deferWhileEditing(document, onChange);
     return onBusEvent(BusEvents.MIND_CHANGED, (data) => {
         if (!data || !isVisible()) return;
         if (data.domain !== domain) return;
         if (data.scope !== getScope()) return;
-        onChange();
+        soft();
     });
 }

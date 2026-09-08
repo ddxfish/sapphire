@@ -10,6 +10,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, PLUGIN_LAYERS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const params = new URL(import.meta.url).searchParams;
 const LAYER = params.get('layer') || '';
@@ -88,6 +89,8 @@ async function renderList() {
         return;
     }
     const chunks = data.chunks || [];
+    // Carry focus + caret + scroll across the rebuild (DOM-refresh hunt 2026-09-08).
+    const restoreFocus = snapFocus(el), restoreScroll = snapScroll(el);
     el.innerHTML = `
         <div class="mind-toolbar">
             <input type="search" id="pal-layer-search" class="palace-search" placeholder="Search ${escAttr(spec.label)}…" value="${escAttr(_search)}">
@@ -110,10 +113,8 @@ async function renderList() {
             renderList();
         }, 300);
     });
-    if (_search && document.activeElement === document.body) {
-        searchBox?.focus();
-        searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
-    }
+    restoreScroll();
+    restoreFocus();
     bindTransfer(el, LAYER, () => scope, ui, renderList);
     el.querySelector('#pal-layer-more')?.addEventListener('click', () => {
         _offset += PAGE; renderList();

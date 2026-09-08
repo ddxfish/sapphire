@@ -7,6 +7,7 @@ import { helpPills } from '../features/video-link.js';
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const DEFAULT_ICONS = {
     work: '\u{1F4BC}', smarthome: '\u{1F3E0}', personality: '\u{1F3AD}',
@@ -97,6 +98,7 @@ function render() {
     const canEditEmoji = selected && selected.type !== 'builtin';
     const hasEmoji = !!emoji;
 
+    const restoreScroll = snapScroll(container, ['.panel-list-items', '.view-body']);   // DOM-refresh hunt 2026-09-08
     container.innerHTML = `
         ${renderSectionTabs(PERSONA_TABS, 'toolsets', helpPills('Toolsets', { video: '9noDUc6bWss', doc: 'TOOLSETS.md', inline: true }))}
         <div class="two-panel">
@@ -140,6 +142,7 @@ function render() {
             </div>
         </div>
     `;
+    restoreScroll();
 
     bindEvents();
 }

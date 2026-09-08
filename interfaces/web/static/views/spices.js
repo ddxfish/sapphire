@@ -8,6 +8,7 @@ import { helpPills } from '../features/video-link.js';
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const DEFAULT_ICONS = {
     default: '\u{1F336}\u{FE0F}', companion: '\u{1F49C}', professional: '\u{1F4BC}',
@@ -65,6 +66,7 @@ function render() {
     const hasEmoji = !!emoji;
     const enabledSet = new Set(selected?.categories || []);
 
+    const restoreScroll = snapScroll(container, ['.panel-list-items', '.view-body']);   // DOM-refresh hunt 2026-09-08
     container.innerHTML = `
         ${renderSectionTabs(PERSONA_TABS, 'spices', helpPills('Spices', { video: 'pu0dauGBhgY', doc: 'SPICE.md', inline: true }))}
         <div class="two-panel">
@@ -112,6 +114,7 @@ function render() {
             </div>
         </div>
     `;
+    restoreScroll();
 
     bindEvents();
 }

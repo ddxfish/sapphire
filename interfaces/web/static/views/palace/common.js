@@ -3,6 +3,7 @@
 // the palace feels like the same Mind the user already knows.
 import { csrfHeaders, escHtml, timeAgo } from '../../shared/mind-common.js';
 import { showExportDialog, showImportDialog } from '../../shared/import-export.js';
+import { sessionId } from '../../shared/fetch.js';
 
 export const API = '/api/plugin/mindpalace';
 export const SCOPE_ENDPOINT = `${API}/scopes`;
@@ -70,7 +71,11 @@ export async function palaceSend(path, method, body) {
     const r = await fetch(`${API}/${path}`, {
         method,
         credentials: 'same-origin',
-        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+        // X-Session-ID → the server stamps `origin` on the mind_changed it
+        // publishes, so THIS tab skips its own echo (every palace click used
+        // to paint twice — DOM-refresh hunt 2026-09-08). Views re-render
+        // locally after their own writes; the echo is for other tabs.
+        headers: csrfHeaders({ 'Content-Type': 'application/json', 'X-Session-ID': sessionId }),
         body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = await r.json().catch(() => ({}));

@@ -26,10 +26,11 @@ def test_publish_mind_changed_fires_event(event_bus_capture):
     publish_mind_changed('goal', 'default', 'save')
     types = [t for t, _ in event_bus_capture.events]
     assert 'mind_changed' in types
-    # Payload shape
+    # Payload shape — `origin` is the requesting tab's X-Session-ID (None from
+    # a tool / cron / test: no request in flight), see tests/test_mind_origin.py.
     for t, data in event_bus_capture.events:
         if t == 'mind_changed':
-            assert data == {'domain': 'goal', 'scope': 'default', 'action': 'save'}
+            assert data == {'domain': 'goal', 'scope': 'default', 'action': 'save', 'origin': None}
             break
 
 

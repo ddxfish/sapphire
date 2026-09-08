@@ -5,6 +5,7 @@ import * as audio from '../audio.js';
 import * as chat from '../chat.js';
 import * as Images from '../ui-images.js';
 import { dispatch, Events } from '../core/event-bus.js';
+import { focusUnlessEditing } from '../shared/dom-guard.js';
 import {
     getElements,
     getIsProc,
@@ -189,7 +190,11 @@ export async function handleSend() {
         ui.hideStatus();
         sendBtn.disabled = false;
         setSendLabel('send');
-        input.focus();
+        // Not unconditional: the user may have moved into a sidebar textarea
+        // while she replied — yanking the cursor back (and popping the phone
+        // keyboard on every dictated turn) was the seeded case of the
+        // DOM-refresh hunt, 2026-09-08.
+        focusUnlessEditing(input);
         setProc(false);
     }
 }

@@ -21,8 +21,10 @@ import {
     populateScopeOptions,
     readScopeSettings
 } from '../shared/scope-dropdowns.js';
+import { deferWhileEditing } from '../shared/dom-guard.js';
 
 let sidebarLoaded = false;
+let _saveInFlight = 0;
 let saveTimer = null;
 let pendingSaveChatName = null;  // captured at debounce schedule time, not fire time
 let llmProviders = [];
@@ -34,6 +36,22 @@ let _docClickHandler = null;
 let _personaHandler = null;
 
 const SAVE_DEBOUNCE = 500;
+
+// Soft sidebar refresh for bus ECHOES (DOM-refresh hunt, 2026-09-08). Seven
+// doors repainted the sidebar — her prompt_edit / switch_model tools publish
+// without an origin, a second tab's autosave echoes every 500 ms, spice /
+// scope / plugin / prompt events — and setVal wrote the server copy straight
+// over whatever the user was typing in Custom Context. Held while a sidebar
+// editable has focus OR a save is pending / in flight (the Bobby class: a
+// refetch mid-debounce repaints the OLD copy and the debounce persists it);
+// catches up on focusout / save completion. User-driven paints
+// (chat-activated after a switch) still call loadSidebar() directly — the
+// cursor is not a veto on a chat switch. Safe to defer: debouncedSave binds
+// its chat name at schedule time, so a late repaint can't cross-chat-write.
+const softSidebar = deferWhileEditing(
+    () => document.getElementById('view-chat')?.querySelector('.chat-sidebar'),
+    () => loadSidebar(),
+    { busy: () => !!saveTimer || _saveInFlight > 0 });
 
 export default {
     init(container) {
@@ -91,8 +109,8 @@ export default {
         // Refresh voice dropdown when TTS provider changes
         eventBus.on('settings_changed', async (data) => {
             if (data?.key === 'TTS_PROVIDER') refreshVoiceDropdown();
-            if (data?.key === 'LLM_PROVIDERS' || data?.key === 'LLM_CUSTOM_PROVIDERS') loadSidebar();
-            if (data?.key === 'PERSONA_FAVORITES') { await refreshInitData(); loadSidebar(); }
+            if (data?.key === 'LLM_PROVIDERS' || data?.key === 'LLM_CUSTOM_PROVIDERS') softSidebar();
+            if (data?.key === 'PERSONA_FAVORITES') { await refreshInitData(); softSidebar(); }
         });
 
         // Refresh prompt dropdown when a user actually saves/deletes a prompt.
@@ -112,15 +130,15 @@ export default {
             // guaranteed, so an un-awaited loadSidebar could paint from the
             // stale init cache (vault names lingering after a lock).
             await refreshInitData();
-            loadSidebar();
+            softSidebar();
         });
         eventBus.on(eventBus.Events.PROMPT_DELETED, async () => {
             await refreshInitData();
-            loadSidebar();
+            softSidebar();
         });
 
         // Refresh spice dropdown when spice sets change
-        eventBus.on(eventBus.Events.SPICE_CHANGED, () => loadSidebar());
+        eventBus.on(eventBus.Events.SPICE_CHANGED, () => softSidebar());
 
         // Sapphire's set_scene tool changes the chat background live (publishes {background}).
         // Her switch_model tool publishes {settings:{llm_primary}} — resync the sidebar
@@ -147,13 +165,15 @@ export default {
                 if (bg !== null) applyBackground(bg);
                 if (motion !== null) setChatMotion(motion);
             }
-            if (s.llm_primary) {
+            // Foreign lane's write never repaints THIS chat's sidebar either
+            // (the guard above covered background/motion but not this leg).
+            if (s.llm_primary && !foreign) {
                 // The badge itself — loadSidebar repaints dropdowns but never
                 // touches #send-btn, so a switch made elsewhere (her
                 // switch_model tool, another tab, a room-sidebar save) left
                 // the tint on the old provider (Krem 2026-08-23).
-                if (!foreign) updateSendButtonLLM(s.llm_primary, s.llm_model || '');
-                loadSidebar();
+                updateSendButtonLLM(s.llm_primary, s.llm_model || '');
+                softSidebar();
             }
         });
 
@@ -161,7 +181,7 @@ export default {
         // the Mind view. Without this, users see stale options until a full
         // page refresh — or worse, select a scope in the sidebar that the
         // backend no longer knows about and silently fall through to 'default'.
-        eventBus.on('scope_changed', () => loadSidebar());
+        eventBus.on('scope_changed', () => softSidebar());
 
         // Backend transient notices (dangling toolset detected, empty-content
         // fallback after tool calls, etc.) — surfaced as toasts so the user
@@ -178,7 +198,7 @@ export default {
         // data so newly-loaded plugin scope_declarations land.
         document.addEventListener('sapphire:plugin_toggled', async () => {
             try { await refreshInitData(); } catch (e) { /* fail-soft */ }
-            loadSidebar();
+            softSidebar();
         });
 
         // Accordion behavior + persisted open-state — shared/accordion.js
@@ -997,6 +1017,7 @@ async function saveSettings(container, chatNameOverride = null) {
     if (!chatName) return;
 
     const settings = collectSettings(container);
+    _saveInFlight++;
 
     try {
         const result = await api.updateChatSettings(chatName, settings);
@@ -1019,6 +1040,9 @@ async function saveSettings(container, chatNameOverride = null) {
         }
     } catch (e) {
         console.warn('Auto-save failed:', e);
+    } finally {
+        _saveInFlight--;
+        softSidebar.kick();   // run the echo refresh this save held back
     }
 }
 

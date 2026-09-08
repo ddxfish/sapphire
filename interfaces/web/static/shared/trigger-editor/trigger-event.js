@@ -2,6 +2,8 @@
 // Response routing is implicit: daemons always reply to source, webhooks always reply via HTTP.
 // Chat history + TTS are configured in the existing Chat/Voice accordions (from ai-config).
 
+import { editableFocused } from '../dom-guard.js';
+
 // Cache sources data so filter hints update on source change
 let _sourcesCache = [];
 
@@ -260,11 +262,17 @@ async function _loadEventSources(modal, initialFilter) {
         // Upgrade the seeded rows to dropdowns for the pre-selected source.
         // Prefer what's live in the DOM — the user may have edited rows
         // while the fetch was in flight.
-        const live = _readFilterRows(modal, '#ed-filter-rows');
-        _buildFilterRows(modal, '#ed-filter-rows',
-                         Object.keys(live).length ? live : initialFilter,
-                         _fieldsFor(select.value));
-        _renderTaskFields(modal);
+        // ...and keep a half-typed row (partial read), and don't rebuild at all
+        // under the user's cursor — text rows still save fine un-upgraded
+        // (DOM-refresh hunt 2026-09-08).
+        const rows = modal.querySelector('#ed-filter-rows');
+        if (!editableFocused(rows)) {
+            const live = _readFilterRows(modal, '#ed-filter-rows', { partial: true });
+            _buildFilterRows(modal, '#ed-filter-rows',
+                             Object.keys(live).length ? live : initialFilter,
+                             _fieldsFor(select.value));
+        }
+        if (!editableFocused(modal.querySelector('#ed-task-fields'))) _renderTaskFields(modal);
     } catch (e) {
         console.error('[trigger-editor] event sources load failed:', e);
         select.innerHTML = `<option value="">Select event source...</option><option value="" disabled>Could not load sources — ${_esc(e?.message || 'unknown error')}</option>`;
@@ -330,7 +338,10 @@ function _buildFilterRows(modal, containerSel, filter, fields) {
     _updateFilterPreview(modal, containerSel);
 }
 
-function _readFilterRows(modal, containerSel) {
+// partial: keep rows with only a key OR only a value (a rebuild mid-edit must
+// not discard what the user has typed so far); the save path wants complete
+// rows only.
+function _readFilterRows(modal, containerSel, { partial = false } = {}) {
     const filter = {};
     modal.querySelectorAll(`${containerSel} .filter-row`).forEach(row => {
         const sel = row.querySelector('.filter-key');
@@ -339,6 +350,7 @@ function _readFilterRows(modal, containerSel) {
             : row.querySelector('.filter-custom-key')?.value?.trim();
         const val = row.querySelector('.filter-val')?.value?.trim();
         if (key && val) filter[key] = val;
+        else if (partial && (key || val)) filter[key || ''] = val || '';
     });
     return filter;
 }

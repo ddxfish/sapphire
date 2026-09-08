@@ -1,5 +1,6 @@
 // settings-tabs/embedding.js - Embedding provider settings
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
+import { editableFocused } from '../../shared/dom-guard.js';
 import { on as onBusEvent, Events as BusEvents } from '../../core/event-bus.js';
 
 // Merged config cache — populated by attachListeners on first render so the
@@ -247,7 +248,12 @@ export default {
         // since last visit). If the merge pulls in new keys, re-render so the
         // dropdown reflects them before we attach any listeners.
         _mergedConfig = await mergeRegistryProviders(tabConfig);
-        if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length) {
+        // ...unless the user switched tabs during the await (el is the
+        // persistent #settings-content) or is typing in the first paint
+        // (DOM-refresh hunt 2026-09-08).
+        if (ctx.isTabActive?.(this.id) === false) return;
+        if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length
+            && !editableFocused(el)) {
             const body = el.querySelector('.settings-tab-body') || el;
             body.innerHTML = this.render(ctx);
             if (ctx.attachAccordionListeners) ctx.attachAccordionListeners(el);

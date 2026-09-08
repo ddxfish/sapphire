@@ -441,7 +441,10 @@ def get_shutdown_callback():
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log incoming requests."""
+    """Log incoming requests; stamp the tab's session id into request context
+    (core/request_context.py) so publishers can mark their events' origin."""
+    from core.request_context import session_origin
+    session_origin.set(request.headers.get('X-Session-ID'))
     logger.debug(f"REQ: {request.method} {request.url.path}")
     response = await call_next(request)
     if response.status_code >= 400 and not request.url.path.startswith('/static/'):

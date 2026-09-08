@@ -1493,7 +1493,14 @@ async function refreshPreview() {
             // renderPreview fell back to the stale selectedData.content from
             // initial load — the preview never updated after a piece edit.
             // TODO L133 — 2026-04-21.
-            selectedData.content = fresh.content;
+            // ...but never over a live edit (DOM-refresh hunt 2026-09-08): the
+            // #pr-content input handler writes selectedData.content on every
+            // keystroke, this GET lands one RTT after the save, and chars typed
+            // meanwhile were clobbered here, then persisted by the next debounce.
+            const mono = container?.querySelector('#pr-content');
+            if (!promptSaveInFlight && !(mono && document.activeElement === mono)) {
+                selectedData.content = fresh.content;
+            }
             selectedData.char_count = fresh.char_count;
         }
     } catch { /* ignore */ }

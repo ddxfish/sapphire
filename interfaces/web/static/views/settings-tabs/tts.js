@@ -1,5 +1,6 @@
 // settings-tabs/tts.js - Text-to-speech provider settings
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
+import { editableFocused } from '../../shared/dom-guard.js';
 
 let _mergedConfig = null;
 
@@ -75,8 +76,13 @@ export default {
         // Always re-fetch plugin providers (plugins may have been toggled)
         {
             _mergedConfig = await mergeRegistryProviders(tabConfig);
-            // Re-render dropdown if new providers were added
-            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length) {
+            // Re-render dropdown if new providers were added — unless the user
+            // switched tabs during the await (el is the persistent
+            // #settings-content) or is typing in the first paint
+            // (DOM-refresh hunt 2026-09-08).
+            if (ctx.isTabActive?.(this.id) === false) return;
+            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length
+                && !editableFocused(el)) {
                 const body = el.querySelector('.settings-tab-body') || el;
                 body.innerHTML = this.render(ctx);
                 if (ctx.attachAccordionListeners) ctx.attachAccordionListeners(el);

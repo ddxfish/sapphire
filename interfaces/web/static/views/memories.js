@@ -9,6 +9,7 @@ import { MIND_TABS, csrfHeaders, escHtml, scopeForChatTab, subscribeMindDomain }
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'memory';
@@ -227,6 +228,7 @@ async function renderMemories(elArg) {
 }
 
 function _renderMemoriesFromCache(el) {
+    const restoreScroll = snapScroll(el);   // DOM-refresh hunt 2026-09-08
     const focusedEl = document.activeElement;
     const refocus = focusedEl && el.contains(focusedEl) && focusedEl.id
         ? { id: focusedEl.id, selStart: focusedEl.selectionStart ?? null, selEnd: focusedEl.selectionEnd ?? null }
@@ -375,6 +377,7 @@ function _renderMemoriesFromCache(el) {
 
     _bindMemoryIO(el);
 
+    restoreScroll();
     if (refocus) {
         const restored = el.querySelector(`#${refocus.id}`);
         if (restored) {

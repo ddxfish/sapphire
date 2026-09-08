@@ -22,6 +22,7 @@ import {
     installPersonaFromStore,
 } from '../shared/store-api.js';
 import { renderMarkdown } from '../shared/markdown.js';
+import { snapFocus } from '../shared/dom-guard.js';
 import { isSafeHref } from '../shared/url-safety.js';
 import { refreshInitData } from '../shared/init-data.js';
 import { confirmPersonaImport } from '../shared/persona-import-confirm.js';
@@ -311,22 +312,19 @@ function renderCard(item, showcase = false) {
 }
 
 
+// Focus + caret snapshot, taken by renderList BEFORE its 'Loading…' wipe. The
+// old inline capture lived in renderMain and ran AFTER that wipe, so it never
+// saw the search box — every 800 ms typing pause destroyed the field and the
+// next keystrokes went nowhere (DOM-refresh hunt 2026-09-08).
+let _focusStash = null;
+
 function renderMain(html) {
     const m = container.querySelector('.store-main');
     if (!m) return;
-    // Preserve search input focus + cursor across re-render so typing in the
-    // search box doesn't kick the user out after each debounce tick.
-    const oldSearch = m.querySelector('.store-search');
-    const wasFocused = oldSearch && document.activeElement === oldSearch;
-    const cursor = wasFocused ? oldSearch.selectionStart : null;
+    const restore = _focusStash || snapFocus(m);
+    _focusStash = null;
     m.innerHTML = html;
-    if (wasFocused) {
-        const newSearch = m.querySelector('.store-search');
-        if (newSearch) {
-            newSearch.focus();
-            try { newSearch.setSelectionRange(cursor, cursor); } catch (_) {}
-        }
-    }
+    restore();
 }
 
 
@@ -355,6 +353,7 @@ async function renderList() {
     state.detailSlug = null;
     const main = container.querySelector('.store-main');
     if (!main) return;
+    _focusStash = snapFocus(main);   // before the wipe; renderMain restores
     main.innerHTML = '<div class="store-loading">Loading...</div>';
 
     // Two parallel fetches when on landing tab + first page: featured strip + grid.

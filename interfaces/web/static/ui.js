@@ -431,6 +431,13 @@ export const addUserMessage = (txt, images = null, files = null) => {
 
 export const renderHistory = (hist) => {
     Images.clearPendingImages();
+    // Background refreshes (turn end, edit save, trim, a remote message) used
+    // to FORCE-snap here and re-arm sticky — the surviving "scroll of god"
+    // path after sticky v2, and saving a message edit mid-transcript jumped
+    // to the bottom. Now: sticky follows to the bottom, a reader who scrolled
+    // up keeps their place. Chat load / switch / clear / import call
+    // forceScrollToBottom() themselves — there the user asked for the bottom.
+    const keepTop = sticky ? null : (chatbgOverlay?.scrollTop ?? null);
     chat.querySelectorAll('.message:not(.status):not(.error)').forEach(msg => msg.remove());
 
     if (!hist || !Array.isArray(hist)) return;
@@ -448,17 +455,21 @@ export const renderHistory = (hist) => {
     });
 
     updateToolbars();
-    
+
+    const settle = () => {
+        if (keepTop !== null && chatbgOverlay) chatbgOverlay.scrollTop = keepTop;
+        else scrollToBottomIfSticky();
+    };
     const waitForImages = () => {
         if (!Images.hasPendingImages()) {
-            scrollToBottomIfSticky(true);
+            settle();
         } else {
             setTimeout(() => {
                 if (Images.hasPendingImages()) {
                     console.log(`Timeout: images still pending, scrolling anyway`);
                     Images.clearPendingImages();
                 }
-                scrollToBottomIfSticky(true);
+                settle();
             }, 5000);
         }
     };

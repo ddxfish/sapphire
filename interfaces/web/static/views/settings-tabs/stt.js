@@ -1,5 +1,6 @@
 // settings-tabs/stt.js - Speech-to-text provider settings + VAD tuning
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
+import { editableFocused } from '../../shared/dom-guard.js';
 
 let _mergedConfig = null;
 
@@ -166,7 +167,13 @@ export default {
     async attachListeners(ctx, el) {
         {
             _mergedConfig = await mergeRegistryProviders(tabConfig);
-            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length) {
+            // The await landed one RTT after the first paint (DOM-refresh hunt
+            // 2026-09-08): `el` is the PERSISTENT #settings-content, so if the
+            // user switched tabs meanwhile this painted STT over that tab; if
+            // they started typing an API key, the second paint ate it.
+            if (ctx.isTabActive?.(this.id) === false) return;
+            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length
+                && !editableFocused(el)) {
                 const body = el.querySelector('.settings-tab-body') || el;
                 body.innerHTML = this.render(ctx);
                 if (ctx.attachAccordionListeners) ctx.attachAccordionListeners(el);

@@ -12,6 +12,7 @@ import { csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindD
 import { showModal, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { API, PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope } from './common.js';
+import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'knowledge';
@@ -176,6 +177,8 @@ async function renderShelf() {
     const cats = _catalog.categories || [];
     const unfiled = (_catalog.unfiled || []).map(docRow).join('');
     const unfiledGrid = imageGrid(_catalog.unfiled);
+    // Carry focus + caret + scroll across the rebuild (DOM-refresh hunt 2026-09-08).
+    const restoreFocus = snapFocus(el), restoreScroll = snapScroll(el);
     el.innerHTML = `
         <div class="ui-rows">
             <div class="ui-row">
@@ -267,10 +270,8 @@ async function renderShelf() {
             renderShelf();
         }, 300);
     });
-    if (_filter && document.activeElement === document.body) {
-        filter?.focus();
-        filter?.setSelectionRange(filter.value.length, filter.value.length);
-    }
+    restoreScroll();
+    restoreFocus();
     el.querySelectorAll('#plib-kind-pills [data-kind]').forEach(btn => {
         btn.addEventListener('click', () => { _kind = btn.dataset.kind; renderShelf(); });
     });
