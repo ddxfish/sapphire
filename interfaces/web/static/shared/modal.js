@@ -154,7 +154,12 @@ export function showModal(title, fields, onSave = null, options = {}) {
   // Animate in
   requestAnimationFrame(() => overlay.classList.add('active'));
   
+  // While an async onSave runs, Cancel / ✕ / Esc / backdrop must not close:
+  // the work continues server-side either way, and a vanished modal only
+  // hid it (then a re-click ran a second batch) — E3#3, 2026-09-08.
+  let busy = false;
   const close = () => {
+    if (busy) return;
     overlay.classList.remove('active');
     setTimeout(() => overlay.remove(), 300);
   };
@@ -187,9 +192,10 @@ export function showModal(title, fields, onSave = null, options = {}) {
     const r = onSave(data);
     if (r && typeof r.then === 'function') {
       const label = saveBtn.textContent;
+      busy = true;
       saveBtn.disabled = true;
       saveBtn.textContent = 'Working…';
-      r.finally(() => { saveBtn.disabled = false; saveBtn.textContent = label; close(); });
+      r.finally(() => { busy = false; saveBtn.disabled = false; saveBtn.textContent = label; close(); });
       return;
     }
     close();

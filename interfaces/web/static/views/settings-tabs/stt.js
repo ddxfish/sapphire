@@ -166,13 +166,17 @@ export default {
 
     async attachListeners(ctx, el) {
         {
+            // What the first paint already showed: repaint only when the merge
+            // CHANGES the provider set. A dropdown-change re-entry re-awaited
+            // the merge and repainted an identical set one RTT later (D2#7).
+            const painted = Object.keys((_mergedConfig || tabConfig).providers).join();
             _mergedConfig = await mergeRegistryProviders(tabConfig);
             // The await landed one RTT after the first paint (DOM-refresh hunt
             // 2026-09-08): `el` is the PERSISTENT #settings-content, so if the
             // user switched tabs meanwhile this painted STT over that tab; if
             // they started typing an API key, the second paint ate it.
             if (ctx.isTabActive?.(this.id) === false) return;
-            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length
+            if (Object.keys(_mergedConfig.providers).join() !== painted
                 && !editableFocused(el)) {
                 const body = el.querySelector('.settings-tab-body') || el;
                 body.innerHTML = this.render(ctx);
@@ -180,7 +184,10 @@ export default {
             }
         }
         const cfg = _mergedConfig || tabConfig;
-        attachProviderListeners(cfg, ctx, el);
+        // `this` = this module: without it a provider-dropdown change fell to
+        // the generic tab render and the VAD section, badge poll and test
+        // button vanished until the tab was re-entered (D2#2, 2026-09-08).
+        attachProviderListeners(cfg, ctx, el, this);
 
         // VAD wiring — badge polling + test button only. The checkbox is
         // bound by the generic data-key path, no manual handlers here.

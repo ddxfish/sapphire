@@ -509,31 +509,52 @@ def is_vault_prompt(name: str) -> bool:
 # move itself is names-only in the ledger (the vault side's own row tells
 # the story); past ledger history of a moved-in prompt is history.
 
+def _vault_refusal(code: str) -> str:
+    """'locked' must surface as VAULT_LOCKED_MSG — move_batch stops the loop
+    on that exact string (E3#9)."""
+    return VAULT_LOCKED_MSG if code == 'locked' else f"Vault refused the move ({code})"
+
+
+def _try_save(saver, what: str) -> bool:
+    """A store save that RAISES (disk full, replace failure) is a failed save,
+    not an exception the mover leaks past its restore."""
+    try:
+        return bool(saver(reason=f"moved '{what}' into the vault", audit=False))
+    except Exception as e:
+        logger.error(f"Store save failed moving '{what}' into the vault: {e}")
+        return False
+
+
 def move_prompt_to_vault(name: str, publish: bool = True) -> tuple[bool, str]:
     """Regular store → vault. Privacy becomes True by construction.
     publish=False: caller batches many moves and publishes once (move_batch)."""
     from core import prompt_vault
     if not prompt_vault.vault_unlocked():
         return False, VAULT_LOCKED_MSG
+    # IN movers pop-and-restore like the OUT twins (pre-push hunt 2026-09-08,
+    # E3#1): deleting from memory and then failing the plaintext save left a
+    # "ghost move" — 🗝 in the UI, plaintext still on disk, restart reverts.
     with prompt_manager._lock:
         if name in prompt_manager._monoliths:
             entry = prompt_manager._monoliths[name]
             content = entry.get('content', '') if isinstance(entry, dict) else str(entry)
             ok, code = prompt_vault.set_monolith(name, content)
             if not ok:
-                return False, f"Vault refused the move ({code})"
-            del prompt_manager._monoliths[name]
-            saved = prompt_manager.save_monoliths(
-                reason=f"moved '{name}' into the vault", audit=False)
+                return False, _vault_refusal(code)
+            prompt_manager._monoliths.pop(name)
+            saved = _try_save(prompt_manager.save_monoliths, name)
+            if not saved:
+                prompt_manager._monoliths[name] = entry
         elif name in prompt_manager._scenario_presets:
-            preset = {k: v for k, v in prompt_manager._scenario_presets[name].items()
-                      if k != '_privacy_required'}
+            entry = prompt_manager._scenario_presets[name]
+            preset = {k: v for k, v in entry.items() if k != '_privacy_required'}
             ok, code = prompt_vault.set_preset(name, preset)
             if not ok:
-                return False, f"Vault refused the move ({code})"
-            del prompt_manager._scenario_presets[name]
-            saved = prompt_manager.save_scenario_presets(
-                reason=f"moved '{name}' into the vault", audit=False)
+                return False, _vault_refusal(code)
+            prompt_manager._scenario_presets.pop(name)
+            saved = _try_save(prompt_manager.save_scenario_presets, name)
+            if not saved:
+                prompt_manager._scenario_presets[name] = entry
         else:
             return False, f"Prompt '{name}' not found in the regular store"
     if not saved:
@@ -605,10 +626,11 @@ def move_piece_to_vault(comp_type: str, key: str, publish: bool = True) -> tuple
         ok, code = prompt_vault.set_piece(comp_type, key,
                                           prompt_manager._components[comp_type][key])
         if not ok:
-            return False, f"Vault refused the move ({code})"
-        del prompt_manager._components[comp_type][key]
-        saved = prompt_manager.save_components(
-            reason=f"moved '{comp_type}/{key}' into the vault", audit=False)
+            return False, _vault_refusal(code)
+        value = prompt_manager._components[comp_type].pop(key)
+        saved = _try_save(prompt_manager.save_components, f"{comp_type}/{key}")
+        if not saved:
+            prompt_manager._components[comp_type][key] = value
     if not saved:
         return False, (f"'{comp_type}/{key}' is in the vault, but the regular-store "
                        f"delete failed to persist — the plaintext copy still shadows it")

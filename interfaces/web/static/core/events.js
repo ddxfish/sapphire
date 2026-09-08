@@ -144,8 +144,10 @@ function handleImageReady(event) {
         content.insertBefore(inlineImg, content.firstChild);
     }
 
-    // Force scroll
-    import('../ui.js').then(ui => ui.forceScrollToBottom());
+    // Follow the bottom only while the reader is stuck to it. A FORCED snap
+    // here (per image, re-arming sticky) undid the transcript's scroll carry
+    // on every background re-render of an image chat (D3-B1, 2026-09-08).
+    import('../ui.js').then(ui => ui.followIfSticky());
 }
 
 export function bindCleanupEvents(cleanupFn) {

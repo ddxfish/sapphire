@@ -115,7 +115,10 @@ export function snapFocus(root) {
             if (all.length === 1) el = all[0];
         }
         if (!el || el === document.activeElement) return;
-        el.focus();
+        // preventScroll: restoreFocus runs AFTER restoreScroll at every site —
+        // a default focus() would scroll the field into view over the
+        // carried position (D1#10).
+        el.focus({ preventScroll: true });
         if (selStart !== null && typeof el.setSelectionRange === 'function') {
             try { el.setSelectionRange(selStart, selEnd ?? selStart); } catch { /* not a text field */ }
         }

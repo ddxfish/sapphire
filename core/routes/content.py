@@ -444,6 +444,8 @@ async def reset_prompts(request: Request, _=Depends(require_login)):
 async def merge_prompts(request: Request, _=Depends(require_login)):
     """Merge factory defaults into user prompts."""
     result = prompts.prompt_manager.merge_defaults()
+    if result and result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
     if result:
         return {"status": "success", **result}
     raise HTTPException(status_code=500, detail="Failed to merge prompts")
@@ -456,6 +458,8 @@ async def merge_updates(request: Request, _=Depends(require_login)):
     backup_dir = str(PROJECT_ROOT / "user" / "backups" / datetime.now().strftime("%Y%m%d_%H%M%S"))
 
     prompt_result = prompts.prompt_manager.merge_defaults(backup_dir)
+    if prompt_result and prompt_result.get("error"):
+        raise HTTPException(status_code=409, detail=prompt_result["error"])
     if not prompt_result:
         raise HTTPException(status_code=500, detail="Failed to merge prompt defaults")
 

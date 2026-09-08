@@ -269,7 +269,7 @@ async function _loadEventSources(modal, initialFilter) {
         if (!editableFocused(rows)) {
             const live = _readFilterRows(modal, '#ed-filter-rows', { partial: true });
             _buildFilterRows(modal, '#ed-filter-rows',
-                             Object.keys(live).length ? live : initialFilter,
+                             live.length ? live : initialFilter,
                              _fieldsFor(select.value));
         }
         if (!editableFocused(modal.querySelector('#ed-task-fields'))) _renderTaskFields(modal);
@@ -332,27 +332,30 @@ function _buildFilterRows(modal, containerSel, filter, fields) {
     if (!container) return;
     container._fields = fields;   // for + Add filter
     container.innerHTML = '';
-    const entries = Object.entries(filter || {});
+    // An array of [key, val] pairs = a partial read (keyless rows keep their
+    // own slot instead of collapsing onto one '' key — D2#8, 2026-09-08).
+    const entries = Array.isArray(filter) ? filter.slice() : Object.entries(filter || {});
     if (!entries.length) entries.push(['', '']);
     for (const [k, v] of entries) container.appendChild(_filterRowEl(k, v, fields));
     _updateFilterPreview(modal, containerSel);
 }
 
 // partial: keep rows with only a key OR only a value (a rebuild mid-edit must
-// not discard what the user has typed so far); the save path wants complete
-// rows only.
+// not discard what the user has typed so far) and return them as ORDERED
+// [key, val] pairs so two half-typed rows don't collapse onto one key; the
+// save path wants complete rows only, as an object.
 function _readFilterRows(modal, containerSel, { partial = false } = {}) {
-    const filter = {};
+    const filter = {}, rows = [];
     modal.querySelectorAll(`${containerSel} .filter-row`).forEach(row => {
         const sel = row.querySelector('.filter-key');
         const key = (sel && sel.value && sel.value !== '__custom__')
             ? sel.value
             : row.querySelector('.filter-custom-key')?.value?.trim();
         const val = row.querySelector('.filter-val')?.value?.trim();
-        if (key && val) filter[key] = val;
-        else if (partial && (key || val)) filter[key || ''] = val || '';
+        if (key && val) { filter[key] = val; rows.push([key, val]); }
+        else if (partial && (key || val)) rows.push([key || '', val || '']);
     });
-    return filter;
+    return partial ? rows : filter;
 }
 
 function _updateFilterPreview(modal, containerSel) {

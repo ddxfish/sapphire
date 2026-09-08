@@ -13,6 +13,7 @@ import config
 from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system, _apply_chat_settings, PROJECT_ROOT
 from core.event_bus import publish, Events
+from core.request_context import session_origin
 from core import prompts
 from core.stt.stt_null import NullWhisperClient as _NullWhisperClient
 from core.stt.utils import can_transcribe
@@ -75,6 +76,9 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
 async def handle_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Non-streaming chat endpoint."""
     check_endpoint_rate(request, 'chat', max_calls=30, window=60)
+    # A chat turn is HER action, not the tab's: a tool save inside it must
+    # repaint every palace view, this tab's included (origin belt, D4-B1).
+    session_origin.set(None)
 
     data = await request.json()
     if not data or 'text' not in data:
@@ -100,6 +104,7 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
 async def handle_chat_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Streaming chat endpoint (SSE)."""
     check_endpoint_rate(request, 'chat', max_calls=30, window=60)
+    session_origin.set(None)   # her action, not the tab's (D4-B1)
 
     data = await request.json()
     if not data or 'text' not in data:
@@ -151,7 +156,12 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
         try:
             chunk_count = 0
             for event in gen:
-                if stream.cancel_flag:
+                # Past llm_done the row is written: forward the tail as-is
+                # (the pump's own cancel_check bails it; `done` is withheld
+                # below and the browser's belt finalizes audio). A cancel
+                # in the gap before llm_done was forwarded painted
+                # "⊘ Cancelled" over a saved reply (E1#7).
+                if stream.cancel_flag and not stream.llm_done:
                     logger.info(f"STREAMING CANCELLED at chunk {chunk_count}")
                     yield f"data: {json.dumps({'cancelled': True})}\n\n"
                     break
@@ -1243,6 +1253,23 @@ async def activate_chat(chat_name: str, request: Request, _=Depends(require_logi
             _pv_touch.touch()
         except Exception:
             pass
+        # A streaming-TTS tail (llm_done, row written, only audio draining)
+        # still holds the stream counter, and switch_chat refused with a 400
+        # for the whole tail — seconds on a slow CPU. Mute the active chat's
+        # web tails and give the counter up to 1 s to reach zero (the pump
+        # bails within ~200 ms). Pre-push hunt 2026-09-08, E1#3.
+        try:
+            sm = system.llm_chat.session_manager
+            active = sm.get_active_chat_name()
+            if chat_name != active:
+                tails = [s for s in system.llm_chat.streams_for_chat(active)
+                         if s.llm_done and not s.cancel_flag and not s.target_chat]
+                for t in tails:
+                    t.stop_tts()
+                if tails:
+                    await asyncio.to_thread(sm._no_streams_event.wait, 1.0)
+        except Exception as e:
+            logger.debug(f"activate: tail mute skipped: {e!r}")
         if system.llm_chat.switch_chat(chat_name):
             # SWITCH MEANS APPLY (2026-08-22): the store's on_switched hook
             # applied the landing chat's settings inside switch_chat — this

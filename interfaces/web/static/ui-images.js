@@ -325,6 +325,10 @@ export const createUserImageThumbnails = (images) => {
     return container;
 };
 
+// Never forced from here: a forced snap re-arms sticky, so an image landing
+// in a background re-render yanked a reader who had scrolled up (the
+// sticky-v2 + keepTop fixes never reached this owner; pre-push hunt
+// 2026-09-08, D3-B2). Chat load/switch force themselves before images load.
 export const scheduleScrollAfterImages = (scrollCallback, force = false) => {
     if (scrollAfterImagesTimeout) {
         clearTimeout(scrollAfterImagesTimeout);
@@ -370,7 +374,7 @@ export const createImageElement = (imageId, isHistoryRender = false, scrollCallb
             if (isHistoryRender && pendingImages.has(imageId)) {
                 pendingImages.delete(imageId);
                 if (scrollCallback) {
-                    scheduleScrollAfterImages(scrollCallback, true);
+                    scheduleScrollAfterImages(scrollCallback);   // follow only while stuck (D3-B2)
                 }
             }
 
@@ -390,7 +394,7 @@ export const createImageElement = (imageId, isHistoryRender = false, scrollCallb
             if (isHistoryRender && pendingImages.has(imageId)) {
                 pendingImages.delete(imageId);
                 if (scrollCallback) {
-                    scheduleScrollAfterImages(scrollCallback, true);
+                    scheduleScrollAfterImages(scrollCallback);   // follow only while stuck (D3-B2)
                 }
             }
             return;

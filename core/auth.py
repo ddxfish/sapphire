@@ -66,12 +66,23 @@ async def require_login(request: Request):
     """
     from core.setup import is_setup_complete, get_password_hash
 
-    if not is_setup_complete():
+    # One hash read per request on the normal path; the setup gate is only
+    # consulted when no hash came back (it re-reads — and tests mock the two
+    # independently).
+    stored_hash = get_password_hash()
+    if stored_hash is None and not is_setup_complete():
         raise HTTPException(status_code=307, headers={"Location": "/setup"})
+    stored_hash = stored_hash or ''
 
-    # 1. Session auth (browser users)
+    # 1. Session auth (browser users). The cookie carries the SALT of the
+    #    hash it was minted under (login_submit stamps it): a password change
+    #    or a delete-secret_key reset invalidates every OTHER cookie — the one
+    #    "log out other devices" primitive (pre-push hunt 2026-09-08, E4#3).
+    #    A stale cookie is cleared here so /login can't bounce it back to /.
     if request.session.get('logged_in'):
-        return True
+        if stored_hash and request.session.get('pw') == stored_hash[:29]:
+            return True
+        request.session.clear()
 
     # 2. Bearer token (named API token; for external integrations like the
     #    Valheim mod, scripts, etc.). Tokens minted via Settings > System >
@@ -91,10 +102,8 @@ async def require_login(request: Request):
 
     # 3. X-API-Key auth (internal/tool calls, e.g. meta.py) — bcrypt password hash
     api_key = request.headers.get('X-API-Key')
-    if api_key:
-        stored_hash = get_password_hash()
-        if stored_hash and secrets.compare_digest(api_key, stored_hash):
-            return True
+    if api_key and stored_hash and secrets.compare_digest(api_key, stored_hash):
+        return True
 
     # Not authenticated
     if request.url.path.startswith('/api/'):
@@ -110,11 +119,13 @@ async def require_login_ws(websocket) -> bool:
     same-origin fills that hole). Accepts then closes 4401 on failure so the
     client gets a readable close code instead of a raw handshake reject."""
     from urllib.parse import urlparse
-    from core.setup import is_setup_complete
+    from core.setup import get_password_hash
 
     ok = False
     try:
-        if is_setup_complete() and websocket.session.get('logged_in'):
+        stored = get_password_hash()
+        if stored and websocket.session.get('logged_in') \
+                and websocket.session.get('pw') == stored[:29]:
             origin = websocket.headers.get('origin', '')
             host = websocket.headers.get('host', '')
             ok = bool(host) and urlparse(origin).netloc == host
@@ -160,6 +171,7 @@ def check_endpoint_rate(request: Request, endpoint: str, max_calls: int,
       2. Session CSRF token if present (standard web flow).
       3. Client IP as last resort.
     """
+    _prune_stale_keys()   # was only run from /login — this dict never shrank (E4#6)
     session_id = identity or request.session.get('csrf_token') or get_client_ip(request)
     key = f"{session_id}:{endpoint}"
     now = time.time()

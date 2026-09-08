@@ -9,6 +9,7 @@ import * as ui from '../ui.js';
 import { snapScroll } from './dom-guard.js';
 
 export async function renderKnowledge(el, tabType, scope) {
+    if (!el) return;   // a held refresh draining after a palace↔classic engine swap (D1#3)
     const isAI = tabType === 'ai';
     const resp = await fetch(`/api/knowledge/tabs?scope=${encodeURIComponent(scope)}&type=${tabType}`);
     if (!resp.ok) { el.innerHTML = '<div class="mind-empty">Failed to load</div>'; return; }

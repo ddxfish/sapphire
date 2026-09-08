@@ -706,6 +706,19 @@ class PromptManager:
 
     def _merge_defaults_locked(self, backup_dir=None):
         try:
+            # Vault-aware (pre-push hunt 2026-09-08, E3#4): a stock name moved
+            # INTO the vault has an empty plaintext slot. Re-seeding the shipped
+            # default there shadowed the private copy (plaintext wins the
+            # overlay) — the persona silently reverted to stock. Sealed = blind:
+            # a locked vault can't be checked, so refuse rather than guess.
+            from core import prompt_vault
+            if prompt_vault.vault_exists() and not prompt_vault.vault_unlocked():
+                return {"error": "The prompt vault is locked — unlock it first so "
+                                 "vaulted stock names aren't re-seeded as plaintext"}
+            v_comps = prompt_vault.overlay_components()
+            v_presets = prompt_vault.overlay_presets()
+            v_monos = prompt_vault.overlay_monoliths()
+
             backup_path = self._backup_user_files(backup_dir)
             added = {"components": 0, "presets": 0, "monoliths": 0, "spice_categories": 0}
 
@@ -715,22 +728,24 @@ class PromptManager:
                 with open(core_pieces_path, 'r', encoding='utf-8') as f:
                     core_pieces = json.load(f)
 
-                # Merge components: add missing keys per type
+                # Merge components: add missing keys per type (vault names skipped)
                 core_components = core_pieces.get("components", {})
                 for comp_type, entries in core_components.items():
+                    vaulted = v_comps.get(comp_type, {})
                     if comp_type not in self._components:
-                        self._components[comp_type] = entries
-                        added["components"] += len(entries)
+                        fresh = {k: v for k, v in entries.items() if k not in vaulted}
+                        self._components[comp_type] = fresh
+                        added["components"] += len(fresh)
                     else:
                         for key, val in entries.items():
-                            if key not in self._components[comp_type]:
+                            if key not in self._components[comp_type] and key not in vaulted:
                                 self._components[comp_type][key] = val
                                 added["components"] += 1
 
                 # Merge scenario presets
                 core_presets = core_pieces.get("scenario_presets", {})
                 for name, preset in core_presets.items():
-                    if name not in self._scenario_presets:
+                    if name not in self._scenario_presets and name not in v_presets:
                         self._scenario_presets[name] = preset
                         added["presets"] += 1
 
@@ -746,7 +761,7 @@ class PromptManager:
                 for key, val in core_monoliths.items():
                     if key.startswith('_'):
                         continue
-                    if key not in self._monoliths:
+                    if key not in self._monoliths and key not in v_monos:
                         if isinstance(val, str):
                             self._monoliths[key] = {'content': val, 'privacy_required': False}
                         elif isinstance(val, dict):

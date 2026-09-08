@@ -21,7 +21,7 @@ import {
     populateScopeOptions,
     readScopeSettings
 } from '../shared/scope-dropdowns.js';
-import { deferWhileEditing } from '../shared/dom-guard.js';
+import { deferWhileEditing, editableFocused } from '../shared/dom-guard.js';
 
 let sidebarLoaded = false;
 let _saveInFlight = 0;
@@ -677,6 +677,16 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         const chatNow = chatSelect?.value;
         if (chatNow !== chatName) {
             console.log(`[SIDEBAR] Chat changed during load (${chatName} → ${chatNow}), discarding`);
+            return;
+        }
+        // softSidebar checked the hold at CALL time; the user may have moved
+        // into a sidebar field (or a save may be pending) during the seven
+        // fetches above. Don't paint under them — re-arm the soft refresh and
+        // let focusout / the save's kick catch up (D1#2, 2026-09-08). The
+        // chat-activated override paint carries the user's own switch: direct.
+        if (!useOverride && (editableFocused(container.querySelector('.chat-sidebar'))
+                             || !!saveTimer || _saveInFlight > 0)) {
+            softSidebar();
             return;
         }
 

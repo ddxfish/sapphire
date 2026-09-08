@@ -261,8 +261,11 @@ def _create_llm_worker():
             fm = system.llm_chat.function_manager
             te = system.llm_chat.tool_engine
 
+            # cancel_check: a dismissed agent stops at its next round instead
+            # of burning to max_rounds with the result voided after (E2#4).
             ctx = ExecutionContext(fm, te, task_settings,
-                                   session_manager=system.llm_chat.session_manager)
+                                   session_manager=system.llm_chat.session_manager,
+                                   cancel_check=self._cancelled.is_set)
             # Vault hunt H2 (2026-08-15): hooks fired on this agent thread
             # (pre/post_execute via function_manager) resolve privacy through
             # the stream-brain override — without one they read the

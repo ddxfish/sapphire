@@ -103,7 +103,9 @@ export default {
             <div class="login-password" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
                 <h4 style="margin:0 0 8px;font-size:var(--font-sm)">Login Password</h4>
                 <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 12px">
-                    The password for this web UI. You stay logged in after changing it.
+                    The password for this web UI. This tab stays logged in after changing it;
+                    every other device is logged out. Scripts sending the old hash as
+                    <code>X-API-Key</code> need the new one — API Keys below are unaffected.
                     Forgot it? The install guide covers the reset.
                 </p>
                 <form id="pw-form" autocomplete="off" style="display:flex;flex-direction:column;gap:8px;max-width:360px">
@@ -264,10 +266,10 @@ export default {
                 const body = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
                 pwForm.reset();
-                ui.showToast('Password changed — you stay logged in', 'success');
+                ui.showToast('Password changed — other devices are logged out', 'success');
             } catch (e) {
                 ui.showToast(`Change failed: ${e.message}`, 'error');
-                cur.value = '';
+                cur.value = nw.value = cf.value = '';   // no password lingers in the DOM (E4#10)
                 cur.focus();
             }
             btn.disabled = false;

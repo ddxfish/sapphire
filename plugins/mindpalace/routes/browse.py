@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 MAX_LIMIT = 500
 
 _MIND_DOMAIN = {'events': 'memory', 'self': 'memory',
-                'entities': 'people', 'knowledge': 'knowledge'}
+                'entities': 'people', 'knowledge': 'knowledge',
+                'goals': 'goal'}   # mind_events domain is singular 'goal' (matches palace_tools)
 
 
 def _pt():

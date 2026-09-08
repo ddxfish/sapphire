@@ -240,3 +240,115 @@ def test_cancel_route(client, mock_system):
     mock_system.continuity_scheduler.cancel_task.return_value = {"success": False, "error": "Task not found"}
     r = c.post('/api/continuity/tasks/zzz/cancel', headers={'X-CSRF-Token': csrf})
     assert r.status_code == 404
+
+
+# ─── pre-push hunt 2026-09-08 (E2#1 pre-arm gap, #3 status, #2 drop log, #5, #7)
+
+class _GatedExecutor:
+    """Blocks on its OWN gate (not the cancel Event) so a test can queue work
+    and click ⏹ while the run is provably still live."""
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.seen_event = None
+
+    def run(self, task, event_data=None, progress_callback=None,
+            response_callback=None, cancel_event=None):
+        self.seen_event = cancel_event
+        self.started.set()
+        self.release.wait(timeout=5)
+        return {"success": True, "responses": [], "errors": [],
+                "cancelled": cancel_event.is_set()}
+
+
+def _wait_idle(sched, task_id="d1"):
+    for _ in range(50):
+        if not sched._task_running.get(task_id):
+            return
+        time.sleep(0.05)
+
+
+def test_stop_in_the_pre_arm_gap_is_not_lost(tmp_path):
+    """⏹ lands after `_task_running` flipped True but BEFORE the worker got
+    past the concurrency semaphore. The Event used to be armed only at the
+    run site, so the stop set the PREVIOUS run's Event and the new one was
+    born unset — the run proceeded while the UI said Stopping… then Running…."""
+    sched = _make_scheduler(tmp_path, [_DAEMON])
+    ex = _BlockingExecutor()
+    sched.executor = ex
+    gate = threading.Semaphore(1)
+    gate.acquire()                        # the worker blocks here
+    sched._concurrency_sem = gate
+    assert sched.fire_event_task("d1", json.dumps({"text": "hi"})) == {"success": True, "queued": False}
+    assert not ex.started.is_set()
+    assert sched.cancel_task("d1")["was_running"] is True
+    assert sched.list_tasks()[0]["cancelling"] is True
+    gate.release()
+    assert ex.started.wait(2)
+    assert ex.seen_event.is_set(), "the Event the run received must be the one ⏹ set"
+    _wait_idle(sched)
+    assert sched._task_running.get("d1") is False
+    statuses = [a["status"] for a in sched._activity if a["task_id"] == "d1"]
+    assert "cancelled" in statuses
+
+
+def test_status_follows_the_executor_not_the_event(tmp_path):
+    """A ⏹ that lands after the run FINISHED must not relabel real work."""
+    sched = _make_scheduler(tmp_path, [_DAEMON])
+    class _Done:
+        def run(self, task, event_data=None, progress_callback=None,
+                response_callback=None, cancel_event=None):
+            cancel_event.set()            # the click arrives as we return
+            return {"success": True, "responses": ["r"], "errors": [], "cancelled": False}
+    sched.executor = _Done()
+    sched.run_task_now("d1")
+    statuses = [a["status"] for a in sched._activity if a["task_id"] == "d1"]
+    assert "complete" in statuses and "cancelled" not in statuses
+
+
+def test_fires_queued_after_the_stop_are_dropped_with_a_count_only(tmp_path, caplog):
+    """Krem's ruling: drop them, log it — never the event content."""
+    sched = _make_scheduler(tmp_path, [_DAEMON])
+    ex = _GatedExecutor()
+    sched.executor = ex
+    sched.fire_event_task("d1", json.dumps({"text": "first"}))
+    assert ex.started.wait(2)
+    sched.cancel_task("d1")
+    assert sched.fire_event_task("d1", json.dumps({"text": "SECRET-PAYLOAD"}))["queued"] is True
+    with caplog.at_level("WARNING", logger="core.continuity.scheduler"):
+        ex.release.set()
+        _wait_idle(sched)
+    assert "dropping 1 queued event" in caplog.text
+    assert "SECRET-PAYLOAD" not in caplog.text
+    assert sched._task_pending["d1"] == []
+
+
+def test_stop_on_an_idle_task_does_not_arm_the_next_run_as_cancelling(tmp_path):
+    sched = _make_scheduler(tmp_path, [_DAEMON])
+    sched.executor.run.return_value = {"success": True, "responses": [], "errors": []}
+    sched.run_task_now("d1")              # completes synchronously
+    assert sched.cancel_task("d1") == {"success": True, "was_running": False}
+    assert not sched._cancel_events()["d1"].is_set(), "a finished run's Event stays unset"
+    assert sched.list_tasks()[0]["cancelling"] is False
+
+
+def test_cancel_requested_publishes_no_bus_event_and_second_click_adds_no_row(tmp_path, monkeypatch):
+    import core.event_bus as eb
+    seen = []
+    monkeypatch.setattr(eb, 'publish', lambda et, data=None, **kw: seen.append((et, data)))
+    sched = _make_scheduler(tmp_path, [_DAEMON])
+    ex = _GatedExecutor()
+    sched.executor = ex
+    sched.fire_event_task("d1", json.dumps({"text": "hi"}))
+    assert ex.started.wait(2)
+    seen.clear()
+    sched.cancel_task("d1")
+    sched.cancel_task("d1")
+    assert not any(d and d.get("status") == "cancel_requested" for _, d in seen), \
+        "the run is still live — nothing for the body LED / avatar rail to react to"
+    rows = [a for a in sched._activity if a["task_id"] == "d1" and a["status"] == "cancel_requested"]
+    assert len(rows) == 1
+    ex.release.set()
+    _wait_idle(sched)
+    assert any(d and d.get("status") == "cancelled" and et == eb.Events.CONTINUITY_TASK_COMPLETE
+               for et, d in seen)

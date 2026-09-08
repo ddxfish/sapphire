@@ -21,7 +21,10 @@ import {
     setSendLabel
 } from '../core/state.js';
 
-export async function handleSend() {
+// refocus=false: a dictated turn (triggerSendWithText) — refocusing the
+// composer after it pops the phone keyboard on every voice turn (D2#4).
+// Wired as a click listener too: an Event has no `refocus` → default true.
+export async function handleSend({ refocus = true } = {}) {
     // One turn per chat (2026-08-29): Send is hidden behind Stop while a
     // turn is live, but Enter never checked. Silent — Stop showing IS the
     // message; the text stays in the box. Same guard as triggerSendWithText
@@ -191,10 +194,11 @@ export async function handleSend() {
         sendBtn.disabled = false;
         setSendLabel('send');
         // Not unconditional: the user may have moved into a sidebar textarea
-        // while she replied — yanking the cursor back (and popping the phone
-        // keyboard on every dictated turn) was the seeded case of the
-        // DOM-refresh hunt, 2026-09-08.
-        focusUnlessEditing(input);
+        // while she replied — yanking the cursor back was the seeded case of
+        // the DOM-refresh hunt, 2026-09-08. Dictated turns skip it entirely
+        // (nothing editable holds focus after a mic tap, so the guard alone
+        // couldn't stop the keyboard pop).
+        if (refocus) focusUnlessEditing(input);
         setProc(false);
     }
 }
@@ -417,7 +421,7 @@ export async function triggerSendWithText(text) {
     const { input } = getElements();
     input.value = text;
     input.dispatchEvent(new Event('input'));
-    await handleSend();
+    await handleSend({ refocus: false });
     return true;
 }
 

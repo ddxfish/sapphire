@@ -800,7 +800,11 @@ function initEventBus() {
         // settles and this handler adopts it then).
         const name = data?.name;
         const sel = document.getElementById('chat-select');
-        if (name && sel && !hasPendingActivate()) {
+        // `sel.value !== name`: a same-chat re-activate from another client
+        // (the server publishes on the no-op too) used to walk straight into
+        // the direct chat-activated sidebar paint and wipe a Custom Context
+        // box mid-typing — the 8th door around softSidebar (D2#3, 2026-09-08).
+        if (name && sel && !hasPendingActivate() && sel.value !== name) {
             if (![...sel.options].some(o => o.value === name)) {
                 const opt = document.createElement('option');
                 opt.value = name;
@@ -812,6 +816,7 @@ function initEventBus() {
             // Transcript + scene never refreshed on remote switches before —
             // the old chat stayed on screen until the next message event.
             await refresh(false);
+            ui.forceScrollToBottom();   // a different chat: land at its bottom, not the old chat's keepTop (D3-B3)
             await updateScene();
         }
         populateChatDropdown();

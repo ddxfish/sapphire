@@ -281,19 +281,23 @@ const processSSEData = (data, handlers) => {
 // ---------------------------------------------------------------------------
 const _readTurn = async (reader, handlers, onTurnDone, onError) => {
     const decoder = new TextDecoder();
-    let buffer = '', gotContent = false, turnDone = false;
+    let buffer = '', gotContent = false, turnDone = false, tailId = null;
     const finishTurn = (data = {}) => {
         if (turnDone) return;
         turnDone = true;
         onTurnDone(data.ephemeral || false, { ttsStreamed: !!data.tts_streamed });
     };
+    // The belts name THIS turn's pump: an id-less end flagged a NEWER
+    // stream's queue as ended (mic flicker, false "couldn't play" toast) when
+    // a stale tail closed after the next turn began (E1#6).
+    const endTail = () => dispatch('tts_stream_end', tailId ? { stream_id: tailId } : {});
     handlers.onLlmDone = finishTurn;
     handlers.onDone = (_ephemeral, data) => finishTurn(data);
     try {
         while (true) {
             const { done, value } = await reader.read();
             if (done) {
-                if (turnDone) { dispatch('tts_stream_end', {}); return; }   // tail closed without `done`
+                if (turnDone) { endTail(); return; }   // tail closed without `done`
                 return gotContent ? finishTurn() : onError(new Error("No content"));
             }
 
@@ -320,10 +324,23 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
                     if (turnDone) {
                         // Tail fault: the turn is complete, only audio was lost.
                         dispatch('chat_notice', { message: `TTS tail failed: ${msg}`, severity: 'warning' });
-                        dispatch('tts_stream_end', {});
+                        endTail();
                         return;
                     }
                     return onError(new Error(msg));
+                }
+                if (data.type === 'tts_stream_start') tailId = data.stream_id || tailId;
+                // A cancel that wasn't THIS tab's Stop (second-tab Stop, mic ⏹ in
+                // conversation mode, a barge-in): the route ends the body with a
+                // bare {cancelled} and no `done`. Before the turn settled that's
+                // a cancelled turn — the same path as our own Stop, NOT the
+                // success lane whose whole-blob fallback re-spoke the cut reply
+                // from the top (E1#1, 2026-09-08). After llm_done: audio-only cut.
+                if (data.cancelled && !data.type) {
+                    if (turnDone) { endTail(); return; }
+                    turnDone = true;
+                    endTail();
+                    return onError(new Error('Cancelled'));
                 }
                 const result = processSSEData(data, handlers);
                 if (result.gotContent) gotContent = true;
@@ -331,7 +348,7 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
             }
         }
     } catch (e) {
-        if (turnDone) { dispatch('tts_stream_end', {}); return; }   // dropped mid-tail: audio only
+        if (turnDone) { endTail(); return; }   // dropped mid-tail: audio only
         onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
     } finally {
         try { await reader.cancel(); } catch {}

@@ -97,7 +97,10 @@ class ApiTokensManager:
         """Atomic write. Same pattern as credentials_manager._save()."""
         with self._lock:
             try:
-                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                # The file's OWN parent, not the import-time CONFIG_DIR: a
+                # test that patches API_TOKENS_FILE alone must not mkdir
+                # the real config dir (order-dependent PermissionError).
+                API_TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
                 tmp_path = API_TOKENS_FILE.with_suffix('.tmp')
                 payload = {"version": 1, "tokens": self._tokens}
                 with open(tmp_path, 'w', encoding='utf-8') as f:

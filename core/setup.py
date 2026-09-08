@@ -107,20 +107,36 @@ def save_password_hash(password: str) -> str | None:
     if not password or len(password) < 10:
         logger.error("Password too short (minimum 10 characters)")
         return None
-    
+    if len(password.encode('utf-8')) > 72:
+        # bcrypt 5.x raises past 72 bytes where 4.x silently truncated —
+        # refuse up front so both wheels behave alike (pre-push hunt 2026-09-08).
+        logger.error("Password too long (bcrypt limit is 72 bytes)")
+        return None
+
     try:
         if not ensure_config_directory():
             return None
-        
+
         # Generate bcrypt hash
         hash_bytes = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         hash_str = hash_bytes.decode('utf-8')
-        
-        # Write to file with restrictive permissions (Unix only)
-        SECRET_KEY_FILE.write_text(hash_str, encoding='utf-8')
+
+        # Atomic write: tmp + fsync + mode BEFORE it becomes the live file +
+        # replace (same shape as api_tokens._save). The old in-place
+        # write_text left a ZERO-BYTE file on a crash mid-write — and an
+        # empty hash doesn't lock the owner out, it reopens /setup to
+        # whoever visits first (pre-push hunt 2026-09-08, E4#1).
+        from core.fs_utils import replace_with_retry
+        from core.settings_manager import _fsync_file, _fsync_dir
+        tmp = SECRET_KEY_FILE.with_suffix('.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(hash_str)
+            _fsync_file(f)
         if sys.platform != 'win32':
-            os.chmod(SECRET_KEY_FILE, 0o600)
-        
+            os.chmod(tmp, 0o600)
+        replace_with_retry(tmp, SECRET_KEY_FILE)
+        _fsync_dir(SECRET_KEY_FILE.parent)
+
         logger.info(f"Password hash saved to {SECRET_KEY_FILE}")
         return hash_str
     except Exception as e:

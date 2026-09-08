@@ -725,6 +725,10 @@ async def login_submit(request: Request):
         # before we stamp logged_in. 2026-04-22 M5 fix.
         request.session.clear()
         request.session['logged_in'] = True
+        # Salt stamp: require_login accepts this cookie only while the live
+        # hash still carries the same salt (password change / reset evicts
+        # every other session). 2026-09-08.
+        request.session['pw'] = password_hash[:29]
         request.session['username'] = getattr(config, 'AUTH_USERNAME', 'user')
         logger.info(f"Successful login from {client_ip}")
         return RedirectResponse(url="/", status_code=302)

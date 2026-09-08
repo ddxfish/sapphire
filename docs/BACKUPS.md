@@ -74,7 +74,7 @@ Click **Backup Now** in Settings > Backup, or via API:
 
 ```bash
 curl -k -X POST https://localhost:8073/api/backup/create \
-  -H "X-API-Key: $(cat ~/.config/sapphire/secret_key)" \
+  -H "Authorization: Bearer $SAPPHIRE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"type": "manual"}'
 ```

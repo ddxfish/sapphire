@@ -1218,6 +1218,7 @@ def drain_stop():
 
 def _drain_loop(scope, what, kind):
     global _drain_active, _drain_stop
+    _detach_origin()
     _drain_active = True
     total = batches = 0
     stopped = False
@@ -1437,11 +1438,24 @@ def _ledger_count(stats, action):
 
 # ─── Workers (one per pass kind) ─────────────────────────────────────────────
 
+def _detach_origin():
+    """A pass is the librarian's action, not the Admin tab's: clear the
+    request origin so every tab (the one that clicked Run included) repaints
+    on the pass's mind_changed events. Threads don't inherit contextvars on
+    stock CPython, but free-threaded 3.14 builds do (D4-B2, 2026-09-08)."""
+    try:
+        from core.request_context import session_origin
+        session_origin.set(None)
+    except Exception:
+        pass
+
+
 def _worker(scope, what, kind='sort'):
     """Dispatch — and the latch's LAST line of defense: anything that
     raises outside a worker's own try (a failed lazy import, a reload
     mid-run) must still release the one-groundskeeper slot, or every
     future pass refuses until process restart."""
+    _detach_origin()
     try:
         if kind == 'dates':
             return _worker_dates(scope)

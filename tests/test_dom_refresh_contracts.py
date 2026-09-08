@@ -115,7 +115,8 @@ def test_prompt_monolith_preview_never_writes_over_a_live_edit():
 
 def test_persona_rename_repaint_is_deferred_and_roster_scroll_carried():
     src = _src("views/personas.js")
-    assert "const softRender = deferWhileEditing(() => container, () => render());" in src
+    assert ("const softRender = deferWhileEditing(() => container, () => render(),\n"
+            "    { busy: () => !!saveTimer || _saveInFlight > 0 });") in src
     rename = _between(src, "if (data.name && data.name !== selectedName) {", "} else {")
     assert "softRender();" in rename and "render();" not in rename.replace("softRender();", "")
     assert "snapScroll(container, ['.panel-list-items', '.view-body'])" in src
@@ -171,13 +172,104 @@ def test_store_search_capture_runs_before_the_loading_wipe():
     rl = _between(src, "async function renderList() {", "// Two parallel fetches")
     assert rl.index("_focusStash = snapFocus(main)") < rl.index("store-loading")
     rm = _between(src, "function renderMain(html) {", "\n}\n")
-    assert "const restore = _focusStash || snapFocus(m);" in rm and "restore();" in rm
+    assert "const restore = (editableFocused(m) ? snapFocus(m) : _focusStash) || (() => {});" in rm
+    assert "restore();" in rm
     assert "oldSearch" not in src, "the dead inline capture came back"
+    # pre-push hunt D2#5: the box survives the Loading wipe while the user types,
+    # and repaints with the LIVE text (keystrokes typed during the RTT)
+    assert "if (!editableFocused(main)) main.innerHTML = '<div class=\"store-loading\">Loading...</div>';" in rl
+    assert "const liveQ = main.querySelector('.store-search')?.value ?? state.q;" in src
+    assert 'value="${_esc(liveQ)}"' in src
 
 
 def test_trigger_editor_keeps_partial_rows_and_never_rebuilds_under_the_cursor():
     src = _src("shared/trigger-editor/trigger-event.js")
     assert "_readFilterRows(modal, '#ed-filter-rows', { partial: true })" in src
     assert "if (!editableFocused(rows)) {" in src
-    assert "else if (partial && (key || val)) filter[key || ''] = val || '';" in src
+    # pre-push hunt D2#8: partial rows are ORDERED pairs so two keyless rows
+    # don't collapse onto one '' key; the save path still gets an object
+    assert "else if (partial && (key || val)) rows.push([key || '', val || '']);" in src
+    assert "return partial ? rows : filter;" in src
+    assert "Array.isArray(filter) ? filter.slice() : Object.entries(filter || {})" in src
     assert re.search(r"if \(!editableFocused\(modal\.querySelector\('#ed-task-fields'\)\)\) _renderTaskFields\(modal\);", src)
+
+
+# ── pre-push scout round, fix wave (2026-09-08; record tmp/scout-round-20260908-prepush.md) ──
+
+def test_image_loads_follow_only_while_sticky():
+    """D3-B1/B2 (found by two scouts): image onload FORCED the bottom and re-armed
+    sticky through two owners the sticky-v2 work never reached."""
+    assert "forceScrollToBottom" not in _src("core/events.js")
+    assert "ui.followIfSticky()" in _src("core/events.js")
+    assert "export const followIfSticky = () => scrollToBottomIfSticky();" in _src("ui.js")
+    imgs = _src("ui-images.js")
+    assert "scheduleScrollAfterImages(scrollCallback, true)" not in imgs
+    assert imgs.count("scheduleScrollAfterImages(scrollCallback);") == 2
+
+
+def test_scroll_intent_guards_short_chats_and_unreachable_clamps():
+    ui = _src("ui.js")
+    assert "const scrollable = () => el.scrollHeight > el.clientHeight + 1;" in ui
+    assert "if (e.deltaY < 0 && scrollable()) unstick();" in ui
+    assert "y > touchY + 4 && scrollable()) unstick();" in ui
+    assert "if (top < _prevTop - 1 && h >= _prevHeight && _prevTop <= max + 1) unstick();" in ui
+
+
+def test_remote_chat_switch_gates_same_chat_and_lands_at_the_bottom():
+    m = _src("main.js")
+    h = _between(m, "eventBus.Events.CHAT_SWITCHED", "eventBus.Events.CHAT_CREATED")
+    assert "sel.value !== name" in h, "same-chat re-activate is the 8th sidebar door (D2#3)"
+    assert h.index("await refresh(false);") < h.index("ui.forceScrollToBottom();") < h.index("await updateScene();")
+
+
+def test_persona_soft_render_holds_while_a_save_is_pending():
+    p = _src("views/personas.js")
+    assert "{ busy: () => !!saveTimer || _saveInFlight > 0 }" in p
+    assert "saveTimer = null;" in p, "the hold reads saveTimer — it must be nulled at fire or it holds forever"
+    assert "_saveInFlight++;" in p and "_saveInFlight--;" in p and "softRender.kick();" in p
+
+
+def test_provider_tabs_pass_the_module_and_repaint_only_on_change():
+    for tab in ("stt", "tts", "embedding"):
+        s = _src(f"views/settings-tabs/{tab}.js")
+        assert "attachProviderListeners(cfg, ctx, el, this);" in s, tab
+        assert "const painted = Object.keys((_mergedConfig || tabConfig).providers).join();" in s, tab
+        assert "Object.keys(_mergedConfig.providers).join() !== painted" in s, tab
+
+
+def test_dictated_turns_do_not_refocus_the_composer():
+    s = _src("handlers/send-handlers.js")
+    assert "export async function handleSend({ refocus = true } = {})" in s
+    assert "if (refocus) focusUnlessEditing(input);" in s
+    assert "await handleSend({ refocus: false });" in s
+
+
+def test_sidebar_load_rearms_the_hold_after_its_fetches():
+    c = _src("views/chat.js")
+    ls = _between(c, "async function loadSidebar(", "const settings = settingsResp.status")
+    assert "if (!useOverride && (editableFocused(container.querySelector('.chat-sidebar'))" in ls
+    assert "softSidebar();\n            return;" in ls
+
+
+def test_sse_reader_treats_a_foreign_cancel_as_cancelled():
+    a = _src("api.js")
+    rt = _between(a, "const _readTurn = async", "const _streamTurn = async")
+    assert "if (data.cancelled && !data.type) {" in rt
+    assert "return onError(new Error('Cancelled'));" in rt
+    assert "if (data.type === 'tts_stream_start') tailId = data.stream_id || tailId;" in rt
+    assert "dispatch('tts_stream_end', {})" not in rt, "belts must name the tail's stream_id (E1#6)"
+
+
+def test_modal_cannot_close_while_an_async_save_runs():
+    m = _src("shared/modal.js")
+    assert "if (busy) return;" in m and "busy = true;" in m and "busy = false;" in m
+
+
+def test_snapfocus_restores_without_scrolling():
+    assert "el.focus({ preventScroll: true });" in _src("shared/dom-guard.js")
+
+
+def test_prompt_preview_binds_the_name_across_its_await():
+    p = _src("views/prompts.js")
+    rp = _between(p, "async function refreshPreview()", "const previewEl")
+    assert "const name = selected;" in rp and "if (fresh && name === selected) {" in rp

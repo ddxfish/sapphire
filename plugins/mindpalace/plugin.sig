@@ -5,7 +5,7 @@
     "README.md": "sha256:5abb98016f50b66cfdfb5610bdd8b4e9059b7ce7b6ed62a39b1d979ee9821728",
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
     "plugin.json": "sha256:7ebfac5c9c5da251ab4c1bd8902d69b4e3e9903b6a7ced9132342979e26a0c99",
-    "routes/browse.py": "sha256:f4645320d5a5f38f7d1fd00be9beb9b0397fd290df3d9ca8be72ec4a09fa5caa",
+    "routes/browse.py": "sha256:524c98e6c6350c8695ec513e7a8e0a21f077b73954fde8e7b4569baeaef908f3",
     "routes/goals_routes.py": "sha256:5bd7a69960707327c0cb17b92238e8547ba95f338ef2224d2e0bd7580afd64c0",
     "routes/library_routes.py": "sha256:7003b18c8cb67311e32004452a37f78e4e368cdda00158e08a94aa984b0ba107",
     "routes/scopes.py": "sha256:199dea0d1e174ee5be365b83e02fd53ba40b406662f37a0078e1300a7a0067d4",
@@ -55,7 +55,7 @@
     "tools/importance_report.py": "sha256:4443411245e56a0d6420af1748331736610809a2dd2c65beb868a37fa46c703d",
     "tools/layer_api.py": "sha256:4e54a5613540f13f60cd400ff33d8d9b36aa5b7f07432b5a54665887191ef855",
     "tools/ledger.py": "sha256:b375a4ccbc35055c70711da19a78d36e60bd49be3cd890b959579bf5fac17f30",
-    "tools/librarian.py": "sha256:397b718010264d42e5222e0d322710e6de4f247b39e5237f1ce1100c4c563386",
+    "tools/librarian.py": "sha256:db010f6636498632df047229815457eddbbb1fe328e2bd85de7a867887f03dcc",
     "tools/librarian_tools.py": "sha256:791b5c535c586807f4acfa95bfa5883c8e862644c22001ff51256858db076a5f",
     "tools/library.py": "sha256:21ddf3f16d085ed79d973abde8cc1a2add0b41b0552b2aad2e0747e9d52ef89c",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
@@ -68,5 +68,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "yYrJtlatD+maW9jwAZgIzqUEWwO7ZWlZ5JzDWxoBdT2eJRjwh+BG8JeHxt/YfBF7EwqN5QpFhalXCJ9CehRKCA=="
+  "signature": "VdgLZO7MDp7zGYSfqP5vzDLbEN+JKG0iXXJmOLZ1JF/fm5UeW+PmqK4BBDcXjPyPGNA51+xyT+ofeh8OfUTlCg=="
 }

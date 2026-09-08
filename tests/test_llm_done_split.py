@@ -263,3 +263,40 @@ def test_stream_route_passes_llm_done_before_done(client, mock_system):
     assert 0 <= i_ld < i_end < i_done
     assert '"tts_streamed": true' in r.text
     assert '"type": "final"' not in r.text
+
+
+# ─── pre-push hunt 2026-09-08 (E1#2 ephemeral rides llm_done, E1#4 phone tails)
+
+def test_llm_done_carries_ephemeral():
+    """The browser settles the turn at llm_done — a flag that only rode the
+    later `done` was never read, so the ephemeral branch (no swap, no TTS)
+    was dead and a pre_chat skip_llm reply got the PREVIOUS turn painted
+    and spoken over it."""
+    s = StreamingChat.__new__(StreamingChat)
+    s.llm_done = False
+    s._typing_ended = True            # the publish leg is pinned elsewhere
+    s.target_chat = None
+    s.ephemeral = True
+    pump = MagicMock()
+    pump._stream_started = False
+    assert s._emit_llm_done(pump) == {"type": "llm_done", "ephemeral": True, "tts_streamed": False}
+    s2 = StreamingChat.__new__(StreamingChat)
+    s2.llm_done = False
+    s2._typing_ended = True
+    s2.target_chat = None
+    assert s2._emit_llm_done(pump)["ephemeral"] is False
+
+
+def test_a_web_send_never_mutes_a_phone_tail_on_the_viewed_chat(llm):
+    """The caller's voice drains on the chat the operator happens to be
+    viewing: the exclusive gate admits the web turn past that tail but must
+    not stop_tts() a stream with an explicit target_chat (the stop/cancel
+    routes already exclude external chats — the gate didn't)."""
+    llm.session_manager.get_active_chat_name.return_value = 'call-chat'
+    phone, _, _ = llm.begin_stream(chat_name='call-chat')     # driver lane: explicit target
+    phone.llm_done = True
+    phone.tts_pump = MagicMock()
+    phone.tts_pump._skip_turn = False
+    llm.begin_stream(exclusive=True)                          # operator types into the call's chat
+    assert phone.tts_stopped is False
+    assert phone.tts_pump._skip_turn is False

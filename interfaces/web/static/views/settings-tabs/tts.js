@@ -75,13 +75,16 @@ export default {
     async attachListeners(ctx, el) {
         // Always re-fetch plugin providers (plugins may have been toggled)
         {
+            const painted = Object.keys((_mergedConfig || tabConfig).providers).join();
             _mergedConfig = await mergeRegistryProviders(tabConfig);
-            // Re-render dropdown if new providers were added — unless the user
+            // Re-render dropdown only if the merge CHANGED the provider set the
+            // first paint showed (a dropdown-change re-entry repainted an
+            // identical set one RTT later, D2#7) — and never when the user
             // switched tabs during the await (el is the persistent
             // #settings-content) or is typing in the first paint
             // (DOM-refresh hunt 2026-09-08).
             if (ctx.isTabActive?.(this.id) === false) return;
-            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length
+            if (Object.keys(_mergedConfig.providers).join() !== painted
                 && !editableFocused(el)) {
                 const body = el.querySelector('.settings-tab-body') || el;
                 body.innerHTML = this.render(ctx);

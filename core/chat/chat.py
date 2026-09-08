@@ -299,7 +299,10 @@ class LLMChat:
                     logger.info(f"begin_stream: refused — chat '{chat_name}' "
                                 f"has {len(live)} live stream(s)")
                     raise ChatBusy(chat_name)
-                tails = [s for s in mine if s.llm_done and not s.cancel_flag]
+                # Web tails only: a phone/driver stream (explicit target_chat)
+                # draining on the chat the operator happens to be viewing is
+                # the CALLER's voice — never muted by a web send (E1#4).
+                tails = [s for s in mine if s.llm_done and not s.cancel_flag and not s.target_chat]
             self._streams_by_id[sid] = stream
             self._streams_by_chat.setdefault(chat_name, set()).add(sid)
         stream.active_chat_name = chat_name

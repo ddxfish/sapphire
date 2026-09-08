@@ -98,7 +98,7 @@ export function formatTime(isoString) {
 
 export function getHeartbeatState(hb, timeline) {
     if (!hb.enabled) return { label: 'Flatlined', cls: 'flatlined' };
-    if (hb.running) return { label: 'Ba-bump', cls: 'babump' };
+    if (hb.running) return { label: hb.cancelling ? 'Stopping…' : 'Ba-bump', cls: 'babump' };
     if (!hb.last_run) return { label: 'Warming up', cls: 'warmup' };
     const recent = (timeline.past || []).filter(a => a.task_id === hb.id);
     if (recent.length > 0 && recent[0].status === 'error') return { label: 'Irregular', cls: 'irregular' };

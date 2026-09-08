@@ -149,3 +149,39 @@ def test_big_batch_completes_with_one_event(world, monkeypatch):
     assert took < 60, f"batch took {took:.1f}s"
     assert all(pv.vault_has_prompt(f'p{i}') for i in range(120))
     assert _events(world).count(('prompt_changed', 'vault_changed')) == 1
+
+
+# ─── pre-push hunt 2026-09-08 (E3#1 Move-In ghost, E3#2 _mutate rollback, E3#9)
+
+def test_move_in_restores_memory_when_the_plaintext_save_fails(world, monkeypatch):
+    """Deleting from memory and THEN failing the plaintext save left a ghost
+    move: 🗝 in the UI, plaintext still on disk, restart reverted it. The
+    OUT movers already restored on failure; the IN twins now do too — for a
+    False return AND for a saver that raises (disk full)."""
+    monkeypatch.setattr(pm, 'save_monoliths', lambda *a, **k: False)
+    ok, msg = prompt_crud.move_prompt_to_vault('mono-a', publish=False)
+    assert ok is False and 'shadows' in msg
+    assert 'mono-a' in pm._monoliths, "memory must agree with disk after a refused save"
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(pm, 'save_components', boom)
+    ok, _ = prompt_crud.move_piece_to_vault('extras', 'quiet', publish=False)
+    assert ok is False
+    assert pm._components['extras']['quiet'] == 'Be quiet.'
+
+
+def test_vault_mutate_rolls_back_when_the_save_is_refused(world, monkeypatch):
+    """_mutate edited _data in place before saving: a refused save left the
+    edit LIVE in memory until the idle lock dropped it."""
+    monkeypatch.setattr(pv, '_save_locked', lambda: False)
+    assert pv.set_monolith('ghost', 'never persisted') == (False, 'save_failed')
+    assert 'ghost' not in pv.overlay_monoliths(), "a refused edit must not stay live in memory"
+    assert pv.trash_purge() == (True, 0)
+
+
+def test_locked_vault_refusal_is_the_batch_stop_string(world, monkeypatch):
+    monkeypatch.setattr(pv, 'set_monolith', lambda *a, **k: (False, 'locked'))
+    ok, msg = prompt_crud.move_prompt_to_vault('mono-a', publish=False)
+    assert ok is False and msg == prompt_crud.VAULT_LOCKED_MSG
+    assert 'mono-a' in pm._monoliths

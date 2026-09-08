@@ -22,7 +22,7 @@ import {
     installPersonaFromStore,
 } from '../shared/store-api.js';
 import { renderMarkdown } from '../shared/markdown.js';
-import { snapFocus } from '../shared/dom-guard.js';
+import { snapFocus, editableFocused } from '../shared/dom-guard.js';
 import { isSafeHref } from '../shared/url-safety.js';
 import { refreshInitData } from '../shared/init-data.js';
 import { confirmPersonaImport } from '../shared/persona-import-confirm.js';
@@ -321,7 +321,10 @@ let _focusStash = null;
 function renderMain(html) {
     const m = container.querySelector('.store-main');
     if (!m) return;
-    const restore = _focusStash || snapFocus(m);
+    // If the search box survived the load (user still typing — see the wipe
+    // guard in renderList), a FRESH snapshot carries the current caret; the
+    // stash is for a box the Loading wipe destroyed.
+    const restore = (editableFocused(m) ? snapFocus(m) : _focusStash) || (() => {});
     _focusStash = null;
     m.innerHTML = html;
     restore();
@@ -354,7 +357,10 @@ async function renderList() {
     const main = container.querySelector('.store-main');
     if (!main) return;
     _focusStash = snapFocus(main);   // before the wipe; renderMain restores
-    main.innerHTML = '<div class="store-loading">Loading...</div>';
+    // Keep the box while the user is typing through the debounce + RTT: the
+    // wipe left keystrokes with nowhere to land (D2#5, 2026-09-08). The old
+    // grid stays a beat longer instead of a spinner — cheap trade.
+    if (!editableFocused(main)) main.innerHTML = '<div class="store-loading">Loading...</div>';
 
     // Two parallel fetches when on landing tab + first page: featured strip + grid.
     // For category/search/page>1 pages, just the grid.
@@ -408,6 +414,9 @@ async function renderList() {
         </section>`;
     }
 
+    // The box repaints with what the user has typed SINCE the query fired
+    // (the results are for state.q; the pending debounce re-queries liveQ).
+    const liveQ = main.querySelector('.store-search')?.value ?? state.q;
     const heading = state.q
         ? `Search: "${_esc(state.q)}" — ${total} result${total === 1 ? '' : 's'}`
         : state.category
@@ -419,7 +428,7 @@ async function renderList() {
         <div class="store-list-header">
             <h2 class="store-section-title">${heading}</h2>
             <div class="store-list-controls">
-                <input type="search" class="store-search" placeholder="${_esc(store().searchPlaceholder)}" value="${_esc(state.q)}">
+                <input type="search" class="store-search" placeholder="${_esc(store().searchPlaceholder)}" value="${_esc(liveQ)}">
                 <select class="store-sort" ${state.q ? 'disabled' : ''}>
                     <option value="newest" ${state.sort === 'newest' ? 'selected' : ''}>Newest</option>
                     <option value="updated" ${state.sort === 'updated' ? 'selected' : ''}>Recently updated</option>

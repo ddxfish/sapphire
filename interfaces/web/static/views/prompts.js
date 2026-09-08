@@ -1485,8 +1485,12 @@ function debouncedSaveComponent(type, key, value) {
 async function refreshPreview() {
     if (!selected) return;
     try {
-        const fresh = await getPrompt(selected);
-        if (fresh) {
+        // Bind the name: a prompt switch within one RTT used to land the OLD
+        // prompt's content in the NEW selectedData, and the next debounced
+        // save persisted it under the new name (E3#5, 2026-09-08).
+        const name = selected;
+        const fresh = await getPrompt(name);
+        if (fresh && name === selected) {
             // Backend /api/prompts/{name} returns the (re-)assembled text in
             // `.content` — there's no `.compiled` field. Previously this wrote
             // to selectedData.compiled which was always undefined, and

@@ -266,11 +266,16 @@ class ContinuityScheduler:
         self._activity = self._activity[-50:]  # Trim
         self._save_activity()
         
-        # Publish event
+        # Publish event. `cancel_requested` publishes nothing: the run is
+        # still live, and the old fall-through to COMPLETE flipped the body
+        # LED idle / cleared the avatar rail at the ⏹ click (E2#5).
+        if status == "cancel_requested":
+            return
         from core.event_bus import publish, Events
         event_map = {
             "started": Events.CONTINUITY_TASK_STARTING,
             "complete": Events.CONTINUITY_TASK_COMPLETE,
+            "cancelled": Events.CONTINUITY_TASK_COMPLETE,
             "skipped": Events.CONTINUITY_TASK_SKIPPED,
             "error": Events.CONTINUITY_TASK_ERROR,
         }
@@ -564,11 +569,22 @@ class ContinuityScheduler:
         return d
 
     def _arm_cancel(self, task_id: str) -> threading.Event:
-        """Fresh cancel Event for the run about to start. Called under no
-        lock — Event creation is cheap and the dict write is atomic."""
+        """Fresh cancel Event for the run about to start. Armed in the SAME
+        lock block that flips `_task_running` True (pre-push hunt
+        2026-09-08, E2#1): arming later — after the concurrency semaphore
+        wait — left a gap where ⏹ set the PREVIOUS run's Event and the new
+        one was born unset (stop silently lost, UI said Stopping… then
+        Running…). The run sites read the armed Event back (`_run_cancel`)
+        instead of re-arming, so one Event spans a run's whole lifetime
+        including drained queue iterations."""
         ev = threading.Event()
         self._cancel_events()[task_id] = ev
         return ev
+
+    def _run_cancel(self, task_id: str) -> threading.Event:
+        """The Event armed with `_task_running` — or a fresh one for a
+        caller that set the flag without arming (test doubles)."""
+        return self._cancel_events().get(task_id) or self._arm_cancel(task_id)
 
     def cancel_task(self, task_id: str) -> Dict[str, Any]:
         """Stop a task's in-flight run and drop anything queued behind it.
@@ -581,10 +597,14 @@ class ContinuityScheduler:
             running = self._task_running.get(task_id, False)
             self._task_pending[task_id] = []
             ev = self._cancel_events().get(task_id)
-            if ev is not None:
+            # Only a RUNNING task's Event: setting a finished run's Event
+            # made the next run paint "Stopping…" for its whole pre-arm
+            # window. Second ⏹ on the same run = no second ledger row.
+            already = ev is not None and ev.is_set()
+            if ev is not None and running:
                 ev.set()
             name = task.get("name", "Unnamed")
-        if running:
+        if running and not already:
             logger.info(f"[Continuity] Cancel requested: {name}")
             self._log_activity(task_id, name, "cancel_requested")
         return {"success": True, "was_running": running}
@@ -670,7 +690,7 @@ class ContinuityScheduler:
                     break
 
             self._log_activity(task_id, task_name, "started")
-            ev = self._arm_cancel(task_id)
+            ev = self._run_cancel(task_id)
             try:
                 result = self.executor.run(
                     task,
@@ -686,7 +706,9 @@ class ContinuityScheduler:
                         self._save_tasks()
                     self._task_progress.pop(task_id, None)
 
-                status = "cancelled" if ev.is_set() else ("complete" if result.get("success") else "error")
+                # The executor's own verdict, not the Event: a ⏹ landing
+                # after the run finished must not relabel real work.
+                status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
 
                 self._log_activity(task_id, task_name, status, {
                     "responses": len(result.get("responses", [])),
@@ -701,7 +723,12 @@ class ContinuityScheduler:
             # Check for queued fires
             with self._lock:
                 if ev.is_set():
-                    self._task_pending[task_id] = []   # cancel = queued fires die too
+                    # cancel = queued fires die too (Krem's ruling 2026-09-08:
+                    # drop, but say so — a count only, never event content).
+                    dropped = len(self._task_pending.get(task_id, []))
+                    if dropped:
+                        logger.warning(f"[Continuity] '{task_name}' stopped — dropping {dropped} queued fire(s)")
+                    self._task_pending[task_id] = []
                 queue = self._task_pending.get(task_id, [])
                 if queue:
                     queue.pop(0)  # Cron queues don't carry data, just drain
@@ -793,6 +820,7 @@ class ContinuityScheduler:
                     self._log_activity(task_id, task_name, "queued", {"pending": len(queue)})
                     continue
                 self._task_running[task_id] = True
+                self._arm_cancel(task_id)
 
             # Run on a separate thread so different tasks can run concurrently.
             # LOAD-BEARING: fresh threading.Thread per task is required for scope
@@ -836,10 +864,11 @@ class ContinuityScheduler:
             if self._task_running.get(task_id, False):
                 return {"success": False, "error": f"Task '{task_name}' is already running"}
             self._task_running[task_id] = True
+            self._arm_cancel(task_id)
 
         logger.info(f"[Continuity] Manual run: {task_name}")
         self._log_activity(task_id, task_name, "started", {"manual": True})
-        ev = self._arm_cancel(task_id)
+        ev = self._run_cancel(task_id)
 
         try:
             result = self.executor.run(
@@ -855,7 +884,7 @@ class ContinuityScheduler:
                     self._increment_run_count(task_id)
                     self._save_tasks()
 
-            status = "cancelled" if ev.is_set() else ("complete" if result.get("success") else "error")
+            status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
 
             self._log_activity(task_id, task_name, status, {
                 "manual": True,
@@ -943,6 +972,7 @@ class ContinuityScheduler:
                 logger.info(f"[Continuity] '{task_name}' busy — queued event ({len(queue)} pending)")
                 return {"success": True, "queued": True}
             self._task_running[task_id] = True
+            self._arm_cancel(task_id)
 
         # Build response callback — saves last_response + routes reply to daemon source
         internal_cb = self._make_response_callback(task_id)
@@ -1015,7 +1045,7 @@ class ContinuityScheduler:
                         pass
 
                 self._log_activity(task_id, task_name, "started", {"trigger": task_type})
-                ev = self._arm_cancel(task_id)
+                ev = self._run_cancel(task_id)
                 try:
                     result = self.executor.run(
                         active_task,
@@ -1031,7 +1061,7 @@ class ContinuityScheduler:
                             self._save_tasks()
                         self._task_progress.pop(task_id, None)
 
-                    status = "cancelled" if ev.is_set() else ("complete" if result.get("success") else "error")
+                    status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
                     self._log_activity(task_id, task_name, status, {
                         "trigger": task_type,
                         "responses": len(result.get("responses", [])),
@@ -1045,7 +1075,12 @@ class ContinuityScheduler:
                 # Drain queued events (with their actual data) or release
                 with self._lock:
                     if ev.is_set():
-                        self._task_pending[task_id] = []   # cancel = queued events die too
+                        # cancel = queued events die too — logged as a COUNT only
+                        # (event payloads are user content; Krem's ruling 2026-09-08)
+                        dropped = len(self._task_pending.get(task_id, []))
+                        if dropped:
+                            logger.warning(f"[Continuity] '{task_name}' stopped — dropping {dropped} queued event(s)")
+                        self._task_pending[task_id] = []
                     queue = self._task_pending.get(task_id, [])
                     if queue:
                         cur_event_data, cur_reply_callback = queue.pop(0)

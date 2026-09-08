@@ -115,6 +115,8 @@ const scrollToBottomIfSticky = (force = false) => {
 };
 
 export const forceScrollToBottom = () => scrollToBottomIfSticky(true);
+// For other scroll owners (image loads): follow the bottom only while stuck.
+export const followIfSticky = () => scrollToBottomIfSticky();
 export const isStickyToBottom = () => sticky;
 
 function bindScrollIntent() {
@@ -124,21 +126,29 @@ function bindScrollIntent() {
     jumpBtn = document.getElementById('scroll-jump');
     jumpBtn?.addEventListener('click', () => scrollToBottomIfSticky(true));
     const unstick = () => { if (sticky) setSticky(false); };
+    // A short chat has nowhere to scroll: a reflex wheel-up there would
+    // unstick with no scroll event ever able to re-stick (D3-B6).
+    const scrollable = () => el.scrollHeight > el.clientHeight + 1;
     // Explicit intent — these only ever come from a human, and they fire
     // before the first pixel moves (the touch one is what makes phones work).
-    el.addEventListener('wheel', e => { if (e.deltaY < 0) unstick(); }, { passive: true });
+    el.addEventListener('wheel', e => { if (e.deltaY < 0 && scrollable()) unstick(); }, { passive: true });
     let touchY = null;
     el.addEventListener('touchstart', e => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
     el.addEventListener('touchmove', e => {
         const y = e.touches[0]?.clientY;
-        if (touchY != null && y != null && y > touchY + 4) unstick();   // finger down = content up
+        if (touchY != null && y != null && y > touchY + 4 && scrollable()) unstick();   // finger down = content up
         if (y != null) touchY = y;
     }, { passive: true });
     // Everything else (scrollbar drag, keyboard) + the re-engage on return.
     _prevTop = el.scrollTop; _prevHeight = el.scrollHeight;
     el.addEventListener('scroll', () => {
         const top = el.scrollTop, h = el.scrollHeight;
-        if (top < _prevTop - 1 && h >= _prevHeight) unstick();
+        const max = h - el.clientHeight;
+        // An up-move our own snaps can't explain = the user. "The previous
+        // position is still reachable" (_prevTop <= max) rules out the clamps
+        // that also move scrollTop up: content shrink, viewport GROWTH (devtools
+        // closing, rotate) and iOS over-scroll bounce (D3-B4/B5, 2026-09-08).
+        if (top < _prevTop - 1 && h >= _prevHeight && _prevTop <= max + 1) unstick();
         else if (!sticky && distanceFromBottom() <= RESTICK_PX) setSticky(true);
         _prevTop = top; _prevHeight = h;
     }, { passive: true });
@@ -438,6 +448,9 @@ export const renderHistory = (hist) => {
     // up keeps their place. Chat load / switch / clear / import call
     // forceScrollToBottom() themselves — there the user asked for the bottom.
     const keepTop = sticky ? null : (chatbgOverlay?.scrollTop ?? null);
+    // INVARIANT: no layout reads between this removal and the re-append below.
+    // A forced layout here would clamp scrollTop to 0 → the scroll listener
+    // reads it as a user scroll-up → sticky reader stranded at the top (D1#11).
     chat.querySelectorAll('.message:not(.status):not(.error)').forEach(msg => msg.remove());
 
     if (!hist || !Array.isArray(hist)) return;

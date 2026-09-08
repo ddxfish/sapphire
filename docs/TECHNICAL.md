@@ -214,7 +214,7 @@ This is the rail that keeps spice/datetime/plugin context cache-friendly. Plugin
 
 ### Password / API Key
 
-One bcrypt hash serves as login password, API key (`X-API-Key` header), and session secret.
+One bcrypt hash serves as login password and legacy API key (`X-API-Key` header); browser sessions ride a separate `session_secret` file. Changing the password (Settings › System) rotates the hash atomically, invalidates the old `X-API-Key` value, and logs out every other session — named API Keys (bearer tokens) are unaffected.
 
 | OS | Path |
 |----|------|

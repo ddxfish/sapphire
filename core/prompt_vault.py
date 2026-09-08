@@ -27,6 +27,7 @@ ruling C amendment 2026-08-09). Stamping requires the vault unlocked (a
 locked name isn't in any dropdown, so references can't be created sealed);
 dropping works any time — the index can only shrink while locked.
 """
+import copy
 import hashlib
 import json
 import logging
@@ -791,16 +792,25 @@ def _audit_row(event):
 
 
 def _mutate(fn, audit_event=None) -> tuple:
-    """Run fn(_data) under the lock while unlocked, then save. fn returns an
-    error code ('' = proceed). audit_event: names-only row emitted on
-    success (outside the lock)."""
+    """Run fn on a COPY of _data under the lock while unlocked, save, then
+    swap the copy in. fn returns an error code ('' = proceed). audit_event:
+    names-only row emitted on success (outside the lock).
+
+    Copy-then-swap (pre-push hunt 2026-09-08, E3#2): mutating _data in
+    place before the save meant a refused save (disk full, replace failure)
+    left the edit LIVE in memory — served as saved by every read until the
+    idle lock dropped it, or persisted by the next successful save."""
+    global _data
     with _lock:
         if _key is None:
             return False, 'locked'
-        code = fn(_data)
+        work = copy.deepcopy(_data)
+        code = fn(work)
         if code:
             return False, code
+        prev, _data = _data, work
         if not _save_locked():
+            _data = prev
             return False, 'save_failed'
         _touch_locked()
         _reconcile_refs_locked()
@@ -900,14 +910,18 @@ def trash_restore(ctype, key) -> tuple:
 
 def trash_purge() -> tuple:
     """Empty the vault trash. (ok, count) on success, (False, code) else."""
+    global _data
     with _lock:
         if _key is None:
             return False, 'locked'
         n = len(_data.get('trash', []))
         if not n:
             return True, 0
-        _data['trash'] = []
+        work = copy.deepcopy(_data)
+        work['trash'] = []
+        prev, _data = _data, work
         if not _save_locked():
+            _data = prev
             return False, 'save_failed'
         _touch_locked()
     logger.info(f"[VAULT] purged {n} trashed piece(s)")
@@ -919,11 +933,13 @@ def rewrite_piece_refs(ctype, old_key, new_key=None):
     ctype/old_key. UNLOCKED only. Repointing onto a key the list already
     holds just drops the old one (no duplicates). Returns (changed_names,
     code) — code '' | 'locked' | 'save_failed'; no-op saves nothing."""
+    global _data
     with _lock:
         if _key is None:
             return [], 'locked'
         changed = []
-        for name, comps in _data['scenario_presets'].items():
+        work = copy.deepcopy(_data)
+        for name, comps in work['scenario_presets'].items():
             if not isinstance(comps, dict):
                 continue
             val = comps.get(ctype)
@@ -939,7 +955,9 @@ def rewrite_piece_refs(ctype, old_key, new_key=None):
                 changed.append(name)
         if not changed:
             return [], ''
+        prev, _data = _data, work
         if not _save_locked():
+            _data = prev
             return [], 'save_failed'
         _touch_locked()
         _reconcile_refs_locked()

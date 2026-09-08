@@ -135,7 +135,11 @@ class StreamingChat:
         if not self._typing_ended:
             self._typing_ended = True
             publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
+        # `ephemeral` rides here, not only on `done`: the browser settles the
+        # turn at llm_done, so a flag that only arrived on the later `done`
+        # was never read (pre-push hunt 2026-09-08, E1#2).
         return {"type": "llm_done",
+                "ephemeral": bool(getattr(self, "ephemeral", False)),
                 "tts_streamed": bool(getattr(tts_pump, "_stream_started", False))}
 
     def _stamp_private_if_unlocked(self):
@@ -1338,7 +1342,11 @@ class StreamingChat:
                 logger.warning(f"[CLEANUP] TTS pump cancel failed: {_tts_e!r}")
             # Close any open tool cycle so history isn't left in a broken state
             # (e.g. user hit Stop mid-tool-execution)
-            if self.main_chat.session_manager._in_tool_cycle:
+            # Past llm_done this stream's own cycle is provably closed
+            # (add_assistant_final precedes the emit) — an open cycle then
+            # belongs to a NEWER stream admitted past this audio tail; don't
+            # inject "[Cancelled…]" rows into its turn (E1#5).
+            if self.main_chat.session_manager._in_tool_cycle and not self.llm_done:
                 logger.info("[CLEANUP] Closing orphaned tool cycle from cancelled stream")
                 self._close_dangling_tool_calls()
                 self.main_chat.session_manager.add_assistant_final(

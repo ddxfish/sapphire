@@ -1131,8 +1131,9 @@ async def change_password(request: Request, _=Depends(require_login)):
     Body {"current", "new"}. The current password is verified against the
     stored bcrypt hash BEFORE anything else — a valid session alone isn't
     enough to rotate it. Same 5-per-minute limiter as the auth pages so a
-    hijacked tab can't brute-force the current one. Sessions ride a separate
-    secret file, so nobody is logged out. NOTE for legacy scripts: the
+    hijacked tab can't brute-force the current one. Every OTHER session is
+    logged out (require_login compares the cookie's salt stamp to the live
+    hash); this tab re-stamps and stays in. NOTE for legacy scripts: the
     X-API-Key header IS the bcrypt hash, so it rotates too — bearer tokens
     (API Keys, right below this card) are unaffected. 2026-09-08."""
     from core.auth import check_endpoint_rate, get_client_ip
@@ -1154,10 +1155,15 @@ async def change_password(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=403, detail="Current password is incorrect")
     if len(new) < 10:
         raise HTTPException(status_code=400, detail="New password must be at least 10 characters")
+    if len(new.encode('utf-8')) > 72:
+        # bcrypt's hard limit; 5.x raises past it where 4.x truncated silently (E4#4)
+        raise HTTPException(status_code=400, detail="New password must be at most 72 bytes (bcrypt's limit)")
     if new == current:
         raise HTTPException(status_code=400, detail="New password must differ from the current one")
-    if not save_password_hash(new):
+    new_hash = save_password_hash(new)
+    if not new_hash:
         raise HTTPException(status_code=500, detail="Failed to save the new password")
+    request.session['pw'] = new_hash[:29]   # this tab survives; every other cookie dies
     logger.info(f"Password changed (from {get_client_ip(request)})")
     return {"status": "success"}
 

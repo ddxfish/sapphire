@@ -8,8 +8,13 @@ import { PERSONA_TABS } from '../shared/persona-tabs.js';
 import { deferWhileEditing, snapScroll } from '../shared/dom-guard.js';
 
 // Rename's roster repaint, held while the user is typing elsewhere in the
-// editor (DOM-refresh hunt 2026-09-08).
-const softRender = deferWhileEditing(() => container, () => render());
+// editor (DOM-refresh hunt 2026-09-08) — AND while a save is pending or in
+// flight (pre-push hunt, D2#1): a drain that rebuilt the fields from
+// selectedData while the 600 ms debounce was still armed made that save read
+// the rebuilt DOM and persist reverted text. Same hold as chat.js's sidebar.
+let _saveInFlight = 0;
+const softRender = deferWhileEditing(() => container, () => render(),
+    { busy: () => !!saveTimer || _saveInFlight > 0 });
 import { mountScenePicker } from '../shared/scene-picker.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
@@ -877,6 +882,7 @@ function collectSettings() {
 function debouncedSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
+        saveTimer = null;   // the softRender hold reads this — never nulled before = held forever
         if (!selectedName || !selectedData) return;
         const data = {
             tagline: container.querySelector('#pa-tagline')?.value || '',
@@ -887,6 +893,7 @@ function debouncedSave() {
         if (nameInput && nameInput.value.trim() && nameInput.value.trim() !== selectedName) {
             data.name = nameInput.value.trim();
         }
+        _saveInFlight++;
         try {
             await updatePersona(selectedName, data);
             // Update local state
@@ -903,6 +910,9 @@ function debouncedSave() {
             }
         } catch (e) {
             console.warn('Persona save failed:', e);
+        } finally {
+            _saveInFlight--;
+            softRender.kick();   // a repaint held by this save catches up now
         }
     }, 600);
 }

@@ -63,3 +63,53 @@ def test_middleware_stamps_session_id_for_async_and_sync_handlers(client):
     finally:
         app.router.routes[:] = [rt for rt in app.router.routes
                                 if getattr(rt, 'path', '') not in ('/__test/origin-async', '/__test/origin-sync')]
+
+
+# ─── pre-push hunt 2026-09-08 (D4-B1/B2/B4) ─────────────────────────────────
+
+import sys
+import threading
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_threads_do_not_inherit_the_origin():
+    """Every long job that publishes mind_changed (librarian, import, transfer)
+    is a threading.Thread — this is the invariant the whole job map rests on."""
+    if getattr(sys.flags, 'thread_inherit_context', 0):
+        pytest.skip("free-threaded build inherits contextvars; the workers reset explicitly")
+    token = session_origin.set('tab-1')
+    seen = []
+    try:
+        t = threading.Thread(target=lambda: seen.append(session_origin.get()))
+        t.start()
+        t.join()
+    finally:
+        session_origin.reset(token)
+    assert seen == [None]
+
+
+def test_chat_turn_detaches_the_tabs_origin(client, mock_system):
+    """A tool save inside HER turn must repaint every palace view, the
+    requesting tab's included. The stream POST sends no X-Session-ID today;
+    the belt is for the day it rides fetchWithTimeout (which auto-stamps)."""
+    c, csrf = client
+    seen = []
+    mock_system.process_llm_query = lambda text, flag: seen.append(session_origin.get()) or "ok"
+    mock_system.llm_chat.pending_notices = []
+    r = c.post('/api/chat', json={'text': 'hi'},
+               headers={'X-CSRF-Token': csrf, 'X-Session-ID': 'tab-9'})
+    assert r.status_code == 200, r.text
+    assert seen == [None]
+
+
+def test_librarian_workers_detach_the_origin_at_entry():
+    src = (ROOT / 'plugins' / 'mindpalace' / 'tools' / 'librarian.py').read_text(encoding='utf-8')
+    assert 'def _detach_origin():' in src
+    worker = src[src.index('def _worker('):]
+    assert worker.index('_detach_origin()') < worker.index('try:')
+    drain = src[src.index('def _drain_loop('):]
+    assert drain.index('_detach_origin()') < drain.index('_drain_active = True')
