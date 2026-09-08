@@ -9,7 +9,8 @@ globalThis.document = {
     body,
     activeElement: body,
     addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
-    querySelector(sel) { return findIn(root, sel); },
+    querySelector(sel) { return findIn(root, sel)[0] || null; },
+    querySelectorAll(sel) { return findIn(root, sel); },
     contains(n) { return true; },
 };
 globalThis.CSS = { escape: s => s };
@@ -22,7 +23,8 @@ function mk(tagName, { id = '', cls = '', editable = false, parent = null } = {}
         contains(n) { for (let x = n; x; x = x.parentElement) if (x === el) return true; return false; },
         focus() { el.focused++; document.activeElement = el; },
         setSelectionRange(a, b) { el.sel = [a, b]; },
-        querySelector(sel) { return findIn(el, sel); },
+        querySelector(sel) { return findIn(el, sel)[0] || null; },
+        querySelectorAll(sel) { return findIn(el, sel); },
     };
     if (parent) parent.children.push(el);
     return el;
@@ -30,15 +32,16 @@ function mk(tagName, { id = '', cls = '', editable = false, parent = null } = {}
 function findIn(node, sel) {
     const m = sel.match(/^#(.+)$/);
     const cm = sel.match(/^(\w+)\[class="(.*)"\]$/);
+    const out = [];
     const walk = n => {
         for (const c of n.children || []) {
-            if (m && c.id === m[1]) return c;
-            if (cm && c.tagName.toLowerCase() === cm[1] && c.getAttribute('class') === cm[2]) return c;
-            const r = walk(c); if (r) return r;
+            if (m && c.id === m[1]) out.push(c);
+            else if (cm && c.tagName.toLowerCase() === cm[1] && c.getAttribute('class') === cm[2]) out.push(c);
+            walk(c);
         }
-        return null;
     };
-    return walk(node);
+    walk(node);
+    return out;
 }
 const focusout = () => (listeners.focusout || []).forEach(fn => fn());
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -128,6 +131,14 @@ r = g.snapFocus(outer);
 document.activeElement = body;
 r();
 ok(document.activeElement === inp && inp.sel?.[0] === 2, 'refound by tag + exact class when no id');
+// per-card inputs share a class: never guess which one — no restore
+const twin = mk('INPUT', { cls: 'store-search', parent: outer });
+document.activeElement = twin;
+r = g.snapFocus(outer);
+document.activeElement = body;
+r();
+ok(document.activeElement === body, 'ambiguous class match is not restored');
+outer.children.splice(outer.children.indexOf(twin), 1);
 document.activeElement = btn;
 r = g.snapFocus(outer);
 document.activeElement = body;

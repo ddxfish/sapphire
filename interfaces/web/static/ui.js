@@ -456,20 +456,23 @@ export const renderHistory = (hist) => {
 
     updateToolbars();
 
-    const settle = () => {
-        if (keepTop !== null && chatbgOverlay) chatbgOverlay.scrollTop = keepTop;
-        else scrollToBottomIfSticky();
-    };
+    // Restore the reader's place NOW — the removal above clamped scrollTop to
+    // 0. (Restoring inside the image wait below could land up to 5 s later,
+    // over a position the user had since moved away from.)
+    if (keepTop !== null && chatbgOverlay) chatbgOverlay.scrollTop = keepTop;
+
+    // Sticky readers follow the bottom once images have sized; non-forced, so
+    // a reader who scrolled up is never touched here.
     const waitForImages = () => {
         if (!Images.hasPendingImages()) {
-            settle();
+            scrollToBottomIfSticky();
         } else {
             setTimeout(() => {
                 if (Images.hasPendingImages()) {
                     console.log(`Timeout: images still pending, scrolling anyway`);
                     Images.clearPendingImages();
                 }
-                settle();
+                scrollToBottomIfSticky();
             }, 5000);
         }
     };

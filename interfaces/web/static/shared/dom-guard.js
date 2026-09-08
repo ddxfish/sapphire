@@ -108,7 +108,12 @@ export function snapFocus(root) {
         const scope = root || document;
         let el = null;
         if (id) el = scope.querySelector(`#${CSS.escape(id)}`);
-        if (!el && cls) el = scope.querySelector(`${tag}[class="${cls.replace(/"/g, '\\"')}"]`);
+        if (!el && cls) {
+            // Class fallback only when it names ONE field — a per-card input
+            // (one note box per goal) would otherwise land in the first card.
+            const all = scope.querySelectorAll(`${tag}[class="${cls.replace(/"/g, '\\"')}"]`);
+            if (all.length === 1) el = all[0];
+        }
         if (!el || el === document.activeElement) return;
         el.focus();
         if (selStart !== null && typeof el.setSelectionRange === 'function') {
