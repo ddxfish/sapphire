@@ -394,9 +394,20 @@ def test_content_over_cap_trims_and_saves(palace):
     assert len(kept) <= cap
     assert not kept.endswith("wor"), "cut must land on a word boundary"
     dropped = long[len(kept):].strip()
-    assert f'Dropped: "{dropped}"' in msg, "receipt must carry the cut text verbatim"
-    assert f"{len(dropped)} chars over the {cap} cap" in msg
-    assert "update_memory(" in msg and "save_memory" in msg
+    assert f'"{dropped}"' in msg, "receipt must carry the cut text verbatim"
+    assert f"{len(dropped)} chars TRIMMED at the {cap} cap" in msg
+    # No pre-filled tool call: the old "Keep it: update_memory(42) …" menu
+    # read as an instruction and she re-ran the save every time (2026-09-08).
+    assert "update_memory(" not in msg and "unless it's critical" in msg
+
+
+def test_save_receipt_carries_the_day(palace):
+    """The day rides the receipt so she sees the system dated it — the cue
+    that stops her stamping today's date into the text (2026-09-08)."""
+    msg, ok = palace._save_memory("I like apples.", scope="default")
+    assert ok
+    assert msg.startswith("Memory saved (ID: ")
+    assert palace._fmt_day(palace._now()) in msg
 
 
 def test_content_at_cap_untouched(palace):
@@ -439,14 +450,14 @@ def test_update_over_cap_trims_and_updates(palace):
     long = ("edit " * 130).strip()
     msg, ok = palace._update_memory(mid, "default", content=long)
     assert ok is True and "Memory updated" in msg and "TRIMMED" in msg
-    assert f"update_memory({mid})" in msg
+    assert "update_memory(" not in msg and "unless it's critical" in msg
     conn = _connect(palace)
     try:
         kept = conn.execute("SELECT content FROM chunks WHERE id = ?", (mid,)).fetchone()[0]
     finally:
         conn.close()
     assert len(kept) <= cap and kept.startswith("edit edit")
-    assert f'Dropped: "{long[len(kept):].strip()}"' in msg
+    assert f'"{long[len(kept):].strip()}"' in msg
 
 
 def test_knowledge_layer_still_exempt_from_cap(palace, monkeypatch):

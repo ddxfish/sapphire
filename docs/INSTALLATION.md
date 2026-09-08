@@ -163,6 +163,12 @@ python main.py
 
 Sapphire creates `user/` directory with your settings and data. Run once before customizing.
 
+### Change or reset the password
+
+- **Change it** in Settings › System › Login Password. Enter the current one, pick a new one (10+ characters). You stay logged in.
+- **Forgot it?** Stop Sapphire, delete the `secret_key` file from the config directory, start again — you get the setup page back. Config directory: Linux `~/.config/sapphire/`, macOS `~/Library/Application Support/Sapphire/`, Windows `%APPDATA%\Sapphire\`.
+- Scripts that still send the bcrypt hash as `X-API-Key` stop working after a change — mint a token under API Keys instead (see [API.md](API.md)).
+
 ---
 
 ## Update Sapphire

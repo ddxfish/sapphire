@@ -4132,6 +4132,34 @@ div.hb-response-summary {
 #chatbg-overlay::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: var(--radius-sm); }
 #chatbg-overlay::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
+/* ↓ pill — shown only while the transcript is UNSTUCK from the bottom
+   (intent-based sticky scroll, ui.js). Floats inside #chatbg, above the
+   overlay, clear of the composer. Tap = jump to latest + re-stick. */
+.scroll-jump {
+    display: none;
+    position: absolute;
+    right: 18px;
+    bottom: 14px;
+    z-index: 3;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    font-size: var(--font-md);
+    align-items: center;
+    justify-content: center;
+    opacity: 0.9;
+}
+.scroll-jump.show { display: flex; }
+.scroll-jump:hover { opacity: 1; background: var(--bg-hover); }
+@media (max-width: 768px) {
+    .scroll-jump { width: 44px; height: 44px; right: 12px; bottom: 12px; }
+}
+
 #chat-container {
     padding: var(--chat-padding-y) var(--chat-padding-x);
     max-width: var(--chat-max-width);

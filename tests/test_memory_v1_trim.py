@@ -25,8 +25,9 @@ def test_over_cap_trims_and_saves(isolated_memory):
     kept = rows[0][0]
     assert len(kept) <= cap and not kept.endswith("wor")
     dropped = long[len(kept):].strip()
-    assert f'Dropped: "{dropped}"' in msg
-    assert "delete_memory(" in msg and "save_memory" in msg
+    assert f'"{dropped}"' in msg
+    # Saved-first, no pre-filled re-save instruction (2026-09-08)
+    assert "delete_memory(" not in msg and "unless it's critical" in msg
 
 
 def test_at_cap_untouched(isolated_memory):

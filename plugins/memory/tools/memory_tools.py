@@ -39,7 +39,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": f"Save information to long-term memory. Max 512 chars (aim under 450) — longer is trimmed at a word boundary and the reply says what was cut. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge.",
+            "description": f"Save information to long-term memory. 450 chars max or it gets trimmed. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge. Never add today's date; add anniversary dates or other important events. Use first person wording when memories talk about yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -878,10 +878,11 @@ def _save_memory(content: str, label: str = None, scope: str = 'default',
         msg = f"Memory saved (ID: {memory_id}{label_str}{priv_str})"
         if dropped:
             logger.info(f"[MEMORY] save trimmed {len(dropped)} chars over cap (ID {memory_id})")
-            msg += (f". TRIMMED: {len(dropped)} chars over the {MAX_MEMORY_LENGTH} cap "
-                    f"were cut. Dropped: \"{dropped}\". Keep it: save_memory the "
-                    f"dropped text as its own memory, or delete_memory({memory_id}) "
-                    f"and re-save tighter. Or leave it.")
+            # Saved-first, no pre-filled tool call (mirrors the Mind Palace
+            # receipt, 2026-09-08): the old "delete_memory(42) and re-save"
+            # menu read as an instruction and defeated the trim.
+            msg += (f". {len(dropped)} chars TRIMMED at the {MAX_MEMORY_LENGTH} cap: "
+                    f"\"{dropped}\". Skip a re-save unless it's critical.")
         return msg, True
 
     except Exception as e:

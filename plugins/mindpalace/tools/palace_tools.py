@@ -102,22 +102,28 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
+            # Krem's wording, 2026-09-08. The 450 is deliberate: the real cap is
+            # 512 (MAX_CHUNK_LENGTH); telling her 450 keeps her under it.
+            # "Never add today's date": every memory is timestamped, recall
+            # shows the day, and a date written INTO the text is read by the
+            # temporal extractor as the event's date — she was stamping every
+            # note and the librarian saw a calendar full of "today".
             "description": (
-                "Save to layered long-term memory. Max 512 chars (aim under 450) — "
-                "longer content is trimmed at a word boundary and the reply says "
-                "what was cut. Layers: "
-                "'events' (default — things that happened), 'entities' (a fact "
-                "about a person/place/thing — requires entity name), 'knowledge' "
-                "(reference material). Who-you-are edits go through update_self "
-                "(the sheet) — layer='self' saves land in events. "
-                f"Suggested labels: {SUGGESTED_LABELS}."
+                "Save to your long-term memory layers. 450 chars max or it gets "
+                "trimmed. Layers: events - default memory snippets, entities - "
+                "facts on people place thing, knowledge - long form knowledge "
+                "less visible, self - your wake-up sheet (edit it with "
+                "update_self; saves here land in events). "
+                f"Suggested labels for memory: {SUGGESTED_LABELS}. Never add "
+                "today's date; add anniversary dates or other important events. "
+                "Use first person wording when memories talk about yourself."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "content": {
                         "type": "string",
-                        "description": "The information to remember"
+                        "description": "The information to remember (no date stamp — it is timestamped for you)"
                     },
                     "layer": {
                         "type": "string",
@@ -224,10 +230,9 @@ TOOLS = [
             "name": "update_memory",
             "description": ("Edit a memory in place by ID — fix wording, add a "
                             "detail, or re-label without losing the memory's id, "
-                            "age, or history. Content max 512 chars (longer is "
-                            "trimmed; the reply says what was cut). Memories "
-                            "only: [N] ids. Library documents ([doc N]) are NOT "
-                            "editable here."),
+                            "age, or history. Content 450 chars max or it gets "
+                            "trimmed. Memories only: [N] ids. Library documents "
+                            "([doc N]) are NOT editable here."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -330,10 +335,13 @@ def _trim_to_cap(content: str, cap: int = MAX_CHUNK_LENGTH) -> tuple:
 
 
 def _trim_note(dropped: str, memory_id, cap: int = MAX_CHUNK_LENGTH) -> str:
-    return (f" TRIMMED: {len(dropped)} chars over the {cap} cap were cut. "
-            f"Dropped: \"{dropped}\". Keep it: update_memory({memory_id}) with "
-            f"tighter wording, or save_memory the dropped text as its own "
-            f"memory. Or leave it.")
+    # Saved-first, and NO pre-filled tool call. The old note ("Keep it:
+    # update_memory(42) with tighter wording, or save_memory …") read as an
+    # instruction with the arguments filled in — she re-ran the save every
+    # time and the trim bought nothing. The cut text stays so she knows what
+    # was lost; the verdict tells her not to act on it (Krem, 2026-09-08).
+    return (f" {len(dropped)} chars TRIMMED at the {cap} cap: \"{dropped}\". "
+            f"Skip update_memory unless it's critical.")
 # Per (scope, layer) — the old system capped memories and knowledge separately
 # at 50k each; layers restore that separation inside the single table.
 MAX_CHUNKS_PER_SCOPE_LAYER = 50_000
@@ -1177,18 +1185,41 @@ def upsert_entity(cursor, name: str, scope: str, kind: str = None) -> int:
 
 # ─── Formatting ──────────────────────────────────────────────────────────────
 
-def _format_time_ago(timestamp_str: str) -> str:
+def _to_user_tz(timestamp_str: str):
+    """(timestamp in the user's zone, now in the user's zone)."""
+    from zoneinfo import ZoneInfo
+    import config
+    tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
+    try: user_tz = ZoneInfo(tz_name)
+    except Exception: user_tz = ZoneInfo('UTC')
+    ts = datetime.fromisoformat(timestamp_str)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=ZoneInfo('UTC'))
+    return ts.astimezone(user_tz), datetime.now(user_tz)
+
+
+def _fmt_day(timestamp_str: str, with_year: bool = True) -> str:
+    """'Sep 8 2026'. Built by hand: no %-d (Windows strftime), ASCII month
+    (cp1252 consoles)."""
     try:
-        from zoneinfo import ZoneInfo
-        import config
-        tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
-        try: user_tz = ZoneInfo(tz_name)
-        except Exception: user_tz = ZoneInfo('UTC')
-        ts = datetime.fromisoformat(timestamp_str)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=ZoneInfo('UTC'))
-        diff = datetime.now(user_tz) - ts
+        ts, _ = _to_user_tz(timestamp_str)
+        return f"{ts.strftime('%b')} {ts.day}" + (f" {ts.year}" if with_year else "")
+    except Exception:
+        return ""
+
+
+def _format_time_ago(timestamp_str: str, absolute_after: int = 14) -> str:
+    """Relative while fresh ('3d ago'); the calendar day once older than
+    `absolute_after` days ('Jan 9'), with the year past 365 ('Jan 9 2025').
+    A bare '128d ago' hid that every memory is already dated, so she wrote
+    today's date into the text (Krem, 2026-09-08). None = relative forever
+    (the goals list converts to weeks itself)."""
+    try:
+        ts, now = _to_user_tz(timestamp_str)
+        diff = now - ts
         days, hours, minutes = diff.days, diff.seconds // 3600, (diff.seconds % 3600) // 60
+        if absolute_after is not None and days >= absolute_after:
+            return _fmt_day(timestamp_str, with_year=days > 365)
         if days > 0:
             return f"{days}d ago"
         elif hours > 0:
@@ -1485,7 +1516,9 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
 
         _publish_mind(layer, scope, 'save')
 
-        bits = [f"ID: {chunk_id}", f"layer: {layer}"]
+        # The day rides the receipt so she sees the system dated it — the
+        # cue that stops her stamping today's date into the text.
+        bits = [f"ID: {chunk_id}", _fmt_day(now), f"layer: {layer}"]
         if entity:
             bits.append(f"entity: {entity}")
         if matched:

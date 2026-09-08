@@ -10,7 +10,7 @@ Short snippets Sapphire saves about you and your world — facts, preferences, e
 
 During conversation the AI decides what's worth remembering and saves it with `save_memory` — a short line of text plus an optional **label**. Later it finds memories with `search_memory` (semantic + keyword) or `get_recent_memories`. You don't have to manage any of this, but you can review, edit, and curate everything in the Memories tab.
 
-Memories are kept **short** — a hard cap of 512 characters each. A save that runs over the cap isn't refused: the text is **trimmed at the last word boundary and saved anyway**, and the tool reply reports the dropped text verbatim so the AI can save the tail as its own memory, delete and re-save tighter, or let it go. They're snippets, not documents. For longer reference material, use [Human Knowledge](KNOWLEDGE.md) instead.
+Memories are kept **short** — a hard cap of 512 characters each (the tool tells the AI 450, on purpose, to keep it under). A save that runs over the cap isn't refused: the text is **trimmed at the last word boundary and saved anyway**, and the tool reply shows what was cut and tells the AI to leave it unless it's critical. Every memory is timestamped automatically and recalled with its age (`3d ago`, then the calendar day once it's older), so the AI is told never to write today's date into the text — a written date is read as the *event's* date. They're snippets, not documents. For longer reference material, use [Human Knowledge](KNOWLEDGE.md) instead.
 
 ---
 
@@ -68,7 +68,7 @@ Enabling the Mind Palace plugin swaps the whole memory tool surface — tools, M
 Long-term memory with full-text (FTS5) + semantic (embedding) search and labels.
 
 TOOLS:
-- save_memory(content, label?, private_key?) — save a short memory (512-char cap; over-cap saves are trimmed at the last word boundary and the reply reports the dropped text verbatim; new labels OK; use 'self' for self-knowledge)
+- save_memory(content, label?, private_key?) — save a short memory (512-char cap, described to the AI as 450; over-cap saves are trimmed at the last word boundary, the reply shows the cut text + "skip update_memory unless it's critical"; receipt carries the stamped day; never write today's date into the text; new labels OK; use 'self' for self-knowledge)
 - search_memory(query, label?, private_key?) — semantic + full-text search, optional label filter
 - get_recent_memories(count?, label?, private_key?) — most recent, optionally filtered by label
 - delete_memory(memory_id, private_key?) — remove a memory

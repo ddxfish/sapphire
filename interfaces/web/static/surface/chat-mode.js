@@ -17,6 +17,7 @@ export const chatMode = {
                         <div id="chatbg-overlay">
                             <div id="chat-container"></div>
                         </div>
+                        <button type="button" id="scroll-jump" class="scroll-jump" title="Jump to latest" aria-label="Jump to latest">&#x2193;</button>
                     </div>`,
 
     formArea: `

@@ -1124,6 +1124,44 @@ async def revoke_api_token(token_id: str, _=Depends(require_login)):
     raise HTTPException(status_code=404, detail="Token not found")
 
 
+@router.post("/api/system/password")
+async def change_password(request: Request, _=Depends(require_login)):
+    """Change the login password (Settings › System › Login Password).
+
+    Body {"current", "new"}. The current password is verified against the
+    stored bcrypt hash BEFORE anything else — a valid session alone isn't
+    enough to rotate it. Same 5-per-minute limiter as the auth pages so a
+    hijacked tab can't brute-force the current one. Sessions ride a separate
+    secret file, so nobody is logged out. NOTE for legacy scripts: the
+    X-API-Key header IS the bcrypt hash, so it rotates too — bearer tokens
+    (API Keys, right below this card) are unaffected. 2026-09-08."""
+    from core.auth import check_endpoint_rate, get_client_ip
+    from core.setup import get_password_hash, verify_password, save_password_hash
+    check_endpoint_rate(request, 'password', max_calls=5, window=60)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    current = str(data.get('current') or '')
+    new = str(data.get('new') or '')
+    stored = get_password_hash()
+    if not stored:
+        raise HTTPException(status_code=409, detail="No password is set — run setup first")
+    if not verify_password(current, stored):
+        logger.warning(f"Password change refused — current password wrong (from {get_client_ip(request)})")
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+    if len(new) < 10:
+        raise HTTPException(status_code=400, detail="New password must be at least 10 characters")
+    if new == current:
+        raise HTTPException(status_code=400, detail="New password must differ from the current one")
+    if not save_password_hash(new):
+        raise HTTPException(status_code=500, detail="Failed to save the new password")
+    logger.info(f"Password changed (from {get_client_ip(request)})")
+    return {"status": "success"}
+
+
 @router.get("/api/system/integrity")
 async def system_integrity(_=Depends(require_login)):
     """Verify the core install against the shipped manifest (SHA256). No git needed."""

@@ -100,6 +100,23 @@ export default {
                 <div id="integrity-output" style="margin-top:10px;font-size:var(--font-xs)"></div>
             </div>
 
+            <div class="login-password" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
+                <h4 style="margin:0 0 8px;font-size:var(--font-sm)">Login Password</h4>
+                <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 12px">
+                    The password for this web UI. You stay logged in after changing it.
+                    Forgot it? The install guide covers the reset.
+                </p>
+                <form id="pw-form" autocomplete="off" style="display:flex;flex-direction:column;gap:8px;max-width:360px">
+                    <input id="pw-current" type="password" placeholder="Current password" autocomplete="current-password" required
+                           style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <input id="pw-new" type="password" placeholder="New password (10+ characters)" autocomplete="new-password" required minlength="10"
+                           style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <input id="pw-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password" required
+                           style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <div><button type="submit" class="btn-primary" id="pw-change">Change Password</button></div>
+                </form>
+            </div>
+
             <div class="api-tokens" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
                 <h4 style="margin:0 0 8px;font-size:var(--font-sm)">API Keys</h4>
                 <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 12px">
@@ -225,6 +242,35 @@ export default {
             }
             integRepair.disabled = false;
             integRepair.textContent = 'Repair';
+        });
+
+        // ─── Login Password ─────────────────────────────────────────────
+        const pwForm = el.querySelector('#pw-form');
+        pwForm?.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const cur = el.querySelector('#pw-current');
+            const nw = el.querySelector('#pw-new');
+            const cf = el.querySelector('#pw-confirm');
+            const btn = el.querySelector('#pw-change');
+            if (nw.value.length < 10) { ui.showToast('New password must be at least 10 characters', 'error'); nw.focus(); return; }
+            if (nw.value !== cf.value) { ui.showToast('New passwords do not match', 'error'); cf.focus(); return; }
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/system/password', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ current: cur.value, new: nw.value })
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+                pwForm.reset();
+                ui.showToast('Password changed — you stay logged in', 'success');
+            } catch (e) {
+                ui.showToast(`Change failed: ${e.message}`, 'error');
+                cur.value = '';
+                cur.focus();
+            }
+            btn.disabled = false;
         });
 
         // ─── API Keys section ───────────────────────────────────────────

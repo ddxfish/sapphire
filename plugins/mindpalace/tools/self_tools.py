@@ -730,7 +730,7 @@ def _wake_goals(cursor, scope, depth):
             if m.get('permanent'):
                 bits.append('permanent')
             if g.get('created'):   # age tells her which goals have gone stale
-                age = ptt._format_time_ago(g['created'])
+                age = ptt._format_time_ago(g['created'], absolute_after=None)
                 wk = re.match(r'(\d+)d ago', age or '')
                 if wk and int(wk.group(1)) >= 14:   # old goals read in weeks
                     age = f"{int(wk.group(1)) // 7}w ago"

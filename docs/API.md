@@ -636,6 +636,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/system/api-tokens` | List programmatic API tokens |
 | POST | `/api/system/api-tokens` | Create a named API token |
 | DELETE | `/api/system/api-tokens/{token_id}` | Revoke an API token |
+| POST | `/api/system/password` | Change the login password (`{current, new}`; verifies the current one, 5/min; sessions survive; rotates the legacy X-API-Key hash) |
 
 ### Media (Tool-Generated Images)
 

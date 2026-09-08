@@ -18,6 +18,7 @@ const statusTpl = document.getElementById('status-template');
 export function bindChatDom() {
     chat = document.getElementById('chat-container');
     chatbgOverlay = document.getElementById('chatbg-overlay');
+    bindScrollIntent();
 }
 
 // Avatar display setting (loaded from /api/init)
@@ -76,26 +77,72 @@ export const refreshAvatarPaths = async () => {
 };
 
 // =============================================================================
-// SCROLL MANAGEMENT
+// SCROLL MANAGEMENT — intent-based sticky bottom (2026-09-08)
+//
+// The old rule was pure position: every streamed chunk snapped to the bottom
+// if you were within 100px of it. Chunks land every few ms, so scrolling up
+// meant out-running the snap — the "scroll of god" on phones and laptops.
+// Stickiness is a STATE now. It turns OFF the moment the user scrolls up by
+// any means (wheel, touch, scrollbar, keys) and back ON when they return to
+// the bottom, tap the ↓ pill, send a message, or a chat loads. Content growth
+// never flips it: our own snaps only ever move DOWN, so a scroll event that
+// moved UP while the content didn't shrink can only be the user.
 // =============================================================================
 
-const SCROLL_THRESHOLD = 100;
+const RESTICK_PX = 40;       // returning this close to the bottom re-engages
+let sticky = true;
+let _prevTop = 0, _prevHeight = 0;
+let jumpBtn = null;
 
-const isNearBottom = () => {
-    if (!chatbgOverlay) return true;
-    const scrollableHeight = chatbgOverlay.scrollHeight - chatbgOverlay.clientHeight;
-    const currentScroll = chatbgOverlay.scrollTop;
-    return (scrollableHeight - currentScroll) <= SCROLL_THRESHOLD;
+const distanceFromBottom = () => chatbgOverlay
+    ? chatbgOverlay.scrollHeight - chatbgOverlay.clientHeight - chatbgOverlay.scrollTop
+    : 0;
+
+const setSticky = (on) => {
+    sticky = on;
+    jumpBtn?.classList.toggle('show', !on);
 };
 
+// force = the user asked for the bottom (send, chat load, regen start):
+// re-engage and go. Otherwise content grew — follow it only while stuck.
 const scrollToBottomIfSticky = (force = false) => {
     if (!chatbgOverlay) return;
-    if (force || isNearBottom()) {
-        chatbgOverlay.scrollTop = chatbgOverlay.scrollHeight;
-    }
+    if (force) setSticky(true);
+    if (!sticky) return;
+    chatbgOverlay.scrollTop = chatbgOverlay.scrollHeight;
+    _prevTop = chatbgOverlay.scrollTop;
+    _prevHeight = chatbgOverlay.scrollHeight;
 };
 
 export const forceScrollToBottom = () => scrollToBottomIfSticky(true);
+export const isStickyToBottom = () => sticky;
+
+function bindScrollIntent() {
+    const el = chatbgOverlay;
+    if (!el || el.dataset.scrollIntent) return;   // organs.js may hand us the same node again
+    el.dataset.scrollIntent = '1';
+    jumpBtn = document.getElementById('scroll-jump');
+    jumpBtn?.addEventListener('click', () => scrollToBottomIfSticky(true));
+    const unstick = () => { if (sticky) setSticky(false); };
+    // Explicit intent — these only ever come from a human, and they fire
+    // before the first pixel moves (the touch one is what makes phones work).
+    el.addEventListener('wheel', e => { if (e.deltaY < 0) unstick(); }, { passive: true });
+    let touchY = null;
+    el.addEventListener('touchstart', e => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
+    el.addEventListener('touchmove', e => {
+        const y = e.touches[0]?.clientY;
+        if (touchY != null && y != null && y > touchY + 4) unstick();   // finger down = content up
+        if (y != null) touchY = y;
+    }, { passive: true });
+    // Everything else (scrollbar drag, keyboard) + the re-engage on return.
+    _prevTop = el.scrollTop; _prevHeight = el.scrollHeight;
+    el.addEventListener('scroll', () => {
+        const top = el.scrollTop, h = el.scrollHeight;
+        if (top < _prevTop - 1 && h >= _prevHeight) unstick();
+        else if (!sticky && distanceFromBottom() <= RESTICK_PX) setSticky(true);
+        _prevTop = top; _prevHeight = h;
+    }, { passive: true });
+}
 
 // =============================================================================
 // SIMPLE UTILITIES
@@ -539,7 +586,7 @@ export const finishStreaming = async (ephemeral = false) => {
         if (streamingMsg) {
             streamingMsg.remove();
         }
-        scrollToBottomIfSticky(true);
+        scrollToBottomIfSticky();   // end of turn follows the reader, never yanks
         return;
     }
     
@@ -575,8 +622,8 @@ export const finishStreaming = async (ephemeral = false) => {
         }
     }
     
-    scrollToBottomIfSticky(true);
-    
+    scrollToBottomIfSticky();   // a reader who scrolled up mid-reply stays put
+
     // Update scene state (spice tooltip, etc.) after generation completes
     import('./features/scene.js').then(scene => scene.updateScene());
 };
