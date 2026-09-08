@@ -69,7 +69,7 @@ Long-term memory with full-text (FTS5) + semantic (embedding) search and labels.
 
 TOOLS:
 - save_memory(content, label?, private_key?) — save a short memory (512-char cap, described to the AI as 450; over-cap saves are trimmed at the last word boundary, the reply shows the cut text + "skip update_memory unless it's critical"; receipt carries the stamped day; never write today's date into the text; new labels OK; use 'self' for self-knowledge)
-- Mind Palace only — entity= on save resolves nicknames: entity='bander' lands on the card whose nicknames include bander; a new name that merely contains a known name/nickname still saves but the receipt asks "Did you mean Krem (nicknames …)?" (the People tab merges). list_entities(kind?, limit?) — read-only roster: brief line per entity (name, kind, nicknames, fact count); with kind='person' etc. the fuller card (relationship, birthday, other filled-in fields). Merge/delete stay UI-only.
+- Mind Palace only — entity= on save resolves nicknames: entity='sam' lands on the card whose nicknames include sam; a new name that merely contains a known name/nickname still saves but the receipt asks "Did you mean Samantha (nicknames …)?" (the People tab merges). list_entities(kind?, limit?) — read-only roster: brief line per entity (name, kind, nicknames, fact count); with kind='person' etc. the fuller card (relationship, birthday, other filled-in fields). Merge/delete stay UI-only.
 - search_memory(query, label?, private_key?) — semantic + full-text search, optional label filter
 - get_recent_memories(count?, label?, private_key?) — most recent, optionally filtered by label
 - delete_memory(memory_id, private_key?) — remove a memory

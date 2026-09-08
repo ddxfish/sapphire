@@ -230,8 +230,9 @@ TOOLS = [
         "function": {
             "name": "list_entities",
             # Read-only roster (2026-09-08). She had no way to see everyone
-            # at once, so near-duplicates ('bander username' beside Krem,
-            # nickname bander) got minted. Merge/delete stay UI-only.
+            # at once, so near-duplicates ('<nickname> username' beside the
+            # card that already carried that nickname) got minted.
+            # Merge/delete stay UI-only.
             "description": (
                 "Your roster of entities (people, places, things, events) in "
                 "this memory scope — see everyone at once before saving a fact "
@@ -1199,9 +1200,9 @@ def _resolve_entity_name(name: str, scope: str) -> tuple:
     """(canonical_name, receipt_note) for a save's entity= parameter.
 
     Exact name OR nickname → that entity's canonical name: a nickname on the
-    card is the user saying "same person", so entity='bander' lands on Krem
+    card is the user saying "same person", so entity='sam' lands on Samantha
     instead of minting a twin. A NEW name that merely contains a known
-    name/nickname ('bander username') stays new — the note asks "did you
+    name/nickname ('sam username') stays new — the note asks "did you
     mean …?" with that entity's nicknames so she can re-save under the right
     name, and the People tab can merge. Never blocks the save (2026-09-08)."""
     try:

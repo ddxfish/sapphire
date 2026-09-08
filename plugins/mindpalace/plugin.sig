@@ -27,7 +27,7 @@
     "tests/test_library.py": "sha256:020ce57cd58af6080e0f3bc506a1cd1c073f2e00637894557464be65af15cdf2",
     "tests/test_library_export.py": "sha256:cf972e1355fa5e748f9a3d9133dc4d29aaeff18994571d85283e85c6d88a62a5",
     "tests/test_memory_dates.py": "sha256:dbf705c9aeb658ce603889d25af9173d238406c06564e47d645c48863aa5c56f",
-    "tests/test_mindpalace.py": "sha256:993060245c3fcc0ab7c98e459c6335f3fb7af0840a2f28305c7b1e9a3a6dc7db",
+    "tests/test_mindpalace.py": "sha256:7bd3c8dca6d6d29d2c5bbaf85a3dbdf3d77d40023d0e30e1bcbf02f9c1ffe138",
     "tests/test_mindpalace_dedup_human.py": "sha256:86e2ca4d32df1775e324363452a7b4115a792d719a08211d416c4e81cadb4976",
     "tests/test_mindpalace_goals.py": "sha256:51dfb3a499a83fc66d116fdf33cff3d57d8a8e688f3831cfb0d8b6d2e9e87e3a",
     "tests/test_mindpalace_import.py": "sha256:41e84eec08d9e192b6cbb62d52d0cd4552bba391890c626b1b2c43030c5c43ab",
@@ -60,7 +60,7 @@
     "tools/library.py": "sha256:21ddf3f16d085ed79d973abde8cc1a2add0b41b0552b2aad2e0747e9d52ef89c",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
     "tools/metadata.py": "sha256:8ca10bffed6064e3167127e3ef5ba25cd60076b03a0101c9eaf7bd2042aac7ed",
-    "tools/palace_tools.py": "sha256:efe01190fd78a3354c4ac636a0d49a165565beff41e30363b31059d22506f0aa",
+    "tools/palace_tools.py": "sha256:ab0ea64af8792193e956a56dfafc32030481c71fcafb60288734f3d3f8e1ad8b",
     "tools/prompt_audit.py": "sha256:5efeab54b0b6b2d5edea18003f28240687af83c4ea7ac5d28a3b06f5719b967b",
     "tools/self_tools.py": "sha256:b2b88427b35affd02af5957bdba5426ee00b8c0c5e2588b65480a5eb03141780",
     "tools/spider.py": "sha256:7447f2e6841c889014175ce186ba1d1da7f5c637c9dd32c0b97b7d117c1f9457",
@@ -68,5 +68,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "VdgLZO7MDp7zGYSfqP5vzDLbEN+JKG0iXXJmOLZ1JF/fm5UeW+PmqK4BBDcXjPyPGNA51+xyT+ofeh8OfUTlCg=="
+  "signature": "f5rU+6AsvjnE8W9eJ0i1vSiqdrvjGPoUXmWoUpO9yHyhOmDhQA2m+0DDkf7DSlj7URXXi1/wex3dT/gMxcpeAg=="
 }
