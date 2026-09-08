@@ -501,6 +501,19 @@ def run_continuity_task(task_id: str, request: Request, _=Depends(require_login)
     return result
 
 
+@router.post("/api/continuity/tasks/{task_id}/cancel")
+async def cancel_continuity_task(task_id: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Stop a task's in-flight run (⏹). The run ends at its next cancel
+    point — between LLM rounds; queued fires behind it are dropped. The task
+    stays enabled. Toggle-off does the same cancel implicitly."""
+    if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
+        raise HTTPException(status_code=503, detail="Continuity scheduler not available")
+    result = system.continuity_scheduler.cancel_task(task_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Task not found"))
+    return result
+
+
 @router.get("/api/continuity/status")
 async def get_continuity_status(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Get continuity scheduler status."""

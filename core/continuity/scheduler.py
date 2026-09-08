@@ -123,6 +123,10 @@ class ContinuityScheduler:
         self._task_pending: Dict[str, list] = {}  # task_id -> [(event_data, reply_cb), ...]
         self._task_last_matched: Dict[str, str] = {}  # task_id -> "YYYY-MM-DD HH:MM"
         self._task_progress: Dict[str, Dict] = {}  # task_id -> {iteration, total}
+        # task_id -> threading.Event for the run in flight. Armed fresh per
+        # run; set by cancel_task / toggle-off / delete. Read by the executor
+        # between LLM rounds. 2026-09-08.
+        self._task_cancel: Dict[str, threading.Event] = {}
         self._event_threads: list = []  # track spawned event worker threads
         self._concurrency_sem = threading.Semaphore(3)  # max 3 concurrent task threads
         
@@ -314,6 +318,8 @@ class ContinuityScheduler:
             for t in self._tasks.values():
                 task = dict(t)  # shallow copy so we don't persist transient fields
                 task["running"] = self._task_running.get(t["id"], False)
+                _ev = self._cancel_events().get(t["id"])
+                task["cancelling"] = bool(task["running"] and _ev is not None and _ev.is_set())
                 progress = self._task_progress.get(t["id"])
                 if progress:
                     task["progress"] = progress
@@ -512,6 +518,15 @@ class ContinuityScheduler:
             self._task_pending[task_id] = []
             self._task_last_matched.pop(task_id, None)
 
+            # Toggling OFF a running task cancels its in-flight run. Before
+            # this the drain loop only stopped BETWEEN runs — a daemon in a
+            # long tool loop had no off switch (Krem, 2026-09-08).
+            if data.get("enabled") is False and self._task_running.get(task_id):
+                _ev = self._cancel_events().get(task_id)
+                if _ev is not None:
+                    _ev.set()
+                    logger.info(f"[Continuity] '{task['name']}' disabled mid-run — cancelling")
+
             self._save_tasks()
             logger.info(f"[Continuity] Updated task: {task['name']} ({task_id})")
         if "prompt" in data:
@@ -531,10 +546,48 @@ class ContinuityScheduler:
             self._task_running.pop(task_id, None)
             self._task_last_matched.pop(task_id, None)
             self._task_progress.pop(task_id, None)
+            _ev = self._cancel_events().pop(task_id, None)
+            if _ev is not None:
+                _ev.set()   # a deleted task's live run stops too
             self._save_tasks()
             logger.info(f"[Continuity] Deleted task: {name} ({task_id})")
         self._vault_ref_sync(None, old_prompt)
         return True
+
+    # ── Cancel (⏹ / toggle-off / delete) ──
+
+    def _cancel_events(self) -> Dict[str, threading.Event]:
+        # Test fixtures build the scheduler via __new__ and may skip __init__.
+        d = getattr(self, "_task_cancel", None)
+        if d is None:
+            d = self._task_cancel = {}
+        return d
+
+    def _arm_cancel(self, task_id: str) -> threading.Event:
+        """Fresh cancel Event for the run about to start. Called under no
+        lock — Event creation is cheap and the dict write is atomic."""
+        ev = threading.Event()
+        self._cancel_events()[task_id] = ev
+        return ev
+
+    def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        """Stop a task's in-flight run and drop anything queued behind it.
+        The run ends at its next cancel point (between LLM rounds); the
+        task stays enabled — a new event fires it again normally."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return {"success": False, "error": "Task not found"}
+            running = self._task_running.get(task_id, False)
+            self._task_pending[task_id] = []
+            ev = self._cancel_events().get(task_id)
+            if ev is not None:
+                ev.set()
+            name = task.get("name", "Unnamed")
+        if running:
+            logger.info(f"[Continuity] Cancel requested: {name}")
+            self._log_activity(task_id, name, "cancel_requested")
+        return {"success": True, "was_running": running}
     
     # =========================================================================
     # SCHEDULE CHECKING
@@ -617,11 +670,13 @@ class ContinuityScheduler:
                     break
 
             self._log_activity(task_id, task_name, "started")
+            ev = self._arm_cancel(task_id)
             try:
                 result = self.executor.run(
                     task,
                     progress_callback=self._make_progress_callback(task_id),
                     response_callback=self._make_response_callback(task_id),
+                    cancel_event=ev,
                 )
 
                 with self._lock:
@@ -631,7 +686,7 @@ class ContinuityScheduler:
                         self._save_tasks()
                     self._task_progress.pop(task_id, None)
 
-                status = "complete" if result.get("success") else "error"
+                status = "cancelled" if ev.is_set() else ("complete" if result.get("success") else "error")
 
                 self._log_activity(task_id, task_name, status, {
                     "responses": len(result.get("responses", [])),
@@ -645,6 +700,8 @@ class ContinuityScheduler:
 
             # Check for queued fires
             with self._lock:
+                if ev.is_set():
+                    self._task_pending[task_id] = []   # cancel = queued fires die too
                 queue = self._task_pending.get(task_id, [])
                 if queue:
                     queue.pop(0)  # Cron queues don't carry data, just drain
@@ -782,12 +839,14 @@ class ContinuityScheduler:
 
         logger.info(f"[Continuity] Manual run: {task_name}")
         self._log_activity(task_id, task_name, "started", {"manual": True})
+        ev = self._arm_cancel(task_id)
 
         try:
             result = self.executor.run(
                 task,
                 progress_callback=self._make_progress_callback(task_id),
                 response_callback=self._make_response_callback(task_id),
+                cancel_event=ev,
             )
 
             with self._lock:
@@ -796,7 +855,7 @@ class ContinuityScheduler:
                     self._increment_run_count(task_id)
                     self._save_tasks()
 
-            status = "complete" if result.get("success") else "error"
+            status = "cancelled" if ev.is_set() else ("complete" if result.get("success") else "error")
 
             self._log_activity(task_id, task_name, status, {
                 "manual": True,
@@ -956,12 +1015,14 @@ class ContinuityScheduler:
                         pass
 
                 self._log_activity(task_id, task_name, "started", {"trigger": task_type})
+                ev = self._arm_cancel(task_id)
                 try:
                     result = self.executor.run(
                         active_task,
                         event_data=cur_event_data,
                         progress_callback=self._make_progress_callback(task_id),
                         response_callback=_make_reply_cb(active_task, cur_event_data, cur_reply_callback),
+                        cancel_event=ev,
                     )
                     with self._lock:
                         if task_id in self._tasks:
@@ -970,7 +1031,7 @@ class ContinuityScheduler:
                             self._save_tasks()
                         self._task_progress.pop(task_id, None)
 
-                    status = "complete" if result.get("success") else "error"
+                    status = "cancelled" if ev.is_set() else ("complete" if result.get("success") else "error")
                     self._log_activity(task_id, task_name, status, {
                         "trigger": task_type,
                         "responses": len(result.get("responses", [])),
@@ -983,6 +1044,8 @@ class ContinuityScheduler:
 
                 # Drain queued events (with their actual data) or release
                 with self._lock:
+                    if ev.is_set():
+                        self._task_pending[task_id] = []   # cancel = queued events die too
                     queue = self._task_pending.get(task_id, [])
                     if queue:
                         cur_event_data, cur_reply_callback = queue.pop(0)

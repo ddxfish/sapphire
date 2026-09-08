@@ -5,7 +5,7 @@
 // sibling views stay thin and render identically (reusing the existing sched-*
 // CSS). View-specific glue (what data to load, surgical poll updates) stays in
 // each view; everything reusable lives here.
-import { createTask, updateTask, deleteTask, runTask } from './continuity-api.js';
+import { createTask, updateTask, deleteTask, runTask, cancelTask } from './continuity-api.js';
 import { openTriggerEditor } from './trigger-editor/editor.js';
 import { describeCron } from './trigger-editor/trigger-cron.js';
 import { showExportDialog, showImportDialog } from './import-export.js';
@@ -138,13 +138,26 @@ export function statusRow({ enabled, total, running, desc }) {
 
 // ── Card renderers ────────────────────────────────────────────────────
 
+// ⏹ on any card whose run is live. Lands between LLM rounds server-side, so
+// the card shows "Stopping…" (cancelling) until the run actually exits.
+// Plugin-handler tasks run their own code and can't be interrupted — no ⏹.
+export function stopBtn(t) {
+    if (!t.running || (t.source || '').startsWith('plugin:')) return '';
+    const label = t.cancelling ? 'Stopping…' : 'Stop run';
+    return `<button class="btn-icon danger" data-action="cancel" data-id="${t.id}" title="${label}"${t.cancelling ? ' disabled' : ''}>⏹</button>`;
+}
+
+export function runningText(t) {
+    if (!t.running) return '';
+    return `<span class="sched-progress">${t.cancelling ? 'Stopping…' : 'Running...'}</span>`;
+}
+
 export function renderTaskCard(t) {
     const sched = describeCron(t.schedule);
     const lastRun = t.last_run ? formatTime(t.last_run) : 'Never';
     const isPlugin = (t.source || '').startsWith('plugin:');
     const pluginName = isPlugin ? t.source.replace('plugin:', '') : '';
-    let statusText = '';
-    if (t.running) statusText = `<span class="sched-progress">Running...</span>`;
+    const statusText = runningText(t);
     const meta = [
         isPlugin ? `<span class="sched-plugin-badge" title="Managed by ${esc(pluginName)} plugin">${esc(pluginName)}</span>` : '',
         t.chance < 100 ? `${t.chance}%` : '',
@@ -156,7 +169,8 @@ export function renderTaskCard(t) {
 
     const actions = isPlugin
         ? `<button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">▶</button>`
-        : `<button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">▶</button>
+        : `${stopBtn(t)}
+           <button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">▶</button>
            <button class="btn-icon" data-action="export" data-id="${t.id}" title="Export">⇩</button>
            <button class="btn-icon" data-action="edit" data-id="${t.id}" title="Edit">✏️</button>
            <button class="btn-icon danger" data-action="delete" data-id="${t.id}" title="Delete">✕</button>`;
@@ -235,6 +249,7 @@ export function renderHeartbeatCard(hb, timeline) {
             <div class="hb-time">${timeParts}</div>
             ${responseHtml}
             <div class="hb-actions">
+                ${stopBtn(hb)}
                 <button class="btn-icon" data-action="run" data-id="${hb.id}" title="Run now">▶</button>
                 <button class="btn-icon" data-action="export" data-id="${hb.id}" title="Export">⇩</button>
                 <button class="btn-icon" data-action="edit" data-id="${hb.id}" title="Edit">✏️</button>
@@ -267,6 +282,7 @@ export function renderDaemonList(daemons) {
         const meta = [
             source,
             hasFilter ? 'filtered' : '',
+            runningText(d),
             chatChip(d.chat_target),
             `Last: ${lastRun}`
         ].filter(Boolean).join(' · ');
@@ -282,6 +298,7 @@ export function renderDaemonList(daemons) {
                     <div class="sched-task-meta">${meta}</div>
                 </div>
                 <div class="sched-task-actions">
+                    ${stopBtn(d)}
                     <button class="btn-icon" data-action="export" data-id="${d.id}" title="Export">⇩</button>
                     <button class="btn-icon" data-action="edit" data-id="${d.id}" title="Edit">✏️</button>
                     <button class="btn-icon danger" data-action="delete" data-id="${d.id}" title="Delete">✕</button>
@@ -303,6 +320,7 @@ export function renderWebhookList(webhooks) {
         const lastRun = w.last_run ? formatTime(w.last_run) : 'Never';
         const meta = [
             `${method} /api/events/webhook/${esc(path)}`,
+            runningText(w),
             chatChip(w.chat_target),
             `Last: ${lastRun}`
         ].filter(Boolean).join(' · ');
@@ -318,6 +336,7 @@ export function renderWebhookList(webhooks) {
                     <div class="sched-task-meta">${meta}</div>
                 </div>
                 <div class="sched-task-actions">
+                    ${stopBtn(w)}
                     <button class="btn-icon" data-action="export" data-id="${w.id}" title="Export">⇩</button>
                     <button class="btn-icon" data-action="edit" data-id="${w.id}" title="Edit">✏️</button>
                     <button class="btn-icon danger" data-action="delete" data-id="${w.id}" title="Delete">✕</button>
@@ -525,6 +544,10 @@ export function bindActions(rootEl, getAll, refresh) {
             if (!item || !confirm(`Run "${item.name}" now?`)) return;
             try { await runTask(id); ui.showToast(`Running: ${item.name}`, 'success'); await refresh(); }
             catch { ui.showToast('Run failed', 'error'); }
+        } else if (action === 'cancel') {
+            if (!item) return;
+            try { await cancelTask(id); ui.showToast(`Stopping: ${item.name}`, 'success'); await refresh(); }
+            catch { ui.showToast('Stop failed', 'error'); }
         } else if (action === 'delete') {
             if (!item || !confirm(`Delete "${item.name}"?`)) return;
             try { await deleteTask(id); ui.showToast('Deleted', 'success'); await refresh(); }
@@ -536,7 +559,12 @@ export function bindActions(rootEl, getAll, refresh) {
         if (action === 'toggle' || action === 'hb-toggle') {
             const item = getAll().find(t => t.id === id);
             if (!item) return;
-            try { await updateTask(id, { enabled: !item.enabled }); await refresh(); }
+            try {
+                await updateTask(id, { enabled: !item.enabled });
+                // Toggle-off cancels the in-flight run server-side.
+                if (item.enabled && item.running) ui.showToast(`Stopping: ${item.name}`, 'success');
+                await refresh();
+            }
             catch { ui.showToast('Toggle failed', 'error'); }
         }
     });

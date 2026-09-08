@@ -739,7 +739,8 @@ class TestReplyHandler:
         mock_executor = MagicMock()
         mock_executor.run.return_value = {"success": True, "responses": [{"output": "Hello!"}], "errors": []}
         # Simulate executor calling response_callback
-        def fake_run(task, event_data=None, progress_callback=None, response_callback=None):
+        def fake_run(task, event_data=None, progress_callback=None, response_callback=None,
+                     cancel_event=None):
             if response_callback:
                 response_callback("Hello from Sapphire!")
             return {"success": True, "responses": [{"output": "Hello!"}], "errors": []}

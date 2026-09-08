@@ -43,12 +43,18 @@ export async function handleRegen(idx) {
     // deleting the turn (S1 #3, hunt 2026-08-30).
     if (!confirm('Regenerate this response?')) return;
 
+    // Regen means "that answer was wrong" — cut its voice at the click, not
+    // at the new turn's first chunk (a slow CPU = 10s+ of the wrong answer
+    // still talking). Send deliberately does NOT do this: she finishes the
+    // last answer until the new voice arrives. Krem's ruling A, 2026-09-08.
+    audio.stop(true);
+
     const abortController = new AbortController();
     setAbortController(abortController);
     setIsCancelling(false);
-    
+
     const audioFn = getTtsEnabled() ? audio.playText : null;
-    
+
     const len = await chat.handleRegen(
         idx, 
         setProc, 

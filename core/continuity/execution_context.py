@@ -95,8 +95,15 @@ class ExecutionContext:
     """
 
     def __init__(self, function_manager, tool_engine, task_settings: Dict[str, Any],
-                 session_manager=None):
+                 session_manager=None, cancel_check=None):
         self.fm = function_manager
+        # Zero-arg callable polled by run(): True = stop. Checked at the top
+        # of every tool round AND between the LLM's reply and its tool batch,
+        # so a cancel never executes another tool. The LLM HTTP call itself
+        # is blocking — a cancel lands when it returns (bounded by the LLM
+        # timeout). Wired by the scheduler's per-run cancel Event. 2026-09-08.
+        self.cancel_check = cancel_check
+        self.cancelled = False
         self.tool_engine = tool_engine
         self.task_settings = task_settings
         # Image sink only — tool images from this lane went to a dead-end disk
@@ -124,6 +131,16 @@ class ExecutionContext:
         # placeholder" so agent UI / status reports don't render a green
         # success for a no-op run. Scout #15 — 2026-04-20. None = clean run.
         self.degraded_reason: Optional[str] = None
+
+    def _is_cancelled(self) -> bool:
+        if self.cancelled:
+            return True
+        try:
+            if self.cancel_check is not None and self.cancel_check():
+                self.cancelled = True
+        except Exception:
+            pass
+        return self.cancelled
 
     # ── Construction (read-only) ──
 
@@ -542,6 +559,9 @@ class ExecutionContext:
         overflow_reason = None
         loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
         for i in range(max_iterations):
+            if self._is_cancelled():
+                logger.info(f"[ExecCtx] cancelled before round {i+1}")
+                break
             # Context limit check — auto-trim oldest messages rather than bail.
             # Previously this break fired before we ever called the LLM whenever
             # loaded history was already >90% of the task's context_limit,
@@ -611,6 +631,13 @@ class ExecutionContext:
             response_msg = self.tool_engine.call_llm_with_metrics(
                 self.provider, messages, self.gen_params, tools=self.tools
             )
+
+            # A cancel that landed during the LLM call: nothing from this
+            # reply is appended or executed — no tool side effects after the
+            # user said stop, no half-turn in history.
+            if self._is_cancelled():
+                logger.info(f"[ExecCtx] cancelled after round {i+1}'s LLM reply — dropping it")
+                break
 
             if response_msg.has_tool_calls:
                 filtered = filter_to_thinking_only(response_msg.content or "")
@@ -807,7 +834,12 @@ class ExecutionContext:
                 # by keeping final_content empty here so caller truthy-checks
                 # (`if response:`) drop the output cleanly. Scout #15 / Krem
                 # 2026-04-24.
-                if overflow_reason:
+                if self.cancelled:
+                    self.degraded_reason = (
+                        f"Cancelled by user. Tools called before the stop: "
+                        f"{', '.join(self.tool_log) or '(none)'}."
+                    )
+                elif overflow_reason:
                     self.degraded_reason = overflow_reason
                 else:
                     self.degraded_reason = (

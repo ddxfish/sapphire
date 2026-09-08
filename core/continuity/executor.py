@@ -210,9 +210,16 @@ class ContinuityExecutor:
         return "\n".join(parts)
 
     def run(self, task: Dict[str, Any], event_data: str = None,
-            progress_callback=None, response_callback=None) -> Dict[str, Any]:
+            progress_callback=None, response_callback=None,
+            cancel_event=None) -> Dict[str, Any]:
         """
         Execute a continuity task.
+
+        cancel_event: optional threading.Event — set by the scheduler when the
+        user stops the run (⏹ / toggle off / delete). Honored between LLM
+        rounds by ExecutionContext; a cancelled run persists an empty reply,
+        sends nothing to its source, speaks nothing. Plugin-handler tasks
+        (source 'plugin:*') run their own code and can't be interrupted.
 
         Args:
             task: Task definition dict
@@ -324,10 +331,12 @@ class ContinuityExecutor:
 
             # Blank chat_target = ephemeral: isolated, no chat creation, no UI impact
             if not chat_target:
-                return self._run_background(task, result, progress_callback, response_callback)
+                return self._run_background(task, result, progress_callback, response_callback,
+                                            cancel_event=cancel_event)
 
             # Named chat_target = foreground: switches to that chat, runs, restores
-            return self._run_foreground(task, result, progress_callback, response_callback)
+            return self._run_foreground(task, result, progress_callback, response_callback,
+                                        cancel_event=cancel_event)
         finally:
             # Reset the event ContextVar. Harmless on today's fresh-thread-per-task
             # scheduler; load-bearing the day any pooled thread calls run() —
@@ -386,7 +395,7 @@ class ContinuityExecutor:
         return settings
 
     def _run_background(self, task: Dict[str, Any], result: Dict[str, Any],
-                        progress_cb=None, response_cb=None) -> Dict[str, Any]:
+                        progress_cb=None, response_cb=None, cancel_event=None) -> Dict[str, Any]:
         """Run task in background mode — fully isolated via ExecutionContext."""
         from core.continuity.execution_context import ExecutionContext
 
@@ -407,7 +416,8 @@ class ContinuityExecutor:
                     self.system.llm_chat.function_manager,
                     self.system.llm_chat.tool_engine,
                     task_settings,
-                    session_manager=self.system.llm_chat.session_manager
+                    session_manager=self.system.llm_chat.session_manager,
+                    cancel_check=(cancel_event.is_set if cancel_event is not None else None),
                 )
 
                 # Set Discord reply channel for auto-reply targeting
@@ -443,6 +453,9 @@ class ContinuityExecutor:
                         response = ctx.run(msg, images=_ev_images)
                     finally:
                         stream_brain.reset_override(_brain_token)
+
+                    if getattr(ctx, "cancelled", False):
+                        result["cancelled"] = True   # response is "" — nothing below fires
 
                     if response_cb and response:
                         # Same egress rule as the foreground lane: a
@@ -554,7 +567,7 @@ class ContinuityExecutor:
         return ("\n" + "\n".join(markers)) if markers else ""
 
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any],
-                        progress_cb=None, response_cb=None) -> Dict[str, Any]:
+                        progress_cb=None, response_cb=None, cancel_event=None) -> Dict[str, Any]:
         """Run task with persistent chat history — no UI switching.
 
         Voice-lock discipline: the lock is held for the ENTIRE duration of
@@ -653,7 +666,8 @@ class ContinuityExecutor:
                 self.system.llm_chat.function_manager,
                 self.system.llm_chat.tool_engine,
                 task_settings,
-                session_manager=self.system.llm_chat.session_manager
+                session_manager=self.system.llm_chat.session_manager,
+                cancel_check=(cancel_event.is_set if cancel_event is not None else None),
             )
 
             # Set Discord reply channel for auto-reply targeting
@@ -740,6 +754,7 @@ class ContinuityExecutor:
                 # message so the frontend can render it as an italic system
                 # note. Frontend MUST keep this out of any speak/relay paths.
                 degraded = getattr(ctx, 'degraded_reason', None)
+                cancelled = getattr(ctx, 'cancelled', False)
                 if degraded and ctx.new_messages:
                     for _m in ctx.new_messages:
                         if _m.get("role") == "assistant" and not _m.get("content"):
@@ -782,10 +797,14 @@ class ContinuityExecutor:
                     # must be able to tell "model failed" from "model
                     # declined"; success stays True for backward compat.
                     result["degraded"] = degraded
-                    publish(Events.CONTINUITY_TASK_ERROR, {
-                        "task": task.get("name", "Unknown"),
-                        "error": degraded,
-                    })
+                    if cancelled:
+                        # The user's stop, not a model failure — no error event.
+                        result["cancelled"] = True
+                    else:
+                        publish(Events.CONTINUITY_TASK_ERROR, {
+                            "task": task.get("name", "Unknown"),
+                            "error": degraded,
+                        })
 
                 if response_cb and response:
                     # Reply callbacks are egress (Discord/Telegram/email posts).

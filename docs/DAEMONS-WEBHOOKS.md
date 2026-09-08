@@ -366,6 +366,9 @@ Every daemon and webhook task has the same AI settings as scheduled tasks:
 - Try with an empty filter `{}` first to confirm events are arriving
 - Check the plugin is enabled and connected (Discord bot online, email polling active)
 
+**Daemon stuck in a long run?**
+- Click ⏹ on the running card (or flip its toggle off). The run stops at the end of its current AI round, drops anything queued behind it, and posts nothing back to the source.
+
 **Webhook returning 404?**
 - Path and method must match exactly (path is case-sensitive)
 - Task must be enabled

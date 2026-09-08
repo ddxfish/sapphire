@@ -98,7 +98,7 @@ Use `*` for "any value". Use `*/N` for "every N". Use `1-5` for ranges (1=Monday
 | ⚡ **Realtime** | Live inbound session rules—phone lines she answers and holds open. |
 | 🔗 **Webhooks** | HTTP triggers so outside services can poke her. |
 
-Heartbeat and Scheduled are the time-driven views this doc covers. Each item can be toggled, edited, exported, run manually (▶), or deleted, and a timeline strip shows what ran and what's coming up, with chance percentages. Daemons, Realtime, and Webhooks fire on incoming events rather than the clock—see [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
+Heartbeat and Scheduled are the time-driven views this doc covers. Each item can be toggled, edited, exported, run manually (▶), stopped mid-run (⏹ appears on a running card; toggling off stops it too), or deleted, and a timeline strip shows what ran and what's coming up, with chance percentages. Daemons, Realtime, and Webhooks fire on incoming events rather than the clock—see [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
 
 ## Tips
 

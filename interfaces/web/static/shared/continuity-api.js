@@ -36,6 +36,11 @@ export async function runTask(taskId) {
   return fetchWithTimeout(`${API_BASE}/tasks/${taskId}/run`, { method: 'POST' });
 }
 
+// Stop a task's in-flight run (⏹). Lands between LLM rounds server-side.
+export async function cancelTask(taskId) {
+  return fetchWithTimeout(`${API_BASE}/tasks/${taskId}/cancel`, { method: 'POST' });
+}
+
 export async function fetchStatus() {
   return fetchWithTimeout(`${API_BASE}/status`);
 }
