@@ -356,3 +356,112 @@ def banter(game, body=None, query=None, **_):
         gc.save_state(game, state, session)
         out = _out(engine, state, session)
     return _with_last(out, rows, gc.append_table(session, rows))
+
+
+# ── the cadence organ (F3, 2026-09-09) ─────────────────────────────────────
+# The room arms core/cadence.py for its session from the resolved spine and
+# keeps it alive (TTL 90s, keepalive every 30s from the open room); leaving
+# disarms; a dead tab expires. Pause writes the session layer's
+# `cadence_paused` and re-arms; poke = a game event ("wave 12 cleared").
+
+def _cadence():
+    from core import cadence
+    return cadence
+
+
+def _session_game(session):
+    s = gc._chat_settings(session)
+    if s is None:
+        return None, ({'error': 'session not found'}, 404)
+    gid = str(s.get('game_id') or '')
+    if s.get('mode') != 'game' or not gid or gid.startswith('story:'):
+        return None, ({'error': 'not a game session'}, 400)
+    return gid, None
+
+
+def cadence_arm(body=None, query=None, **_):
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    gid, err = _session_game(session)
+    if err:
+        return err
+    meta, _engine = gc.get_game(gid)
+    spec = gc.cadence_spec(session)
+    st = _cadence().arm(session, owner='game-room', ttl=90, prompt=gc.cadence_prompt(session),
+                        title=(meta or {}).get('title') or gid, **spec)
+    return {'status': 'ok', 'cadence': st, 'spec': spec}
+
+
+def cadence_disarm(body=None, query=None, **_):
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    return {'status': 'ok', 'disarmed': _cadence().disarm(session, owner='game-room')}
+
+
+def cadence_status(query=None, **_):
+    session = _session(query)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    return {'status': 'ok', 'cadence': _cadence().status(session), 'spec': gc.cadence_spec(session)}
+
+
+def cadence_pause(body=None, query=None, **_):
+    """Pause / resume her unprompted turns for THIS session (the session
+    layer's one tenant) — persisted on the chat, mirrored into the organ."""
+    body = body or {}
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    gid, err = _session_game(session)
+    if err:
+        return err
+    paused = bool(body.get('paused'))
+    set_session_settings(body={'session': session, 'settings': {'cadence_paused': paused}})
+    st = _cadence().status(session)
+    if st.get('armed'):
+        st = _cadence().pause(session, paused)
+    return {'status': 'ok', 'paused': paused, 'cadence': st}
+
+
+def cadence_poke(body=None, query=None, **_):
+    """A game moment (event mode fires on it, no sooner than the min gap;
+    timer mode pulls its next turn forward to that floor)."""
+    body = body or {}
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    note = str(body.get('note') or '').strip()[:400]
+    if note:
+        from core import perception
+        percept = perception.peek(session) or {}
+        perception.deposit(session, frames=percept.get('frames'), text=note, source='poke')
+    st = _cadence().poke(session, note)
+    return {'status': 'ok', 'cadence': st or {'armed': False}}
+
+
+def session_end(body=None, query=None, **_):
+    """The session is ending: her summary turn (spine: session_end_summary),
+    run in the background — the room is already leaving."""
+    body = body or {}
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    gid, err = _session_game(session)
+    if err:
+        return err
+    eff = gc.effective_for_chat(session)
+    _cadence().disarm(session, owner='game-room')
+    if not eff.get('session_end_summary'):
+        return {'status': 'ok', 'summary': False}
+    import threading
+
+    def _run():
+        try:
+            _cadence().fire_once(session, gc.summary_prompt(session),
+                                 speak=eff.get('tts_route') or 'browser', source='session_end')
+        except Exception as e:
+            gc.logger.warning(f"game-room: session-end summary for {session!r} did not run: {e}")
+    threading.Thread(target=_run, daemon=True, name='gameroom-session-end').start()
+    return {'status': 'ok', 'summary': True}

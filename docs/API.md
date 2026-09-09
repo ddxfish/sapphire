@@ -729,3 +729,10 @@ COMMON PATTERNS:
 - Toolsets: /api/toolsets (not /api/abilities — legacy name removed)
 - Most endpoints return JSON
 - 200/201 success, 400 validation, 403 auth/CSRF, 404 not found, 409 conflict (busy chat, existing vault), 503 system not ready
+
+## Perception & cadence (Game Room F3, 2026-09-09)
+
+| Method | Path | Body / Query | Notes |
+|---|---|---|---|
+| POST | `/api/perception/{chat}` | `{frames: [{data, media_type}], text, source}` | Deposit what she should see next for `chat` (a game board, an mpv watcher). Latest wins; frames are model-only for the next unprompted turn, never persisted. 404 for an unknown or sealed chat. |
+| GET | `/api/cadence/{chat}` | — | The cadence organ's record for `chat`: `armed, mode (event\|timer), paused, next_in, last_at, skips, pending, fired, ttl_in`. Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`). |

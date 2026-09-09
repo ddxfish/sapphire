@@ -92,3 +92,11 @@ def test_room_defaults_pass_through_flat_and_scalar():
     by = {g['id']: g for g in m.list_games()}
     assert by['poker']['room_defaults'] == {'cadence_mode': 'turn', 'send_frames': False}
     assert by['plain']['room_defaults'] == {}
+
+
+def test_moments_pass_through_capped():
+    m = _fresh()
+    assert m.register_game('td', {'surfaces': ['room'], 'entry_js': 'a.js',
+                                  'moments': ['after each wave', 'when the castle falls', {'no': 1}] + ['x'] * 9}, 'p')
+    got = {g['id']: g for g in m.list_games()}['td']['moments']
+    assert got[:2] == ['after each wave', 'when the castle falls'] and len(got) == 6

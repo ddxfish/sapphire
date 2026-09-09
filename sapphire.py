@@ -1258,6 +1258,7 @@ class VoiceChatSystem:
             ("plugin daemons", _pl.stop_all_daemons),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
             ("voice components", self.stop_components),
+            ("cadence organ", lambda: __import__('core.cadence', fromlist=['stop']).stop()),
             ("continuity scheduler", lambda: hasattr(self, 'continuity_scheduler') and self.continuity_scheduler and self.continuity_scheduler.stop()),
             ("backup scheduler", lambda: __import__('core.backup', fromlist=['backup_manager']).backup_manager.stop()),
             ("settings watcher", settings.stop_file_watcher),
@@ -1353,6 +1354,10 @@ def run():
         voice_chat.continuity_scheduler = continuity_scheduler  # Attach for stop() and API routes
         continuity_scheduler.start()
         logger.info("Continuity scheduler started")
+
+        # The cadence organ — her unprompted turns (rooms arm it per chat)
+        from core import cadence as _cadence
+        _cadence.start(voice_chat)
 
         # Wire scheduler into plugin loader for plugin schedule tasks
         from core.plugin_loader import plugin_loader

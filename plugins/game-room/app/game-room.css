@@ -56,6 +56,13 @@
     white-space: nowrap;
 }
 .gr-attn:hover { background: var(--trim-light, var(--bg-hover, #1c2230)); }
+/* her unprompted turns: mode + countdown, ⏸/▶ (the session's pause) */
+.gr-cad {
+    display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px;
+    border: 1px solid var(--border, #2a3040); border-radius: 999px; font-size: 0.8em;
+    color: var(--text-secondary, #8a8fa3); white-space: nowrap;
+}
+.gr-cad .sb-icon-btn { padding: 0 4px; font-size: 0.95em; }
 .gr-room { display: flex; gap: 12px; flex: 1 1 auto; min-height: 0; padding: 10px 12px; position: relative; }
 .gr-stagecol { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; gap: 8px; position: relative; }
 /* the subtitle: her latest line over the felt, only while the rail is folded */

@@ -477,13 +477,21 @@ class StreamingChat:
                             "filename": f.get("filename", ""),
                             "text": f.get("text", "")
                         })
-                    for img in (images or []):
-                        user_content.append({
-                            "type": "image",
-                            "data": img.get("data", ""),
-                            "media_type": img.get("media_type", "image/jpeg")
-                        })
-                    self.main_chat.session_manager.add_user_message(user_content)
+                    # images_ephemeral (cadence organ, F3 2026-09-09): perception
+                    # frames reach the MODEL this turn only (they're already in
+                    # `messages`); the persisted row keeps the words. F2's blob
+                    # lane replaces this with a marker per frame.
+                    if not getattr(self, 'images_ephemeral', False):
+                        for img in (images or []):
+                            user_content.append({
+                                "type": "image",
+                                "data": img.get("data", ""),
+                                "media_type": img.get("media_type", "image/jpeg")
+                            })
+                    if len(user_content) == 1 and user_content[0].get("type") == "text":
+                        self.main_chat.session_manager.add_user_message(user_input)
+                    else:
+                        self.main_chat.session_manager.add_user_message(user_content)
                 else:
                     self.main_chat.session_manager.add_user_message(user_input)
             else:

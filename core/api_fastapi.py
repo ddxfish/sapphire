@@ -975,6 +975,7 @@ from core.routes.knowledge import router as knowledge_router
 from core.routes.system import router as system_router
 from core.routes.plugins import router as plugins_router
 from core.routes.media import router as media_router
+from core.routes.perception import router as perception_router
 from core.routes.agents import router as agents_router
 from core.routes.docs import router as docs_router
 from core.routes.store import router as store_router
@@ -994,6 +995,7 @@ app.include_router(knowledge_router)
 app.include_router(system_router)
 app.include_router(plugins_router)
 app.include_router(media_router)
+app.include_router(perception_router)
 app.include_router(agents_router)
 app.include_router(docs_router)
 app.include_router(store_router)

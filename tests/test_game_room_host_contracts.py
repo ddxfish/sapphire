@@ -92,3 +92,19 @@ def test_settings_spine_has_one_kit_and_one_key_table():
     assert hooks["prompt_inject"] == "hooks/costume.py"
     routes = {r["path"] for r in MANIFEST["capabilities"]["routes"]}
     assert {"room/settings", "room/effective", "room/session-settings"} <= routes
+
+
+def test_cadence_organ_is_core_and_the_room_arms_it():
+    # F3 (2026-09-09): one organ in core (heartbeats later ride it too); the
+    # room host arms it per session from the spine and keeps it alive.
+    assert (ROOT / "core" / "cadence.py").exists() and (ROOT / "core" / "perception.py").exists()
+    sapphire = (ROOT / "sapphire.py").read_text(encoding="utf-8")
+    assert "_cadence.start(voice_chat)" in sapphire and '"cadence organ"' in sapphire
+    api = (ROOT / "core" / "api_fastapi.py").read_text(encoding="utf-8")
+    assert "perception_router" in api
+    for s in ("startCadence", "room/cadence/arm", "room/session-end", "/api/perception/", "captureFrame"):
+        assert s in HOST, s
+    routes = {r["path"] for r in MANIFEST["capabilities"]["routes"]}
+    assert {"room/cadence/arm", "room/cadence/pause", "room/cadence/poke", "room/session-end"} <= routes
+    engine = (ROOT / "core" / "chat" / "chat_streaming.py").read_text(encoding="utf-8")
+    assert "images_ephemeral" in engine

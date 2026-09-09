@@ -23,6 +23,13 @@
 // as their row and her quip as hers on the session chat, so the rail IS the
 // table log. Send alone is a normal chat turn. The 💬 badge on the move
 // buttons says "this goes with your move" while text is pending.
+// THE CADENCE ORGAN (F3, same day): a game room ARMS core/cadence.py for
+// its session from the spine (mode/range/frames/voice route) and keeps it
+// alive every 30s while open; leaving disarms, a dead tab expires. Her
+// unprompted turns arrive as VOICE_TURN events — the bound rail streams
+// them, the subtitle carries them, 'browser' voice plays here. A canvas
+// stage feeds the perception inbox with frames while `send_frames` is on;
+// boards poke game moments (ctx.poke) for event mode.
 // THE SUBTITLE (coffee sip, same day): one caption over the felt with her
 // LATEST row — her move in small caps, her words — shown ONLY while the rail
 // is folded, so exactly one surface ever carries her line. It fades, the
@@ -46,6 +53,7 @@
 //   sayRidesMoves composer text rides ctx.post moves (games)
 //   roomKeys      the spine's GAME layer as sidebar accordions (Cadence, …):
 //                 fields pre-filled with what this game inherits from the room
+//   cadence       arm her unprompted turns for this session (games)
 //   voice         🔊 speak her fresh seat quips
 //   settingsButton()                     ⚙ in the sidebar
 //   clearSession  ✕ clear (games: wipe history + fresh table, keep the name)
@@ -82,6 +90,7 @@ const RAIL_KEY = 'sapphire-game-rail';
 const VOICE_KEY = 'gameroom_voice';
 const ROOM_PLACEHOLDER = 'Say something — Send talks; a move button plays it with your move';
 const CAPTION_MS = 10000;
+const KEEPALIVE_MS = 30000;
 
 const bootV = () => document.querySelector('meta[name="boot-version"]')?.content || '';
 
@@ -342,6 +351,7 @@ export async function openRoom(root, spec, sessionName, opts = {}) {
 
     initSections(me);
     if (spec.roomKeys) initRoomKeys(me);
+    if (spec.cadence) startCadence(me);
     if (me.mod) {
         await loadState(me);
         if (R !== me) return null;
@@ -365,6 +375,7 @@ export function close() {
     R = null;
     if (me.timer) { clearInterval(me.timer); me.timer = null; }
     if (me.capTimer) { clearTimeout(me.capTimer); me.capTimer = null; }
+    stopCadence(me);
     try { me.spec.onClose?.(); } catch (e) { console.warn('[GameRoom] onClose failed', e); }
     if (me.mod?.unmount) { try { me.mod.unmount(); } catch (e) { /* game's problem */ } }
     // force: plain stop() no-ops while a stream is mid-flight, so leaving a
@@ -450,6 +461,12 @@ function makeCtx(me) {
         backdrop: (url) => setBackdrop(me, url),
         tickNow: () => { if (me.tickFn) me.tickFn(); },
         live: () => R === me,
+        // perception: what she sees next (latest wins); frames = [{data, media_type}]
+        deposit: (o) => deposit(me, o),
+        // a game moment — event mode fires on it (no sooner than the min gap).
+        // The frame of THAT moment rides along when the game shows her the screen.
+        poke: (note) => pokeMoment(me, note),
+        cadence: () => me.cad,
     };
 }
 
@@ -506,6 +523,7 @@ function skeleton(me) {
                 <span class="gr-stage-title">${title}</span>
                 <span class="gr-stage-info" id="gr-stage-info"></span>
                 <button type="button" id="gr-attn" class="gr-attn" style="display:none" title="Her attention (voice, wake word) moved to another chat — bring it back to this table">&#x1F3A4; retake</button>
+                ${spec.cadence ? '<span class="gr-cad" id="gr-cad" style="display:none"><span id="gr-cad-text"></span><button type="button" id="gr-cad-pause" class="sb-icon-btn" title="Pause her unprompted turns in this session">&#x23F8;</button></span>' : ''}
                 ${railMode ? '' : `<button type="button" id="gr-rail-toggle" class="sb-icon-btn" title="Show / hide the chat">&#x1F4AC;</button>`}
             </div>
             <div class="gr-room gr-mode-${esc(mode)}" id="gr-room">
@@ -997,10 +1015,153 @@ function captionFromRail(me) {
         const last = bubbles[bubbles.length - 1];
         if (!last) return;
         const copy = last.cloneNode(true);
-        copy.querySelectorAll('details, .thinking, .tool-call, .tool-accordion, script, style').forEach(n => n.remove());
-        const text = (copy.textContent || '').replace(/\s+/g, ' ').trim();
-        if (text) showCaption(me, text);
+        copy.querySelectorAll('details, .thinking, .think, .tool-call, .tool-accordion, .message-metadata, script, style').forEach(n => n.remove());
+        const text = (copy.textContent || '').replace(/<(?:seed:)?think>[\s\S]*?(?:<\/(?:seed:)?think>|$)/g, '').replace(/\s+/g, ' ').trim();
+        if (text) showCaption(me, firstSentences(text));
     }, 350);
+}
+
+// A subtitle is a line, not a paragraph: the first sentence, a second if it
+// still fits, then … (the rail has the rest).
+function firstSentences(text, max = 200) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (t.length <= max) return t;
+    const parts = t.match(/[^.!?…]+[.!?…]+["')\]]?\s*|[^.!?…]+$/g) || [t];
+    let out = '';
+    for (const p of parts) {
+        if ((out + p).trim().length > max) break;
+        out += p;
+    }
+    out = out.trim() || t.slice(0, max);
+    return out.length < t.length ? out.replace(/[.!?…]*$/, '') + '…' : out;
+}
+
+// ------------------------------------------------------------------ the cadence organ (F3)
+// Arm on open, keep alive while open, disarm on leave (+ the session-end
+// summary turn, which runs server-side after we're gone). The stage-bar
+// pill shows the mode and the countdown; ⏸ writes the session's pause.
+
+function startCadence(me) {
+    const arm = async () => {
+        if (R !== me) return;
+        try {
+            const r = await me.ctx.api('room/cadence/arm', 'POST', {});
+            if (R !== me) return;
+            me.cad = r.cadence || null;
+            me.cadSpec = r.spec || null;
+            paintCadence(me);
+            startFrames(me);
+        } catch (e) { /* not a game session, or the organ is off — the pill stays dark */ }
+    };
+    arm();
+    me.cadKeep = setInterval(arm, KEEPALIVE_MS);
+    me.cadPaint = setInterval(() => { if (me.cad && me.cad.next_in != null && !me.cad.paused) { me.cad.next_in = Math.max(0, me.cad.next_in - 1); paintCadence(me); } }, 1000);
+    const btn = me.root?.querySelector('#gr-cad-pause');
+    if (btn) btn.onclick = async () => {
+        if (!me.cad) return;
+        try {
+            const r = await me.ctx.api('room/cadence/pause', 'POST', { paused: !me.cad.paused });
+            if (R !== me) return;
+            me.cad = r.cadence || me.cad;
+            if (me.cad) me.cad.paused = !!r.paused;
+            paintCadence(me);
+        } catch (e) { showError(e.message); }
+    };
+}
+
+function stopCadence(me) {
+    if (me.cadKeep) { clearInterval(me.cadKeep); me.cadKeep = null; }
+    if (me.cadPaint) { clearInterval(me.cadPaint); me.cadPaint = null; }
+    stopFrames(me);
+    if (me.cad && me.cad.armed) {
+        // the session is ending: disarm + her summary (server-side, after us)
+        fetch(PLUGIN_API + 'room/session-end', {
+            method: 'POST', keepalive: true,
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+            body: JSON.stringify({ session: me.session }),
+        }).catch(() => {});
+    }
+    me.cad = null;
+}
+
+function paintCadence(me) {
+    const pill = me.root?.querySelector('#gr-cad');
+    const text = me.root?.querySelector('#gr-cad-text');
+    const btn = me.root?.querySelector('#gr-cad-pause');
+    if (!pill || !text) return;
+    const c = me.cad;
+    if (!c || !c.armed) { pill.style.display = 'none'; return; }
+    pill.style.display = '';
+    let label;
+    const moments = (me.spec.moments || []).join(', ');
+    if (c.paused) label = 'her turns paused';
+    else if (c.running) label = 'her turn…';
+    else if (c.mode === 'event') label = c.pending ? 'her turn: soon' : `her turns: ${moments || 'on game events'}`;
+    else label = c.next_in != null ? `her turn in ${Math.ceil(c.next_in)}s` : 'her turns: on';
+    if (c.skips) label += ` (waited ${c.skips}×)`;
+    text.textContent = label;
+    if (btn) { btn.textContent = c.paused ? '\u25B6' : '\u23F8'; btn.title = c.paused ? 'Resume her unprompted turns' : 'Pause her unprompted turns in this session'; }
+}
+
+// ── perception: frames from a canvas stage ──
+// TIMER rooms: while `send_frames` is on and the stage holds a canvas, grab
+// it on a steady beat (the gap spread over frames_per_tick), keep the last
+// N, deposit the ring — latest wins server-side, the organ takes it at fire
+// time. EVENT rooms capture at the moment instead (pokeMoment). A board may
+// deposit its own view (ctx.deposit).
+
+async function pokeMoment(me, note) {
+    if (R !== me) return;
+    if (me.cadSpec?.send_frames) {
+        const f = grabFrame(me);
+        if (f) await deposit(me, { frames: [f], text: note || '' });
+    }
+    return me.ctx.api('room/cadence/poke', 'POST', { note: note || '' }).catch(() => {});
+}
+
+function grabFrame(me) {
+    const cv = me.root?.querySelector('#gr-stage canvas');
+    if (!cv || !cv.width || !cv.height) return null;
+    try {
+        const short = Math.max(128, Math.min(1080, me.cadSpec?.frame_short_edge_px || 512));
+        const scale = Math.min(1, short / Math.min(cv.width, cv.height));
+        const off = document.createElement('canvas');
+        off.width = Math.round(cv.width * scale); off.height = Math.round(cv.height * scale);
+        off.getContext('2d').drawImage(cv, 0, 0, off.width, off.height);
+        return { data: off.toDataURL('image/jpeg', 0.72), media_type: 'image/jpeg' };
+    } catch (e) { return null; }   // a tainted canvas or a dead stage
+}
+
+function startFrames(me) {
+    const spec = me.cadSpec, c = me.cad;
+    if (!spec || !c || !c.armed || !spec.send_frames || c.mode !== 'timer') { stopFrames(me); return; }
+    if (me.frameTimer) return;
+    const n = Math.max(1, spec.frames_per_tick || 6);
+    const every = Math.max(2, Math.min(30, (spec.min_s || 60) / n)) * 1000;
+    me.frames = [];
+    me.frameTimer = setInterval(() => captureFrame(me, n), every);
+}
+
+function stopFrames(me) {
+    if (me.frameTimer) { clearInterval(me.frameTimer); me.frameTimer = null; }
+    me.frames = [];
+}
+
+function captureFrame(me, n) {
+    if (R !== me || document.hidden) return;
+    const f = grabFrame(me);
+    if (!f) return;
+    me.frames = [...(me.frames || []), f].slice(-n);
+    deposit(me, { frames: me.frames });
+}
+
+function deposit(me, { frames, text } = {}) {
+    if (R !== me) return Promise.resolve(false);
+    return fetch(`/api/perception/${encodeURIComponent(me.session)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+        body: JSON.stringify({ frames: frames || [], text: text || '', source: 'room' }),
+    }).then(r => r.ok).catch(() => false);
 }
 
 // ------------------------------------------------------------------ backdrop
@@ -1121,7 +1282,21 @@ function bindWatch() {
     });
     eventBus.on('voice_turn_end', (d) => {
         const me = R;
-        if (me && me.spec.sayRidesMoves && mine(me, d)) captionFromRail(me);
+        if (!me || !mine(me, d)) return;
+        if (d?.source) {
+            // her unprompted turn: the END carries what she actually said
+            // (think blocks gone; empty = a dropped no-answer turn)
+            if (d.text) showCaption(me, firstSentences(d.text));
+        } else if (me.spec.sayRidesMoves) {
+            captionFromRail(me);
+        }
+        // 'browser' voice route: this tab speaks it
+        if (d?.speak === 'browser' && d?.text && me.spec.cadence) speakText(me, String(d.text).slice(0, 2000));
+        if (me.cad) { me.cad.running = false; me.cad.last_at = Date.now() / 1000; me.cad.pending = false; paintCadence(me); }
+    });
+    eventBus.on('voice_turn_start', (d) => {
+        const me = R;
+        if (me && me.cad && mine(me, d) && d?.source === 'cadence') { me.cad.running = true; paintCadence(me); }
     });
 }
 
@@ -1153,12 +1328,13 @@ export async function openGame(root, gameMeta, sessionName, opts = {}) {
         hash: '#app-game-room/' + encodeURIComponent(gameMeta.id),
         loading: 'Setting the table...',
         stage: { mode: gameMeta.stage_mode || 'side', keepsFocus: !!gameMeta.keeps_focus },
+        moments: gameMeta.moments || [],
         // Module bust = boot version + registry generation: a plugin hot
         // reload/toggle bumps the generation, so an updated board module is
         // fetched fresh while an unchanged one stays memoized (the old
         // t=Date.now() retained one module instance per room entry, forever).
         board: () => import(`/plugin-web/${gameMeta.plugin_name}/${gameMeta.entry_js}?v=${v}&g=${gen}`),
-        sayRidesMoves: true, voice: true, roomKeys: true,
+        sayRidesMoves: true, voice: true, roomKeys: true, cadence: true,
         settingsButton: async () => {
             const mod = await import(`./settings-modal.js?v=${v}`);
             mod.openGameSettings(gameMeta.id);

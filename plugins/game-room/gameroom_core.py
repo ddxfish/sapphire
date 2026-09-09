@@ -699,6 +699,48 @@ def effective_for_chat(chat):
     return effective(gid or None, chat_settings=s)
 
 
+# ---------------------------------------------------------------- the cadence organ (F3)
+# The spine feeds core/cadence.py: a game session's resolved mode/range/
+# frames/voice route become the arm spec; the room keeps it alive while it
+# is open (TTL), and her cue names the game so the turn reads as a moment
+# at the table, not a message from nowhere.
+
+def cadence_spec(session):
+    """core.cadence.arm(**spec) for a game session, from the resolved spine."""
+    eff = effective_for_chat(session)
+    return {'mode': eff.get('cadence_mode') or 'timer',
+            'min_s': eff.get('cadence_min') or 60, 'max_s': eff.get('cadence_max') or 180,
+            'paused': bool(eff.get('cadence_paused')), 'send_frames': bool(eff.get('send_frames')),
+            'frames_per_tick': int(eff.get('frames_per_tick') or 6),
+            'speak': eff.get('tts_route') or 'browser'}
+
+
+def cadence_prompt(session):
+    """Her unprompted-turn cue for a game session — the deposit's state line
+    (or 'nothing new'), framed by the game's title."""
+    gid = game_session(session) or ''
+    meta, _engine = get_game(gid) if gid else (None, None)
+    title = (meta or {}).get('title') or gid or 'the table'
+
+    def build(percept, rec):
+        state = (percept or {}).get('text') or ''
+        frames = len((percept or {}).get('frames') or []) if rec.get('send_frames') else 0
+        head = f"[{title} — your turn while {('the screen' if frames else 'the table')} is in front of you]"
+        body = state or ('what you see is attached' if frames else 'nothing new on the table')
+        return (f"{head}\n{body}\n(Nobody spoke. Say what you'd say out loud right now, briefly; "
+                f"a word or two is fine, or a real read of the moment.)")
+    return build
+
+
+def summary_prompt(session):
+    gid = game_session(session) or ''
+    meta, _engine = get_game(gid) if gid else (None, None)
+    title = (meta or {}).get('title') or 'this session'
+    return (f"[{title} — the session is ending]\n"
+            "Write it up in your own words, a short paragraph: what happened, what you'll remember, "
+            "how it felt. This is the note you'll find later.")
+
+
 def seat_display_name(cfg):
     """Her name at the table, from the seat cfg (persona > prompt > Sapphire)."""
     name = (cfg or {}).get('persona') or (cfg or {}).get('prompt') or 'sapphire'
@@ -862,11 +904,7 @@ def game_session(chat):
     Stories carry 'story:' ids and their own hooks — never a game here."""
     if not chat:
         return None
-    try:
-        from core.api_fastapi import get_system
-        s = get_system().llm_chat.session_manager.get_settings_for(chat)
-    except Exception:
-        return None
+    s = _chat_settings(chat)
     if not isinstance(s, dict) or s.get('mode') != 'game':
         return None
     gid = str(s.get('game_id') or '').strip()

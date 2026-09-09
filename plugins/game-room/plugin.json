@@ -4,7 +4,7 @@
   "short_display_name": "Game Room",
   "display_name": "Game Room",
   "description": "The Game Room host: Surface rooms on the real chat rail, the sealed seat for moves, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "emoji": "🎲",
   "author": "Krem & Claude",
   "default_enabled": true,
@@ -120,6 +120,36 @@
         "method": "POST",
         "path": "room/session-settings",
         "handler": "routes/play.py:set_session_settings"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/arm",
+        "handler": "routes/play.py:cadence_arm"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/disarm",
+        "handler": "routes/play.py:cadence_disarm"
+      },
+      {
+        "method": "GET",
+        "path": "room/cadence/status",
+        "handler": "routes/play.py:cadence_status"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/pause",
+        "handler": "routes/play.py:cadence_pause"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/poke",
+        "handler": "routes/play.py:cadence_poke"
+      },
+      {
+        "method": "POST",
+        "path": "room/session-end",
+        "handler": "routes/play.py:session_end"
       },
       {
         "method": "GET",

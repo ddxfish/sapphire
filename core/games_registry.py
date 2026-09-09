@@ -82,6 +82,10 @@ def register_game(game_id, spec, plugin_name):
                 # (2026-09-09): {key: scalar}; the host validates keys and
                 # values against its declared table — core only keeps the
                 # shape honest (flat, scalar values, capped).
+                # The moments an event-mode game pokes ("after each wave") —
+                # the room's pill says what she's waiting for (2026-09-09).
+                'moments': [str(m)[:60] for m in (spec.get('moments') or [])
+                            if isinstance(m, (str, int, float))][:6],
                 'room_defaults': {str(k)[:64]: v for k, v in (spec.get('room_defaults') or {}).items()
                                   if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 2000}
                                  if isinstance(spec.get('room_defaults'), dict) else {},
