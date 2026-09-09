@@ -5,6 +5,7 @@
     "functions": [
       "web_search",
       "get_website",
+      "web_search_images",
       "save_memory",
       "search_memory",
       "get_recent_memories",
@@ -18,7 +19,8 @@
       "list_goals",
       "update_goal",
       "read_document",
-      "view_image"
+      "image_view",
+      "memory_save_image"
     ]
   },
   "default": {
@@ -54,7 +56,8 @@
       "get_wikipedia",
       "research_topic",
       "get_site_links",
-      "get_images",
+      "web_search_images",
+      "image_view",
       "create_goal",
       "list_goals",
       "update_goal",

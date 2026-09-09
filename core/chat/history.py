@@ -5065,6 +5065,24 @@ class ChatSessionManager:
             logger.error(f"Failed to get tool image '{image_id}': {e}")
             return None
 
+    def last_tool_image_id(self, chat_name: str = None) -> Optional[str]:
+        """Newest tool image id for a chat (default: the effective chat) — the
+        `img:` handle default for send-the-last-image tools. None when the
+        chat has none or is vault-hidden. 2026-09-09."""
+        owner = chat_name if chat_name is not None else self._effective_chat_name()
+        if not owner or self._vault_hidden(owner):
+            return None
+        self._ensure_db()
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT id FROM tool_images WHERE chat_name = ? "
+                    "ORDER BY created_at DESC LIMIT 1", (owner,)).fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Failed to read last tool image for '{owner}': {e}")
+            return None
+
     def _get_chat_path(self, chat_name: str) -> Path:
         """Legacy method - only used for migration detection."""
         safe_name = "".join(c for c in chat_name if c.isalnum() or c in (' ', '-', '_')).strip()

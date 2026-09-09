@@ -91,6 +91,30 @@ def sources_dir() -> Path:
     return d
 
 
+_portable_hits = set()
+
+
+def _local_path(doc_id, stored):
+    """Stored paths are absolute — the install that wrote them. On another
+    box (remembrance restore, a moved user/) the file is still where THIS
+    install keeps sources: sources_dir()/<doc_id>/<basename>. Every reader
+    of source_path/working_path goes through here. None = truly gone.
+    Watch-folder docs live outside sources/ and simply stay None. 2026-09-09."""
+    if not stored:
+        return None
+    p = Path(stored)
+    if p.exists():
+        return p
+    alt = sources_dir() / str(doc_id) / p.name
+    if alt.exists():
+        if not _portable_hits:
+            logger.info(f"[LIBRARY] doc {doc_id}: stored path missing, resolved under "
+                        f"{sources_dir()} — library restored from another install")
+        _portable_hits.add(int(doc_id))
+        return alt
+    return None
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS collections (
     id INTEGER PRIMARY KEY, parent_id INTEGER,
@@ -446,7 +470,8 @@ def _safe_filename(name, fallback):
 
 
 def import_image(scope, filename, raw: bytes, title=None, description=None,
-                 collection_id=None, importance=None, added_by='user'):
+                 collection_id=None, importance=None, added_by='user',
+                 private_key=None, meta_extra=None):
     """Typed add-modal 'Images': decode-verify FIRST (corrupt file creates
     nothing), EXIF → meta, original + thumbnail + metadata.md into sources/.
     Synchronous — the text side of an image is tiny. Vision vectors arrive
@@ -469,6 +494,8 @@ def import_image(scope, filename, raw: bytes, title=None, description=None,
         return None, f"'{filename}' doesn't decode as an image — corrupt file?"
     meta = _exif_data(img)
     meta['people'] = []
+    if meta_extra:
+        meta.update(meta_extra)       # provenance: import_key / source (memory_save_image)
     if meta.get('lat') is not None:
         # GPS → place name, offline (I2). No dataset yet = first-use
         # download kicks off in the background; backfill_places() names
@@ -486,6 +513,9 @@ def import_image(scope, filename, raw: bytes, title=None, description=None,
             cur, scope, title, 'image', importance or 'med', collection_id,
             (description or '').strip() or None, None, None, None, 'ready',
             added_by, meta=meta)
+        if private_key:
+            cur.execute('UPDATE documents SET private_key = ? WHERE id = ?',
+                        (private_key.strip(), doc_id))
         conn.commit()
     ddir = sources_dir() / str(doc_id)
     ddir.mkdir(parents=True, exist_ok=True)
@@ -645,10 +675,10 @@ def image_paths(scope, doc_id):
     with get_connection() as conn:
         row = conn.execute('SELECT scope, source_path, kind FROM documents '
                            'WHERE id = ?', (int(doc_id),)).fetchone()
-    if not row or row[0] != scope or row[2] != 'image' or not row[1]:
+    if not row or row[0] != scope or row[2] != 'image':
         return None, None, None, None
-    src = Path(row[1])
-    if not src.exists():
+    src = _local_path(doc_id, row[1])
+    if not src:
         return None, None, None, None
     ddir = src.parent
     thumb = ddir / 'thumb.jpg'
@@ -1116,12 +1146,13 @@ def export_annotated(scope, doc_id):
                            (int(doc_id),)).fetchone()
     if not row or row[0] != scope or row[3] != 'image':
         return None, None, "Not found."
-    if not row[5] or not Path(row[5]).exists():
+    src = _local_path(doc_id, row[5])
+    if not src:
         return None, None, "Original file is missing."
     title, description = row[1], row[2]
     meta = json.loads(row[4] or '{}')
-    raw = Path(row[5]).read_bytes()
-    ext = Path(row[5]).suffix.lower()
+    raw = src.read_bytes()
+    ext = src.suffix.lower()
     safe = ''.join(c if c.isalnum() or c in ' ._-' else '_'
                    for c in title)[:60].strip() or f'doc-{doc_id}'
     people = ', '.join(meta.get('people') or [])
@@ -1440,9 +1471,10 @@ def work_once() -> bool:
             if stage == 'chunk':
                 doc = cur.execute('SELECT working_path, kind FROM documents '
                                   'WHERE id = ?', (doc_id,)).fetchone()
-                if not doc or not doc[0] or not Path(doc[0]).exists():
+                wp = _local_path(doc_id, doc[0]) if doc else None
+                if not wp:
                     raise FileNotFoundError(f"working copy missing for doc {doc_id}")
-                text = Path(doc[0]).read_text(encoding='utf-8')
+                text = wp.read_text(encoding='utf-8')
                 chunks = chunk_text(text, doc[1])
                 # Re-run safety: a crash after chunk-insert but before the
                 # stage flip re-chunks from zero — wipe partials first.
@@ -1489,15 +1521,15 @@ def work_once() -> bool:
             if stage == 'vision':
                 doc = cur.execute('SELECT source_path, kind FROM documents '
                                   'WHERE id = ?', (doc_id,)).fetchone()
-                if (not doc or doc[1] != 'image' or not doc[0]
-                        or not Path(doc[0]).exists()):
+                sp = _local_path(doc_id, doc[0]) if doc and doc[1] == 'image' else None
+                if not sp:
                     raise FileNotFoundError(f"image missing for doc {doc_id}")
                 ve = _vision()
                 if not getattr(ve, 'available', False):
                     # Model absent/down: metadata text already serves search.
                     # Job stays pending — boot resume retries when it's back.
                     return False
-                vec = ve.embed_paths([Path(doc[0])])[0]
+                vec = ve.embed_paths([sp])[0]
                 if vec is None:
                     raise ValueError(f"vision embed failed for doc {doc_id}")
                 scale, blob = quantize(vec)
@@ -2034,9 +2066,9 @@ def document_text(scope, doc_id):
                           'WHERE id = ?', (int(doc_id),)).fetchone()
         if not row or row[2] != scope:
             return None, None
-        title, wp = row[0], row[1]
-        if wp and Path(wp).exists():
-            return title, Path(wp).read_text(encoding='utf-8')
+        title, wp = row[0], _local_path(doc_id, row[1])
+        if wp:
+            return title, wp.read_text(encoding='utf-8')
         return title, _whole_note(cur, int(doc_id))
 
 
@@ -2195,7 +2227,8 @@ def export_scope_zip(scope, out_path):
                 ann = {k: meta[k] for k in ('people', 'notes') if meta.get(k)}
                 if ann:
                     rec['annotations'] = ann
-                if kind == 'note' or not src or not Path(src).exists():
+                src = _local_path(did, src)
+                if kind == 'note' or not src:
                     ttl, text = document_text(scope, did)
                     if text is None:
                         report['skipped'] += 1
@@ -2675,7 +2708,7 @@ PHOTO_DESC_MAX = 256   # caption cap on the result LINE (full text stays put)
 
 def _photo_line(doc_id, title, meta_raw, description=None):
     """One photo, metadata only — caption · date · place · people. Pixels
-    cost context; view_image(id) spends it deliberately. The caption is
+    cost context; image_view("doc:N") spends it deliberately. The caption is
     load-bearing: filenames like 'download (13)' say nothing."""
     try:
         m = json.loads(meta_raw or '{}')
@@ -2921,7 +2954,7 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
                 lines.extend(shown)
                 more = len(photos) - len(shown)
                 tail = f"; {more} more behind this search" if more else ""
-                lines.append(f"  [view_image(id) shows a photo{tail}]")
+                lines.append(f'  [image_view("doc:N") shows a photo{tail}]')
     return '\n'.join(lines), True
 
 
@@ -2980,41 +3013,84 @@ def read_document_text(scope, doc_id, page=None, around=None, start=None,
     return '\n'.join(lines), True
 
 
-def view_image_data(scope, doc_id, private_key=None, max_dim=1024):
-    """The view_image tool (I4): pixels on demand, resized for the LLM,
-    riding the tool-result image rail. Returns ({'text', 'images'}, True)
-    or (refusal_text, False)."""
-    import base64
-    import io
-    from PIL import Image, ImageOps
+def image_source(scope, doc_id, private_key=None):
+    """(path, label) of a library image — core.images' `doc:<N>` lane (the
+    image_view tool; replaced view_image 2026-09-09). label = the photo line
+    (caption · date · place · people) + notes, so a look carries its context.
+    LookupError carries the honest refusal (not hers / not an image / keyed
+    without the word / file gone); the caller shows it verbatim."""
     with get_connection() as conn:
-        row = conn.execute('SELECT scope, title, kind, meta, source_path, '
-                           'private_key, description FROM documents '
-                           'WHERE id = ?', (int(doc_id),)).fetchone()
+        row = conn.execute('SELECT scope, title, kind, source_path, private_key, '
+                           'meta, description FROM documents WHERE id = ?',
+                           (int(doc_id),)).fetchone()
     if not row or row[0] != scope or row[2] != 'image':
-        return f"No image [doc {doc_id}] in the library.", False
-    if row[5] and row[5] != (private_key or '').strip():
-        return f"No image [doc {doc_id}] in the library.", False
-    if not row[4] or not Path(row[4]).exists():
-        return f"[doc {doc_id}] {row[1]} has no image file.", False
-    _heic_ready()
+        raise LookupError(f"No image [doc {doc_id}] in the library.")
+    if row[4] and row[4] != (private_key or '').strip():
+        raise LookupError(f"No image [doc {doc_id}] in the library.")
+    src = _local_path(doc_id, row[3])
+    if not src:
+        raise LookupError(f"[doc {doc_id}] {row[1]} has no image file.")
+    label = _photo_line(int(doc_id), row[1], row[5], row[6]).strip()
     try:
-        img = ImageOps.exif_transpose(Image.open(row[4]))
-        img.thumbnail((max_dim, max_dim))
-        buf = io.BytesIO()
-        img.convert('RGB').save(buf, 'JPEG', quality=85)
-    except Exception as e:
-        return f"Couldn't read [doc {doc_id}]: {e}", False
-    try:
-        m = json.loads(row[3] or '{}')
+        notes = (json.loads(row[5] or '{}')).get('notes')
     except Exception:
-        m = {}
-    lines = ['🖼 ' + _photo_line(int(doc_id), row[1], row[3], row[6]).strip()]
-    if m.get('notes'):
-        lines.append(f"notes: {m['notes']}")
-    return {'text': '\n'.join(lines),
-            'images': [{'data': base64.b64encode(buf.getvalue()).decode('ascii'),
-                        'media_type': 'image/jpeg'}]}, True
+        notes = None
+    if notes:
+        label += f"\nnotes: {notes}"
+    return src, label
+
+
+_IMG_EXT = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
+            'image/webp': '.webp', 'image/heic': '.heic'}
+
+
+def save_image(scope, source, topic, caption=None, private_key=None):
+    """The memory_save_image tool (2026-09-09): any core.images handle
+    (img:<id> / doc:<N> / absolute path / URL) becomes a library image under
+    a topic. sha256 dedup per scope (meta.import_key = 'img:<sha>'); topic
+    matches an existing Category or Topic by name (case-insensitive), else
+    becomes a new top-level Category. Returns (receipt, ok)."""
+    import hashlib
+    from core import images as ci
+    topic = (topic or '').strip()
+    if not topic:
+        return "Give the image a topic (a category or topic name).", False
+    try:
+        r = ci.resolve(source, private_key=private_key)
+    except ci.ImageError as e:
+        return str(e), False
+    key = f"img:{hashlib.sha256(r.data).hexdigest()}"
+    with get_connection() as conn:
+        dup = conn.execute(
+            "SELECT id, title FROM documents WHERE scope = ? AND kind = 'image' "
+            "AND meta LIKE ?", (scope, f'%"import_key": "{key}"%')).fetchone()
+        col = conn.execute(
+            'SELECT id, name FROM collections WHERE scope = ? AND lower(name) = lower(?) '
+            'ORDER BY parent_id IS NOT NULL, id LIMIT 1', (scope, topic)).fetchone()
+    if dup:
+        return f'Already in the library as [doc {dup[0]}] "{dup[1]}".', True
+    if col:
+        cid, cname = col
+    else:
+        cid, err = create_collection(scope, topic)
+        if err:
+            return err, False
+        cname = topic
+    ext = _IMG_EXT.get(r.media_type, '.jpg')
+    stem = Path(r.label.split('\n', 1)[0]).stem if r.origin in ('file', 'web') else 'image'
+    stem = ''.join(c if c.isalnum() or c in ' ._-' else '_' for c in stem).strip() or 'image'
+    filename = f"{stem[:60]}{ext}"
+    caption = (caption or '').strip()
+    doc_id, err = import_image(
+        scope, filename, r.data, title=caption[:60] or None, description=caption or None,
+        collection_id=cid, added_by='sapphire', private_key=private_key,
+        meta_extra={'import_key': key, 'source': r.label.split('\n', 1)[0][:200]})
+    if err:
+        return err, False
+    with get_connection() as conn:
+        title = conn.execute('SELECT title FROM documents WHERE id = ?', (doc_id,)).fetchone()[0]
+    keyed = ' (private)' if private_key else ''
+    return f'Saved [doc {doc_id}] "{title}" under ▸ {cname}{keyed}. image_view("doc:{doc_id}") shows it.', True
 
 
 def catalog_text(scope):

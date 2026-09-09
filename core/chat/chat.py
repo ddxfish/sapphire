@@ -62,8 +62,8 @@ def _inject_tool_images(messages, tool_images, provider=None):
     carry images in a `tool` message. But it must NOT read as the user
     talking - models (notably Qwen) otherwise treat it as a fresh request and
     re-call the image tool. So the text self-labels as tool output and carries
-    a gentle brake. A tool can override the framing via an `inject_note` key on
-    its image dict; otherwise a super-explicit generic note is used. 2026-06-14.
+    a gentle brake. 2026-06-14. (The per-image `inject_note` override never
+    grew a producer — deleted 2026-09-09.)
 
     If the provider doesn't support vision, fall back to a text-only
     placeholder. Without this the next LLM call blows up with a 400
@@ -84,14 +84,12 @@ def _inject_tool_images(messages, tool_images, provider=None):
     # Self-labeling, non-imperative framing that carries the brake into the
     # highest-authority/most-recent message (where the model actually listens),
     # instead of leaving it stranded in the distrusted tool result.
-    generic_note = (
+    note = (
         "[These image(s) are the result of the tool call you just made and have "
         "already been shown to the user. This is NOT a message from the user. No "
         "further action is needed; do not call the tool again unless the user asks "
         "for a change. Continue your reply.]"
     )
-    note = next((img.get("inject_note") for img in tool_images
-                 if isinstance(img, dict) and img.get("inject_note")), None) or generic_note
     content = [{"type": "text", "text": note}]
     for img in tool_images:
         data = img.get("data", "")

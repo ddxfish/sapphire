@@ -14,9 +14,7 @@ what the server reports back.
 """
 
 import base64
-import io
 import logging
-import math
 import random
 import re
 
@@ -224,53 +222,6 @@ def _call_sdserver(api_url, payload, timeout):
     return base64.b64decode(b64)
 
 
-def _resize_for_chat(img_bytes, max_px=1536, quality=90):
-    """Downscale + JPEG to keep chat/history light. Returns (jpeg_bytes)."""
-    try:
-        from PIL import Image
-        img = Image.open(io.BytesIO(img_bytes))
-        if max(img.size) > max_px:
-            r = max_px / max(img.size)
-            img = img.resize((int(img.width * r), int(img.height * r)), Image.LANCZOS)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality)
-        return buf.getvalue()
-    except Exception:
-        return img_bytes
-
-
-def _make_grid(images_bytes, cell=512):
-    """Compose a numbered contact-sheet grid (1..N labels). Returns JPEG bytes."""
-    from PIL import Image, ImageDraw, ImageFont
-    n = len(images_bytes)
-    cols = math.ceil(math.sqrt(n))
-    rows = math.ceil(n / cols)
-    grid = Image.new("RGB", (cols * cell, rows * cell), (24, 24, 28))
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
-    except Exception:
-        font = ImageFont.load_default()
-    draw = ImageDraw.Draw(grid)
-    for i, raw in enumerate(images_bytes):
-        try:
-            im = Image.open(io.BytesIO(raw)).convert("RGB")
-        except Exception:
-            continue
-        im.thumbnail((cell, cell), Image.LANCZOS)
-        x, y = (i % cols) * cell, (i // cols) * cell
-        ox, oy = x + (cell - im.width) // 2, y + (cell - im.height) // 2
-        grid.paste(im, (ox, oy))
-        # number badge (top-left of cell)
-        label = str(i + 1)
-        draw.rectangle([x + 6, y + 6, x + 52, y + 52], fill=(0, 0, 0))
-        draw.text((x + 18, y + 8), label, fill=(255, 255, 255), font=font)
-    buf = io.BytesIO()
-    grid.save(buf, format="JPEG", quality=88)
-    return buf.getvalue()
-
-
 def _exec_generate(arguments, plugin_settings=None):
     cfg = _settings(plugin_settings)
 
@@ -361,8 +312,7 @@ def _exec_generate(arguments, plugin_settings=None):
     # by default (view defaults true, matching the tool description); pass
     # view=false to skip the model's own look for a cheaper, hands-off call.
     view = bool(arguments.get("view", True))
-    def _enc(raw):
-        return base64.b64encode(_resize_for_chat(raw)).decode()
+    from core import images as ci     # the one resize + the one grid (2026-09-09)
 
     # view=false → display_only: the user still sees the full image, the model
     # gets ONLY the recipe text. No CLIP description — its subject-blind guesses
@@ -371,13 +321,11 @@ def _exec_generate(arguments, plugin_settings=None):
     # prevent. CLIP remains core's automatic fallback for view=true on a
     # non-vision model (an image the model was meant to see). 2026-08-09.
     if len(raw_images) == 1:
-        out_images = [{"data": _enc(raw_images[0]), "media_type": "image/jpeg",
-                       "display_only": (not view)}]
+        shaped = [ci.for_chat(raw_images[0], quality=90)]
     else:
         # count>1: ONE clean image — the labeled grid (contact sheet). Individuals
         # aren't rendered to avoid the grid+duplicates clutter; the recipe above
         # gives each image's seed, so any single is a recreate-by-seed away.
-        out_images = [{"data": base64.b64encode(_make_grid(raw_images)).decode(),
-                       "media_type": "image/jpeg", "display_only": (not view)}]
+        shaped = [ci.contact_sheet(raw_images, cell=512)]
 
-    return {"text": recipe, "images": out_images}, True
+    return ci.result(recipe, shaped, display_only=(not view)), True

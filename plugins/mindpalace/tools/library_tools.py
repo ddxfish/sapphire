@@ -1,8 +1,8 @@
 # plugins/mindpalace/tools/library_tools.py
 # Library (Knowledge v3) — her tool surface (P3b, 2026-07-17).
-# Two tools: `library` (the card catalog — drawers WITH descriptions, that's
-# how she finds where to look) and `read_document` (sequential reading +
-# range digs). Search itself lives inside search_memory: layer='knowledge'
+# Three tools: `library` (the card catalog — drawers WITH descriptions, that's
+# how she finds where to look), `read_document` (sequential reading + range
+# digs) and `memory_save_image` (any image → the library; image_view shows one). Search itself lives inside search_memory: layer='knowledge'
 # reroutes to the library engine, mixed searches get a library append
 # (palace_tools). save_memory layer='knowledge' becomes a library note —
 # her muscle memory keeps working, the storage underneath got a building.
@@ -16,7 +16,7 @@ ENABLED = True
 EMOJI = '🏛'
 GROUP = 'Mind Palace'
 
-AVAILABLE_FUNCTIONS = ['library', 'read_document', 'view_image']
+AVAILABLE_FUNCTIONS = ['library', 'read_document', 'memory_save_image']
 
 TOOLS = [
     {
@@ -58,20 +58,23 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "network": True,
+        "is_local": False,
         "function": {
-            "name": "view_image",
-            "description": ("Look at a photo from the library (photo results "
-                            "show ids as [doc N]). Returns the actual image — "
-                            "it spends context, so pick the one you need "
-                            "rather than viewing a whole grid."),
+            "name": "memory_save_image",
+            "description": ("Keep an image in the library under a topic (Knowledge tab; searchable by "
+                            "pixels and caption; look at it later with image_view(\"doc:N\")). source = "
+                            "img:<id> (the '(image img:...)' handle a tool gave you), doc:<N>, an absolute "
+                            "path, or an image URL. topic = an existing category/topic name, or a new one."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "document_id": {"type": "integer", "description": "The [doc N] id"},
-                    "private_key": {"type": "string", "description": "Gating word for a private image"}
+                    "source": {"type": "string", "description": "img:<id>, doc:<N>, /absolute/path, or https://..."},
+                    "topic": {"type": "string", "description": "Category or topic name to file it under"},
+                    "caption": {"type": "string", "description": "What it is — becomes the title and the searchable caption"},
+                    "private_key": {"type": "string", "description": "Gate word to keep it private (optional)"}
                 },
-                "required": ["document_id"]
+                "required": ["source", "topic"]
             }
         }
     },
@@ -105,9 +108,10 @@ def execute(function_name, arguments, config):
                 start=arguments.get('start'),
                 end=arguments.get('end'),
                 private_key=arguments.get('private_key'))
-        if function_name == 'view_image':
-            return lib.view_image_data(
-                scope, arguments.get('document_id'),
+        if function_name == 'memory_save_image':
+            return lib.save_image(
+                scope, arguments.get('source'), arguments.get('topic'),
+                caption=arguments.get('caption'),
                 private_key=arguments.get('private_key'))
         return f"Unknown library function: {function_name}", False
     except Exception as e:

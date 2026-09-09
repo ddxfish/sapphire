@@ -54,11 +54,14 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     if not content:
         return content
 
-    # Pattern to match <<TYPE::data>> markers
+    # Pattern to match <<TYPE::data>> markers. The GALLERY marker (tile list a
+    # tool appends for the browser — see shared/gallery-marker.js) is UI-only
+    # too: the model already has the numbered URL list above it. It rides the
+    # keep_img rule for the same reason IMG does. 2026-09-09.
     if keep_img:
         marker_pattern = r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*'
     else:
-        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*'
+        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:\[[^\n]*\]-->\s*'
 
     # Remove all markers
     clean = re.sub(marker_pattern, '', content)
@@ -68,7 +71,7 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
         markers_found = re.findall(marker_pattern, content)
         logger.info(f"[CLEANUP] Stripped {len(markers_found)} UI markers from tool result for LLM context")
         for marker in markers_found:
-            logger.debug(f"   - {marker.strip()}")
+            logger.debug(f"   - {marker.strip()[:120]}")
     
     return clean.strip()
 
@@ -250,15 +253,17 @@ def _extract_tool_images(result, history=None, provider=None, function_name=None
         for img in images:
             img_id = _save_tool_image(img, history)
             if img_id:
-                text = f"<<IMG::tool:{img_id}>>\n{text}"
+                # Marker = the UI's (stripped from the LLM copy). The receipt
+                # line = the model's handle: any image tool accepts img:<id>
+                # (core.images.resolve). Head-placed so the cap can't eat it.
+                text = f"<<IMG::tool:{img_id}>>\n(image img:{img_id})\n{text}"
             if not img.get("display_only") and supports_vision:
                 llm_images.append(img)
-            elif img.get("vibe_when_hidden") or (not supports_vision and not img.get("display_only")):
+            elif not supports_vision and not img.get("display_only"):
                 # CLIP describe fires only as a FALLBACK: the model was meant to
                 # see this image (not display_only) but the provider has no
-                # vision — or the tool explicitly opted in (vibe_when_hidden).
-                # display_only images are deliberately hidden; describing them
-                # defeats the point, and CLIP's subject-blind guesses read as
+                # vision. display_only images are deliberately hidden; describing
+                # them defeats the point, and CLIP's subject-blind guesses read as
                 # "wrong image" to literal models → regeneration loops. 2026-08-09.
                 hidden_to_vibe.append(img)
         if hidden_to_vibe:

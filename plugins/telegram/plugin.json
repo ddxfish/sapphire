@@ -1,17 +1,21 @@
 {
   "name": "telegram",
   "short_display_name": "Telegram",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Telegram — bot and client accounts via Telethon",
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
-  "icon": "\u2708\ufe0f",
+  "icon": "✈️",
   "priority": 50,
   "default_enabled": false,
-  "pip_dependencies": ["telethon"],
+  "pip_dependencies": [
+    "telethon"
+  ],
   "settingsUI": "plugin",
   "capabilities": {
-    "tools": ["tools/telegram_tools.py"],
+    "tools": [
+      "tools/telegram_tools.py"
+    ],
     "scopes": [
       {
         "key": "telegram",
@@ -25,47 +29,97 @@
     ],
     "daemon": {
       "entry": "daemon.py",
-      "event_sources": [{
-        "name": "telegram_message",
-        "label": "Telegram Message",
-        "description": "New message received on a Telegram account",
-        "filter_fields": [
-          {"key": "chat_id", "label": "Chat ID"},
-          {"key": "username", "label": "Username"},
-          {"key": "chat_type", "label": "Chat Type"}
-        ],
-        "task_fields": [
-          {
-            "key": "account",
-            "type": "select",
-            "label": "Account",
-            "required": true,
-            "dynamic": "/api/plugin/telegram/accounts",
-            "help": "Which Telegram account to listen on"
-          },
-          {
-            "key": "reply_format",
-            "type": "select",
-            "label": "Reply Format",
-            "options": [
-              {"value": "text", "label": "Plain Text"},
-              {"value": "markdown", "label": "Markdown"},
-              {"value": "html", "label": "HTML"},
-              {"value": "text+voice", "label": "Text + Voice Note"},
-              {"value": "voice", "label": "Voice Note Only"}
-            ],
-            "default": "text"
-          }
-        ]
-      }]
+      "event_sources": [
+        {
+          "name": "telegram_message",
+          "label": "Telegram Message",
+          "description": "New message received on a Telegram account",
+          "filter_fields": [
+            {
+              "key": "chat_id",
+              "label": "Chat ID"
+            },
+            {
+              "key": "username",
+              "label": "Username"
+            },
+            {
+              "key": "chat_type",
+              "label": "Chat Type"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Account",
+              "required": true,
+              "dynamic": "/api/plugin/telegram/accounts",
+              "help": "Which Telegram account to listen on"
+            },
+            {
+              "key": "reply_format",
+              "type": "select",
+              "label": "Reply Format",
+              "options": [
+                {
+                  "value": "text",
+                  "label": "Plain Text"
+                },
+                {
+                  "value": "markdown",
+                  "label": "Markdown"
+                },
+                {
+                  "value": "html",
+                  "label": "HTML"
+                },
+                {
+                  "value": "text+voice",
+                  "label": "Text + Voice Note"
+                },
+                {
+                  "value": "voice",
+                  "label": "Voice Note Only"
+                }
+              ],
+              "default": "text"
+            }
+          ]
+        }
+      ]
     },
     "routes": [
-      {"method": "GET",  "path": "accounts",          "handler": "routes/auth.py:list_accounts"},
-      {"method": "POST", "path": "accounts",          "handler": "routes/auth.py:start_auth"},
-      {"method": "POST", "path": "accounts/bot",      "handler": "routes/auth.py:start_bot_auth"},
-      {"method": "POST", "path": "auth/code",         "handler": "routes/auth.py:submit_code"},
-      {"method": "POST", "path": "auth/2fa",          "handler": "routes/auth.py:submit_2fa"},
-      {"method": "DELETE","path": "accounts/{name}",   "handler": "routes/auth.py:delete_account"}
+      {
+        "method": "GET",
+        "path": "accounts",
+        "handler": "routes/auth.py:list_accounts"
+      },
+      {
+        "method": "POST",
+        "path": "accounts",
+        "handler": "routes/auth.py:start_auth"
+      },
+      {
+        "method": "POST",
+        "path": "accounts/bot",
+        "handler": "routes/auth.py:start_bot_auth"
+      },
+      {
+        "method": "POST",
+        "path": "auth/code",
+        "handler": "routes/auth.py:submit_code"
+      },
+      {
+        "method": "POST",
+        "path": "auth/2fa",
+        "handler": "routes/auth.py:submit_2fa"
+      },
+      {
+        "method": "DELETE",
+        "path": "accounts/{name}",
+        "handler": "routes/auth.py:delete_account"
+      }
     ],
     "settings": [
       {

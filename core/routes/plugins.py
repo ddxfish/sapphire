@@ -1854,44 +1854,6 @@ async def get_plugins_config(request: Request, _=Depends(require_login)):
     return _get_merged_plugins()
 
 
-@router.post("/api/webui/plugins/image-gen/test-connection")
-async def test_sdxl_connection(request: Request, _=Depends(require_login)):
-    """Test SDXL connection."""
-    data = await request.json() or {}
-    url = data.get('url', '').strip()
-    if not url:
-        return {"success": False, "error": "No URL provided"}
-    if not url.startswith(('http://', 'https://')):
-        return {"success": False, "error": "URL must start with http:// or https://"}
-
-    def _test():
-        import requests as req
-        from core import net
-        try:
-            response = net.get(url, timeout=5)
-            return {"success": True, "status_code": response.status_code, "message": f"Connected (HTTP {response.status_code})"}
-        except req.exceptions.Timeout:
-            return {"success": False, "error": "Connection timed out (5s)"}
-        except req.exceptions.ConnectionError as e:
-            return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
-        except Exception as e:
-            return {"success": False, "error": f"Error: {str(e)[:100]}"}
-
-    return await asyncio.to_thread(_test)
-
-
-@router.get("/api/webui/plugins/image-gen/defaults")
-async def get_image_gen_defaults(request: Request, _=Depends(require_login)):
-    """Get image-gen defaults."""
-    return {
-        'api_url': 'http://localhost:5153',
-        'negative_prompt': 'ugly, deformed, noisy, blurry, distorted, grainy, low quality, bad anatomy, jpeg artifacts',
-        'static_keywords': 'wide shot',
-        'character_descriptions': {'me': '', 'you': ''},
-        'defaults': {'height': 1024, 'width': 1024, 'steps': 23, 'cfg_scale': 3.0, 'scheduler': 'dpm++_2m_karras'}
-    }
-
-
 @router.get("/api/webui/plugins/homeassistant/defaults")
 async def get_ha_defaults(request: Request, _=Depends(require_login)):
     """Get HA defaults."""

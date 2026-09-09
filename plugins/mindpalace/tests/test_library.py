@@ -1063,7 +1063,7 @@ def test_vision_job_photo_block_and_cleanup(library, monkeypatch):
     text, found = library.search_library('default', 'PIXELS')
     assert found and '\U0001F5BC Photos — 1 of 1 matched' in text
     assert 'image RAG' in text                 # she's told HOW these matched
-    assert f'[doc {did}] beach' in text and 'view_image' in text
+    assert f'[doc {did}] beach' in text and 'image_view' in text
     assert '§' not in text                     # never rendered as sections
     ok, _ = library.delete_document('default', did)
     assert ok
@@ -1138,37 +1138,37 @@ def test_backfill_vision_queues_the_missing(library):
     assert library.backfill_vision() == 0            # pending job = no double
 
 
-# --- Arc 2 I4: view_image -- pixels on demand via the image rail -------------
+# --- Arc 2 I4 → 2026-09-09: image_source feeds core.images' doc: lane --------
+# (view_image retired; image_view("doc:N") is the one viewing door.)
 
-def test_view_image_rides_the_rail(library):
-    import base64
+def test_image_source_carries_the_photo_line(library):
     did, _ = library.import_image('default', 'porch.jpg', _jpeg_with_exif(),
                                   title='Porch night')
     library.update_image_meta('default', did, notes='green night')
-    out, ok = library.view_image_data('default', did)
-    assert ok and isinstance(out, dict)
-    assert 'Porch night' in out['text'] and 'green night' in out['text']
-    img = out['images'][0]
-    assert img['media_type'] == 'image/jpeg'
-    assert base64.b64decode(img['data'])[:2] == b'\xff\xd8'
+    path, label = library.image_source('default', did)
+    assert path.name == 'porch.jpg' and path.exists()
+    assert f'[doc {did}] Porch night' in label and 'notes: green night' in label
     # walls: wrong scope, private key, non-image docs
-    out, ok = library.view_image_data('other', did)
-    assert not ok
+    with pytest.raises(LookupError):
+        library.image_source('other', did)
     with library.get_connection() as conn:
         conn.execute("UPDATE documents SET private_key = 'k' WHERE id = ?",
                      (did,))
         conn.commit()
-    assert not library.view_image_data('default', did)[1]
-    assert library.view_image_data('default', did, private_key='k')[1]
+    with pytest.raises(LookupError):
+        library.image_source('default', did)
+    assert library.image_source('default', did, private_key='k')[1]
     nid, _ = library.import_note('default', 'Note', 'text')
-    assert not library.view_image_data('default', nid)[1]
+    with pytest.raises(LookupError):
+        library.image_source('default', nid)
 
 
-def test_view_image_in_toolset_schema():
+def test_tool_surface_after_the_image_rebuild():
     from plugins.mindpalace.tools import library_tools as lt
-    assert 'view_image' in lt.AVAILABLE_FUNCTIONS
+    assert 'memory_save_image' in lt.AVAILABLE_FUNCTIONS
+    assert 'view_image' not in lt.AVAILABLE_FUNCTIONS
     names = [t['function']['name'] for t in lt.TOOLS]
-    assert 'view_image' in names
+    assert 'memory_save_image' in names and 'view_image' not in names
 
 
 # --- Captions are retrieval + presentation surface (Krem's tron report) ------
@@ -1182,8 +1182,8 @@ def test_caption_searchable_and_on_the_photo_line(library):
     text, found = library.search_library('default', 'tron')
     assert found and '"sapphire in the movie tron"' in text
     assert f'[doc {did}] download (13)' in text        # title AND caption
-    out, ok = library.view_image_data('default', did)
-    assert ok and 'sapphire in the movie tron' in out['text']
+    _, label = library.image_source('default', did)
+    assert 'sapphire in the movie tron' in label
 
 
 def test_caption_capped_on_line_full_in_md(library):

@@ -4356,43 +4356,17 @@ a.gallery-caption:hover {
     }
 }
 
-/* Gallery listing - category browse with preview thumbnails */
-.gallery-listing {
-    margin: 10px 0;
-}
-
-.gallery-listing-item {
-    margin-bottom: 14px;
-}
-
-.gallery-listing-name {
-    display: block;
-    font-weight: 600;
-    color: var(--accent);
-    text-decoration: none;
-    margin-bottom: 4px;
-    font-size: var(--font-base);
-}
-
-.gallery-listing-name:hover {
-    text-decoration: underline;
-}
-
-.gallery-listing-thumbs {
-    display: flex;
-    gap: 4px;
-}
-
-.gallery-listing-thumbs img {
-    height: 64px;
-    width: auto;
+/* Legacy image markers whose bytes never lived in Sapphire (old SDXL proxy,
+   route removed 2026-09-09) render as this instead of a broken icon. */
+span[data-image-gone] {
+    display: inline-block;
+    font-size: var(--font-xs);
+    color: var(--text-secondary);
+    background: var(--bg-inset);
+    border: 1px dashed var(--border);
     border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: opacity var(--transition-fast);
-}
-
-.gallery-listing-thumbs img:hover {
-    opacity: 0.8;
+    padding: 4px 10px;
+    margin: 6px 0;
 }
 
 .message details {

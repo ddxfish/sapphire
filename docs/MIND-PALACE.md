@@ -125,7 +125,7 @@ TOOLS (palace surface):
 - librarian_instructions(stage, instructions) — edit own per-scope charter awake; '' restores default; stages: dates, link, dedup, sort, self_first, self_tend, self_verify; NOT available during passes (instructions change between rituals, never mid-ritual)
 - Pass-time verbs (librarian toolset): atomize_memory, merge_memories, promote_memory, prune_memory, set_links, set_event_dates, mark_processed; run_librarian starts a pass
 - Goals: create_goal / list_goals / update_goal / delete_goal (goals = graph chunks; permanence via importance)
-- Library: library / read_document / view_image; import: import_v2
+- Library: library / read_document / memory_save_image(source, topic, caption?, private_key?) — any image (img:<id>, doc:<N>, path, URL) into the library; core image_view("doc:N") shows one; import: import_v2
 
 SELF: sheet cap SELF_MAX_CHARS 2000; '(important)' suffix on a sheet line pulls top memories per item at wake (self_important_per_item 0-10, default 5, 0=off); wake tools = structured standing boxes served at wake; resident strip = per-scope nightly prompt/provider/model + per-pass toggles (default OFF).
 

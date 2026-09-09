@@ -532,7 +532,7 @@ class ContinuityExecutor:
         """Save plugin event images to the chat DB keyed to target_chat and
         return a marker suffix to append to the user message text.
 
-        Markers (`<<IMG::event:id>>`) match the UI strip pattern, so they're
+        Markers (`<<IMG::tool:id>>`) match the UI strip pattern, so they're
         stripped before the LLM and rehydrated from the DB by the frontend —
         the same lifecycle as tool images. Bytes live in the DB; history holds
         only the marker. 2026-06-13.
@@ -693,7 +693,7 @@ class ContinuityExecutor:
             msg = task.get("initial_message", "Hello.")
 
             # Plugin event images: save bytes to the chat DB (keyed to target_chat)
-            # and append <<IMG::event:id>> markers to the persisted text. The base64
+            # and append <<IMG::tool:id>> markers to the persisted text. The base64
             # is handed to ctx separately for the LLM turn (vision-gated); history
             # keeps only the marker. 2026-06-13.
             _ev_images = task.get("_event_images")

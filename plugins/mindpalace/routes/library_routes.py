@@ -353,8 +353,8 @@ def download(did=None, query=None, **_):
                            'FROM documents WHERE id = ?', (int(did),)).fetchone()
     if not row or row[0] != scope:
         return {'error': 'Not found'}, 404
-    path = row[2] if which == 'original' else row[3]
-    if not path or not Path(path).exists():
+    path = lib._local_path(did, row[2] if which == 'original' else row[3])
+    if not path:
         if which == 'original':
             # Notes have no source file — the working text IS the note.
             title, text = lib.document_text(scope, did)
@@ -367,4 +367,4 @@ def download(did=None, query=None, **_):
                 text, headers={'Content-Disposition':
                                f'attachment; filename="{safe}.md"'})
         return {'error': 'No file for this document'}, 404
-    return FileResponse(path, filename=Path(path).name)
+    return FileResponse(path, filename=path.name)

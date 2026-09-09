@@ -24,7 +24,7 @@ AVAILABLE_FUNCTIONS = [
     'get_wikipedia',
     'research_topic',
     'get_site_links',
-    'get_images',
+    'web_search_images',
 ]
 
 TOOLS = [
@@ -98,7 +98,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_site_links",
-            "description": "Internal text links from a webpage (anchor + URL). Explore structure before get_images.",
+            "description": "Internal text links from a webpage (anchor + URL). Explore a site's structure.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -114,15 +114,19 @@ TOOLS = [
         "network": True,
         "is_local": False,
         "function": {
-            "name": "get_images",
-            "description": "Image URLs + descriptions from a webpage. Display with markdown: ![desc](url).",
+            "name": "web_search_images",
+            "description": ("Search the web for images (Bing-backed). The user always gets clickable tiles. "
+                            "view=true also shows YOU the pictures: one image when count=1, otherwise a numbered "
+                            "contact sheet (#1, #2, ... in result order). Each result line carries its full URL; "
+                            "hand a URL to image_view for a closer look or to memory_save_image to keep it."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL"},
-                    "show_to_user": {"type": "boolean", "description": "Auto-display in chat gallery (default false)"}
+                    "query": {"type": "string", "description": "What to search for"},
+                    "count": {"type": "integer", "description": "How many results, 1-12 (default 6)"},
+                    "view": {"type": "boolean", "description": "Also look at them yourself (default false: tiles for the user only)"}
                 },
-                "required": ["url"]
+                "required": ["query"]
             }
         }
     }
@@ -238,101 +242,97 @@ def extract_content(html: str) -> str:
     logger.info(f"[WEB] Extracted {len(result)} chars")
     return result
 
-def _best_srcset_url(srcset: str) -> str:
-    """Pick best URL from srcset, preferring ~1920w."""
-    if not srcset:
-        return None
-    candidates = []
-    for part in srcset.split(','):
-        part = part.strip()
-        if not part:
-            continue
-        pieces = part.split()
-        if len(pieces) >= 2:
-            url, descriptor = pieces[0], pieces[1]
-            if descriptor.endswith('w'):
-                try:
-                    candidates.append((url, int(descriptor[:-1])))
-                except ValueError:
-                    candidates.append((url, 0))
-            elif descriptor.endswith('x'):
-                try:
-                    candidates.append((url, int(float(descriptor[:-1]) * 1000)))
-                except ValueError:
-                    candidates.append((url, 0))
-        elif len(pieces) == 1:
-            candidates.append((pieces[0], 0))
-    if not candidates:
-        return None
-    # Prefer closest to 1920w, fall back to largest
-    best = min(candidates, key=lambda c: abs(c[1] - 1920) if c[1] > 0 else float('inf'))
-    return best[0]
+_BING_IMAGES = "https://www.bing.com/images/search"
 
 
-_JUNK_PATTERNS = ['logo', 'icon', 'sprite', 'pixel', 'badge', 'emoji', 'favicon',
-                  'avatar', '1x1', 'spacer', 'blank', 'tracking', 'spinner', 'loader']
-
-
-def extract_images(html: str, base_url: str) -> list:
-    """Extract content images from HTML, stripping nav/header/footer."""
+def _parse_bing_images(html: str, limit: int) -> list:
+    """Bing's results ride <a class="iusc" m="{json}">: murl (full), turl (thumb),
+    purl (source page), t (title); dims sit in the card's .img_info span.
+    Deduped by full URL; broken anchors skipped."""
     soup = BeautifulSoup(html, 'html.parser')
-    for tag in soup(WORK_WEBSITE_STRIP_ELEMENTS + ['form']):
-        tag.decompose()
-
-    images = []
-    seen_urls = set()
-
-    for img in soup.find_all('img'):
-        src = (img.get('data-src') or img.get('data-lazy-src') or
-               _best_srcset_url(img.get('srcset')) or img.get('src'))
-        if not src:
-            continue
-        if src.startswith('data:') or src.endswith('.svg'):
-            continue
-
-        full_src = urllib.parse.urljoin(base_url, src)
-
-        if full_src in seen_urls:
-            continue
-        seen_urls.add(full_src)
-
-        src_lower = full_src.lower()
-        if any(p in src_lower for p in _JUNK_PATTERNS):
-            continue
-
-        # Skip tiny images
-        width, height = img.get('width', ''), img.get('height', '')
+    out, seen = [], set()
+    for a in soup.find_all('a', class_='iusc'):
         try:
-            if width and height and (int(width) < 80 or int(height) < 80):
-                continue
-        except (ValueError, TypeError):
-            pass
+            m = json.loads(a.get('m') or '')
+        except ValueError:
+            continue
+        full, thumb = m.get('murl'), m.get('turl')
+        if not full or not thumb or full in seen:
+            continue
+        seen.add(full)
+        dims = ''
+        card = a.find_parent(class_='iuscp')
+        info = card.select_one('.img_info') if card else None
+        if info:
+            first = info.get_text(' ', strip=True).split(' ')[0]
+            if '×' in first or 'x' in first:
+                dims = first.replace('×', 'x')
+        out.append({'full': full, 'thumb': thumb, 'page': m.get('purl') or '',
+                    'title': (m.get('t') or '').strip(), 'dims': dims})
+        if len(out) >= limit:
+            break
+    return out
 
-        alt = img.get('alt', '').strip()
-        title = img.get('title', '').strip()
 
-        # Check for figcaption
-        caption = ''
-        figure = img.find_parent('figure')
-        if figure:
-            figcaption = figure.find('figcaption')
-            if figcaption:
-                caption = figcaption.get_text(strip=True)
+def search_bing_images(query: str, count: int) -> list:
+    """Bing's image results page, server side, through core.net. (DDG's own
+    image endpoint is walled — 403 for every non-browser client, verified
+    2026-09-09 — and DDG's images ARE Bing's.) The user's browser never
+    touches Bing: tiles ride DDG's image proxy (core.images.proxied)."""
+    from core import net
+    url = f"{_BING_IMAGES}?q={urllib.parse.quote_plus(query)}&form=HDRSC2&first=1"
+    logger.info("[WEB] Bing image search requested")
+    resp = net.wan_session().get(url, timeout=15)
+    if resp.status_code != 200 or not resp.text:
+        logger.warning(f"[WEB] Bing images bad status: {resp.status_code}")
+        return []
+    results = _parse_bing_images(resp.text, count)
+    if not results:
+        preview = resp.text[:200].replace('\n', ' ')
+        logger.warning(f"[WEB] Bing images: 0 parsed (markup drift?): {preview}")
+    logger.info(f"[WEB] Bing images: {len(results)} results")
+    return results
 
-        # Parent link
-        parent_link = ''
-        parent_a = img.find_parent('a')
-        if parent_a and parent_a.get('href'):
-            parent_link = urllib.parse.urljoin(base_url, parent_a['href'])
 
-        images.append({
-            'url': full_src,
-            'name': caption or alt or title or '',
-            'link': parent_link
-        })
+def _fetch_any(*urls):
+    """First URL that resolves to image bytes, else None (logged, never raised)."""
+    from core import images as ci
+    for u in urls:
+        try:
+            return ci.resolve(u).data
+        except ci.ImageError as e:
+            logger.warning(f"[WEB] image fetch skipped: {e}")
+    return None
 
-    logger.info(f"[WEB] Extracted {len(images)} images from {base_url}")
-    return images[:30]
+
+def image_search_result(query: str, results: list, view: bool = False):
+    """The model's numbered list + the user's tiles (GALLERY marker v2, proxied
+    URLs) — plus the pixels when view=true: one image for a single result,
+    else one numbered contact sheet. Returns str, or the images contract dict."""
+    from core import images as ci
+    lines = []
+    for i, r in enumerate(results, 1):
+        host = urllib.parse.urlsplit(r['page'] or r['full']).hostname or ''
+        dims = f" — {r['dims']}" if r.get('dims') else ''
+        lines.append(f"{i}. {r['title'] or '(untitled)'} — {host}{dims}\n   {r['full']}")
+    text = (f"Top {len(results)} images for '{query}' (shown to the user as clickable tiles):\n"
+            + "\n".join(lines))
+    marker = "<!--GALLERY:" + json.dumps(
+        [{'thumb': ci.proxied(r['thumb']), 'full': ci.proxied(r['full']),
+          'title': r['title'], 'page': r['page']} for r in results]) + "-->"
+    if not view:
+        return f"{text}\n{marker}"
+    if len(results) == 1:
+        raw = _fetch_any(results[0]['full'], results[0]['thumb'])
+        shaped = [ci.for_chat(raw)] if raw else []
+        note = "You're looking at it now."
+    else:
+        raws = [_fetch_any(r['thumb']) or b'' for r in results]
+        shaped = [ci.contact_sheet(raws)] if any(raws) else []
+        note = f"You're looking at a contact sheet numbered 1-{len(results)} in the order above."
+    if not shaped:
+        return f"{text}\n(couldn't fetch the pixels for you — the tiles still reached the user)\n{marker}"
+    return ci.result(f"{text}\n{note}\n{marker}", shaped)
 
 
 def extract_site_links(html: str, base_url: str, strip_nav: bool = True) -> list:
@@ -660,51 +660,31 @@ def execute(function_name, arguments, config):
                 logger.error(f"[WEB] get_site_links: {type(e).__name__}: {e}")
                 return f"Error browsing website: {str(e)}", False
 
-        elif function_name == "get_images":
-            if not (url := arguments.get('url')):
-                logger.warning("[WEB] get_images: No URL provided")
-                return "I need a URL to get images from.", False
-
-            logger.info(f"[WEB] get_images: Fetching {url}")
+        elif function_name == "web_search_images":
+            if not (query := (arguments.get('query') or '').strip()):
+                return "I need something to search images for.", False
             try:
-                resp = get_session().get(url, timeout=12)
-                if resp.status_code != 200:
-                    return f"Couldn't access website. HTTP {resp.status_code}", False
-
-                images = extract_images(resp.text, url)
-                if not images:
-                    return "No images found in the content area of that page.", True
-
-                lines = []
-                for i, img in enumerate(images, 1):
-                    name = img['name'] or '(no description)'
-                    line = f"{i}. [{name}] {img['url']}"
-                    if img['link']:
-                        line += f"\n   → links to: {img['link']}"
-                    lines.append(line)
-
-                out = "\n\n".join(lines)
-
-                if arguments.get('show_to_user', False):
-                    urls = [img['url'] for img in images]
-                    return (f"Found {len(images)} images on {url}. Images are displayed in chat.\n\n{out}"
-                            f"\n<!--GALLERY:{json.dumps(urls)}-->"), True
-
-                return (f"Found {len(images)} images on {url}:\n\n{out}\n\n"
-                        "To display images, use: ![description](image_url)"), True
+                count = max(1, min(int(arguments.get('count') or 6), 12))
+            except (TypeError, ValueError):
+                count = 6
+            view = bool(arguments.get('view', False))
+            try:
+                results = search_bing_images(query, count)
+            except SocksAuthError as e:
+                logger.error(f"[WEB] web_search_images: SOCKS auth failed: {e}")
+                return "Image search failed: SOCKS proxy authentication error. Tell the user to check their SOCKS credentials in Settings.", False
             except ValueError as e:
                 if "SOCKS5 is enabled" in str(e):
-                    return "Web access failed: SOCKS5 credentials not configured.", False
+                    return "Image search failed: SOCKS5 is enabled but credentials are not configured. Tell the user to set them in Settings → SOCKS.", False
                 raise
-            except requests.exceptions.ProxyError as e:
-                logger.error(f"[WEB] get_images: SOCKS proxy error: {e}")
-                return "Web access failed: SOCKS proxy error.", False
-            except requests.exceptions.ConnectionError as e:
-                logger.error(f"[WEB] get_images: Connection error: {e}")
-                return "Web access failed: Connection error.", False
-            except Exception as e:
-                logger.error(f"[WEB] get_images: {type(e).__name__}: {e}")
-                return f"Error getting images: {str(e)}", False
+            except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+                logger.error(f"[WEB] web_search_images: Network/proxy error: {e}")
+                return "Image search failed: Could not connect through the network/proxy. Tell the user to check their SOCKS proxy and internet connection.", False
+            except requests.exceptions.Timeout:
+                return "Image search timed out.", False
+            if not results:
+                return f"No images found for '{query}'.", True
+            return image_search_result(query, results, view), True
 
         logger.warning(f"[WEB] Unknown function: {function_name}")
         return f"Unknown function: {function_name}", False

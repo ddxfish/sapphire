@@ -1,6 +1,8 @@
 // ui-streaming.js - Real-time streaming with typed SSE events
 
-import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries, _createGalleryListing, _createCategoryGrid } from './ui-parsing.js';
+import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
+import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
+import { openImageModal } from './ui-images.js';
 
 // Streaming state
 let streamMsg = null;
@@ -506,6 +508,8 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
 // Internal function to actually update tool accordion
 const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     let toolData = state.toolAccordions[toolId];
+    // Tiles ride a UI marker; the accordion shows the text without it.
+    const { entries: galleryEntries, text: shownResult } = parseGalleryMarker(result);
 
     if (!toolData) {
         // Fallback: create accordion now
@@ -517,7 +521,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         acc.classList.remove('loading');
         if (isError) acc.classList.add('error');
         summary.innerHTML = `Tool Result: ${toolName}`;
-        content.textContent = 'Result:\n' + result;
+        content.textContent = 'Result:\n' + shownResult;
 
         if (state.curPara) {
             streamMsg.el.insertBefore(acc, state.curPara);
@@ -535,57 +539,16 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
 
         const existingContent = content.textContent;
         if (existingContent && existingContent !== 'Running...') {
-            content.textContent = existingContent + '\n\nResult:\n' + result;
+            content.textContent = existingContent + '\n\nResult:\n' + shownResult;
         } else {
-            content.textContent = 'Result:\n' + result;
+            content.textContent = 'Result:\n' + shownResult;
         }
     }
 
-    // Auto-inject from tool results (marker-based, works with any tool)
+    // Tiles under the accordion (shared renderer — the same one history uses).
     if (!isError && streamMsg) {
-        const galleryMatch = result.match(/<!--GALLERY:(\[.*\])-->/s);
-        if (galleryMatch) {
-            try {
-                const imgUrls = JSON.parse(galleryMatch[1]);
-                if (imgUrls.length > 0) {
-                    const gallery = document.createElement('div');
-                    gallery.className = 'image-gallery';
-                    for (const url of imgUrls) {
-                        const item = document.createElement('div');
-                        item.className = 'gallery-item';
-                        const img = document.createElement('img');
-                        img.src = url;
-                        img.className = 'chat-img';
-                        item.appendChild(img);
-                        gallery.appendChild(item);
-                    }
-                    toolData.acc.after(gallery);
-                }
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse gallery data:', e);
-            }
-        }
-
-        const listMatch = result.match(/<!--GALLERIES:(\[.*\])-->/s);
-        if (listMatch) {
-            try {
-                const listing = _createGalleryListing(JSON.parse(listMatch[1]));
-                if (listing) toolData.acc.after(listing);
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse gallery listing:', e);
-            }
-        }
-
-        const catMatch = result.match(/<!--CATEGORIES:(\[.*\])-->/s);
-        if (catMatch) {
-            try {
-                const grid = _createCategoryGrid(JSON.parse(catMatch[1]));
-                if (grid) toolData.acc.after(grid);
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse category data:', e);
-            }
-        }
-
+        const gallery = buildGallery(galleryEntries, openImageModal);
+        if (gallery) toolData.acc.after(gallery);
     }
 
     if (scrollCallback) scrollCallback();

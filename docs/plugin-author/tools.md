@@ -102,6 +102,25 @@ TOOLS = [{
 
 ---
 
+## Returning Images
+
+A tool that wants the model (and the user) to see a picture returns the images contract instead of a string:
+
+```python
+from core import images as ci
+
+def execute(function_name, arguments, config):
+    raw = capture()                       # bytes of any image format
+    return ci.result("Here's the camera.", [ci.for_chat(raw)]), True
+```
+
+- `ci.result(text, images, display_only=False)` builds `{"text", "images": [{data, media_type, display_only}]}`. `display_only=True` = the user sees it, the model never does.
+- The user sees every image forever; the model sees an image only in the turn it arrives (history replay drops image blocks).
+- Core saves each image to the chat's `tool_images` table (encrypted for vaulted chats), prepends the UI marker, and appends an **`(image img:<id>)` receipt line** to your text. Any image tool accepts that handle — `ci.resolve("img:<id>")` gives you the bytes; users hand it to `image_view`, `memory_save_image`, `telegram_send_image`.
+- `ci.for_chat(raw)` is the one resize (EXIF-upright, ≤1536px, JPEG); `ci.contact_sheet(list_of_raw)` the one numbered grid. Don't write your own.
+- `ci.resolve(source)` understands `img:<id>`, `doc:<N>` (Mind Palace library image), an absolute path, or an `http(s)` URL (fetched through `core.net`, 20MB cap). Raises `ci.ImageError` with a user-readable message.
+- Tiles for the user without spending model tokens: append `<!--GALLERY:[{"thumb", "full", "title", "page"}, ...]-->` to your text (URLs may be plain strings). Browser-facing external image URLs go through `ci.proxied(url)` — the browser never hot-links a third party. The marker is stripped from the model's copy.
+
 ## Networking from Plugins
 
 Make HTTP calls through the network facade instead of bare `requests`:

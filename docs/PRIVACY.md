@@ -123,6 +123,7 @@ Plugin authors: see [Private chats & `privacy_aware`](plugin-author/hooks.md#pri
 - **Old backups and old exports** made while a chat was public stay plaintext.
 - **Managed mode** (hosted/Docker-managed installs) disables the vault and private chats entirely.
 - A corrupted vault file is quarantined beside itself as `prompt_vault.enc.bad-<timestamp>` rather than deleted — restore from a backup.
+- **Web image tiles ride DuckDuckGo's image proxy.** `web_search_images` results (and any tile gallery a tool shows you) load through `external-content.duckduckgo.com` with no referrer — your browser never hot-links the source host. When the model looks at an image itself, the fetch goes through the app's network facade (your SOCKS settings apply), so the source host sees Sapphire's egress, not your browser.
 
 ---
 

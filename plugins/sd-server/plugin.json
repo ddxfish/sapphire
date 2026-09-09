@@ -1,23 +1,23 @@
 {
   "name": "sd-server",
   "short_display_name": "SD Server",
-  "version": "1.1.1",
-  "description": "Local image generation via stable-diffusion.cpp (sd-server). Generic \u2014 runs Z-Image Turbo by default, swap models per the README. Generate, grid, recreate-by-seed, and a wildcard slideshow.",
+  "version": "1.2.0",
+  "description": "Local image generation via stable-diffusion.cpp (sd-server). Generic — runs Z-Image Turbo by default, swap models per the README. Generate, grid, recreate-by-seed, and a wildcard slideshow.",
   "author": "sapphire",
-  "icon": "\ud83d\uddbc\ufe0f",
+  "icon": "🖼️",
   "priority": 50,
   "default_enabled": false,
   "settingsUI": "plugin",
   "capabilities": {
     "app": {
       "label": "Image Studio",
-      "icon": "\ud83d\uddbc\ufe0f",
-      "description": "Generate images directly \u2014 tune prompts, CFG, seed and steps in real time; run a wildcard slideshow",
+      "icon": "🖼️",
+      "description": "Generate images directly — tune prompts, CFG, seed and steps in real time; run a wildcard slideshow",
       "nav": false
     },
     "sidebar_accordion": {
       "title": "Reel",
-      "icon": "\ud83c\udf9e\ufe0f",
+      "icon": "🎞️",
       "content": "sidebar.html",
       "script": "sidebar.js"
     },
@@ -122,7 +122,7 @@
         "type": "string",
         "label": "AI name",
         "default": "",
-        "help": "The name the AI writes to mean itself (e.g. 'Sapphire'). Case-insensitive. Wherever it appears in a prompt it's auto-replaced with the AI appearance below \u2014 so the AI just writes the name, never the description."
+        "help": "The name the AI writes to mean itself (e.g. 'Sapphire'). Case-insensitive. Wherever it appears in a prompt it's auto-replaced with the AI appearance below — so the AI just writes the name, never the description."
       },
       {
         "key": "ai_description",

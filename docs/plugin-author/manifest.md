@@ -211,7 +211,7 @@ user/
     plugins.json                  # Enabled list: {"enabled": [...]}
     plugins/                      # Per-plugin settings
       ssh.json
-      image-gen.json
+      sd-server.json
 ```
 
 ## Reference for AI

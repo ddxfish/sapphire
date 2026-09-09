@@ -349,11 +349,18 @@ export const scheduleScrollAfterImages = (scrollCallback, force = false) => {
  * @returns {HTMLImageElement}
  */
 export const createImageElement = (imageId, isHistoryRender = false, scrollCallback = null) => {
+    if (!imageId.startsWith('tool:')) {
+        // Pre-2026-09 SDXL markers pointed at a live proxy route to the SDXL box —
+        // those bytes never lived inside Sapphire and the route is gone. One
+        // honest placeholder, no fetch, no 20-retry loop.
+        const gone = document.createElement('span');
+        gone.dataset.imageGone = 'true';
+        gone.dataset.imageId = imageId;
+        gone.textContent = 'image no longer available';
+        return gone;
+    }
     const img = document.createElement('img');
-    const isToolImage = imageId.startsWith('tool:');
-    const imgUrl = isToolImage
-        ? `/api/tool-image/${imageId.slice(5)}`
-        : `/api/sdxl-image/${imageId}`;
+    const imgUrl = `/api/tool-image/${imageId.slice(5)}`;
     img.src = imgUrl;
     img.className = 'inline-image';
     img.alt = 'Generated image';
@@ -361,7 +368,7 @@ export const createImageElement = (imageId, isHistoryRender = false, scrollCallb
     img.dataset.retryCount = '0';
 
     // Tool images are in the DB — no generation delay, minimal retries
-    const MAX_RETRIES = isToolImage ? 2 : 20;
+    const MAX_RETRIES = 2;
 
     // Track this image if it's from history render
     if (isHistoryRender) {

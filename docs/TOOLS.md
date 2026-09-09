@@ -59,8 +59,19 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 | `get_wikipedia` | web.py | Get Wikipedia article summary |
 | `research_topic` | web.py | Advanced multi-page research |
 | `get_site_links` | web.py | Extract navigation links from a site |
-| `get_images` | web.py | Extract image URLs from a page |
 | `ask_claude` | ai.py | Query Claude API for complex analysis |
+
+### Images
+
+One primitive (`core/images.py`), one return contract, one handle. Every tool that returns an image gets an `(image img:<id>)` receipt line appended to its result; any image tool accepts that handle.
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `web_search_images` | web.py | Bing-backed image search. The user gets clickable tiles (served through DuckDuckGo's image proxy); `view=true` also shows the model one image (`count=1`) or a numbered contact sheet |
+| `image_view` | images.py | Look at an image: `img:<id>`, `doc:<N>` (library), an absolute path, or a URL |
+| `memory_save_image` | mindpalace library_tools.py | Keep an image in the library under a topic (Knowledge tab; pixel + caption search; optional `private_key`) |
+| `telegram_send_image` | telegram plugin | Send an image (`source=` any handle; default = newest image of this chat) |
+| `generate_image` | sd-server plugin | Generate images on a local SD server (single or contact sheet) |
 
 ### Self-Modification
 
@@ -108,7 +119,6 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 | `ha_notify` | homeassistant.py | Send phone notification |
 | `ha_house_status` | homeassistant.py | Home status snapshot |
 | `ha_get_camera_image` | homeassistant.py | Grab a camera snapshot |
-| `generate_scene_image` | image_tool.py | Generate SDXL image from description |
 | `get_inbox` | email_tool.py | Fetch recent emails |
 | `read_email` | email_tool.py | Read email by index |
 | `search_emails` | email_tool.py | Search the mailbox |
@@ -142,13 +152,13 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 
 ### Where Tools Live
 
-Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, meta/self-modification, ai, network, notepad, docs, scene, schedule).
+Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, images, meta/self-modification, ai, network, notepad, docs, scene, schedule).
 
 | Path | Purpose | Git Tracked |
 |------|---------|-------------|
 | `plugins/memory/tools/` | Memory, knowledge, goals, people tools | Yes |
-| `plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents, calendar, image-gen, clock, ...) | Yes |
-| `functions/` | Standalone tools (web, meta, ai, network, notepad, docs, scene, schedule) | Yes |
+| `plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents, calendar, sd-server, clock, ...) | Yes |
+| `functions/` | Standalone tools (web, images, meta, ai, network, notepad, docs, scene, schedule) | Yes |
 | `user/plugins/*/tools/` | AI-created tool plugins | No |
 
 ### Enable/Disable
@@ -198,13 +208,14 @@ TOOL MODULES:
 - knowledge_tools.py (plugins/memory): save_person, save_knowledge, search_knowledge, delete_knowledge
 - goals_tools.py (plugins/memory): create_goal, list_goals, update_goal, delete_goal
 - Mind Palace engine (when enabled) swaps in its own memory tool surface: same core verbs plus update_memory(memory_id, ...), layered saves
-- web.py: web_search, get_website, get_wikipedia, research_topic, get_site_links, get_images
+- web.py: web_search, get_website, get_wikipedia, research_topic, get_site_links, web_search_images(query, count?=6, view?=false)
+- images.py: image_view(source, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
+- mindpalace library_tools.py: library, read_document, memory_save_image(source, topic, caption?, private_key?)
 - ai.py: ask_claude
 - meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools]
 - scene.py: set_scene(name) — chat scene background, 'none' clears
 - toolmaker.py: tool_save, tool_read, tool_load
 - homeassistant.py: ha_list_scenes_and_scripts, ha_activate, ha_list_areas, ha_area_light, ha_area_color, ha_get_thermostat, ha_set_thermostat, ha_list_lights_and_switches, ha_set_light, ha_set_switch, ha_notify, ha_house_status, ha_get_camera_image
-- image_tool.py (plugins/image-gen): generate_scene_image
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
 - agents plugin: agent_options, spawn_agent, check_agents, recall_agent, dismiss_agent
 - schedule_tool.py: schedule_task

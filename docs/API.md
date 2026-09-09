@@ -519,13 +519,6 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/webui/plugins/homeassistant/token` | HA token status |
 | POST | `/api/webui/plugins/homeassistant/entities` | Fetch HA entities |
 
-### Image Generation Plugin
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| POST | `/api/webui/plugins/image-gen/test-connection` | Test image gen connection |
-| GET | `/api/webui/plugins/image-gen/defaults` | Get image gen defaults |
-
 ### Email Plugin
 
 | Method | Endpoint | Purpose |
@@ -644,7 +637,6 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/tool-image/{id}` | Serve tool-generated image |
-| GET | `/api/sdxl-image/{id}` | Serve SDXL-generated image |
 
 ### Docs
 
@@ -681,7 +673,7 @@ ROUTE MODULES (core/routes/):
 - content.py: prompts, prompt components, piece trash/rename/usage, toolsets, functions, spices, spice sets, personas (PNG character-card export.png / import-card, legacy JSON import)
 - settings.py: settings CRUD, credentials, SOCKS proxy + /api/socks/status, LLM providers + test + test-thinking, custom providers, presets, TTS/STT/embedding provider registries, system status, system prompt (read-only)
 - system.py: backup suite (list/create/delete/download tar.gz/health/estimate/restore/restore-upload/restore-result), audio devices, continuity tasks, setup wizard, avatars, restart/shutdown, update + cancel + last-update-result, integrity verify + repair, metrics, api-tokens, daemon events, dashboard system-info + component-status, runtime true-speech GET/PUT
-- plugins.py: plugin listing/toggle/rescan/reload/surfaces, install/uninstall/revert/check-update, deps check/install, per-plugin conda envs (build-env, env-status, env DELETE), apps/games/themes/motions, plugin settings, HA/image-gen/email/bitcoin/gcal/github/ssh routes
+- plugins.py: plugin listing/toggle/rescan/reload/surfaces, install/uninstall/revert/check-update, deps check/install, per-plugin conda envs (build-env, env-status, env DELETE), apps/games/themes/motions, plugin settings, HA/email/bitcoin/gcal/github/ssh routes
 - knowledge.py: embedding test/integrity/reembed, memory, goals, knowledge tabs/entries/dedup, people, per-chat RAG documents, export/import
 - tts.py: TTS generate/stream/preview/status/stop/test, voices, transcribe, mic active, STT VAD status/test, image upload
 - agents.py: agent status/providers/dismiss, workspace run/stop/status
@@ -692,7 +684,7 @@ ROUTE MODULES (core/routes/):
 - backgrounds.py: scene background library (list/serve/upload/delete, webp)
 - fonts.py: font registry, serve, pinned sha256-verified download
 - videos.py: in-app Video Guide feed (cached)
-- media.py: tool-image, sdxl-image serving
+- media.py: tool-image serving
 - docs.py: doc tree, search, markdown content
 - body.py: multi-body runtime (wake, health, events SSE)
 Plus app-level routes in core/api_fastapi.py: /login, /logout, /setup, /api/avatar/{filename}, /plugin-web/{name}/{path}, /workspace/{project}/{path}, /cdn-cache/{path}.
