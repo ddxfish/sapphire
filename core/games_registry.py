@@ -78,6 +78,13 @@ def register_game(game_id, spec, plugin_name):
                 'stage_mode': (str(spec.get('stage_mode') or '').lower()
                                if str(spec.get('stage_mode') or '').lower() in VALID_STAGE_MODES else ''),
                 'keeps_focus': bool(spec.get('keeps_focus')),
+                # The game's own defaults for the room's settings spine
+                # (2026-09-09): {key: scalar}; the host validates keys and
+                # values against its declared table — core only keeps the
+                # shape honest (flat, scalar values, capped).
+                'room_defaults': {str(k)[:64]: v for k, v in (spec.get('room_defaults') or {}).items()
+                                  if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 2000}
+                                 if isinstance(spec.get('room_defaults'), dict) else {},
             }
             _generation += 1
         logger.info(f"[GAMES] Game registered: '{game_id}' from '{plugin_name}'")

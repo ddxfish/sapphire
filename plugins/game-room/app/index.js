@@ -103,10 +103,10 @@ async function renderLibrary() {
     // The spine's room layer (2026-09-09): every room default is a field in
     // this sidebar, pre-filled with the shipped default; an edited one gets
     // a dot and ↺ (Krem's ruling: no override switches). Games inherit these.
-    let roomSchema = [];
+    let roomSchema = [], roomNotes = {};
     try {
         const res = await fetch('/api/plugin/game-room/room/settings', { headers: { 'X-CSRF-Token': csrfTok() } });
-        if (res.ok) { const d = await res.json(); roomSchema = d.schema || []; roomCfg = d.settings || {}; }
+        if (res.ok) { const d = await res.json(); roomSchema = d.schema || []; roomCfg = d.settings || {}; roomNotes = d.notes || {}; }
     } catch (e) { /* the accordions render empty */ }
     const modal = await import(`./settings-modal.js?v=${bootV()}`);
     // Stories are chat-gear games — scanned server-side across story packs
@@ -159,7 +159,7 @@ async function renderLibrary() {
             </div>
             <div class="gr-seat-note" style="padding:6px 4px 2px">Room defaults — every game inherits these; a game's own sidebar can override them.</div>
             <div id="gr-room-keys">${modal.layerAccordionsHtml(roomSchema,
-                Object.fromEntries(roomSchema.map(f => [f.key, f.default])), roomCfg, 'lib', modal.LAYER_ICONS)}</div>`,
+                Object.fromEntries(roomSchema.map(f => [f.key, f.default])), roomCfg, 'lib', modal.LAYER_ICONS, roomNotes)}</div>`,
     });
 
     // Sidebar collapse — own preference key, chat's CSS

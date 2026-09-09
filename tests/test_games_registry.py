@@ -79,3 +79,16 @@ def test_room_host_hints_pass_through():
     by = {g['id']: g for g in m.list_games()}
     assert by['doom2']['stage_mode'] == 'fullscreen' and by['doom2']['keeps_focus'] is True
     assert by['cards']['stage_mode'] == '' and by['cards']['keeps_focus'] is False
+
+
+def test_room_defaults_pass_through_flat_and_scalar():
+    # the spine's game-declared layer (2026-09-09): {key: scalar} only; the
+    # host validates keys/values against its own table
+    m = _fresh()
+    assert m.register_game('poker', {'surfaces': ['room'], 'entry_js': 'app/p.js',
+                                     'room_defaults': {'cadence_mode': 'turn', 'send_frames': False,
+                                                       'nested': {'x': 1}, 'big': 'x' * 3000}}, 'game-holdem')
+    assert m.register_game('plain', {'surfaces': ['room'], 'entry_js': 'app/x.js', 'room_defaults': 'nope'}, 'p')
+    by = {g['id']: g for g in m.list_games()}
+    assert by['poker']['room_defaults'] == {'cadence_mode': 'turn', 'send_frames': False}
+    assert by['plain']['room_defaults'] == {}

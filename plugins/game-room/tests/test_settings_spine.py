@@ -234,3 +234,63 @@ def test_costume_hook_injects_the_games_line(store, monkeypatch):
     ev2 = types.SimpleNamespace(chat_name='plain', context_parts=[])
     costume.prompt_inject(ev2)
     assert ev2.context_parts == []
+
+
+# ── the dual nature: turn vs event vs timer, declared by the game ──────────
+
+def test_cadence_mode_declared_and_hides_the_clock_rows():
+    mode = _key('cadence_mode')
+    assert [o['value'] for o in mode['options']] == ['turn', 'event', 'timer'] and mode['default'] == 'timer'
+    # nature, not taste: no room layer, never in the library (a room-level
+    # "timer" read as "this applies to poker" — Krem 2026-09-09)
+    assert mode['scope'] == ['game', 'session'] and mode['show_in'] == ['room']
+    assert _key('cadence_min')['reveal_if'] == {'key': 'cadence_mode', 'not': ['turn']}
+    assert _key('send_frames')['reveal_if'] == {'key': 'cadence_mode', 'not': ['turn']}
+
+
+def test_game_declaration_sits_between_room_and_override(store, monkeypatch):
+    import core.games_registry as reg
+    monkeypatch.setattr(reg, 'list_games', lambda: [
+        {'id': 'poker', 'room_defaults': {'cadence_mode': 'turn', 'send_frames': False, 'player_name': 'nope', 'bogus': 1}},
+        {'id': 'doom', 'room_defaults': {'cadence_mode': 'timer', 'cadence_min': 30}}])
+    gc.save_room_defaults({'cadence_mode': 'event', 'cadence_min': 100})
+    assert 'cadence_mode' not in store.d['roomcfg']                     # the room has no nature
+    assert gc.effective()['cadence_mode'] == 'timer'                    # a game declaring nothing = the shipped default
+    # the game's nature beats the shipped default…
+    eff, layers = gc.effective('poker', with_layers=True)
+    assert eff['cadence_mode'] == 'turn' and layers['cadence_mode'] == 'game_default'
+    assert eff['send_frames'] is False
+    assert eff['player_name'] == '' and 'bogus' not in eff          # room-only / unknown keys refused
+    assert eff['cadence_min'] == 100 and layers['cadence_min'] == 'room'   # taste keys flow from the room
+    # …and the user's per-game override beats the declaration
+    gc.save_game_room_overrides('poker', {'cadence_mode': 'event'})
+    eff, layers = gc.effective('poker', with_layers=True)
+    assert eff['cadence_mode'] == 'event' and layers['cadence_mode'] == 'game'
+    # what the game sidebar shows as inherited = room ⊕ declaration (no overrides)
+    inh = gc.inherited_for_game('poker')
+    assert inh['cadence_mode'] == 'turn' and inh['cadence_min'] == 100
+    assert gc.inherited_for_game('doom')['cadence_min'] == 30
+    assert gc.game_declared_defaults(None) == {} and gc.game_declared_defaults('unknown') == {}
+
+
+# ── show_in: where a key is rendered (independent of scope) ────────────────
+
+def test_show_in_filters_the_sidebars_not_the_resolver(store, monkeypatch):
+    monkeypatch.setattr(gc, '_dynamic_options', lambda kind: [])
+    assert _key('new_session_toolset')['show_in'] == ['library']
+    lib = {f['key'] for f in gc.room_schema('room', surface='library')}
+    room = {f['key'] for f in gc.room_schema('game', surface='room')}
+    assert 'new_session_toolset' in lib and 'new_session_toolset' not in room
+    assert 'cadence_min' in lib and 'cadence_min' in room                 # absent show_in = both
+    # the resolver still honors a manifest declaration of a library-only key…
+    import core.games_registry as reg
+    monkeypatch.setattr(reg, 'list_games', lambda: [{'id': 'doom', 'room_defaults': {'new_session_toolset': 'none'}}])
+    assert gc.effective('doom')['new_session_toolset'] == 'none'
+    # …but the USER's per-game layer has no door for it: refused on write, ignored on read
+    gc.save_game_room_overrides('doom', {'new_session_toolset': 'work', 'cadence_min': 9})
+    assert store.d['gamecfg:doom']['_room'] == {'cadence_min': 9}
+    store.d['gamecfg:doom']['_room']['new_session_toolset'] = 'stale'      # a value stored before the rule
+    assert gc.game_room_overrides('doom') == {'cadence_min': 9}
+    assert gc.effective('doom')['new_session_toolset'] == 'none'
+    from routes import play
+    assert 'new_session_toolset' in {f['key'] for f in play.get_room_settings()['schema']}

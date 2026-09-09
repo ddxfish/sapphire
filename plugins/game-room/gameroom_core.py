@@ -415,8 +415,15 @@ def save_room_config(patch):
 #
 #     effective(game_id, session) = room defaults ⊕ game overrides ⊕ session overrides
 #
-# Every key is declared ONCE here with its scope ladder (which layers may set
-# it). Storage: room defaults in the `roomcfg` blob; a game's overrides under
+# Every key is declared ONCE here with TWO independent axes: `scope` = which
+# layers may hold a value (room / game / session — the resolver's business),
+# and `show_in` = which sidebars render the row (`library` = the Game Room's
+# own sidebar, `room` = inside a game; absent = both). A key that only makes
+# sense before a session exists (the toolset new sessions are born with)
+# shows in the library alone — inside a running game it could only ever
+# affect the NEXT session (Krem 2026-09-09). The user's per-game layer accepts
+# only keys shown in rooms: that sidebar is its one door.
+# Storage: room defaults in the `roomcfg` blob; a game's overrides under
 # `gamecfg:<id>['_room']` (beside the engine's own SETTINGS keys, never
 # colliding); a session's overrides on its chat settings under `game_room`.
 # The cadence organ (F3) rolls a random gap in [cadence_min, cadence_max]
@@ -435,17 +442,32 @@ ROOM_KEYS = [
     # Cadence — her unprompted turns while you play / watch: the gap, what
     # she sees each turn, what a session leaves behind (one accordion, one
     # short label + one field per line — Krem 2026-09-09; the long words live
-    # behind each row's ?). `reveal_if` = shown only while that checkbox is on.
-    {'key': 'cadence_min', 'label': 'min gap (s)', 'type': 'number',
+    # behind each row's ?). `reveal_if` = a checkbox key (shown while on) or
+    # {key, is: [...]} / {key, not: [...]} against another field's value.
+    # The dual nature (Krem 2026-09-09): poker is TURN-based (she speaks in
+    # reply to a move or a message), Doom is TIME-based (a clock rolls her
+    # turns), a wave game is EVENT-based (the game posts moments). NATURE,
+    # not taste: a game declares its own in its manifest (`room_defaults`)
+    # and the user may override it INSIDE that game — the room has no
+    # nature, so this key has no room layer and never shows in the library
+    # (a room-level "timer" read as "this applies to poker"). The gap and
+    # frame rows hide in turn mode.
+    {'key': 'cadence_mode', 'label': 'her turns', 'type': 'select',
+     'options': [{'value': 'turn', 'label': 'per move (turn-based)'},
+                 {'value': 'event', 'label': 'on game events'},
+                 {'value': 'timer', 'label': 'on a timer'}],
+     'default': 'timer', 'tab': 'Cadence', 'scope': ['game', 'session'], 'show_in': ['room'],
+     'help': "Turn-based: she speaks only in reply to your moves and messages (poker). Game events: the game says when a moment happened (a wave cleared) and she gets a turn, no sooner than the min gap. Timer: her turns come on a random clock between min and max (watching you play Doom, a movie)."},
+    {'key': 'cadence_min', 'label': 'min gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
      'min': 5, 'max': 3600, 'step': 5, 'default': 60, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
      'help': 'The shortest wait before one of her unprompted turns. Each turn waits a random gap between min and max seconds.'},
-    {'key': 'cadence_max', 'label': 'max gap (s)', 'type': 'number',
+    {'key': 'cadence_max', 'label': 'max gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
      'min': 5, 'max': 3600, 'step': 5, 'default': 180, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
      'help': 'The longest wait before one of her unprompted turns. Never below the min.'},
     {'key': 'cadence_paused', 'label': 'paused', 'type': 'checkbox',
      'default': False, 'tab': 'Cadence', 'scope': ['session'],
      'help': 'No unprompted turns in this session while on.'},
-    {'key': 'send_frames', 'label': 'show screen', 'type': 'checkbox',
+    {'key': 'send_frames', 'label': 'show screen', 'type': 'checkbox', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
      'default': True, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
      'help': 'Send her frames of the screen with each unprompted turn. Off = words only (a card game, a text state).'},
     {'key': 'frames_per_tick', 'label': 'frames/turn', 'type': 'number', 'reveal_if': 'send_frames',
@@ -466,20 +488,39 @@ ROOM_KEYS = [
     {'key': 'session_prompt_piece', 'label': 'costume line', 'type': 'text', 'rows': 3,
      'default': '', 'tab': 'Identity', 'scope': ['room', 'game'],
      'help': "One or two sentences she wears in this game's sessions, on top of the persona — e.g. \"You're on the couch watching Krem play Doom.\""},
-    {'key': 'new_session_toolset', 'label': 'new sessions', 'type': 'select',
-     'dynamic': 'toolsets', 'default': '', 'tab': 'Identity', 'scope': ['room', 'game'],
-     'help': 'The toolset a new session of this game starts with. Blank = the chat default.'},
+    {'key': 'new_session_toolset', 'label': 'game toolset', 'type': 'select',
+     'dynamic': 'toolsets', 'default': '', 'tab': 'Identity', 'scope': ['room', 'game'], 'show_in': ['library'],
+     'help': 'The toolset every new game session is born with. Blank = the chat default. A game may declare its own in its manifest. Sessions that already exist keep theirs (change it in their sidebar).'},
 ]
 _KEY = {k['key']: k for k in ROOM_KEYS}
-LAYERS = ('default', 'room', 'game', 'session')
+LAYERS = ('default', 'room', 'game_default', 'game', 'session')
+SURFACES = ('library', 'room')
+
+# One line under an accordion, per sidebar: the library's taste defaults say
+# which KIND of game uses them (the rows are honest, the kind is implicit).
+TAB_NOTES = {
+    'library': {
+        'Cadence': "Defaults for games she watches on a clock or on game events. Turn-based games like poker ignore the timing rows.",
+        'Identity': 'Defaults for new sessions of every game; a game may declare its own.',
+    },
+    'room': {},
+}
 
 
-def room_schema(scope=None, with_options=False):
+def shown_in(field, surface):
+    """Does `surface` render this key? Absent show_in = every sidebar."""
+    return not surface or surface in (field.get('show_in') or SURFACES)
+
+
+def room_schema(scope=None, with_options=False, surface=None):
     """The declared keys (a copy), optionally only those a layer may set,
-    optionally with dynamic option lists filled (providers/prompts/toolsets)."""
+    optionally only those a sidebar shows, optionally with dynamic option
+    lists filled (providers/prompts/toolsets)."""
     out = []
     for k in ROOM_KEYS:
         if scope and scope not in k['scope']:
+            continue
+        if not shown_in(k, surface):
             continue
         f = dict(k)
         if with_options and f.get('dynamic'):
@@ -516,13 +557,14 @@ def _dynamic_options(kind):
     return []
 
 
-def _clean_layer(patch, scope):
-    """Validate a patch for one layer: unknown keys and keys the layer may
-    not set are dropped; None clears (inherit); values are coerced."""
+def _clean_layer(patch, scope, surface=None):
+    """Validate a patch for one layer: unknown keys, keys the layer may not
+    set, and (with `surface`) keys that sidebar doesn't show are dropped;
+    None clears (inherit); values are coerced."""
     out = {}
     for key, val in (patch or {}).items():
         f = _KEY.get(key)
-        if not f or scope not in f['scope']:
+        if not f or scope not in f['scope'] or not shown_in(f, surface):
             continue
         if val is None:
             out[key] = None
@@ -554,18 +596,45 @@ def save_room_defaults(patch):
     return room_defaults()
 
 
+def game_declared_defaults(game_id):
+    """The game's OWN defaults from its manifest (`room_defaults`) — its
+    nature (turn vs timer, frames or not). Sits between the room and the
+    user's per-game overrides: Doom is time-based whatever the room says,
+    unless the user overrides it for Doom."""
+    if not game_id:
+        return {}
+    try:
+        from core import games_registry
+        spec = next((g for g in games_registry.list_games() if g.get('id') == game_id), None)
+    except Exception:
+        spec = None
+    return _clean_layer({k: v for k, v in ((spec or {}).get('room_defaults') or {}).items()
+                         if v is not None}, 'game')
+
+
+def inherited_for_game(game_id):
+    """What a game gets before the user's per-game overrides: room ⊕ the
+    game's declaration. The game sidebar's dot compares against this."""
+    out = room_defaults()
+    out.update(game_declared_defaults(game_id))
+    if out['cadence_max'] < out['cadence_min']:
+        out['cadence_max'] = out['cadence_min']
+    return out
+
+
 def game_room_overrides(game_id):
-    """Layer 2: this game's overrides of room keys (only what's explicitly set)."""
+    """Layer 3: the USER's per-game overrides (only what's explicitly set,
+    only keys the game-room sidebar shows — its one door)."""
     stored = store.get(f'gamecfg:{game_id}')
     ov = (stored or {}).get('_room') if isinstance(stored, dict) else None
-    return _clean_layer({k: v for k, v in (ov or {}).items() if v is not None}, 'game')
+    return _clean_layer({k: v for k, v in (ov or {}).items() if v is not None}, 'game', surface='room')
 
 
 def save_game_room_overrides(game_id, patch):
     stored = store.get(f'gamecfg:{game_id}')
     stored = stored if isinstance(stored, dict) else {}
     ov = stored.get('_room') if isinstance(stored.get('_room'), dict) else {}
-    for key, val in _clean_layer(patch, 'game').items():
+    for key, val in _clean_layer(patch, 'game', surface='room').items():
         if val is None:
             ov.pop(key, None)
         else:
@@ -592,8 +661,9 @@ def session_room_overrides(session=None, chat_settings=None):
 
 
 def effective(game_id=None, session=None, chat_settings=None, with_layers=False):
-    """THE resolver. Later layers win; a layer only touches keys it may set.
-    with_layers → (values, {key: layer that set it})."""
+    """THE resolver: default → room → the game's declared defaults → the
+    user's per-game overrides → session. Later layers win; a layer only
+    touches keys it may set. with_layers → (values, {key: layer})."""
     out = {k['key']: k.get('default') for k in ROOM_KEYS}
     src = {k: 'default' for k in out}
     rc = store.get('roomcfg')
@@ -602,6 +672,9 @@ def effective(game_id=None, session=None, chat_settings=None, with_layers=False)
         out[k] = v
         src[k] = 'room'
     if game_id:
+        for k, v in game_declared_defaults(game_id).items():
+            out[k] = v
+            src[k] = 'game_default'
         for k, v in game_room_overrides(game_id).items():
             out[k] = v
             src[k] = 'game'

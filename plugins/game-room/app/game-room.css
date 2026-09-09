@@ -298,6 +298,7 @@
 }
 .grs-help-btn:hover { color: var(--trim, #8ab8ff); border-color: var(--trim, #8ab8ff); }
 .grs-inline-help { display: flex; justify-content: flex-end; margin: -2px 0 4px; }
+.grs-tab-note { margin: 0 0 6px; line-height: 1.35; }
 .grs-hidden { display: none !important; }
 .gr-voice-route { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border, #2a3040); }
 

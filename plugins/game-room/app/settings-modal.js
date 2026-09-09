@@ -515,15 +515,28 @@ export function layerRowsHtml(schema, inherited, values) {
         const v = shown(f);
         const over = !sameValue(f, v, inh);
         let hidden = false;
-        if (f.reveal_if) {
-            const ctl = schema.find(x => x.key === f.reveal_if);
-            hidden = !!ctl && !shown(ctl);
+        const rv = revealSpec(f);
+        if (rv) {
+            const ctl = schema.find(x => x.key === rv.key);
+            hidden = !!ctl && !revealOk(rv, shown(ctl));
         }
-        return `<div class="grs-layer-row${over ? ' overridden' : ''}${hidden ? ' grs-hidden' : ''}" data-key="${esc(f.key)}"${f.reveal_if ? ` data-reveal-if="${esc(f.reveal_if)}"` : ''}>
+        return `<div class="grs-layer-row${over ? ' overridden' : ''}${hidden ? ' grs-hidden' : ''}" data-key="${esc(f.key)}"${rv ? ` data-reveal-if="${esc(rv.key)}"` : ''}>
             <div class="grs-layer-field">${inlineFieldHtml(f, v)}</div>
             <button type="button" class="grs-reset-key sb-icon-btn" title="Inherit again (${esc(optionLabel(f, inh))})">&#x21BA;</button>
         </div>`;
     }).join('');
+}
+
+// reveal_if: 'key' (a checkbox — shown while on) or {key, is: [...]} /
+// {key, not: [...]} against another field's current value.
+function revealSpec(f) {
+    if (!f.reveal_if) return null;
+    return typeof f.reveal_if === 'string' ? { key: f.reveal_if } : f.reveal_if;
+}
+function revealOk(rv, value) {
+    if (rv.is) return rv.is.map(String).includes(String(value));
+    if (rv.not) return !rv.not.map(String).includes(String(value));
+    return !!value && value !== 'false';
 }
 
 // The ? card: the field's long words, one small card, click anywhere closes.
@@ -562,10 +575,11 @@ export function wireLayer(scope, schema, inherited, onChange) {
     // reveal: a checkbox controls the rows/groups tagged with its key
     const reveal = () => {
         scope.querySelectorAll('[data-reveal-if]').forEach(el => {
-            const ctl = scope.querySelector(`.grs-layer-row[data-key="${CSS.escape(el.dataset.revealIf)}"]`);
+            const f = byKey[el.dataset.key];
+            const rv = f && revealSpec(f);
+            const ctl = rv && scope.querySelector(`.grs-layer-row[data-key="${CSS.escape(rv.key)}"]`);
             if (!ctl) return;
-            const on = !!readField(ctl, el.dataset.revealIf);
-            el.classList.toggle('grs-hidden', !on);
+            el.classList.toggle('grs-hidden', !revealOk(rv, readField(ctl, rv.key)));
         });
     };
     scope.querySelectorAll('.grs-help-btn').forEach(b => {
@@ -593,10 +607,11 @@ export function wireLayer(scope, schema, inherited, onChange) {
 }
 
 // Accordions per `tab` for one layer — the same shape in both sidebars.
-export function layerAccordionsHtml(schema, inherited, values, nsPrefix, icons = {}) {
+export function layerAccordionsHtml(schema, inherited, values, nsPrefix, icons = {}, notes = {}) {
     return groupByTab(schema).map(([t, fields]) => accordionHtml({
         id: `${nsPrefix}:${t.toLowerCase()}`, title: t, icon: icons[t] || '',
-        content: layerRowsHtml(fields, inherited, values),
+        content: (notes[t] ? `<div class="gr-seat-note grs-tab-note">${esc(notes[t])}</div>` : '')
+            + layerRowsHtml(fields, inherited, values),
     })).join('');
 }
 

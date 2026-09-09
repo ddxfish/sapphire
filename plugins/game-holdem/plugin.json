@@ -18,6 +18,7 @@
         "surfaces": [
           "room"
         ],
+        "room_defaults": {"cadence_mode": "turn", "send_frames": false},
         "entry_js": "app/poker.js",
         "players": "heads-up — you vs her",
         "facts": [

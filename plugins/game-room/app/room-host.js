@@ -690,7 +690,7 @@ async function initRoomKeys(me) {
     const voiceHome = me.root.querySelector('.sidebar-accordion[data-acc="surface:voice"] .sidebar-accordion-content');
     const own = [], merged = [];
     for (const f of schema) ((f.tab === 'Voice' && voiceHome) ? merged : own).push(f);
-    box.innerHTML = mod.layerAccordionsHtml(own, room.inherited || {}, room.overrides || {}, 'game', mod.LAYER_ICONS);
+    box.innerHTML = mod.layerAccordionsHtml(own, room.inherited || {}, room.overrides || {}, 'game', mod.LAYER_ICONS, room.notes || {});
     let voiceBox = null;
     if (merged.length) {
         voiceBox = document.createElement('div');

@@ -180,8 +180,9 @@ def get_game_settings(game, **_):
     schema = getattr(engine, 'SETTINGS', None) or []
     return {'game': game, 'title': meta.get('title', game),
             'schema': schema, 'settings': gc.game_settings(game),
-            'room': {'schema': gc.room_schema('game', with_options=True),
-                     'inherited': gc.effective(),
+            'room': {'schema': gc.room_schema('game', with_options=True, surface='room'),
+                     'notes': gc.TAB_NOTES.get('room', {}),
+                     'inherited': gc.inherited_for_game(game),
                      'overrides': gc.game_room_overrides(game),
                      'effective': gc.effective(game)}}
 
@@ -220,7 +221,8 @@ def set_room_config(body=None, **_):
 def get_room_settings(**_):
     """Room Defaults modal: the declared keys (room layer, options filled),
     the saved defaults, and the room-level resolution."""
-    return {'schema': gc.room_schema('room', with_options=True),
+    return {'schema': gc.room_schema('room', with_options=True, surface='library'),
+            'notes': gc.TAB_NOTES.get('library', {}),
             'settings': gc.room_defaults(), 'effective': gc.effective()}
 
 
@@ -259,8 +261,8 @@ def get_session_settings(query=None, **_):
     gid = str(s.get('game_id') or '')
     if s.get('mode') != 'game' or gid.startswith('story:'):
         gid = ''
-    return {'schema': gc.room_schema('session', with_options=True),
-            'inherited': gc.effective(gid or None),
+    return {'schema': gc.room_schema('session', with_options=True, surface='room'),
+            'inherited': gc.effective(gid or None),      # room ⊕ declared ⊕ the game's overrides
             'overrides': gc.session_room_overrides(chat_settings=s),
             'effective': gc.effective(gid or None, chat_settings=s)}
 
