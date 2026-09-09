@@ -66,3 +66,16 @@ def test_bad_spec_never_raises():
     m = _fresh()
     assert not m.register_game(None, None, 'p')
     assert not m.register_game('x', {'surfaces': 'room'}, 'p')  # string, not list — TypeError inside → False
+
+
+def test_room_host_hints_pass_through():
+    # F6 (2026-09-09): stage_mode + keeps_focus ride the registry entry so the
+    # room host can lay the board out; unknown modes fall to '' (host default).
+    m = _fresh()
+    assert m.register_game('doom2', {'surfaces': ['room'], 'entry_js': 'app/doom.js',
+                                     'stage_mode': 'Fullscreen', 'keeps_focus': 1}, 'game-doom')
+    assert m.register_game('cards', {'surfaces': ['room'], 'entry_js': 'app/c.js',
+                                     'stage_mode': 'sideways'}, 'game-cards')
+    by = {g['id']: g for g in m.list_games()}
+    assert by['doom2']['stage_mode'] == 'fullscreen' and by['doom2']['keeps_focus'] is True
+    assert by['cards']['stage_mode'] == '' and by['cards']['keeps_focus'] is False

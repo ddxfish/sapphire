@@ -28,7 +28,23 @@ engine.py must export:
   build_user_msg(view) -> str               the turn prompt
   build_banter_msg(view) -> str             the banter prompt
   validate_decision(data, view) -> {'action','args','say'}|None
+  view_public(state) -> dict                RAIL SET (F6, 2026-09-09): the table as
+  build_ghost(view) -> str                  the CHAT rail may see it (no hidden info)
+                                            + its one-line rendering for the ghost
+                                            envelope on every chat turn of a session
 Engines import add_talk/IllegalAction from gameroom_core.
+
+TALK IS THE CHAT (F6 port, 2026-09-09): table talk rides the real chat rail
+(sessions are chats — the rail is transplanted into the room). The sealed
+seat stays for MOVES only. ONE TABLE, ONE TRANSCRIPT (Krem's plan A, same
+day): every seat call lands on the session's chat as one pair — the
+player's row (the move + whatever they typed) and hers (fresh dealer lines +
+her quip) — so the hand is readable later by both of them; her quips are
+her own words, never her cards. hooks/mirror.py copies chat TURNS (player +
+hers) into state['talk'] so the seat still hears the table.
+
+  describe_action(action, args) -> str      optional: 'raise to 20' (the player's
+                                            row; fallback = generic verb + amount)
 
 SILENT VERBS: a client action prefixed '_' (e.g. '_checkpoint') is a system
 verb — no talk line, no AI turn. The HOST strips the prefix before calling
@@ -396,12 +412,171 @@ def seat_display_name(cfg):
     return name[:1].upper() + name[1:]
 
 
-def add_talk(state, who, text):
+def add_talk(state, who, text, via=None):
     state['talk_seq'] = state.get('talk_seq', 0) + 1
     round_no = (state.get('hand') or state.get('round') or {}).get('num', 0)
-    state['talk'].append({'who': who, 'text': str(text), 'hand': round_no,
-                          'seq': state['talk_seq']})
+    line = {'who': who, 'text': str(text), 'hand': round_no, 'seq': state['talk_seq']}
+    if via:
+        line['via'] = via        # 'chat' = mirrored from the rail (board never re-shows it)
+    state['talk'].append(line)
     state['talk'] = state['talk'][-TALK_CAP:]
+
+
+def _names(view, state):
+    """Guarantee my_name/opp_name on any engine view. Engines whose views
+    omit them (Dark Horse's _summary) KeyError'd inside _system_prompt ->
+    a bare 500 on every table-talk call (S2 live bug, 2026-09-08). The
+    session block is the one place both names always live."""
+    sess = (state or {}).get('session') or {}
+    view = dict(view or {})
+    view.setdefault('my_name', sess.get('ai_name') or 'Sapphire')
+    view.setdefault('opp_name', sess.get('player_name') or 'Player')
+    return view
+
+
+def round_live(state):
+    """A hand/round is in play (the seat sees hidden info mid-round)."""
+    hand = (state or {}).get('hand') or (state or {}).get('round')
+    return bool(hand) and hand.get('street', hand.get('phase')) != 'over'
+
+
+def public_view(engine, state):
+    """The table as the CHAT rail may see it — never hidden info. An engine
+    declares view_public; without one, only the between-rounds view is safe
+    (view_for_ai carries her hole cards) -> None while a round is live."""
+    if hasattr(engine, 'view_public'):
+        return _names(engine.view_public(state), state)
+    if not round_live(state) and hasattr(engine, 'view_between'):
+        return _names(engine.view_between(state), state)
+    return None
+
+
+def ghost_block(game_id, session):
+    """Read-only table state for the ghost envelope on a game session's chat
+    turn (F6 port). The engine renders it (build_ghost); no renderer or no
+    state -> no block. Never ticks, never writes — games have no turn clock."""
+    meta, engine = get_game(game_id)
+    if not engine or not hasattr(engine, 'build_ghost'):
+        return None
+    state = load_state(game_id, session)
+    if not state:
+        return None
+    view = public_view(engine, state)
+    if view is None:
+        return None
+    text = str(engine.build_ghost(view) or '').strip()
+    if not text:
+        return None
+    title = (meta or {}).get('title') or game_id
+    return f'Game Room, {title} — live table: {text}'
+
+
+def record_talk(game_id, session, who, text):
+    """Mirror a chat-rail line into the seat's ears (state['talk']). Since
+    the F6 port the rail IS the chat; the sealed seat still reads
+    view['talk'] to needle and answer. No saved state -> nothing to mirror.
+    Returns True when a line landed."""
+    text = str(text or '').strip()
+    if not text:
+        return False
+    with session_lock(game_id, session):
+        state = load_state(game_id, session)
+        if not state or not isinstance(state.get('talk'), list):
+            return False
+        add_talk(state, who, text[:400], via='chat')
+        save_state(game_id, state, session)
+    return True
+
+
+# ---------------------------------------------------------------- the table log
+# (plan A, 2026-09-09) One pair per seat call, appended to the session chat
+# BY NAME through core's append primitive (waits on the chat's own idle
+# event, syncs the live singleton when the session is active, publishes
+# MESSAGE_ADDED). The pair is BUILT under the session lock (may force a
+# banter reply — she always answers words at the table) and APPENDED after
+# it, so a stream-wait never holds the table.
+
+TABLE_VERBS = {'new_session': 'sit down', 'start': 'deal', 'say': 'says'}
+TABLE_MARK = '\u21b3 '          # ↳ — the player's row is a move, not a message
+
+
+def describe_action(engine, action, args=None):
+    fn = getattr(engine, 'describe_action', None)
+    if callable(fn):
+        try:
+            text = str(fn(action, args or {}) or '').strip()
+            if text:
+                return text
+        except Exception as e:
+            logger.debug(f'game-room: describe_action failed: {e}')
+    if action in TABLE_VERBS:
+        return TABLE_VERBS[action]
+    amt = (args or {}).get('amount')
+    return f'{action} {amt}'.strip() if amt not in (None, '') else str(action)
+
+
+def fresh_lines(state, since_seq):
+    """Talk the TABLE produced after `since_seq`: dealer + her seat lines,
+    never the player's, never a mirrored chat turn."""
+    return [t for t in (state or {}).get('talk', [])
+            if t.get('seq', 0) > since_seq and t.get('who') != 'player' and not t.get('via')]
+
+
+def table_pair(engine, state, since_seq, action, args=None, say='', cfg=None, gcfg=None):
+    """The transcript pair for one seat call, or None when the table said
+    nothing and the player said nothing (silent verbs, a checkpoint)."""
+    say = str(say or '').strip()
+    lines = fresh_lines(state, since_seq)
+    if say and not any(t.get('who') == 'ai' for t in lines) and hasattr(engine, 'build_banter_msg'):
+        # words at the table always get her answer — the between-hands
+        # voice when the move gave the seat no turn (a fold, a call that
+        # ends the hand). Engines without a banter set just log the words.
+        add_talk(state, 'ai', banter_reply(engine, state, cfg or {}, gcfg))
+        lines = fresh_lines(state, since_seq)
+    if not lines and not say:
+        return None
+    user = TABLE_MARK + describe_action(engine, action, args)
+    if say:
+        user += ' \u2014 ' + say
+    parts = [('\U0001f0a0 ' + t['text']) if t.get('who') == 'dealer' else t['text'] for t in lines]
+    return [{'role': 'user', 'content': user, 'metadata': {'source': 'table'}},
+            {'role': 'assistant', 'content': '\n'.join(parts) or '\u2026',
+             'metadata': {'source': 'table'}}]
+
+
+def append_table(session, rows):
+    """Land a pair on the session chat. Refusals (sealed, degraded, a 20s
+    stream-wait) are logged — the move itself already happened on the felt."""
+    if not session or not rows:
+        return False
+    try:
+        from core.api_fastapi import get_system
+        sm = get_system().llm_chat.session_manager
+        ok = bool(sm.append_messages_to_chat(session, rows, max_wait_if_streaming=20.0))
+    except Exception as e:
+        logger.warning(f'game-room: table log for {session!r} failed: {e}')
+        return False
+    if not ok:
+        logger.warning(f'game-room: table log for {session!r} did not land (sealed, degraded, or stream-busy)')
+    return ok
+
+
+def game_session(chat):
+    """The game id when `chat` is a session of a room GAME, else None.
+    Stories carry 'story:' ids and their own hooks — never a game here."""
+    if not chat:
+        return None
+    try:
+        from core.api_fastapi import get_system
+        s = get_system().llm_chat.session_manager.get_settings_for(chat)
+    except Exception:
+        return None
+    if not isinstance(s, dict) or s.get('mode') != 'game':
+        return None
+    gid = str(s.get('game_id') or '').strip()
+    if not gid or gid.startswith('story:'):
+        return None
+    return gid
 
 
 # ---------------------------------------------------------------- LLM plumbing
@@ -648,7 +823,7 @@ def _merge_gcfg(cfg, gcfg):
 def decide(engine, state, cfg, gcfg=None):
     """One AI move: LLM proposes, engine's validator disposes. Always returns
     {'action', 'args', 'say', 'fallback': bool} that is safe to apply."""
-    view = engine.view_for_ai(state)
+    view = _names(engine.view_for_ai(state), state)
     s_action, s_args = engine.safe_action(state)
     fallback = {'action': s_action, 'args': s_args,
                 'say': f'(static on the line... I {s_action})', 'fallback': True}
@@ -675,9 +850,8 @@ def decide(engine, state, cfg, gcfg=None):
 
 def banter_reply(engine, state, cfg, gcfg=None):
     """Table talk between moves — no game action. Returns the reply string."""
-    hand = state.get('hand') or state.get('round')
-    live = hand and hand.get('street', hand.get('phase')) != 'over'
-    view = engine.view_for_ai(state) if live else engine.view_between(state)
+    live = round_live(state)
+    view = _names(engine.view_for_ai(state) if live else engine.view_between(state), state)
     system = _system_prompt(engine.BANTER_CONTRACT, view, cfg, gcfg)
     content = _call_llm(system, engine.build_banter_msg(view), _merge_gcfg(cfg, gcfg))
     data = _extract_json(content or '')

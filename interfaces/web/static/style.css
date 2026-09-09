@@ -608,7 +608,8 @@ body {
     display: none;
     position: absolute;
     right: 0;
-    top: 12px;
+    top: 50%;                 /* mid-height (Krem 2026-09-09): the top corner belongs to each page's own bar */
+    transform: translateY(-50%);
     min-width: 44px;
     padding: 20px 12px 20px 14px;
     border: 1px solid var(--trim, var(--border));

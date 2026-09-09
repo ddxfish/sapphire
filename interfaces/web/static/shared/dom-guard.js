@@ -24,7 +24,12 @@ const SETTLE_MS = 150;   // focusout fires before the next target owns focus
 export function isEditable(el) {
     if (!el) return false;
     const t = el.tagName;
-    return t === 'TEXTAREA' || t === 'INPUT' || t === 'SELECT' || !!el.isContentEditable;
+    if (t === 'TEXTAREA' || t === 'INPUT' || t === 'SELECT' || !!el.isContentEditable) return true;
+    // Focus-owner rule (Game Room F6, 2026-09-09): a stage that holds focus
+    // for its own input — a canvas game, an emulator — marks itself
+    // `data-keeps-focus`; it counts as "the user is in it", so the composer
+    // refocus after her turn and every soft refresh leave it alone.
+    return !!(el.closest && el.closest('[data-keeps-focus]'));
 }
 
 export function editableFocused(root = document) {

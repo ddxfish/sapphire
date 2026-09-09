@@ -7,6 +7,10 @@ Since 0.5 every call carries a `session` (the mode-tagged chat name — the chat
 IS the save): state is keyed per (game, session) and her seat's brain resolves
 from that chat's settings. Session-less calls still work against the legacy
 room-global state so nothing strands.
+
+F6 port (2026-09-09): table talk is the chat rail. `banter` survives as the
+published REST contract (docs/plugin-author/games.md) but the room no longer
+calls it — a typed line at the table is a normal chat turn on the session.
 """
 
 import sys
@@ -43,6 +47,15 @@ def _out(engine, state, session=None):
         cfg.get('provider'), cfg.get('model', ''),
         privacy_required=bool(cfg.get('privacy_required') or cfg.get('hidden')))}
     return view
+
+
+def _with_last(out, rows, logged):
+    """The caption's source (plan A subtitle, 2026-09-09): the pair this call
+    put on the transcript — byte-for-byte what the rail shows — so the
+    board's subtitle can never disagree with the chat. None = nothing said."""
+    out['last'] = ({'user': rows[0]['content'], 'assistant': rows[1]['content'],
+                    'logged': bool(logged)} if rows else None)
+    return out
 
 
 def list_games(**_):
@@ -82,9 +95,12 @@ def new_session(game, body=None, query=None, **_):
         display = gc.seat_display_name(cfg)
         if display != 'Sapphire':
             state['session']['ai_name'] = display
+        before = state.get('talk_seq', 0)
         gc.add_talk(state, 'dealer', 'New session. Shuffle up.')
+        rows = gc.table_pair(engine, state, before, 'new_session', cfg=cfg, gcfg=gcfg)
         gc.save_state(game, state, session)
-        return _out(engine, state, session)
+        out = _out(engine, state, session)
+    return _with_last(out, rows, gc.append_table(session, rows))
 
 
 def start(game, body=None, query=None, **_):
@@ -100,10 +116,14 @@ def start(game, body=None, query=None, **_):
         why = engine.can_start(state)
         if why:
             return ({'error': why}, 400)
+        before = state.get('talk_seq', 0)
+        cfg, gcfg = gc.session_cfg(session), gc.game_settings(game)
         engine.start_round(state)
-        gc.run_ai_turns(engine, state, gc.session_cfg(session), gc.game_settings(game))   # AI may act first
+        gc.run_ai_turns(engine, state, cfg, gcfg)   # AI may act first
+        rows = gc.table_pair(engine, state, before, 'start', cfg=cfg, gcfg=gcfg)
         gc.save_state(game, state, session)
-        return _out(engine, state, session)
+        out = _out(engine, state, session)
+    return _with_last(out, rows, gc.append_table(session, rows))
 
 
 def act(game, body=None, query=None, **_):
@@ -112,9 +132,10 @@ def act(game, body=None, query=None, **_):
         return err
     body = body or {}
     session = _session(query, body)
-    # Table talk is optional since 0.5 — a silent move gets a marker line so
-    # the table drama survives and her seat can needle the quiet (Krem's call,
-    # 2026-08-02: simple play must work, she still always talks back).
+    # One table, one transcript (plan A, 2026-09-09): `say` is whatever the
+    # player typed when they clicked the move — it rides the move as their
+    # row on the session chat, her quip lands as hers. No text = a silent
+    # move (the old '(plays in silence)' marker is gone).
     say = str(body.get('say') or '').strip()
     action = str(body.get('action') or '').lower().strip()
     args = body.get('args') or {}
@@ -132,16 +153,21 @@ def act(game, body=None, query=None, **_):
         # suppress her turn on a normal move (finding 4.18).
         silent = action.startswith('_')
         action = action.lstrip('_')
-        if not silent:
-            gc.add_talk(state, 'player', say[:400] if say else '(plays in silence)')
+        before = state.get('talk_seq', 0)
+        if not silent and say:
+            gc.add_talk(state, 'player', say[:400])
         try:
             engine.apply_action(state, 'player', action, args)
         except gc.IllegalAction as e:
             return ({'error': str(e)}, 400)   # nothing saved — talk line discarded too
+        rows = None
         if not silent:
-            gc.run_ai_turns(engine, state, gc.session_cfg(session), gc.game_settings(game))
+            cfg, gcfg = gc.session_cfg(session), gc.game_settings(game)
+            gc.run_ai_turns(engine, state, cfg, gcfg)
+            rows = gc.table_pair(engine, state, before, action, args, say[:400], cfg, gcfg)
         gc.save_state(game, state, session)
-        return _out(engine, state, session)
+        out = _out(engine, state, session)
+    return _with_last(out, rows, gc.append_table(session, rows))
 
 
 def get_game_settings(game, **_):
@@ -227,8 +253,12 @@ def banter(game, body=None, query=None, **_):
         state = gc.load_state(game, session)
         if not state:
             return ({'error': 'No session — sit down first.'}, 400)
+        before = state.get('talk_seq', 0)
         gc.add_talk(state, 'player', say[:400])
-        reply = gc.banter_reply(engine, state, gc.session_cfg(session), gc.game_settings(game))
+        cfg, gcfg = gc.session_cfg(session), gc.game_settings(game)
+        reply = gc.banter_reply(engine, state, cfg, gcfg)
         gc.add_talk(state, 'ai', reply)
+        rows = gc.table_pair(engine, state, before, 'say', say=say[:400], cfg=cfg, gcfg=gcfg)
         gc.save_state(game, state, session)
-        return _out(engine, state, session)
+        out = _out(engine, state, session)
+    return _with_last(out, rows, gc.append_table(session, rows))

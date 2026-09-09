@@ -1,6 +1,6 @@
 # Game Plugins
 
-Ship a playable game as a plugin. The **Game Room** (system plugin `game-room`) is the host: it owns the Surface room, sessions, the talk rail, per-game settings, and Sapphire's sealed seat. Your plugin brings the game — an engine, a board module, and one manifest declaration. Core carries zero game code; if the host is disabled, your registration just holds harmlessly.
+Ship a playable game as a plugin. The **Game Room** (system plugin `game-room`) is the host: it owns the Surface room, sessions, the **real chat rail** (table talk IS the chat), per-game settings, and Sapphire's sealed seat for moves. Your plugin brings the game — an engine, a board module, and one manifest declaration. Core carries zero game code; if the host is disabled, your registration just holds harmlessly.
 
 Reference implementations: **`plugins/game-holdem`** (turn game, sealed seat — ships with the app) and **game-darkhorse** (free-mount real-time game — lives in its own external repo and installs like any store plugin).
 
@@ -93,7 +93,18 @@ view_for_ai(state) -> dict                         # MUST include my_name, opp_n
                                                    # because the data never reaches her.
 ```
 
-**Banter set (state-aware table talk — strongly recommended):**
+**Rail set (the chat sees the table — strongly recommended):**
+
+```
+view_public(state) -> dict                         # the table as the CHAT may see it —
+                                                   # never hidden info (this view is
+                                                   # persisted with the chat)
+build_ghost(view) -> str                           # one line of live table state
+```
+
+Table talk is a normal chat turn on the session (the room transplants the real chat rail). On every chat turn the host puts `build_ghost(view_public(state))` on the ghost rail, so she genuinely sees the board when you talk to her — and the seat still hears the table: the host mirrors chat lines (yours and hers) into `state['talk']`. Without a rail set, the host contributes nothing mid-round (it can't know which keys are hidden) and only `view_between` between rounds.
+
+**Banter set (REST table talk — the `play/{game}/banter` route; the room itself no longer calls it):**
 
 ```
 BANTER_CONTRACT                                    # persona block for pure talk
@@ -101,7 +112,7 @@ view_between(state) -> dict                        # banter context when no roun
 build_banter_msg(view) -> str                      # the banter prompt
 ```
 
-With these, talking to her at the table means she genuinely sees the board.
+Views may omit `my_name`/`opp_name` — the host fills them from `state['session']`.
 
 **Per-game settings** — export a `SETTINGS` list and the host renders a settings modal and passes saved values as `cfg`:
 
@@ -122,8 +133,12 @@ Saved values are stored per *game*, plugin-wide — a player's house rules carry
 
 Loaded fresh on every room entry as an ES module from `/plugin-web/<your-plugin>/<entry_js>`. Two shapes:
 
-- **Turn game** — export `renderBoard`/`renderActions`; the shell owns all chrome (talk rail, composer, voice). Helpers arrive via `ctx` — don't import the shell. See `game-holdem/app/poker.js`.
+- **Turn game** — export `renderBoard`/`renderActions`; the host owns all chrome (the real chat rail + composer, her quip strip, voice, sidebar). Helpers arrive via `ctx` — don't import the host. See `game-holdem/app/poker.js`.
 - **Free-mount** — export `{mount, unmount}`; you own the whole stage (canvas, input, your own sim loop). Server stays authoritative for setup and checkpoints. See `app/towerd.js` in the external game-darkhorse repo.
+
+`ctx` (both shapes): `api(path, method, body)` (plugin routes; the session is attached for you), `post(path, body, label)` (a MOVE on the sealed seat — busy gate, board redraw, her quip spoken), `state()`, `cfg()` (her seat), `session()`, `settings` (the session chat's settings, live), `save(patch)`, `busy()`, `esc`, `prettyCodes`, `stageInfo(html)` (one-line status in the stage bar), `showError(msg)`, `composerText()`, `draft(text)` (pre-fill the real composer — the player sends), `sendTurn({text, images, refocus})` (a real chat turn on the session, through the full pipeline), `refreshState()`.
+
+**One table, one transcript.** Whatever the player typed rides the move button they click (`say` on `play/{game}/act`); Send alone is a normal chat turn. Every seat call lands on the session chat as one pair: the player's row (`↳ raise to 20 — you blinked`) and hers (fresh dealer lines, then her quip). If the player typed something and the move gave your seat no turn (a fold ends the hand), the host asks your banter set for her answer, so words at the table are always answered. Silent `_` verbs log nothing. Export `describe_action(action, args) -> str` to phrase the player's row (`'raise to 20'`); the fallback is the verb plus any `amount`. Manifest extras for the room: `stage_mode` (`side` default, `stack`, `fullscreen`), `keeps_focus: true` when your stage owns keyboard focus (the composer won't steal it back after her turn).
 
 Load sibling assets relative to your own module so the path survives any rename:
 
@@ -156,7 +171,8 @@ GAME PLUGINS (Game Room host):
 - Files: games/<id>/meta.json ({id, title, icon, desc, order}) + games/<id>/engine.py; board module at entry_js served as an ES module from /plugin-web/<plugin>/<entry_js>, loaded fresh on every room entry.
 - Engine core set: new_session(...)->state (host calls with kwargs cfg + optional player_name — default every param; state carries session{player_name, ai_name}, talk[], talk_seq), can_start(state)->str|None, start_round(state), whose_turn(state)->'player'|'ai'|None, apply_action(state, who, action, args) (raises IllegalAction), safe_action(state)->(action, args), redact(state)->dict (client-safe, strip hidden info). `import gameroom_core` inside engines gives add_talk + IllegalAction.
 - Seat set (required iff whose_turn can return 'ai'): legal_actions(state)->{'actions': [...], ...bounds}, CONTRACT (prompt block, {ai_name}/{opp_name} slots), build_user_msg(view)->str, validate_decision(data, view)->{'action','args','say'}|None, view_for_ai(state)->dict (MUST include my_name/opp_name/talk; MUST NOT include hidden opponent info — sealed-seat law). Invalid AI move -> safe_action fallback.
-- Banter set (recommended): BANTER_CONTRACT, view_between(state), build_banter_msg(view).
+- Rail set (recommended): view_public(state) (the table as the CHAT may see it — no hidden info; persisted with the chat) + build_ghost(view) → one line on the ghost rail every chat turn; the host mirrors chat lines (player + hers) into state['talk'] so the seat hears the table. Banter set (REST `play/{game}/banter` only): BANTER_CONTRACT, view_between(state), build_banter_msg(view). Views may omit my_name/opp_name (host fills from state['session']).
+- Board ctx: api/post/state/cfg/session/settings/save/busy/esc/prettyCodes/stageInfo/showError/composerText/draft/sendTurn/refreshState. ONE TABLE, ONE TRANSCRIPT: the composer's text rides the clicked move (`say`); every seat call appends one pair to the session chat by name — player row `↳ <describe_action> — <say>`, her row = fresh dealer lines + her quip (banter set answers when the seat had no turn); silent `_` verbs log nothing. Optional engine `describe_action(action, args)->str`. Manifest extras: stage_mode (side|stack|fullscreen), keeps_focus.
 - Per-game settings: export SETTINGS = [{key, label, type: text(+rows)|string|number|range(+min/max/step), tab?, default}]; saved per game plugin-wide (NOT chat-scoped, NOT vault-encrypted — no conversation content), arrives as cfg.
 - Sessions ARE chats: state stored as a chat-scoped row (key `game:<id>`) — keep state JSON-serializable; saves follow the chat (rename/private-encrypt/delete), survive plugin rename, never survive changing the game id. Private (vault-locked) session: host reads no state, refuses writes LOUDLY, AI seat fails closed.
 - Actions prefixed `_` are silent system verbs (checkpoints, state sync): no talk line, no AI turn. Real-time games checkpoint at natural boundaries; keep snapshots small.

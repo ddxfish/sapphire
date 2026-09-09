@@ -344,3 +344,41 @@ def test_full_state_layers_by_convention(monkeypatch):
     assert full["cast"]["hero"]["wearing"] == {"body": "cloak"}
     assert full["layers"]["cloak"].endswith("/backdrops/layer-cloak.png")
     assert "locket" not in full["layers"]
+
+
+# ── the player's name for packs that declare no cast (2026-09-09) ──────────
+# Krem's Titanic click-list: the People tile said 'Player' while the pack's
+# player_role opens 'Giuseppe — twenty-one, ...'. The name is a pack read
+# now (seeded at start AND overlaid at load, so existing runs heal).
+
+class TestLegacyPlayerName:
+    def test_name_head_of_player_role(self, monkeypatch):
+        monkeypatch.setattr(session, "_player_name", session._player_name)   # real
+        meta = {"player_role": "Giuseppe — twenty-one, a steerage artist from Florence"}
+        assert session._player_name(meta) == "Giuseppe"
+        assert session._player_name({"player_role": "Sam Vale, hired by the widow"}) == "Sam Vale"
+        assert session._player_name({"player_role": "Detective Sam Vale: hired"}) == "Detective Sam Vale"
+
+    def test_sentence_roles_fall_through(self, monkeypatch):
+        import gameroom_core as gc
+        monkeypatch.setattr(gc, "room_config", lambda: {"player_name": "Krem"})
+        assert session._player_name({"player_role": "Shipped player role."}) == "Krem"
+        assert session._player_name({"player_role": "You are a detective in 1920s Boston"}) == "Krem"
+        assert session._player_name({"player_role": "a steerage artist with a journal"}) == "Krem"
+        monkeypatch.setattr(gc, "room_config", lambda: {})
+        assert session._player_name({"player_role": "You are a detective"}) == "Player"
+        assert session._player_name({}) == "Player"
+
+    def test_seed_and_overlay_use_the_derived_name(self, monkeypatch):
+        import gameroom_core as gc
+        monkeypatch.setattr(gc, "room_config", lambda: {})
+        story = {"meta": {"role": {"name": "Lucretia", "text": "x"},
+                          "player_role": "Giuseppe — twenty-one"}, "rooms": {}}
+        ev = session._seed_cast(story)
+        player = next(e for e in ev if e["id"] == "player")
+        assert player["name"] == "Giuseppe" and player["controlled_by"] == "player"
+        # an OLD run journaled as 'Player' heals at load
+        state = _state(JOIN, PJOIN)
+        session._overlay_cast(story, state)
+        assert state["cast"]["player"]["name"] == "Giuseppe"
+        assert state["cast"]["sapphire"]["name"] == "Sapphire"     # untouched

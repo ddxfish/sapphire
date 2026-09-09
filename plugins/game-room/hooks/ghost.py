@@ -1,10 +1,13 @@
-# hooks/ghost.py — per-turn story context on the ghost rail.
+# hooks/ghost.py — per-turn story/game context on the ghost rail.
 #
 # Fires once per player message. When this chat has an active story:
 #   1. append a turn_tick to the journal (turn numbers stay replayable —
 #      the ONE write the read-rail owns, it IS the turn boundary marker)
 #   2. contribute the current-state block (render.ghost_block) — rebuilt
 #      fresh every call, never persisted, solutions never included.
+# When this chat is a GAME session (F6 port, 2026-09-09): contribute the
+# engine's PUBLIC table view (gameroom_core.ghost_block) — read-only, no
+# tick, never hidden info (her hole cards stay with the sealed seat).
 import logging
 import sys
 from pathlib import Path
@@ -55,10 +58,12 @@ def handle(event):
             logger.info("[STORY] ghost: no chat resolved — no block")
             return
         entry = st.get_active_entry(chat)   # hot path: no cross-chat sweep
-        if not entry or entry.get("paused"):
+        if not entry:
+            _game_block(event, chat)
+            return
+        if entry.get("paused"):
             # the normal path for every non-story chat — debug, not noise
-            logger.debug(f"[STORY] ghost: no active story on '{chat}'"
-                         + (" (paused)" if entry else ""))
+            logger.debug(f"[STORY] ghost: story paused on '{chat}'")
             return  # intermission: no ticks, no block — clock stops
         # Two-ledger regen (plan tmp/regen-two-ledger-plan.md, F1-A): if the
         # chat was rewound (regenerate/delete), the journal tail is anchored
@@ -110,3 +115,22 @@ def handle(event):
                     f"turn {next_turn} room {room.get('id')}")
     except Exception as e:
         logger.warning(f"[STORY] ghost hook failed: {e}", exc_info=True)
+
+
+def _game_block(event, chat):
+    """Game session -> the table's public view on the rail. Silent for every
+    plain chat (debug); loud only when a game lookup itself fails."""
+    try:
+        import gameroom_core as gc
+        gid = gc.game_session(chat)
+        if not gid:
+            logger.debug(f"[STORY] ghost: no active story on '{chat}'")
+            return
+        block = gc.ghost_block(gid, chat)
+        if block:
+            event.ghost_text = block
+            logger.info(f"[GAME] ghost block {len(block)}ch -> '{chat}' ({gid})")
+        else:
+            logger.debug(f"[GAME] ghost: no block for '{chat}' ({gid})")
+    except Exception as e:
+        logger.warning(f"[GAME] ghost block failed on '{chat}': {e}")

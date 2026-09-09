@@ -469,6 +469,11 @@ def _overlay_cast(story, state):
     at a read seam (a load-time seed would re-dress after every remove)."""
     declared = story["meta"].get("cast")
     if not isinstance(declared, list):
+        # Legacy (undeclared) cast: the player's name is a pack read too —
+        # a run journaled as 'Player' before 2026-09-09 shows the role name.
+        rec = (state.get("cast") or {}).get("player")
+        if isinstance(rec, dict) and rec.get("controlled_by") == "player":
+            rec["name"] = _player_name(story["meta"])
         return
     cast = state.setdefault("cast", {})
     for c in declared:
@@ -852,10 +857,36 @@ def _seed_cast(story):
                    "id": referee._key(rname) or "narrator",
                    "name": rname or "the narrator", "controlled_by": "dm",
                    "desc": str(role.get("text") or "")[:2000]})
-    events.append({"event": "cast_join", "id": "player", "name": "Player",
+    events.append({"event": "cast_join", "id": "player", "name": _player_name(meta),
                    "desc": str(meta.get("player_role") or "")[:2000],
                    "controlled_by": "player"})
     return events
+
+
+def _player_name(meta):
+    """The player's name for a pack that declares no cast (Krem's Titanic
+    click-list 2026-09-09: the People tile said 'Player' — the pack says
+    'Giuseppe'). The head of `player_role` when it reads like a name
+    ('Giuseppe — twenty-one, ...' / 'Sam, a detective'), else the Game
+    Room's player name, else 'Player'. Read live at load like every other
+    cast declaration, so existing runs pick it up too."""
+    import re
+    pr = str((meta or {}).get("player_role") or "").strip()
+    head = re.split(r"\s+[\u2014\u2013-]\s+|,\s|:\s|\s\(", pr, 1)[0].strip() if pr else ""
+    # Looks like a name: short, capitalized, not a sentence ('Shipped player
+    # role.' / 'You are a detective' fall through to the room's player name).
+    if (head and len(head) <= 40 and len(head.split()) <= 4 and head[0].isupper()
+            and not head.endswith(('.', '!', '?'))
+            and not re.match(r"(?i)^(the|a|an|you|your|someone|anyone)\b", head)):
+        return head
+    try:
+        import gameroom_core as gc
+        rn = str(gc.room_config().get("player_name") or "").strip()
+        if rn:
+            return rn
+    except Exception:
+        pass
+    return "Player"
 
 
 def start(system, slug, character=None, mode=None, local=None, session=None,

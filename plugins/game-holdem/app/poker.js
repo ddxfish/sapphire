@@ -1,7 +1,10 @@
-// Heads-Up Hold'em — game module. Board + actions only; the shell owns
-// the chrome (top AI bar, chat sidebar, composer, voice, API plumbing).
-// Helpers (esc, prettyCodes) arrive via ctx — no direct shell import, so the
-// cache-busted shell module stays a single instance.
+// Heads-Up Hold'em — game module. Board + actions only; the room host owns
+// the chrome (stage bar, sidebar, the REAL chat rail + composer, her quip
+// strip, voice, API plumbing). Table talk is the chat (F6 port, 2026-09-09);
+// a move carries no talk line of its own. Helpers (esc, prettyCodes) arrive
+// via ctx — no direct host import, so the cache-busted host stays one instance.
+// Plan A (same day): the host attaches the composer's text to every move as
+// `say`; the server lands move + words as the player's row on the chat.
 
 const SUIT = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const RED = { h: true, d: true };
@@ -26,7 +29,7 @@ function renderBoard(el, state, ctx) {
         el.innerHTML = `
           <div class="pk-splash">
             <h2>♠ Heads-Up Hold'em</h2>
-            <p>She talks every move — needle back, or play in silence and let her wonder.</p>
+            <p>She talks every move, right here in the chat. Type a needle and click your move to send it with the play — or Send it on its own.</p>
           </div>`;
         return;
     }
@@ -131,10 +134,10 @@ function renderActions(el, state, ctx) {
     const amt = el.querySelector('#pk-amt');
     el.querySelectorAll('.pk-preset').forEach(b => b.onclick = () => { if (amt) amt.value = b.dataset.v; });
     el.querySelectorAll('.pk-act').forEach(b => b.onclick = () => {
-        const say = ctx.composerText();   // optional — silence is a legal move
-        const body = { action: b.dataset.a, args: {}, say };
+        // The move only — anything typed in the composer is a chat turn the
+        // player sends themselves (the seat hears it through the mirror).
+        const body = { action: b.dataset.a, args: {} };
         if ((b.dataset.a === 'bet' || b.dataset.a === 'raise') && amt) body.args.amount = parseInt(amt.value, 10);
-        ctx.clearComposer();
         ctx.post('act', body, 'thinking');
     });
 }

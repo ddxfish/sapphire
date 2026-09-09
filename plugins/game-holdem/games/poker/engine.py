@@ -592,6 +592,50 @@ def view_between(state):
     }
 
 
+def describe_action(action, args=None):
+    """The player's row on the table log (plan A, 2026-09-09)."""
+    amt = (args or {}).get('amount')
+    return {'new_session': 'sit down', 'start': 'deal', 'say': 'says',
+            'raise': f'raise to {amt}', 'bet': f'bet {amt}',
+            'call': 'call', 'check': 'check', 'fold': 'fold'}.get(action) or action
+
+
+def view_public(state):
+    """RAIL SET (F6 port, 2026-09-09): the table as the CHAT rail sees it —
+    board, pot, stacks, street, action so far. Never her hole cards, never
+    the player's, never the deck: this view rides every chat turn's ghost
+    envelope, and the chat is persisted."""
+    sess = state['session']
+    hand = state.get('hand')
+    v = {'my_name': sess['ai_name'], 'opp_name': sess['player_name'],
+         'my_chips': sess['ai_chips'], 'opp_chips': sess['player_chips'],
+         'past_hands': sess['history'], 'hand_num': None, 'board': [],
+         'street': None, 'pot': 0, 'to_act': None, 'dealer': None,
+         'actions_this_hand': []}
+    if hand and hand['street'] != 'over':
+        v.update(hand_num=hand['num'], board=list(hand['board']), street=hand['street'],
+                 pot=hand['committed']['player'] + hand['committed']['ai'],
+                 to_act=hand['to_act'], dealer=hand['dealer'],
+                 actions_this_hand=list(hand['actions']))
+    return v
+
+
+def build_ghost(view):
+    """One line of live table state for the ghost envelope (public view)."""
+    if view.get('street'):
+        board = ' '.join(view['board']) if view['board'] else 'no board yet'
+        line = (f"hand #{view['hand_num']}, {view['street']}, board {board}, pot {view['pot']}; "
+                f"to act: {'you' if view['to_act'] == 'ai' else view['opp_name']}; "
+                f"action so far: {_fmt_history(view)}")
+    else:
+        line = 'between hands'
+    line += f". Stacks: you {view['my_chips']}, {view['opp_name']} {view['opp_chips']}."
+    if view.get('past_hands'):
+        line += f" Last hand: {view['past_hands'][-1]['desc']}."
+    return line + (" Your hole cards live with your sealed seat and are NOT visible here — "
+                   "talk like a player who knows their own hand, never invent cards.")
+
+
 def view_for_ai(state):
     """Everything the AI seat may see: its cards, board, pot, history — never
     the player's hole cards or the deck."""

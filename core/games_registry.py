@@ -23,6 +23,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 VALID_SURFACES = frozenset({'room', 'chat_sidebar'})
+VALID_STAGE_MODES = {'side', 'stack', 'fullscreen'}
 _ID_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,32}$')
 
 _lock = threading.Lock()
@@ -71,6 +72,12 @@ def register_game(game_id, spec, plugin_name):
                           if isinstance(f, (str, int, float))][:8],
                 # Tile art: plugin-web-relative path (web/<tile> or app/...)
                 'tile': str(spec.get('tile') or '')[:200],
+                # Room host hints (F6, 2026-09-09): how the board shares the
+                # pane with the chat rail, and whether the stage owns keyboard
+                # focus (an emulator) — unknown values fall to the host default.
+                'stage_mode': (str(spec.get('stage_mode') or '').lower()
+                               if str(spec.get('stage_mode') or '').lower() in VALID_STAGE_MODES else ''),
+                'keeps_focus': bool(spec.get('keeps_focus')),
             }
             _generation += 1
         logger.info(f"[GAMES] Game registered: '{game_id}' from '{plugin_name}'")

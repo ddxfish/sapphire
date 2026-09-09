@@ -2,19 +2,21 @@
 // wide tiles in the main pane, library sidebar (search, type filter, room
 // settings) on the right. Games come from the core registry
 // (capabilities.games → GET /api/games), room-mountable only. Play opens the
-// game's newest session in room.js — sessions are mode-tagged chats.
+// game's newest session on the room host (room-host.js) — sessions are
+// mode-tagged chats on the real chat rail.
 // Deep links: #app-game-room/<game> (bookmarkable, game-level).
 
 import { renderSurface } from '/static/surface/surface.js';
 import { accordionHtml, initAccordions } from '/static/shared/accordion.js';
 import * as ui from '/static/ui.js';
 
-let room = null;   // ./room.js, loaded with boot-version (same policy as views)
+let host = null;   // ./room-host.js — the ONE room lifecycle (F6, 2026-09-09)
 let storyRoom = null;   // ./story-room.js — lazy, only when a story tile opens
 let _vaultOpen = false; // refreshed by renderLibrary; gates the 🗝 Private buttons
 let _root = null;
 let _cssLink = null;
 let _games = [];
+let _gen = 0;      // games-registry generation — busts board modules on hot reload
 let _roomGames = [];
 let _stories = [];
 let _sessions = [];
@@ -31,7 +33,7 @@ document.addEventListener('click', () =>
 const bootV = () => document.querySelector('meta[name="boot-version"]')?.content || '';
 const csrfTok = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
 
-// Render sequence: module state (_root, room, storyRoom) is shared across
+// Render sequence: module state (_root, host, storyRoom) is shared across
 // renders of this memoized module. A superseded render's teardown must
 // no-op once a newer render owns that state — without the guard, the loser
 // of a rapid nav race killed the winner (post-fix review 2026-08-05).
@@ -40,7 +42,7 @@ let _renderSeq = 0;
 export async function render(container) {
     const seq = ++_renderSeq;
     _root = container;
-    if (!room) room = await import(`./room.js?v=${bootV()}`);
+    if (!host) host = await import(`./room-host.js?v=${bootV()}`);
     if (!_cssLink) {
         _cssLink = document.createElement('link');
         _cssLink.rel = 'stylesheet';
@@ -58,7 +60,7 @@ export async function render(container) {
     } else if (deep) {
         const g = _roomGames.find(x => x.id === deep[1]);
         if (g) {
-            room.openRoom(_root, g, null, { back: renderLibrary, games: _roomGames })
+            host.openGame(_root, g, null, { back: renderLibrary, games: _roomGames, gen: _gen })
                 .catch(e => console.error('[GameRoom] deep link failed', deep[1], e));
         }
     }
@@ -67,42 +69,29 @@ export async function render(container) {
 }
 
 export function cleanup() {
-    if (room) room.close();
-    if (storyRoom) storyRoom.close();   // returns the borrowed organs home
+    if (host) host.close();             // returns the borrowed organs home
     if (_cssLink) { _cssLink.remove(); _cssLink = null; }
     _root = null;
-    // Leaving the Game Room with a game session still ACTIVE: hand Chat back
-    // to the chats — most recent real chat, else default (Krem 2026-08-03:
-    // "Titanic active when it shouldn't be visible"). Scoped to THIS tab's
-    // deliberate exit, so a phone mid-game is never yanked by a desktop that
-    // merely opens Chat. Fire-and-forget: Chat works either way.
-    const roomMod = room;
-    (async () => {
-        try {
-            if (!roomMod) return;
-            const r = await fetch('/api/chats', { headers: { 'X-CSRF-Token': csrfTok() } });
-            if (!r.ok) return;
-            const d = await r.json();
-            const act = (d.chats || []).find(c => c.name === d.active_chat);
-            if (!act || (act.mode || act.settings?.mode) !== 'game') return;
-            const target = (d.chats || []).find(c =>
-                !(c.mode || c.settings?.mode) && !c.archived && !c.private_chat)?.name || 'default';
-            await roomMod.activateSession(target);
-        } catch (e) { /* picker hides game chats regardless */ }
-    })();
+    // Leaving the Game Room with a game session still ACTIVE: the Chat view
+    // steers itself off game chats on show (views/chat.js steerOffGameChat)
+    // — the ONE owner since F6 (2026-09-09). The copy that lived here fired
+    // a second activation on every exit (two owners, S5).
 }
 
 async function renderLibrary() {
-    room.close();
-    if (storyRoom) storyRoom.close();
+    host.close();
     let roomCfg = {};
     try {
         const res = await fetch('/api/games', { headers: { 'X-CSRF-Token': csrfTok() } });
-        if (res.ok) _games = ((await res.json()).games || []);
+        if (res.ok) {
+            const d = await res.json();
+            _games = d.games || [];
+            _gen = d.generation || 0;
+        }
     } catch (e) {
         console.warn('[GameRoom] games registry fetch failed', e);
     }
-    try { _sessions = await room.listSessions(); } catch (e) { _sessions = []; }
+    try { _sessions = await host.listSessions(); } catch (e) { _sessions = []; }
     // Play Private is offered only while the vault is OPEN — closed or
     // absent, the library looks exactly like pre-v1.3 (the second universe
     // only exists once the door's unlocked).
@@ -143,7 +132,7 @@ async function renderLibrary() {
     if (!_root) return;
     history.replaceState(null, '', '#app-game-room');
     _roomGames = _games.filter(g => (g.surfaces || []).includes('room'));
-    const esc = room.esc;
+    const esc = host.esc;
 
     const genres = [...new Set([
         ..._roomGames.map(g => (g.genre || 'other')),
@@ -281,7 +270,7 @@ async function renderLibrary() {
 function paintShelf() {
     const shelf = _root?.querySelector('#gr-shelf');
     if (!shelf) return;
-    const esc = room.esc;
+    const esc = host.esc;
     const counts = {};
     for (const s of _sessions) {
         const gid = s.settings?.game_id;
@@ -429,8 +418,8 @@ function paintShelf() {
                 }
                 const g = _roomGames.find(x => x.id === card?.dataset.game);
                 if (!g) return;
-                const session = await room.createPrivateSession(g.id, g.id);
-                await room.openRoom(_root, g, session, { back: renderLibrary, games: _roomGames });
+                const session = await host.createPrivateSession(g.id, g.id);
+                await host.openGame(_root, g, session, { back: renderLibrary, games: _roomGames, gen: _gen });
             } catch (e2) {
                 console.error('[GameRoom] private session failed', e2);
                 ui.showToast(e2.message, 'error');
@@ -457,10 +446,10 @@ function paintShelf() {
             }
             const g = _roomGames.find(x => x.id === el.dataset.game);
             if (!g) return;
-            room.openRoom(_root, g, null, { back: renderLibrary, games: _roomGames })
+            host.openGame(_root, g, null, { back: renderLibrary, games: _roomGames, gen: _gen })
                 .catch(e => {
                     console.error('[GameRoom] failed to open', g.id, e);
-                    if (_root) _root.innerHTML = `<div class="gr-lib"><div class="gr-empty">Couldn't open ${room.esc(g.title || g.id)}: ${room.esc(e.message)}</div></div>`;
+                    if (_root) _root.innerHTML = `<div class="gr-lib"><div class="gr-empty">Couldn't open ${host.esc(g.title || g.id)}: ${host.esc(e.message)}</div></div>`;
                 });
         });
     });
@@ -475,8 +464,8 @@ async function openStory(st, opts) {
         // stays on ensureSession, which naturally finds private ones too
         // while the vault is open (they're just visible chats then).
         const session = opts?.priv
-            ? await room.createPrivateSession('story:' + st.slug, st.slug)
-            : await room.ensureSession('story:' + st.slug, st.slug);
+            ? await host.createPrivateSession('story:' + st.slug, st.slug)
+            : await host.ensureSession('story:' + st.slug, st.slug);
         if (!storyRoom) storyRoom = await import(`./story-room.js?v=${bootV()}`);
         await storyRoom.openStoryRoom(_root, st, session, { back: renderLibrary, stories: _stories });
     } catch (e) {
