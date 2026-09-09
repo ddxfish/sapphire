@@ -266,6 +266,41 @@
 .grs-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .grs-actions .pk-btn { white-space: nowrap; }
 
+/* The spine's layer rows (library = room defaults over the shipped ones;
+   a game room = the game's values over the room's). The Mind accordion's
+   line: short label left, short field right; edited = ● on the label + ↺
+   to inherit again; ? = the long words in a card. */
+.grs-layer-row { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
+.grs-layer-row .grs-layer-field { flex: 1 1 auto; min-width: 0; }
+.grs-layer-row .grs-layer-field .sb-field { margin-bottom: 0; }
+.grs-layer-row .sb-field.grs-inline > label:first-child {
+    width: auto; flex: 1 1 auto; min-width: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px;
+}
+.grs-layer-row .sb-field.grs-inline > input[type="number"] { flex: 0 0 5.2em; width: 5.2em; text-align: right; padding: 4px 6px;
+    background: var(--input-bg); border: 1px solid var(--border, #2a3040); border-radius: var(--radius-sm, 6px);
+    color: var(--text); font-size: var(--font-sm); }
+.grs-layer-row .sb-field.grs-inline > input[type="text"] { flex: 0 1 55%; }
+.grs-layer-row .sb-field.grs-inline > select { flex: 0 1 55%; }
+.grs-layer-row .sb-field.grs-inline > input[type="checkbox"] { margin-left: auto; accent-color: var(--trim, #4a9eff); }
+.grs-layer-row .grs-reset-key {
+    flex: 0 0 auto; visibility: hidden; font-size: 1.05em; line-height: 1; padding: 2px 3px;
+    color: var(--trim, #8ab8ff);
+}
+.grs-layer-row.overridden .grs-reset-key { visibility: visible; }
+.grs-layer-row.overridden .grs-layer-field label::before {
+    content: '\25CF'; color: var(--trim, #8ab8ff); font-size: 0.7em; margin-right: 3px; vertical-align: 1px;
+}
+.grs-help-btn {
+    flex: 0 0 auto; width: 15px; height: 15px; border-radius: 50%; padding: 0; line-height: 13px;
+    font-size: 0.72em; text-align: center; cursor: help; text-transform: none;
+    border: 1px solid var(--border, #2a3040); background: transparent; color: var(--text-muted, #8a8fa3);
+}
+.grs-help-btn:hover { color: var(--trim, #8ab8ff); border-color: var(--trim, #8ab8ff); }
+.grs-inline-help { display: flex; justify-content: flex-end; margin: -2px 0 4px; }
+.grs-hidden { display: none !important; }
+.gr-voice-route { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border, #2a3040); }
+
 /* Setup form layout — named sections + width-hinted slot columns
    (slot `section`/`width` in story.json; Krem 2026-08-20). */
 .grs-section-title {

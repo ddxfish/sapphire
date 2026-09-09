@@ -100,28 +100,15 @@ async function renderLibrary() {
         const st = await (await fetch('/api/status')).json();
         _vaultOpen = !!(st?.vault?.exists && st?.vault?.unlocked);
     } catch { /* no status = no private button, fail quiet */ }
+    // The spine's room layer (2026-09-09): every room default is a field in
+    // this sidebar, pre-filled with the shipped default; an edited one gets
+    // a dot and ↺ (Krem's ruling: no override switches). Games inherit these.
+    let roomSchema = [];
     try {
-        const res = await fetch('/api/plugin/game-room/room/config', { headers: { 'X-CSRF-Token': csrfTok() } });
-        if (res.ok) roomCfg = (await res.json()).config || {};
-    } catch (e) { /* sidebar shows blank name */ }
-    // Providers for the room model override (Krem 2026-08-20) — same list
-    // the chat sidebar offers; fail quiet = picker shows default only.
-    let llmProviders = [];
-    try {
-        const res = await fetch('/api/llm/providers', { headers: { 'X-CSRF-Token': csrfTok() } });
-        if (res.ok) llmProviders = (await res.json()).providers || [];
-    } catch { /* default-only picker */ }
-    // Prompts for the return-prompt picker (Krem 2026-08-21): who the chat
-    // becomes on story pause / after end. Hidden pack costumes excluded.
-    let promptNames = [];
-    try {
-        const res = await fetch('/api/prompts', { headers: { 'X-CSRF-Token': csrfTok() } });
-        if (res.ok) {
-            const d = await res.json();
-            const hidden = d.hidden || {};
-            promptNames = (d.prompts || []).map(p => p.name).filter(n => n && !hidden[n]);
-        }
-    } catch { /* default-only picker */ }
+        const res = await fetch('/api/plugin/game-room/room/settings', { headers: { 'X-CSRF-Token': csrfTok() } });
+        if (res.ok) { const d = await res.json(); roomSchema = d.schema || []; roomCfg = d.settings || {}; }
+    } catch (e) { /* the accordions render empty */ }
+    const modal = await import(`./settings-modal.js?v=${bootV()}`);
     // Stories are chat-gear games — scanned server-side across story packs
     // (story-samples plugin, user/story_presets/, any plugin's stories/)
     try {
@@ -170,34 +157,9 @@ async function renderLibrary() {
                     </div>
                 </div>
             </div>
-            ${accordionHtml({
-                id: 'lib:room', title: 'Room', icon: '\u{1F6CB}', open: true,
-                content: `
-                    <div class="sb-field">
-                        <label>player name</label>
-                        <input type="text" id="gr-player-name" maxlength="40" placeholder="Player" value="${esc(roomCfg.player_name || '')}">
-                    </div>
-                    <div class="gr-seat-note">Your seat name in new sessions.</div>
-                    <div class="sb-field">
-                        <label>model</label>
-                        <select id="gr-room-model">
-                            <option value="">persona's model (default)</option>
-                            ${llmProviders.map(p => {
-                                const m = p.model ? ` (${esc(String(p.model).split('/').pop())})` : '';
-                                return `<option value="${esc(p.key)}"${roomCfg.llm_primary === p.key ? ' selected' : ''}>${esc(p.display_name || p.key)}${m}${p.is_local ? ' \u{1F3E0}' : ' ☁️'}</option>`;
-                            }).join('')}
-                        </select>
-                    </div>
-                    <div class="gr-seat-note">Override for game &amp; story sessions — stamped when you enter one. Default leaves each chat on the persona's model.</div>
-                    <div class="sb-field">
-                        <label>return prompt</label>
-                        <select id="gr-room-return">
-                            <option value="">stay in story costume</option>
-                            ${promptNames.map(n => `<option value="${esc(n)}"${roomCfg.return_prompt === n ? ' selected' : ''}>${esc(n)}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div class="gr-seat-note">Who the chat becomes when you ⏸ pause a story — and the default after it ends.</div>`,
-            })}`,
+            <div class="gr-seat-note" style="padding:6px 4px 2px">Room defaults — every game inherits these; a game's own sidebar can override them.</div>
+            <div id="gr-room-keys">${modal.layerAccordionsHtml(roomSchema,
+                Object.fromEntries(roomSchema.map(f => [f.key, f.default])), roomCfg, 'lib', modal.LAYER_ICONS)}</div>`,
     });
 
     // Sidebar collapse — own preference key, chat's CSS
@@ -230,39 +192,18 @@ async function renderLibrary() {
     if (!genres.includes(_genre) && _genre !== 'all') _genre = 'all';
     paintChips();
 
-    // Player name — room-wide, feeds new sessions' seat name
-    const nameInput = _root.querySelector('#gr-player-name');
-    nameInput.addEventListener('change', async () => {
-        try {
-            await fetch('/api/plugin/game-room/room/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok() },
-                body: JSON.stringify({ config: { player_name: nameInput.value } }),
-            });
-        } catch (e) { console.warn('[GameRoom] player name save failed', e); }
-    });
-    // Room model override — stamped onto sessions as you enter them
-    const modelSel = _root.querySelector('#gr-room-model');
-    modelSel.addEventListener('change', async () => {
-        try {
-            await fetch('/api/plugin/game-room/room/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok() },
-                body: JSON.stringify({ config: { llm_primary: modelSel.value } }),
-            });
-        } catch (e) { console.warn('[GameRoom] room model save failed', e); }
-    });
-    // Return prompt — pause hands the chat to this persona; end defaults to it
-    const returnSel = _root.querySelector('#gr-room-return');
-    returnSel.addEventListener('change', async () => {
-        try {
-            await fetch('/api/plugin/game-room/room/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok() },
-                body: JSON.stringify({ config: { return_prompt: returnSel.value } }),
-            });
-        } catch (e) { console.warn('[GameRoom] return prompt save failed', e); }
-    });
+    // Room defaults autosave per field, by key; null = back to the shipped default.
+    modal.wireLayer(_root.querySelector('#gr-room-keys'), roomSchema,
+        Object.fromEntries(roomSchema.map(f => [f.key, f.default])), async (key, value) => {
+            try {
+                const res = await fetch('/api/plugin/game-room/room/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok() },
+                    body: JSON.stringify({ settings: { [key]: value } }),
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+            } catch (e) { ui.showToast(`Room default not saved: ${e.message}`, 'error'); }
+        });
 
     paintShelf();
 }

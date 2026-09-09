@@ -171,33 +171,125 @@ def act(game, body=None, query=None, **_):
 
 
 def get_game_settings(game, **_):
-    """Per-game settings + the engine's schema (drives the settings modal)."""
+    """Per-game settings + the engine's schema (drives the settings modal),
+    plus the spine's game layer: which room keys this game may override,
+    what it inherits from the room, and what it has overridden."""
     meta, engine = gc.get_game(game)
     if not engine:
         return ({'error': f'Unknown game: {game}'}, 404)
     schema = getattr(engine, 'SETTINGS', None) or []
     return {'game': game, 'title': meta.get('title', game),
-            'schema': schema, 'settings': gc.game_settings(game)}
+            'schema': schema, 'settings': gc.game_settings(game),
+            'room': {'schema': gc.room_schema('game', with_options=True),
+                     'inherited': gc.effective(),
+                     'overrides': gc.game_room_overrides(game),
+                     'effective': gc.effective(game)}}
 
 
 def set_game_settings(game, body=None, **_):
-    """Save per-game settings (validated against the engine's schema)."""
+    """Save per-game settings (validated against the engine's schema) and/or
+    the game's room-key overrides (`room_overrides`: value = override,
+    null = inherit again)."""
     _meta, engine = gc.get_game(game)
     if not engine:
         return ({'error': f'Unknown game: {game}'}, 404)
-    merged = gc.save_game_settings(game, (body or {}).get('settings') or {})
-    if merged is None:
-        return ({'error': 'This game has no settings.'}, 400)
-    return {'status': 'ok', 'settings': merged}
+    body = body or {}
+    out = {'status': 'ok'}
+    if 'settings' in body:
+        merged = gc.save_game_settings(game, body.get('settings') or {})
+        if merged is None and 'room_overrides' not in body:
+            return ({'error': 'This game has no settings.'}, 400)
+        out['settings'] = merged
+    if isinstance(body.get('room_overrides'), dict):
+        out['room_overrides'] = gc.save_game_room_overrides(game, body['room_overrides'])
+        out['effective'] = gc.effective(game)
+    return out
 
 
 def get_room_config(**_):
-    """Room-wide config (player name etc.) — drives the library sidebar."""
+    """Room-wide defaults (the spine's room layer) — legacy shape."""
     return {'config': gc.room_config()}
 
 
 def set_room_config(body=None, **_):
     return {'status': 'ok', 'config': gc.save_room_config((body or {}).get('config') or {})}
+
+
+# ── the settings spine (2026-09-09) ────────────────────────────────────────
+
+def get_room_settings(**_):
+    """Room Defaults modal: the declared keys (room layer, options filled),
+    the saved defaults, and the room-level resolution."""
+    return {'schema': gc.room_schema('room', with_options=True),
+            'settings': gc.room_defaults(), 'effective': gc.effective()}
+
+
+def set_room_settings(body=None, **_):
+    saved = gc.save_room_defaults((body or {}).get('settings') or {})
+    return {'status': 'ok', 'settings': saved, 'effective': gc.effective()}
+
+
+def get_effective(query=None, **_):
+    """The resolved settings for a game and/or session, with the layer that
+    set each key. The cadence organ and the rooms read this."""
+    query = query or {}
+    game = str(query.get('game') or '').strip() or None
+    session = _session(query)
+    if session and not game:
+        vals, layers = gc.effective(with_layers=True, chat_settings=gc._chat_settings(session) or {})
+        # a game session resolves through its game
+        s = gc._chat_settings(session) or {}
+        gid = str(s.get('game_id') or '')
+        if s.get('mode') == 'game' and gid and not gid.startswith('story:'):
+            vals, layers = gc.effective(gid, chat_settings=s, with_layers=True)
+    else:
+        vals, layers = gc.effective(game, session=session, with_layers=True)
+    return {'effective': vals, 'layers': layers}
+
+
+def get_session_settings(query=None, **_):
+    """This-session section: session-scope keys, what the session inherits
+    (room ⊕ its game), and its own overrides."""
+    session = _session(query)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    s = gc._chat_settings(session)
+    if s is None:
+        return ({'error': 'session not found'}, 404)
+    gid = str(s.get('game_id') or '')
+    if s.get('mode') != 'game' or gid.startswith('story:'):
+        gid = ''
+    return {'schema': gc.room_schema('session', with_options=True),
+            'inherited': gc.effective(gid or None),
+            'overrides': gc.session_room_overrides(chat_settings=s),
+            'effective': gc.effective(gid or None, chat_settings=s)}
+
+
+def set_session_settings(body=None, query=None, **_):
+    """Write a session's overrides onto its chat settings (`game_room`),
+    by name — live chat or not (value = override, null = inherit)."""
+    body = body or {}
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    s = gc._chat_settings(session)
+    if s is None:
+        return ({'error': 'session not found'}, 404)
+    current = dict(gc.session_room_overrides(chat_settings=s))
+    for key, val in gc._clean_layer(body.get('settings') or {}, 'session').items():
+        if val is None:
+            current.pop(key, None)
+        else:
+            current[key] = val
+    from core.api_fastapi import get_system
+    from gameroom_story import session as story_session
+    story_session._stamp_settings(get_system(), session, {'game_room': current}, runtime_toolset=False)
+    s2 = gc._chat_settings(session) or {}
+    gid = str(s2.get('game_id') or '')
+    if s2.get('mode') != 'game' or gid.startswith('story:'):
+        gid = ''
+    return {'status': 'ok', 'overrides': gc.session_room_overrides(chat_settings=s2),
+            'effective': gc.effective(gid or None, chat_settings=s2)}
 
 
 def apply_room_model(body=None, **_):

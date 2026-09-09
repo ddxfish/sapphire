@@ -4,7 +4,7 @@
   "short_display_name": "Game Room",
   "display_name": "Game Room",
   "description": "The Game Room host: Surface rooms on the real chat rail, the sealed seat for moves, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "emoji": "🎲",
   "author": "Krem & Claude",
   "default_enabled": true,
@@ -26,6 +26,7 @@
     ],
     "hooks": {
       "ghost_inject": "hooks/ghost.py",
+      "prompt_inject": "hooks/costume.py",
       "pre_chat": "hooks/mirror.py",
       "post_chat": "hooks/mirror.py",
       "tools_filter": "hooks/toolfence.py",
@@ -94,6 +95,31 @@
         "method": "POST",
         "path": "room/config",
         "handler": "routes/play.py:set_room_config"
+      },
+      {
+        "method": "GET",
+        "path": "room/settings",
+        "handler": "routes/play.py:get_room_settings"
+      },
+      {
+        "method": "POST",
+        "path": "room/settings",
+        "handler": "routes/play.py:set_room_settings"
+      },
+      {
+        "method": "GET",
+        "path": "room/effective",
+        "handler": "routes/play.py:get_effective"
+      },
+      {
+        "method": "GET",
+        "path": "room/session-settings",
+        "handler": "routes/play.py:get_session_settings"
+      },
+      {
+        "method": "POST",
+        "path": "room/session-settings",
+        "handler": "routes/play.py:set_session_settings"
       },
       {
         "method": "GET",

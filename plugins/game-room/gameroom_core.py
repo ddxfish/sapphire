@@ -361,46 +361,269 @@ def save_game_settings(game_id, patch):
         key = field.get('key')
         if key not in patch:
             continue
-        val = patch[key]
-        ftype = field.get('type')
-        try:
-            if ftype in ('number', 'range'):
-                val = float(val)
-                if 'min' in field:
-                    val = max(field['min'], val)
-                if 'max' in field:
-                    val = min(field['max'], val)
-                if ftype == 'number':
-                    val = int(val)
-            else:
-                val = str(val)[:8000]
-        except (TypeError, ValueError):
+        val = coerce_field(field, patch[key])
+        if val is None:
             continue
         stored[key] = val
     store.save(f'gamecfg:{game_id}', stored)
     return game_settings(game_id)
 
 
+def coerce_field(field, val):
+    """One coercion for every schema-driven setting (engine SETTINGS, the
+    room spine): numbers clamped, checkboxes real booleans, selects held to
+    their options (S2 #8 — the server used to str() a checkbox into
+    'true'). None = rejected (the caller keeps what it had)."""
+    ftype = field.get('type')
+    try:
+        if ftype in ('number', 'range'):
+            v = float(val)
+            if 'min' in field:
+                v = max(field['min'], v)
+            if 'max' in field:
+                v = min(field['max'], v)
+            return int(v) if ftype == 'number' else v
+        if ftype == 'checkbox':
+            if isinstance(val, bool):
+                return val
+            return str(val).strip().lower() in ('1', 'true', 'on', 'yes')
+        v = str(val if val is not None else '')[:8000]
+        if ftype == 'select':
+            opts = [o.get('value') if isinstance(o, dict) else o for o in (field.get('options') or [])]
+            if opts and v not in [str(o) for o in opts] and not field.get('allow_custom'):
+                return None
+        return v
+    except (TypeError, ValueError):
+        return None
+
+
 def room_config():
-    """Room-wide config (player name, model override; future knobs)."""
-    rc = store.get('roomcfg')
-    return rc if isinstance(rc, dict) else {}
+    """Room-wide defaults (the spine's room layer). player_name / llm_primary
+    (Krem 2026-08-20: stamped on session entry; '' = persona's model) /
+    return_prompt (2026-08-21: story pause + after-end persona; '' = stay in
+    costume) live here alongside every other room key since 2026-09-09."""
+    return room_defaults()
 
 
 def save_room_config(patch):
-    rc = room_config()
-    if isinstance(patch, dict) and 'player_name' in patch:
-        rc['player_name'] = str(patch['player_name'] or '').strip()[:40]
-    if isinstance(patch, dict) and 'llm_primary' in patch:
-        # Room model override (Krem 2026-08-20): provider key stamped onto
-        # session chats on entry; '' = persona's model, never touch.
-        rc['llm_primary'] = str(patch['llm_primary'] or '').strip()[:80]
-    if isinstance(patch, dict) and 'return_prompt' in patch:
-        # Who the chat becomes on story pause / after end (Krem 2026-08-21);
-        # '' = stay in the story costume (the classic behavior).
-        rc['return_prompt'] = str(patch['return_prompt'] or '').strip()[:80]
+    return save_room_defaults(patch if isinstance(patch, dict) else {})
+
+
+# ---------------------------------------------------------------- the settings spine
+# (2026-09-09, Krem's requirement) The Game Room has UNIVERSAL defaults that
+# every game inherits and may override, and a session may override again:
+#
+#     effective(game_id, session) = room defaults ⊕ game overrides ⊕ session overrides
+#
+# Every key is declared ONCE here with its scope ladder (which layers may set
+# it). Storage: room defaults in the `roomcfg` blob; a game's overrides under
+# `gamecfg:<id>['_room']` (beside the engine's own SETTINGS keys, never
+# colliding); a session's overrides on its chat settings under `game_room`.
+# The cadence organ (F3) rolls a random gap in [cadence_min, cadence_max]
+# from the resolved dict; the costume hook injects session_prompt_piece.
+
+ROOM_KEYS = [
+    # Room — who's at the table (these three were roomcfg's hand-rolled fields)
+    {'key': 'player_name', 'label': 'player name', 'type': 'string', 'default': '',
+     'tab': 'Room', 'scope': ['room'], 'help': 'Your seat name in new sessions.'},
+    {'key': 'llm_primary', 'label': 'model', 'type': 'select', 'dynamic': 'providers',
+     'default': '', 'tab': 'Room', 'scope': ['room'],
+     'help': "Stamped onto game and story sessions as you enter them. Blank = each chat's persona model."},
+    {'key': 'return_prompt', 'label': 'return prompt', 'type': 'select', 'dynamic': 'prompts',
+     'default': '', 'tab': 'Room', 'scope': ['room'],
+     'help': 'Who the chat becomes when you pause a story, and the default after it ends. Blank = stay in costume.'},
+    # Cadence — her unprompted turns while you play / watch: the gap, what
+    # she sees each turn, what a session leaves behind (one accordion, one
+    # short label + one field per line — Krem 2026-09-09; the long words live
+    # behind each row's ?). `reveal_if` = shown only while that checkbox is on.
+    {'key': 'cadence_min', 'label': 'min gap (s)', 'type': 'number',
+     'min': 5, 'max': 3600, 'step': 5, 'default': 60, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
+     'help': 'The shortest wait before one of her unprompted turns. Each turn waits a random gap between min and max seconds.'},
+    {'key': 'cadence_max', 'label': 'max gap (s)', 'type': 'number',
+     'min': 5, 'max': 3600, 'step': 5, 'default': 180, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
+     'help': 'The longest wait before one of her unprompted turns. Never below the min.'},
+    {'key': 'cadence_paused', 'label': 'paused', 'type': 'checkbox',
+     'default': False, 'tab': 'Cadence', 'scope': ['session'],
+     'help': 'No unprompted turns in this session while on.'},
+    {'key': 'send_frames', 'label': 'show screen', 'type': 'checkbox',
+     'default': True, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
+     'help': 'Send her frames of the screen with each unprompted turn. Off = words only (a card game, a text state).'},
+    {'key': 'frames_per_tick', 'label': 'frames/turn', 'type': 'number', 'reveal_if': 'send_frames',
+     'min': 1, 'max': 12, 'default': 6, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
+     'help': 'How many frames each turn carries, spread over the gap (6 over a minute = one every 10 seconds).'},
+    {'key': 'frame_short_edge_px', 'label': 'frame size (px)', 'type': 'number', 'reveal_if': 'send_frames',
+     'min': 256, 'max': 1080, 'step': 32, 'default': 512, 'tab': 'Cadence', 'scope': ['room', 'game'],
+     'help': "Frames are scaled so their short edge is this many pixels. Smaller = cheaper tokens; 512 reads a HUD fine."},
+    {'key': 'session_end_summary', 'label': 'end summary', 'type': 'checkbox',
+     'default': True, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
+     'help': 'When a session ends she writes it up in her own words (the movie she watched, the hand she lost) so it can be remembered.'},
+    # Voice — where her lines play (a game room merges this into its TTS accordion)
+    {'key': 'tts_route', 'label': 'plays on', 'type': 'select',
+     'options': [{'value': 'browser', 'label': 'this browser'}, {'value': 'speakers', 'label': "server speakers"}],
+     'default': 'browser', 'tab': 'Voice', 'scope': ['room', 'game', 'session'],
+     'help': "Where her voice comes out during a session: the browser you're playing in, or the speakers on the machine running Sapphire."},
+    # Identity — the costume for this game's sessions
+    {'key': 'session_prompt_piece', 'label': 'costume line', 'type': 'text', 'rows': 3,
+     'default': '', 'tab': 'Identity', 'scope': ['room', 'game'],
+     'help': "One or two sentences she wears in this game's sessions, on top of the persona — e.g. \"You're on the couch watching Krem play Doom.\""},
+    {'key': 'new_session_toolset', 'label': 'new sessions', 'type': 'select',
+     'dynamic': 'toolsets', 'default': '', 'tab': 'Identity', 'scope': ['room', 'game'],
+     'help': 'The toolset a new session of this game starts with. Blank = the chat default.'},
+]
+_KEY = {k['key']: k for k in ROOM_KEYS}
+LAYERS = ('default', 'room', 'game', 'session')
+
+
+def room_schema(scope=None, with_options=False):
+    """The declared keys (a copy), optionally only those a layer may set,
+    optionally with dynamic option lists filled (providers/prompts/toolsets)."""
+    out = []
+    for k in ROOM_KEYS:
+        if scope and scope not in k['scope']:
+            continue
+        f = dict(k)
+        if with_options and f.get('dynamic'):
+            f['options'] = [{'value': '', 'label': '(default)'}] + _dynamic_options(f['dynamic'])
+        out.append(f)
+    return out
+
+
+def _dynamic_options(kind):
+    try:
+        if kind == 'providers':
+            import config
+            from core.chat.llm_providers import PROVIDER_METADATA
+            conf = {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
+            out = []
+            for key, c in conf.items():
+                if not (isinstance(c, dict) and c.get('enabled')):
+                    continue
+                label = c.get('display_name') or PROVIDER_METADATA.get(key, {}).get('display_name') or key
+                out.append({'value': key, 'label': str(label)})
+            return out
+        if kind == 'prompts':
+            from core import prompts
+            # list_prompts() already excludes hidden pack costumes
+            return [{'value': n, 'label': n} for n in (prompts.list_prompts() or []) if n]
+        if kind == 'toolsets':
+            # the chat sidebar's list: user toolsets + the two builtins,
+            # alphabetical (the manager's own order is creation order)
+            from core.toolsets import get_toolset_names
+            names = sorted({n for n in (get_toolset_names() or []) if n} | {'all', 'none'})
+            return [{'value': n, 'label': n} for n in names]
+    except Exception as e:
+        logger.debug(f'game-room: dynamic options {kind!r} unavailable: {e}')
+    return []
+
+
+def _clean_layer(patch, scope):
+    """Validate a patch for one layer: unknown keys and keys the layer may
+    not set are dropped; None clears (inherit); values are coerced."""
+    out = {}
+    for key, val in (patch or {}).items():
+        f = _KEY.get(key)
+        if not f or scope not in f['scope']:
+            continue
+        if val is None:
+            out[key] = None
+            continue
+        v = coerce_field(f, val)
+        if v is not None:
+            out[key] = v
+    return out
+
+
+def room_defaults():
+    """Layer 1: the declared defaults ⊕ the room's saved defaults."""
+    rc = store.get('roomcfg')
+    rc = rc if isinstance(rc, dict) else {}
+    out = {k['key']: k.get('default') for k in ROOM_KEYS}
+    out.update(_clean_layer({k: v for k, v in rc.items() if v is not None}, 'room'))
+    return out
+
+
+def save_room_defaults(patch):
+    rc = store.get('roomcfg')
+    rc = rc if isinstance(rc, dict) else {}
+    for key, val in _clean_layer(patch, 'room').items():
+        if val is None:
+            rc.pop(key, None)
+        else:
+            rc[key] = val
     store.save('roomcfg', rc)
-    return rc
+    return room_defaults()
+
+
+def game_room_overrides(game_id):
+    """Layer 2: this game's overrides of room keys (only what's explicitly set)."""
+    stored = store.get(f'gamecfg:{game_id}')
+    ov = (stored or {}).get('_room') if isinstance(stored, dict) else None
+    return _clean_layer({k: v for k, v in (ov or {}).items() if v is not None}, 'game')
+
+
+def save_game_room_overrides(game_id, patch):
+    stored = store.get(f'gamecfg:{game_id}')
+    stored = stored if isinstance(stored, dict) else {}
+    ov = stored.get('_room') if isinstance(stored.get('_room'), dict) else {}
+    for key, val in _clean_layer(patch, 'game').items():
+        if val is None:
+            ov.pop(key, None)
+        else:
+            ov[key] = val
+    stored['_room'] = ov
+    store.save(f'gamecfg:{game_id}', stored)
+    return game_room_overrides(game_id)
+
+
+def _chat_settings(session):
+    try:
+        from core.api_fastapi import get_system
+        s = get_system().llm_chat.session_manager.get_settings_for(session)
+        return s if isinstance(s, dict) else None
+    except Exception:
+        return None
+
+
+def session_room_overrides(session=None, chat_settings=None):
+    """Layer 3: the session chat's overrides (`game_room` on its settings)."""
+    s = chat_settings if chat_settings is not None else (_chat_settings(session) or {})
+    ov = s.get('game_room') if isinstance(s, dict) else None
+    return _clean_layer({k: v for k, v in (ov or {}).items() if v is not None}, 'session')
+
+
+def effective(game_id=None, session=None, chat_settings=None, with_layers=False):
+    """THE resolver. Later layers win; a layer only touches keys it may set.
+    with_layers → (values, {key: layer that set it})."""
+    out = {k['key']: k.get('default') for k in ROOM_KEYS}
+    src = {k: 'default' for k in out}
+    rc = store.get('roomcfg')
+    for k, v in _clean_layer({k: v for k, v in (rc or {}).items() if v is not None}
+                             if isinstance(rc, dict) else {}, 'room').items():
+        out[k] = v
+        src[k] = 'room'
+    if game_id:
+        for k, v in game_room_overrides(game_id).items():
+            out[k] = v
+            src[k] = 'game'
+    if session or chat_settings is not None:
+        for k, v in session_room_overrides(session, chat_settings).items():
+            out[k] = v
+            src[k] = 'session'
+    if out['cadence_max'] < out['cadence_min']:
+        out['cadence_max'] = out['cadence_min']
+    return (out, src) if with_layers else out
+
+
+def effective_for_chat(chat):
+    """The resolved settings for a chat: a game session resolves through
+    its game; a story or plain chat gets room defaults ⊕ its own overrides."""
+    s = _chat_settings(chat) or {}
+    gid = str(s.get('game_id') or '')
+    if s.get('mode') != 'game':
+        gid = ''
+    if gid.startswith('story:'):
+        gid = ''
+    return effective(gid or None, chat_settings=s)
 
 
 def seat_display_name(cfg):

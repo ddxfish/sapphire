@@ -70,3 +70,25 @@ def test_subtitle_shows_only_while_the_rail_is_folded():
     assert "railFolded(me)" in body
     assert "hideCaption(me)" in HOST.split("const toggleRail")[1].split("$('#gr-rail-toggle')")[0]
     assert ".gr-caption" in CSS and ".gr-quips" not in CSS
+
+
+def test_settings_spine_has_one_kit_and_one_key_table():
+    # 2026-09-09: room defaults ⊕ game overrides ⊕ session overrides — every
+    # key declared once (ROOM_KEYS), every layer edited with the same rows.
+    core = (ROOT / "plugins" / "game-room" / "gameroom_core.py").read_text(encoding="utf-8")
+    assert "ROOM_KEYS = [" in core and "def effective(" in core and "def coerce_field(" in core
+    modal = (APP / "settings-modal.js").read_text(encoding="utf-8")
+    for name in ("layerRowsHtml", "wireLayer", "layerAccordionsHtml"):
+        assert f"export function {name}" in modal, name
+    # Krem's ruling: NO override switches — pre-filled fields, a dot + ↺
+    assert "grs-ovr" not in modal and 'type="checkbox" class="grs-ovr' not in modal
+    assert "grs-reset-key" in modal and "overridden" in modal
+    assert "gr-room-model" not in INDEX and "gr-player-name" not in INDEX   # hand-rolled pickers folded into the kit
+    assert "layerAccordionsHtml" in INDEX and "room/settings" in INDEX      # library = room defaults
+    assert "initRoomKeys" in HOST and "room_overrides" in HOST               # game room = the game's layer
+    assert "room/session-settings" not in HOST                              # no session fields UI (F3's pause writes that layer)
+    assert "birthSettings" in HOST                                           # new_session_toolset rides the create
+    hooks = MANIFEST["capabilities"]["hooks"]
+    assert hooks["prompt_inject"] == "hooks/costume.py"
+    routes = {r["path"] for r in MANIFEST["capabilities"]["routes"]}
+    assert {"room/settings", "room/effective", "room/session-settings"} <= routes

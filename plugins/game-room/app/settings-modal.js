@@ -15,6 +15,7 @@
 // Fresh launch uses openStorySetup(): ONLY the Setup tab, Start Story button.
 
 import * as ui from '/static/ui.js';
+import { accordionHtml } from '/static/shared/accordion.js';
 
 const PLUGIN_API = '/api/plugin/game-room/';
 const bootV = () => document.querySelector('meta[name="boot-version"]')?.content || '';
@@ -74,12 +75,14 @@ function fieldHtml(f, val) {
                        min="${f.min ?? ''}" max="${f.max ?? ''}" step="${f.step ?? 1}" value="${esc(v)}">
             </div>`;
         case 'select': {
-            const options = f.options || [];
-            const isCustom = !!f.allow_custom && v !== '' && !options.includes(v);
+            // options: plain values, or {value, label} (the room spine's
+            // dynamic lists — providers, prompts, toolsets)
+            const options = (f.options || []).map(o => (o && typeof o === 'object') ? o : { value: o, label: o });
+            const isCustom = !!f.allow_custom && v !== '' && !options.some(o => String(o.value) === String(v));
             return `<div class="sb-field sb-field-stack">
                 ${labelHtml(f)}
                 <select class="grs-field grs-select" data-key="${esc(f.key)}">
-                    ${options.map(o => `<option value="${esc(o)}"${String(v) === String(o) ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+                    ${options.map(o => `<option value="${esc(o.value)}"${String(v) === String(o.value) ? ' selected' : ''}>${esc(o.label ?? o.value)}</option>`).join('')}
                     ${f.allow_custom ? `<option value="__custom"${isCustom ? ' selected' : ''}>Other…</option>` : ''}
                 </select>
                 ${f.allow_custom ? `<input type="text" class="grs-custom" data-for="${esc(f.key)}"
@@ -447,6 +450,157 @@ export async function openGameSettings(gameId) {
     if (!gameId) return;
     return openFromPath(`play/${gameId}/settings`, gameId);
 }
+
+// ── the settings spine (2026-09-09) ─────────────────────────────────────────
+// The layer kit (Krem's ruling, same day: NO override switches). A layer's
+// fields come pre-filled with what they inherit; editing one makes it this
+// layer's own value — marked with a dot, with ↺ to inherit again. Typing
+// the inherited value back is not an override. One kit, two sidebars: the
+// library (room defaults over the shipped ones) and a game room (the game's
+// overrides over the room's).
+
+function optionLabel(f, v) {
+    if (f.type === 'checkbox') return v ? 'on' : 'off';
+    if (f.type === 'select') {
+        const o = (f.options || []).map(o => (o && typeof o === 'object') ? o : { value: o, label: o })
+            .find(o => String(o.value) === String(v));
+        return o ? String(o.label ?? o.value) : String(v ?? '');
+    }
+    return String(v ?? '');
+}
+
+function sameValue(f, a, b) {
+    if (f.type === 'checkbox') return !!a === !!b;
+    if (f.type === 'number' || f.type === 'range') return Number(a) === Number(b);
+    return String(a ?? '').trim() === String(b ?? '').trim();
+}
+
+// values = this layer's OWN values ({key: value} — absent = inheriting).
+// Sidebar shape (Krem 2026-09-09, the Mind accordion's line): one short
+// label + one field per line, the field right-aligned; a ? opens the long
+// words. Text fields stack. `reveal_if: key` rows show only while that
+// checkbox is on.
+function inlineFieldHtml(f, v) {
+    const key = esc(f.key);
+    const help = f.help ? `<button type="button" class="grs-help-btn" data-help="${key}" title="${esc(f.help)}">?</button>` : '';
+    const label = `<label>${esc(f.label)}${help}</label>`;
+    switch (f.type) {
+        case 'checkbox':
+            return `<div class="sb-field grs-inline">${label}<input type="checkbox" class="grs-field" data-key="${key}"${(v === true || v === 'true') ? ' checked' : ''}></div>`;
+        case 'number':
+        case 'range':
+            return `<div class="sb-field grs-inline">${label}<input type="number" class="grs-field grs-num" data-key="${key}"
+                min="${f.min ?? ''}" max="${f.max ?? ''}" step="${f.step ?? 1}" value="${esc(v)}"></div>`;
+        case 'select': {
+            const options = (f.options || []).map(o => (o && typeof o === 'object') ? o : { value: o, label: o });
+            return `<div class="sb-field grs-inline">${label}<select class="grs-field grs-select" data-key="${key}">
+                ${options.map(o => `<option value="${esc(o.value)}"${String(v) === String(o.value) ? ' selected' : ''}>${esc(o.label ?? o.value)}</option>`).join('')}
+            </select></div>`;
+        }
+        case 'text':
+            return fieldHtml(f, v) + (f.help ? `<div class="grs-inline-help"><button type="button" class="grs-help-btn" data-help="${key}" title="${esc(f.help)}">?</button></div>` : '');
+        default:
+            return `<div class="sb-field grs-inline">${label}<input type="text" class="grs-field" data-key="${key}" value="${esc(v)}"></div>`;
+    }
+}
+
+export function layerRowsHtml(schema, inherited, values) {
+    const shown = (f) => {
+        const inh = inherited?.[f.key] ?? f.default;
+        const own = values && values[f.key] !== undefined && values[f.key] !== null ? values[f.key] : undefined;
+        return own !== undefined && !sameValue(f, own, inh) ? own : inh;
+    };
+    return schema.map(f => {
+        const inh = inherited?.[f.key] ?? f.default;
+        const v = shown(f);
+        const over = !sameValue(f, v, inh);
+        let hidden = false;
+        if (f.reveal_if) {
+            const ctl = schema.find(x => x.key === f.reveal_if);
+            hidden = !!ctl && !shown(ctl);
+        }
+        return `<div class="grs-layer-row${over ? ' overridden' : ''}${hidden ? ' grs-hidden' : ''}" data-key="${esc(f.key)}"${f.reveal_if ? ` data-reveal-if="${esc(f.reveal_if)}"` : ''}>
+            <div class="grs-layer-field">${inlineFieldHtml(f, v)}</div>
+            <button type="button" class="grs-reset-key sb-icon-btn" title="Inherit again (${esc(optionLabel(f, inh))})">&#x21BA;</button>
+        </div>`;
+    }).join('');
+}
+
+// The ? card: the field's long words, one small card, click anywhere closes.
+function helpCard(f) {
+    document.getElementById('grs-help-card')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'grs-help-card';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:10000';
+    wrap.innerHTML = `<div class="st-card"><div class="st-card-title">${esc(f.label)}</div><div class="st-card-desc" style="margin-bottom:0">${esc(f.help || '')}</div></div>`;
+    wrap.onclick = () => wrap.remove();
+    document.body.appendChild(wrap);
+}
+
+export function groupByTab(schema) {
+    const byTab = {}, order = [];
+    for (const f of schema) {
+        const t = f.tab || 'Settings';
+        if (!byTab[t]) { byTab[t] = []; order.push(t); }
+        byTab[t].push(f);
+    }
+    return order.map(t => [t, byTab[t]]);
+}
+
+// onChange(key, value | null) — null = inherit again. The dot follows the
+// comparison, not the click: typing the inherited value clears it.
+export function wireLayer(scope, schema, inherited, onChange) {
+    const byKey = Object.fromEntries(schema.map(f => [f.key, f]));
+    const sync = (row) => {
+        const f = byKey[row.dataset.key];
+        const inh = inherited?.[f.key] ?? f.default;
+        const v = readField(row, f.key);
+        const over = v !== undefined && !sameValue(f, v, inh);
+        row.classList.toggle('overridden', over);
+        return over ? v : null;
+    };
+    // reveal: a checkbox controls the rows/groups tagged with its key
+    const reveal = () => {
+        scope.querySelectorAll('[data-reveal-if]').forEach(el => {
+            const ctl = scope.querySelector(`.grs-layer-row[data-key="${CSS.escape(el.dataset.revealIf)}"]`);
+            if (!ctl) return;
+            const on = !!readField(ctl, el.dataset.revealIf);
+            el.classList.toggle('grs-hidden', !on);
+        });
+    };
+    scope.querySelectorAll('.grs-help-btn').forEach(b => {
+        b.addEventListener('click', (e) => { e.preventDefault(); const f = byKey[b.dataset.help]; if (f) helpCard(f); });
+    });
+    scope.querySelectorAll('.grs-layer-row').forEach(row => {
+        const key = row.dataset.key;
+        const f = byKey[key];
+        if (!f) return;
+        sync(row);
+        row.querySelectorAll('.grs-field, .grs-custom').forEach(el => {
+            el.addEventListener('change', () => { if (onChange) onChange(key, sync(row)); reveal(); });
+        });
+        row.querySelector('.grs-reset-key')?.addEventListener('click', () => {
+            writeField(row, key, inherited?.[key] ?? f.default);
+            const lbl = row.querySelector('.grs-val');
+            if (lbl) lbl.textContent = String(readField(row, key));
+            sync(row);
+            if (onChange) onChange(key, null);
+            reveal();
+        });
+    });
+    wireSelects(scope);
+    reveal();
+}
+
+// Accordions per `tab` for one layer — the same shape in both sidebars.
+export function layerAccordionsHtml(schema, inherited, values, nsPrefix, icons = {}) {
+    return groupByTab(schema).map(([t, fields]) => accordionHtml({
+        id: `${nsPrefix}:${t.toLowerCase()}`, title: t, icon: icons[t] || '',
+        content: layerRowsHtml(fields, inherited, values),
+    })).join('');
+}
+
+export const LAYER_ICONS = { Room: '\u{1F6CB}', Cadence: '⏱', Perception: '\u{1F441}', Voice: '\u{1F50A}', Memory: '\u{1F9E0}', Identity: '\u{1F3AD}' };
 
 // ── Story settings (the ⚙ gear) ─────────────────────────────────────────────
 // opts.session + opts.active → the in-game gear: Setup-this-run + Objects

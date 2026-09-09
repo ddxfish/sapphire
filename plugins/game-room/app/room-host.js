@@ -44,6 +44,8 @@
 //   board         async () => module      {renderBoard, renderActions,
 //                                         renderSidebar} | {mount, unmount}
 //   sayRidesMoves composer text rides ctx.post moves (games)
+//   roomKeys      the spine's GAME layer as sidebar accordions (Cadence, …):
+//                 fields pre-filled with what this game inherits from the room
 //   voice         🔊 speak her fresh seat quips
 //   settingsButton()                     ⚙ in the sidebar
 //   clearSession  ✕ clear (games: wipe history + fresh table, keep the name)
@@ -122,11 +124,24 @@ export async function listSessions() {
 
 // Birth stamp (F1): mode + game_id ride the create — a session never exists
 // untagged for a beat (the old create-then-PUT left an untagged chat when
-// the second call failed).
+// the second call failed). Birth defaults (the spine, 2026-09-09): the
+// room's / game's `new_session_toolset` rides the same write.
+async function birthSettings(tagId) {
+    const settings = { mode: 'game', game_id: tagId };
+    try {
+        const gid = String(tagId || '').startsWith('story:') ? '' : tagId;
+        const r = await fetch(PLUGIN_API + 'room/effective' + (gid ? `?game=${encodeURIComponent(gid)}` : ''),
+            { headers: { 'X-CSRF-Token': csrf() } });
+        const eff = r.ok ? (await r.json()).effective || {} : {};
+        if (eff.new_session_toolset) settings.toolset = eff.new_session_toolset;
+    } catch (e) { /* birth without defaults is still a birth */ }
+    return settings;
+}
+
 export async function createSession(tagId, rawName) {
     const name = sanitizeName(rawName);
     if (!name) throw new Error('Session needs a name');
-    await coreApi.createChat(name, { mode: 'game', game_id: tagId });
+    await coreApi.createChat(name, await birthSettings(tagId));
     return name;
 }
 
@@ -135,10 +150,11 @@ export async function createSession(tagId, rawName) {
 export async function ensureSession(tagId, baseName) {
     const mine = (await listSessions()).filter(c => (c.settings?.game_id) === tagId);
     if (mine.length) return mine[0].name;   // list is updated_at DESC
+    const birth = await birthSettings(tagId);
     for (let n = 1; n <= 20; n++) {
         const nm = sanitizeName(n === 1 ? baseName : `${baseName}_${n}`);
         try {
-            await coreApi.createChat(nm, { mode: 'game', game_id: tagId });
+            await coreApi.createChat(nm, birth);
             return nm;
         } catch (e) {
             if (!String(e.message).includes('already exists')) throw e;
@@ -153,10 +169,11 @@ export async function ensureSession(tagId, baseName) {
 // route refuses private_chat — the vault registers the chat on the flip).
 // A failed flip deletes the just-made chat — no public stragglers.
 export async function createPrivateSession(tagId, baseName) {
+    const birth = await birthSettings(tagId);
     for (let n = 1; n <= 20; n++) {
         const nm = sanitizeName(n === 1 ? `${baseName}_private` : `${baseName}_private_${n}`);
         try {
-            await coreApi.createChat(nm, { mode: 'game', game_id: tagId });
+            await coreApi.createChat(nm, birth);
         } catch (e) {
             if (String(e.message).includes('already exists')) continue;
             throw e;
@@ -324,6 +341,7 @@ export async function openRoom(root, spec, sessionName, opts = {}) {
     syncCore(sessionName, me.settings);
 
     initSections(me);
+    if (spec.roomKeys) initRoomKeys(me);
     if (me.mod) {
         await loadState(me);
         if (R !== me) return null;
@@ -528,6 +546,7 @@ function skeleton(me) {
                 ${coreSections.filter(s => s.bare && !(spec.ownSections || []).includes(s.key)).map(s =>
                     `<div class="gs-content" data-sec="${s.key}"></div>`).join('')}
             </div>`}
+            ${spec.roomKeys ? '<div id="gr-room-keys"></div>' : ''}
             ${coreSections.filter(s => !s.bare && !(spec.ownSections || []).includes(s.key)).map(s => accordionHtml({
                 id: 'surface:' + s.key, title: s.title, icon: s.icon, open: !!s.open,
                 content: `<div class="gs-content" data-sec="${s.key}"></div>`,
@@ -644,6 +663,49 @@ async function initSections(me) {
         try { await s.init(el, me.ctx); } catch (e) { console.warn('[GameRoom] section failed:', s.key, e); }
     }
     if (R === me) drawResolved(me);
+}
+
+// ------------------------------------------------------------------ the game's layer (the spine)
+// The room keys THIS GAME may override — cadence range, frames, voice route,
+// end summary, costume line, birth toolset — as sidebar accordions, fields
+// pre-filled with what the game inherits from the room; an edited value is
+// the game's own (dot + ↺), persisting across its sessions. Same kit as the
+// library's room defaults (settings-modal.js), so both sidebars read alike.
+// The SESSION layer keeps no fields here — F3's pause button writes it.
+
+async function initRoomKeys(me) {
+    const box = me.root?.querySelector('#gr-room-keys');
+    if (!box) return;
+    let mod, data;
+    try {
+        mod = await import(`./settings-modal.js?v=${bootV()}`);
+        data = await me.ctx.api(`play/${me.spec.id}/settings`);
+    } catch (e) { return; }
+    if (R !== me || !box.isConnected) return;
+    const room = data.room || {};
+    const schema = room.schema || [];
+    if (!schema.length) return;
+    // Voice keys join the core TTS accordion (one Voice, not two — Krem
+    // 2026-09-09); every other tab is its own accordion.
+    const voiceHome = me.root.querySelector('.sidebar-accordion[data-acc="surface:voice"] .sidebar-accordion-content');
+    const own = [], merged = [];
+    for (const f of schema) ((f.tab === 'Voice' && voiceHome) ? merged : own).push(f);
+    box.innerHTML = mod.layerAccordionsHtml(own, room.inherited || {}, room.overrides || {}, 'game', mod.LAYER_ICONS);
+    let voiceBox = null;
+    if (merged.length) {
+        voiceBox = document.createElement('div');
+        voiceBox.className = 'gr-voice-route';
+        voiceBox.innerHTML = mod.layerRowsHtml(merged, room.inherited || {}, room.overrides || {});
+        voiceHome.appendChild(voiceBox);
+    }
+    initAccordions(me.root.querySelector('.chat-sidebar-inner'), 'game-sidebar');
+    const save = async (key, value) => {
+        try {
+            await me.ctx.api(`play/${me.spec.id}/settings`, 'POST', { room_overrides: { [key]: value } });
+        } catch (e) { showError(e.message); }
+    };
+    mod.wireLayer(box, own, room.inherited || {}, save);
+    if (voiceBox) mod.wireLayer(voiceBox, merged, room.inherited || {}, save);
 }
 
 // ------------------------------------------------------------------ session CRUD
@@ -1096,7 +1158,7 @@ export async function openGame(root, gameMeta, sessionName, opts = {}) {
         // fetched fresh while an unchanged one stays memoized (the old
         // t=Date.now() retained one module instance per room entry, forever).
         board: () => import(`/plugin-web/${gameMeta.plugin_name}/${gameMeta.entry_js}?v=${v}&g=${gen}`),
-        sayRidesMoves: true, voice: true,
+        sayRidesMoves: true, voice: true, roomKeys: true,
         settingsButton: async () => {
             const mod = await import(`./settings-modal.js?v=${v}`);
             mod.openGameSettings(gameMeta.id);

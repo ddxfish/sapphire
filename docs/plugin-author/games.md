@@ -129,6 +129,20 @@ Types: `text` (+`rows`), `string`, `number`, `range` (+`min`/`max`/`step`). `tab
 
 Saved values are stored per *game*, plugin-wide — a player's house rules carry across every session. They are not chat-scoped and not encrypted with a private chat, so keep conversation content out of them.
 
+## Room settings — the spine
+
+The Game Room has **universal defaults** that every game inherits and may override, and a session may override again:
+
+```
+effective(game, session) = room defaults ⊕ game overrides ⊕ session overrides
+```
+
+Every key is declared once (`gameroom_core.ROOM_KEYS`) with the layers allowed to set it. Today's keys: `player_name`, `llm_primary`, `return_prompt` (room only); `cadence_min` / `cadence_max` (seconds — her unprompted turns wait a random gap in that range; room, game, session); `cadence_paused` (session only); `frames_per_tick` (room, game, session); `frame_short_edge_px` (room, game); `tts_route` (`browser` | `speakers`); `session_end_summary`; `session_prompt_piece` (a costume line injected on the system prompt of this game's sessions; room, game); `new_session_toolset` (birth default; room, game).
+
+- Players edit the room layer in the library sidebar (accordions Room / Cadence / Perception / Voice / Memory / Identity, pre-filled with the shipped defaults) and a game's layer in the same accordions inside that game's room sidebar, pre-filled with what the game inherits. An edited value shows a dot and a ↺ that inherits again; typing the inherited value back is not an override. The session layer has no fields — the room's pause control writes `cadence_paused`.
+- Your engine's own `SETTINGS` keys never collide with room keys — game overrides are stored beside them under `_room`.
+- Read the resolved values from `GET play/room/effective?game=<id>&session=<chat>` (with `layers` naming which layer set each key), or in-process `gameroom_core.effective(game_id, session)` / `effective_for_chat(chat)`.
+
 ## The board module (`entry_js`)
 
 Loaded fresh on every room entry as an ES module from `/plugin-web/<your-plugin>/<entry_js>`. Two shapes:
@@ -173,7 +187,8 @@ GAME PLUGINS (Game Room host):
 - Seat set (required iff whose_turn can return 'ai'): legal_actions(state)->{'actions': [...], ...bounds}, CONTRACT (prompt block, {ai_name}/{opp_name} slots), build_user_msg(view)->str, validate_decision(data, view)->{'action','args','say'}|None, view_for_ai(state)->dict (MUST include my_name/opp_name/talk; MUST NOT include hidden opponent info — sealed-seat law). Invalid AI move -> safe_action fallback.
 - Rail set (recommended): view_public(state) (the table as the CHAT may see it — no hidden info; persisted with the chat) + build_ghost(view) → one line on the ghost rail every chat turn; the host mirrors chat lines (player + hers) into state['talk'] so the seat hears the table. Banter set (REST `play/{game}/banter` only): BANTER_CONTRACT, view_between(state), build_banter_msg(view). Views may omit my_name/opp_name (host fills from state['session']).
 - Board ctx: api/post/state/cfg/session/settings/save/busy/esc/prettyCodes/stageInfo/showError/composerText/draft/sendTurn/refreshState. ONE TABLE, ONE TRANSCRIPT: the composer's text rides the clicked move (`say`); every seat call appends one pair to the session chat by name — player row `↳ <describe_action> — <say>`, her row = fresh dealer lines + her quip (banter set answers when the seat had no turn); silent `_` verbs log nothing. Optional engine `describe_action(action, args)->str`. Manifest extras: stage_mode (side|stack|fullscreen), keeps_focus.
-- Per-game settings: export SETTINGS = [{key, label, type: text(+rows)|string|number|range(+min/max/step), tab?, default}]; saved per game plugin-wide (NOT chat-scoped, NOT vault-encrypted — no conversation content), arrives as cfg.
+- Per-game settings: export SETTINGS = [{key, label, type: text(+rows)|string|number|range(+min/max/step)|checkbox|select(+options), tab?, default}]; saved per game plugin-wide (NOT chat-scoped, NOT vault-encrypted — no conversation content), arrives as cfg.
+- Room settings spine: effective(game, session) = room defaults ⊕ game overrides ⊕ session overrides; keys declared once in gameroom_core.ROOM_KEYS with a scope ladder (cadence_min/max, cadence_paused, frames_per_tick, frame_short_edge_px, tts_route, session_end_summary, session_prompt_piece (costume line on the system prompt), new_session_toolset, player_name/llm_primary/return_prompt). UI: the same accordions in the library sidebar (room defaults) and a game room's sidebar (the game's layer), fields pre-filled with the inherited value, dot + ↺ when overridden — no override switches; session layer = the pause control only. Read: GET play/room/effective?game=&session= (+layers) or gameroom_core.effective()/effective_for_chat().
 - Sessions ARE chats: state stored as a chat-scoped row (key `game:<id>`) — keep state JSON-serializable; saves follow the chat (rename/private-encrypt/delete), survive plugin rename, never survive changing the game id. Private (vault-locked) session: host reads no state, refuses writes LOUDLY, AI seat fails closed.
 - Actions prefixed `_` are silent system verbs (checkpoints, state sync): no talk line, no AI turn. Real-time games checkpoint at natural boundaries; keep snapshots small.
 - Ship: sign (`python tools/sign_plugin.py <plugin>`), restart, expect log `[GAMES] Game registered: '<id>' from '<plugin>'`.
