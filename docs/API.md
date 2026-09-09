@@ -60,10 +60,10 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | POST | `/api/chat` | Send message, get response |
-| POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409** |
-| POST | `/api/cancel` | Cancel active stream |
+| POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409**. Optional `chat` in the body addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed → 409, missing → 404 |
+| POST | `/api/cancel` | Cancel active stream (`?chat=` scopes to one chat) |
 | GET | `/api/events` | SSE event stream (real-time UI updates) |
-| GET | `/api/history` | Get chat message history |
+| GET | `/api/history` | Get chat message history (`?chat=` reads a chat by name; absent = active) |
 
 ### Chat Sessions
 
@@ -98,7 +98,7 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 | POST | `/api/history/messages/remove-last-assistant` | Remove last assistant message |
 | POST | `/api/history/messages/remove-from-assistant` | Remove from last assistant message onward |
 | DELETE | `/api/history/tool-call/{id}` | Delete specific tool call |
-| POST | `/api/history/messages/edit` | Edit a message |
+| POST | `/api/history/messages/edit` | Edit a message (the message-edit routes act on the active chat; a rail bound by name sends `?chat=` and gets **409** if that chat is no longer active) |
 | GET | `/api/history/raw` | Export raw chat history |
 | POST | `/api/history/import` | Import chat history |
 
@@ -704,9 +704,10 @@ KEY ENDPOINTS:
 - GET /api/events — SSE event stream for real-time UI updates
 
 CHAT FLOW:
-1. POST /api/chat or /api/chat/stream with {"text": "message", "chat_name": "optional"}
+1. POST /api/chat or /api/chat/stream with {"text": "message", "chat": "optional chat name"} — `chat` names the target chat; the active chat runs as before, another chat runs pinned to its own stored settings (never the active pointer)
 2. Response streams as SSE events (content, tool_pending, tool_start, tool_end, reload)
-3. POST /api/cancel to abort; a second stream on the same busy chat returns 409
+3. POST /api/cancel (?chat= to scope) to abort; a second stream on the same busy chat returns 409
+4. GET /api/history?chat=<name> reads any chat by name; GET /api/chats?kind=game&slim=1 lists game/story sessions with trimmed settings; POST /api/chats {"name", "settings"} stamps settings at birth (private_chat refused there — use the vault flip)
 
 PLUGIN MANAGEMENT:
 - POST /api/plugins/install — GitHub URL or zip upload

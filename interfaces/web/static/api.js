@@ -1,8 +1,17 @@
 // api.js - Backend communication
 import { fetchWithTimeout } from './shared/fetch.js';
 import { dispatch, on, Events } from './core/event-bus.js';
+import { getBoundChat } from './core/bound-chat.js';
 
 export { fetchWithTimeout };
+
+// F1 (2026-09-08): when a room has bound the rail to its session, every
+// history read, turn, cancel and message edit names that chat. Unbound =
+// the active pointer, byte-identical to before.
+const _boundQS = (sep = '?') => {
+    const b = getBoundChat();
+    return b ? `${sep}chat=${encodeURIComponent(b)}` : '';
+};
 
 // Context bar update function
 const updateContextBar = (context) => {
@@ -34,7 +43,7 @@ let _lastHistoryChatName = null;
 export const getLastHistoryChatName = () => _lastHistoryChatName;
 
 export const fetchHistoryFull = async () => {
-    const response = await fetchWithTimeout('/api/history');
+    const response = await fetchWithTimeout('/api/history' + _boundQS());
     // Update context bar if context info is present
     if (response && response.context) {
         updateContextBar(response.context);
@@ -50,37 +59,47 @@ export const fetchHistoryFull = async () => {
 export const fetchHistory = async () => (await fetchHistoryFull()).messages;
 
 export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw');
-export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages', {
+export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages' + _boundQS(), {
     method: 'DELETE', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ user_message: userMessage }) 
 }, 10000);
-export const removeLastAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-last-assistant', {
+export const removeLastAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-last-assistant' + _boundQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
-export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant', {
+export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant' + _boundQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
-export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}`, {
+export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}` + _boundQS(), {
     method: 'DELETE'
 }, 10000);
 // Legacy - kept for backwards compatibility, prefer fetchStatus
 export const fetchSystemStatus = () => fetchWithTimeout('/api/system/status', {}, 5000);
 
 // Chat management
-export const cancelGeneration = () => fetchWithTimeout('/api/cancel', { 
+export const cancelGeneration = () => fetchWithTimeout('/api/cancel' + _boundQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }
 }, 5000);
-export const fetchChatList = (type) => fetchWithTimeout(type ? `/api/chats?type=${type}` : '/api/chats', {}, 10000);
-export const createChat = (name) => fetchWithTimeout('/api/chats', {
-    method: 'POST', 
-    headers: { 'Content-Type': 'application/json' }, 
-    body: JSON.stringify({ name }) 
+// kind (F1, 2026-09-08): server-side filter — 'game' returns only game +
+// story sessions; opts.slim trims each entry's settings to picker keys.
+export const fetchChatList = (kind, opts = {}) => {
+    const p = new URLSearchParams();
+    if (kind) p.set('kind', kind);
+    if (opts.slim) p.set('slim', '1');
+    const q = p.toString();
+    return fetchWithTimeout(q ? `/api/chats?${q}` : '/api/chats', {}, 10000);
+};
+// settings (F1): stamped at birth in the same write — a session never
+// exists untagged for a beat (private_chat is refused there; vault flip).
+export const createChat = (name, settings = null) => fetchWithTimeout('/api/chats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings ? { name, settings } : { name })
 }, 10000);
 export const deleteChat = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}`, { 
     method: 'DELETE' 
@@ -105,7 +124,7 @@ export const activateChat = async (name) => {
         _pendingActivates--;
     }
 };
-export const clearChat = () => fetchWithTimeout('/api/history/messages', {
+export const clearChat = () => fetchWithTimeout('/api/history/messages' + _boundQS(), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ count: -1 })
@@ -495,6 +514,8 @@ export const streamChat = (text, onChunk, onComplete, onError, signal = null, pr
     if (prefill) body.prefill = prefill;
     if (images && images.length > 0) body.images = images;
     if (files && files.length > 0) body.files = files;
+    const bound = getBoundChat();
+    if (bound) body.chat = bound;   // F1: a bound rail's turn names its session
     return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
 };
 
@@ -534,7 +555,7 @@ export const postAudio = async (blob) => {
 };
 
 export const editMessage = (role, timestamp, newContent) => 
-  fetchWithTimeout('/api/history/messages/edit', { 
+  fetchWithTimeout('/api/history/messages/edit' + _boundQS(), {
     method: 'POST', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ role, timestamp, new_content: newContent }) 

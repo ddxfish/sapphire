@@ -20,6 +20,7 @@
 // detached, not destroyed, and we hold direct refs.
 
 import { getIsProc } from '../core/state.js';
+import { setBoundChat, clearBoundChat } from '../core/bound-chat.js';
 
 let _holder = null;
 let _records = [];   // {node, parent, next} in claim order
@@ -34,12 +35,15 @@ function restoreAll() {
         }
     }
     _records = [];
+    clearBoundChat();                        // home = the active pointer again
 }
 
 // Move the organs into a frame. Refuses (returns false) while a turn is
 // processing — same rule handleChatChange enforces — or if the anatomy is
 // missing. On success the caller owns them until releaseOrgans(ownerId).
-export function claimOrgans({ railSlot, composerSlot }, ownerId) {
+// chatName (F1, 2026-09-08): the session the visiting rail is BOUND to —
+// history + turns go by that name, pointer moves elsewhere are ignored.
+export function claimOrgans({ railSlot, composerSlot }, ownerId, chatName = null) {
     if (getIsProc()) return false;
     if (_holder) restoreAll();               // auto-release previous holder
     _holder = null;
@@ -55,6 +59,7 @@ export function claimOrgans({ railSlot, composerSlot }, ownerId) {
         composerSlot.appendChild(child);
     }
     _holder = ownerId || 'unknown';
+    setBoundChat(chatName);
     return true;
 }
 

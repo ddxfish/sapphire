@@ -36,14 +36,27 @@ def stamp_private_if_unlocked(session_manager):
         # Name captured BEFORE the write (vault hunt R5 family): if an
         # eviction retargets the active chat mid-stamp, expected_active
         # makes the store refuse rather than mark the landing chat.
-        name = sm.get_active_chat_name()
+        # F1 (2026-09-08): a by-name operator turn stamps ITS chat — the
+        # override-aware name + settings, written by name when the pointer
+        # is elsewhere.
+        active = sm.get_active_chat_name()
+        # Minimal session managers (tests, doubles) may lack the override
+        # resolver — the stamp then means the active chat, as it always did.
+        _eff = getattr(sm, '_effective_chat_name', None)
+        name = _eff() if callable(_eff) else None
+        if not isinstance(name, str) or not name:
+            name = active
         cur = sm.get_chat_settings()
         if cur.get('private_chat') or cur.get('mode'):
             return
-        if sm.update_chat_settings({'private_chat': True},
-                                   expected_active=name):
+        if name and name != active:
+            ok = bool(sm.set_named_chat_settings(name, {'private_chat': True}))
+        else:
+            ok = bool(sm.update_chat_settings({'private_chat': True},
+                                              expected_active=name))
+        if ok:
             # No name in the log — it just became a secret (ruling F3).
-            logger.info("[VAULT] active chat marked private — spoke while vault open")
+            logger.info("[VAULT] chat marked private — spoke while vault open")
             publish(Events.CHAT_SETTINGS_CHANGED,
                     {"chat": name, "settings": {"private_chat": True},
                      "origin": None})
@@ -134,13 +147,27 @@ class StreamingChat:
         self.llm_done = True
         if not self._typing_ended:
             self._typing_ended = True
-            publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
+            publish(Events.AI_TYPING_END, self._typing_payload())
         # `ephemeral` rides here, not only on `done`: the browser settles the
         # turn at llm_done, so a flag that only arrived on the later `done`
         # was never read (pre-push hunt 2026-09-08, E1#2).
         return {"type": "llm_done",
                 "ephemeral": bool(getattr(self, "ephemeral", False)),
                 "tts_streamed": bool(getattr(tts_pump, "_stream_started", False))}
+
+    def _typing_payload(self):
+        """AI_TYPING_* payload. `foreign` = this turn's chat is NOT the one
+        the operator's Chat view shows — ONE definition (F1, 2026-09-08),
+        the same `chat != active` the driver and wake doors compute. Before
+        this any target-chat stream was foreign even when the operator was
+        watching that very chat. `chat` = the turn's chat, so a rail bound
+        by name can filter on it."""
+        tgt = getattr(self, "target_chat", None)
+        try:
+            active = self.main_chat.session_manager.get_active_chat_name()
+        except Exception:
+            active = None
+        return {"foreign": bool(tgt) and tgt != active, "chat": tgt or active}
 
     def _stamp_private_if_unlocked(self):
         """Streaming-lane wrapper — see stamp_private_if_unlocked below."""
@@ -198,7 +225,7 @@ class StreamingChat:
         # foreign stream). Untagged, a live call flickered the operator's avatar +
         # Stop button and re-fetched their active chat.
         self.is_streaming = True
-        publish(Events.AI_TYPING_START, {"foreign": bool(self.target_chat), "chat": self.target_chat})
+        publish(Events.AI_TYPING_START, self._typing_payload())
 
         # Immediate feedback that backend received the request
         yield {"type": "stream_started"}
@@ -235,6 +262,7 @@ class StreamingChat:
         # for phone streams), and silently self-disabled on ImportError.
 
         _brain_token = None   # A1: declared before the try so the finally is always safe
+        _reg_chat, _reg_pinned = None, False   # F1: what begin_streaming was told; the finally mirrors it
 
         try:
             # H4 counter, moved to the TOP of the try (vault hunt R3 2026-08-15):
@@ -244,7 +272,12 @@ class StreamingChat:
             # double-decrement a concurrent stream's count when setup throws.
             # (H4 2026-04-22 history: single bool let two concurrent streams
             # corrupt mid-turn history; counter fix.)
-            self.main_chat.session_manager.begin_streaming()
+            # F1 (2026-09-08): count under THIS stream's chat. A pinned
+            # by-name turn (target_chat) never blocks a pointer switch; the
+            # chat it writes to still refuses delete/rename/clear/append.
+            _reg_chat = getattr(self, "active_chat_name", None) or None
+            _reg_pinned = bool(getattr(self, "target_chat", None))
+            self.main_chat.session_manager.begin_streaming(_reg_chat, pinned=_reg_pinned)
             # No cancel_flag reset here: StreamingChat is per-request
             # (__init__ starts it False) -- a reset only EATS a /api/cancel
             # that landed between registration and this generator's first
@@ -307,6 +340,7 @@ class StreamingChat:
             _brain_token = None
             _tgt = getattr(self, "target_chat", None)
             if _tgt:
+                _installed = False
                 try:
                     from core.chat import stream_brain
                     from core import prompts as _prompts
@@ -324,12 +358,39 @@ class StreamingChat:
                             sess["settings"].get("toolset", "all"),
                             sess["settings"].get("extra_toolsets"))
                         _brain_token = stream_brain.set_override(sess)
+                        _installed = True
                         logger.info(f"[A1] stream brain override → chat '{_tgt}' "
                                     f"(provider={sess['settings'].get('llm_primary')}, "
                                     f"tools={len(sess['tools']) if sess['tools'] else 0})")
                 except Exception as _e:
                     logger.warning(f"[A1] stream brain override failed for '{_tgt}': {_e}")
                     _brain_token = None
+                if not _installed:
+                    # F1 (2026-09-08): a by-name turn whose brain can't be
+                    # built (chat missing, sealed, read error) REFUSES —
+                    # never falls through to the operator's active chat.
+                    # That fall-through is the cross-chat class this door
+                    # exists to close.
+                    logger.warning(f"[A1] turn refused — no brain for '{_tgt}'")
+                    _refusal = (f"🔒 Chat '{_tgt}' isn't reachable right now "
+                                f"(missing or sealed) — the turn was not run.")
+                    yield {"type": "content", "text": _refusal}
+                    yield self._emit_llm_done(tts_pump)
+                    yield {"type": "final", "text": _refusal,
+                           "cancelled": False, "error": True}
+                    return
+                if getattr(self, "operator_lane", False):
+                    # A human typed this by name (a room's bound rail while
+                    # the pointer is elsewhere): the operator rulings ride —
+                    # vault idle touch + talk-stamp on THIS chat (mode-
+                    # tagged sessions skip the stamp inside). Phone and
+                    # background lanes never reach here.
+                    try:
+                        from core import prompt_vault as _pv_touch
+                        _pv_touch.touch()
+                    except Exception:
+                        pass
+                    self._stamp_private_if_unlocked()
             else:
                 # Talk-marks-private (Krem's ruling 2026-08-14): SPEAKING in a
                 # chat while the vault is open stamps it private — reading
@@ -1372,9 +1433,9 @@ class StreamingChat:
                     stream_brain.reset_override(_brain_token)
                 except Exception:
                     pass
-            self.main_chat.session_manager.end_streaming()
+            self.main_chat.session_manager.end_streaming(_reg_chat, pinned=_reg_pinned)
             # Clean exits already published this at llm_done; cancel/error
             # exits land here.
             if not self._typing_ended:
                 self._typing_ended = True
-                publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
+                publish(Events.AI_TYPING_END, self._typing_payload())

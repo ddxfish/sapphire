@@ -233,10 +233,12 @@ export async function openStoryRoom(root, story, sessionName, opts) {
     skeleton();
 
     // The transplant: real rail + composer move into the story frame.
+    // Bound BY NAME (F1, 2026-09-08): history + turns address this session
+    // even if a phone or second tab moves the active pointer elsewhere.
     const ok = claimOrgans({
         railSlot: root.querySelector('#st-rail-slot'),
         composerSlot: root.querySelector('.form-wrapper'),
-    }, OWNER);
+    }, OWNER, sessionName);
     if (!ok) {
         ui.showToast('Could not borrow the chat rail — finish the current turn first.', 'warning');
         const back = _back; close(); if (back) back();

@@ -260,10 +260,18 @@ class LLMChat:
 
     # ── Per-request streaming state API ──
 
-    def begin_stream(self, chat_name=None, exclusive=False):
+    def begin_stream(self, chat_name=None, exclusive=False, operator=False):
         """Create a fresh StreamingChat, register it. Caller owns the ref.
 
         Returns (stream, stream_id, chat_name_used). Pair with end_stream().
+
+        operator=True (F1, 2026-09-08): a HUMAN turn addressed by name — a
+        room's rail bound to its session. If that chat IS the active one the
+        turn stays pointer-bound (target_chat None: today's path, in-memory
+        brain, blocks pointer switches like any typed turn). Only when the
+        pointer has moved elsewhere does it pin an A1 override to the named
+        chat — the phone-call lane, browser as the phone. Driver lanes
+        (operator=False) keep the unconditional override they rely on.
 
         exclusive=True: one operator turn per chat at a time. Refuses
         (raises ChatBusy) while the chat has a live stream that has NOT been
@@ -277,13 +285,19 @@ class LLMChat:
         """
         import secrets as _secrets
         stream = StreamingChat(self)
-        stream.target_chat = chat_name   # A1: explicit target (None = web/active)
+        stream.operator_lane = bool(operator)
         sid = _secrets.token_hex(8)
+        try:
+            _active = self.session_manager.get_active_chat_name() or ''
+        except Exception:
+            _active = ''
+        _requested = chat_name
         if chat_name is None:
-            try:
-                chat_name = self.session_manager.get_active_chat_name() or ''
-            except Exception:
-                chat_name = ''
+            chat_name = _active
+        if _requested is None or (operator and chat_name == _active):
+            stream.target_chat = None        # bound to the active pointer
+        else:
+            stream.target_chat = chat_name   # A1: explicit target (pinned)
         tails = []
         with self._streams_lock:
             if exclusive:
@@ -519,8 +533,11 @@ class LLMChat:
         if hook_runner.has_handlers("prompt_inject"):
             # surface stamp: presence plugins (avatar…) only inject where
             # they're actually shown — chat setting `surface`, default chat
+            # F1 (2026-09-08): derived from the mode tag when no explicit
+            # surface is stamped (core.hooks.surface_for — one derivation).
+            from core.hooks import surface_for as _surface_for
             inject_event = HookEvent(context_parts=context_parts, config=config,
-                                     surface=chat_settings.get("surface") or "chat")
+                                     surface=_surface_for(chat_settings))
             hook_runner.fire("prompt_inject", inject_event)
 
         # Combine all static context into main prompt
@@ -888,8 +905,8 @@ class LLMChat:
     def list_chats(self) -> List[Dict[str, Any]]:
         return self.session_manager.list_chat_files()
 
-    def create_chat(self, chat_name: str) -> bool:
-        return self.session_manager.create_chat(chat_name)
+    def create_chat(self, chat_name: str, settings=None) -> bool:
+        return self.session_manager.create_chat(chat_name, settings=settings)
 
     def delete_chat(self, chat_name: str) -> bool:
         return self.session_manager.delete_chat(chat_name)

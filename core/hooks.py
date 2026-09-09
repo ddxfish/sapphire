@@ -146,6 +146,16 @@ SURFACES = (("chat", "Chat"), ("game", "Game Room"))
 SURFACE_HOOKS = frozenset({"prompt_inject", "ghost_inject"})
 
 
+def surface_for(settings) -> str:
+    """The surface a chat is shown on: an explicit `surface` setting wins;
+    otherwise DERIVED from the mode tag — every game/story session is the
+    Game Room surface without the room having to stamp it (only stories
+    did; poker sessions were 'chat', so the avatar injected into them).
+    F1, 2026-09-08 — one derivation for every fire site."""
+    s = settings or {}
+    return s.get("surface") or ("game" if s.get("mode") == "game" else "chat")
+
+
 class HookRunner:
     """Priority-ordered hook dispatcher with error isolation.
 

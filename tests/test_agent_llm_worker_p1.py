@@ -104,7 +104,7 @@ def test_llm_worker_inline_fallback_when_agent_persona_missing(at, monkeypatch):
     from core.continuity import execution_context as exec_ctx_mod
 
     class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None):
+        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
             captured_settings.update(settings)
             self.tool_log = []
         def run(self, mission):
@@ -152,7 +152,7 @@ def test_llm_worker_no_inline_fallback_for_non_agent_persona(at, monkeypatch):
     from core.continuity import execution_context as exec_ctx_mod
 
     class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None):
+        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
             captured_settings.update(settings)
             self.tool_log = []
         def run(self, mission):
@@ -207,7 +207,7 @@ def test_llm_worker_persona_prompt_field_resolves_to_prompt_file_not_persona_nam
     from core.continuity import execution_context as exec_ctx_mod
 
     class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None):
+        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
             captured_settings.update(settings)
             self.tool_log = []
         def run(self, mission):
@@ -255,7 +255,7 @@ def test_llm_worker_persona_without_prompt_field_falls_back_to_persona_name(
     from core.continuity import execution_context as exec_ctx_mod
 
     class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None):
+        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
             captured.update(settings)
             self.tool_log = []
         def run(self, mission):
@@ -316,7 +316,7 @@ def test_llm_worker_passes_toolset_and_resolved_model(at, monkeypatch):
     from core.continuity import execution_context as exec_ctx_mod
 
     class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None):
+        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
             captured.update(settings)
             self.tool_log = []
         def run(self, mission):

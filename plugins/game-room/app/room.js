@@ -84,9 +84,11 @@ export function sanitizeName(name) {
 }
 
 export async function listSessions() {
-    const data = await coreApi.fetchChatList();
+    // F1 (2026-09-08): server-side kind filter + slim settings — the room
+    // no longer downloads every chat's full settings blob to find its own.
+    const data = await coreApi.fetchChatList('game', { slim: true });
     return (data.chats || []).filter(c =>
-        (c.mode || c.settings?.mode) === 'game' && !c.archived);
+        (c.kind === 'game' || (c.mode || c.settings?.mode) === 'game') && !c.archived);
 }
 
 export async function createSession(game, rawName) {

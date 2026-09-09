@@ -957,6 +957,17 @@ class ChatSessionManager:
         # delete / save guards. Counter represents how many streams are
         # currently active; `_is_streaming` property reads > 0.
         self._streaming_count = 0
+        # By-name turns (F1, 2026-09-08): streams are ALSO tracked per chat.
+        # _pointer_streams = streams bound to the active pointer (web turns
+        # with no chat target, wake door, browser conversation) — the only
+        # kind that must block a pointer switch. _chat_streams[name] = live
+        # streams on that chat, pinned (A1 override) or pointer-bound alike
+        # — what delete/rename/clear/trim/append must respect. _chat_idle
+        # [name] is set while that chat has no live stream: append waits on
+        # ITS chat, never on a stranger's turn.
+        self._pointer_streams = 0
+        self._chat_streams = {}
+        self._chat_idle = {}
         # Event signals "no streams currently active." append_messages_to_chat
         # waits on this instead of polling _streaming_count every 200ms — so
         # heartbeat appends fire as soon as the stream ends, not up to 200ms
@@ -1031,8 +1042,13 @@ class ChatSessionManager:
 
     @property
     def _is_streaming(self) -> bool:
-        """True if at least one stream is active."""
-        return getattr(self, '_streaming_count', 0) > 0
+        """True while a POINTER-BOUND stream is live — a turn that resolves
+        "which chat" from the active pointer (web turn with no chat target,
+        wake door, browser conversation). Only these must block a pointer
+        switch. Pinned by-name streams (A1 override: phone calls, a room's
+        turn on a non-active session) don't count here; every by-name store
+        guard asks is_streaming(chat) instead. F1, 2026-09-08."""
+        return getattr(self, '_pointer_streams', 0) > 0
 
     @_is_streaming.setter
     def _is_streaming(self, val):
@@ -1044,6 +1060,15 @@ class ChatSessionManager:
         tests that toggle this directly don't leave waiters stuck.
         """
         self._streaming_count = 1 if val else 0
+        self._pointer_streams = 1 if val else 0
+        name = getattr(self, 'active_chat_name', None)
+        if name:
+            self._chat_streams_map()[name] = 1 if val else 0
+            cevt = self.chat_idle_event(name)
+            if val:
+                cevt.clear()
+            else:
+                cevt.set()
         evt = getattr(self, '_no_streams_event', None)
         if evt is not None:
             if val:
@@ -1051,15 +1076,50 @@ class ChatSessionManager:
             else:
                 evt.set()
 
-    def begin_streaming(self):
-        """Increment active-stream counter. Safe for concurrent streams.
+    def _chat_streams_map(self):
+        m = getattr(self, '_chat_streams', None)
+        if m is None:
+            m = self._chat_streams = {}
+        return m
 
-        Clears the no-streams event on the 0→1 transition so any append
-        waiters block until end_streaming brings the counter back to 0.
+    def is_streaming(self, chat_name) -> bool:
+        """True while `chat_name` has ANY live stream — pinned by-name turns
+        included. The guard every by-name mutation (delete/rename/clear/
+        trim/revert/append) uses. Unknown/None name → False."""
+        if not chat_name:
+            return False
+        return self._chat_streams_map().get(chat_name, 0) > 0
+
+    def chat_idle_event(self, chat_name):
+        """Per-chat "no live stream" Event (set = idle). Created set."""
+        m = getattr(self, '_chat_idle', None)
+        if m is None:
+            m = self._chat_idle = {}
+        evt = m.get(chat_name)
+        if evt is None:
+            evt = m[chat_name] = threading.Event()
+            evt.set()
+        return evt
+
+    def begin_streaming(self, chat_name=None, pinned=False):
+        """Count a live stream. Safe for concurrent streams.
+
+        chat_name: the chat this stream writes to (None → the active
+        pointer's chat at this instant). pinned: the stream carries its own
+        target (A1 override) and does NOT block pointer switches. Clears the
+        global no-streams event on the 0→1 transition and the chat's idle
+        event on ITS 0→1, so append waiters block only on their own chat.
         """
         with self._lock:
             prev = getattr(self, '_streaming_count', 0)
             self._streaming_count = prev + 1
+            if not pinned:
+                self._pointer_streams = getattr(self, '_pointer_streams', 0) + 1
+            name = chat_name or getattr(self, 'active_chat_name', None)
+            if name:
+                m = self._chat_streams_map()
+                m[name] = m.get(name, 0) + 1
+                self.chat_idle_event(name).clear()
             if prev == 0:
                 # Lazy-init guard for the legacy bool setter path that
                 # bypasses __init__ in some test fixtures.
@@ -1067,18 +1127,30 @@ class ChatSessionManager:
                 if evt is not None:
                     evt.clear()
 
-    def end_streaming(self):
-        """Decrement active-stream counter (floored at 0). Safe for
-        concurrent streams. A double-decrement (bug elsewhere) is silent
-        — counter stays at 0.
+    def end_streaming(self, chat_name=None, pinned=False):
+        """Decrement the stream counters (floored at 0). Pass the SAME
+        chat_name/pinned the matching begin_streaming got. A double-
+        decrement (bug elsewhere) is silent — counters stay at 0.
 
-        Sets the no-streams event when the counter reaches 0 so any
-        append waiters can proceed immediately.
+        Sets the chat's idle event on its 1→0 and the global no-streams
+        event when the total reaches 0 so waiters proceed immediately.
         """
         _no_streams = False
         with self._lock:
             cur = getattr(self, '_streaming_count', 0)
             self._streaming_count = cur - 1 if cur > 0 else 0
+            if not pinned:
+                p = getattr(self, '_pointer_streams', 0)
+                self._pointer_streams = p - 1 if p > 0 else 0
+            name = chat_name or getattr(self, 'active_chat_name', None)
+            if name:
+                m = self._chat_streams_map()
+                left = m.get(name, 0) - 1
+                if left > 0:
+                    m[name] = left
+                else:
+                    m.pop(name, None)
+                    self.chat_idle_event(name).set()
             if self._streaming_count == 0:
                 _no_streams = True
                 evt = getattr(self, '_no_streams_event', None)
@@ -2031,7 +2103,7 @@ class ChatSessionManager:
             # sealed chat must be indestructible by stale name (bulk-clear
             # clicked across an idle-lock). Hidden = nonexistent, even here.
             return False
-        if self._is_streaming and chat_name == self.active_chat_name:
+        if self.is_streaming(chat_name):
             # Same guard rename/revert carry — a mid-turn wipe of the chat
             # being streamed is torn state (hunt 2026-09-04 S5-02).
             logger.info(f"clear_chat('{chat_name}') refused — chat is mid-stream")
@@ -2144,7 +2216,7 @@ class ChatSessionManager:
             return False, "Invalid new name"
         if safe_name == old_name:
             return False, "Name unchanged"
-        if self._is_streaming and old_name == self.active_chat_name:
+        if self.is_streaming(old_name):
             return False, "Chat is streaming — try again in a moment"
         try:
             with self._lock, self._get_connection() as conn:
@@ -2183,7 +2255,7 @@ class ChatSessionManager:
         Serializes the LIVE rows — not the frozen blob — so it loses nothing
         and works even after the frozen blob was privacy-nulled. Refuses
         while the chat could be mid-write. One transaction."""
-        if self._is_streaming and chat_name == self.active_chat_name:
+        if self.is_streaming(chat_name):
             logger.warning(f"revert_chat_to_blob('{chat_name}') refused — streaming in progress")
             return False
         if chat_name in self._rows_degraded:
@@ -2263,7 +2335,7 @@ class ChatSessionManager:
         between (a heartbeat turn during a minutes-long compress) — abort
         rather than clobber their words. Checked under the same lock as the
         write."""
-        if self._is_streaming and chat_name == self.active_chat_name:
+        if self.is_streaming(chat_name):
             return False, "Chat is streaming — try again in a moment"
         if chat_name in self._rows_degraded:
             # F2 latch: trim/compress must not rewrite over unreadable rows.
@@ -2537,7 +2609,7 @@ class ChatSessionManager:
         self._ensure_db()
         if self._vault_hidden(chat_name):
             return False, f"Chat '{chat_name}' not found"
-        if self._is_streaming and chat_name == self.active_chat_name:
+        if self.is_streaming(chat_name):
             return False, "Chat is streaming — try again in a moment"
         try:
             with self._lock, self._get_connection() as conn:
@@ -2966,6 +3038,14 @@ class ChatSessionManager:
                         # plugin surface; core surfaces them like private/archived
                         # and stays agnostic about what the modes mean.
                         "mode": settings.get("mode") or "",
+                        # kind (F1, 2026-09-08): the chat's surface family —
+                        # 'chat' | 'game' (game + story sessions) | 'limbo'.
+                        # Derived from the mode tag; `/api/chats?kind=`
+                        # filters on it server-side. game_id rides beside it
+                        # so slim listings still group sessions by game.
+                        "kind": ("game" if settings.get("mode") == "game"
+                                 else (settings.get("mode") or "chat")),
+                        "game_id": settings.get("game_id") or "",
                         # F2 latch (in-memory — only chats loaded this session
                         # can carry it; a never-activated corrupt chat shows
                         # healthy here until first activation).
@@ -3086,8 +3166,16 @@ class ChatSessionManager:
                 logger.warning(f"vaulted-chat search scan failed: {e}")
         return hits
 
-    def create_chat(self, chat_name: str) -> bool:
-        """Create new chat with default settings."""
+    def create_chat(self, chat_name: str, settings: Optional[Dict[str, Any]] = None) -> bool:
+        """Create new chat with default settings.
+
+        settings (F1, 2026-09-08): keys stamped AT BIRTH, merged over the
+        user defaults in the same INSERT — a tagged session (mode/game_id)
+        never exists untagged for a beat (CHAT_CREATED used to publish
+        before the room's tag PUT, and a failed PUT leaked a plain chat for
+        good). private_chat is refused here: a private birth goes through
+        the vault flip (encrypt + register), never a plaintext row wearing
+        the flag."""
         if not chat_name or not chat_name.strip():
             logger.error("Cannot create chat with empty name")
             return False
@@ -3112,12 +3200,19 @@ class ChatSessionManager:
                 # 'rows' (rowify step 2): messages persist to chat_messages
                 # from the first write; the blob column stays '[]' forever.
                 now = datetime.now().isoformat()
+                birth = get_user_defaults()
+                if isinstance(settings, dict) and settings:
+                    extra = {k: v for k, v in settings.items() if k != 'private_chat'}
+                    if 'private_chat' in settings:
+                        logger.warning(f"create_chat('{safe_name}'): private_chat ignored "
+                                       f"at birth — use the vault flip")
+                    birth = {**birth, **extra}
                 conn.execute(
                     """INSERT INTO chats (name, settings, messages, updated_at, created_at, storage_format)
                        VALUES (?, ?, ?, ?, ?, 'rows')""",
                     (
                         safe_name,
-                        json.dumps(get_user_defaults()),
+                        json.dumps(birth),
                         json.dumps([]),
                         now,
                         now
@@ -3143,7 +3238,7 @@ class ChatSessionManager:
         if self._vault_hidden(chat_name):
             return False   # sealed vault: behaves as nonexistent
 
-        if self._is_streaming and chat_name == self.active_chat_name:
+        if self.is_streaming(chat_name):
             logger.warning(f"Cannot delete '{chat_name}' — streaming in progress")
             return False
 
@@ -3725,7 +3820,7 @@ class ChatSessionManager:
         with self._lock:
             self._effective_chat().add_user_message(content, persona=persona)
             self._save_current_chat()
-        publish(Events.MESSAGE_ADDED, {"role": "user"})
+        publish(Events.MESSAGE_ADDED, {"role": "user", "chat_name": self._effective_chat_name()})
 
     def add_assistant_with_tool_calls(
         self,
@@ -3767,13 +3862,13 @@ class ChatSessionManager:
                 self._in_tool_cycle = False
 
             self._save_current_chat()
-        publish(Events.MESSAGE_ADDED, {"role": "assistant"})
+        publish(Events.MESSAGE_ADDED, {"role": "assistant", "chat_name": self._effective_chat_name()})
 
     def add_message_pair(self, user_content: str, assistant_content: str):
         with self._lock:
             self._effective_chat().add_message_pair(user_content, assistant_content)
             self._save_current_chat()
-        publish(Events.MESSAGE_ADDED, {"role": "pair"})
+        publish(Events.MESSAGE_ADDED, {"role": "pair", "chat_name": self._effective_chat_name()})
 
     def get_messages(self) -> List[Dict[str, str]]:
         """Get raw messages (for storage/debugging)."""
@@ -3782,6 +3877,20 @@ class ChatSessionManager:
     def get_messages_for_display(self) -> List[Dict[str, Any]]:
         """Get messages formatted for UI with <think> tags reconstructed."""
         return self.current_chat.get_messages_for_display()
+
+    def get_display_messages_for(self, chat_name: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+        """Display-shaped messages for a chat BY NAME (F1, 2026-09-08 — the
+        rail of a room bound to a non-active session). The active chat reads
+        the live singleton (in-flight rows included); any other chat reads
+        the store. None = no such chat / sealed (behaves as nonexistent)."""
+        if not chat_name or chat_name == self.active_chat_name:
+            return self.get_messages_for_display()
+        data = self.export_chat(chat_name)
+        if data is None:
+            return None
+        hist = ConversationHistory(max_history=self.max_history)
+        hist.messages = data.get("messages") or []
+        return hist.get_messages_for_display()
 
     # ── Per-stream session (A1) — a conversation stream on a non-active chat ──
     #  routes reads/writes to ITS chat, leaving the active-chat singletons alone,
@@ -3829,15 +3938,60 @@ class ChatSessionManager:
         if ch is not None:
             ch._in_tool_cycle = bool(value)
 
+    def _read_store_messages(self, chat_name: str):
+        """RAW messages of a chat exactly as stored — the seed for a per-
+        stream override history (F1, 2026-09-08). Returns (messages,
+        rows_state, skipped); messages None = no such chat.
+
+        rows_state is the SAME watermark _load_chat sets for the active chat
+        (newest window, offset = rows below it), so the override's first
+        save is append-only. Before this, make_stream_session seeded from
+        read_chat_messages() — the LLM view: context-trimmed, image blocks
+        dropped, files flattened, markers stripped — and the first override
+        save on a rows chat is a full-window RESYNC from its seed: a by-name
+        turn (a phone call, now a room's rail) on a long or image-bearing
+        chat rewrote the store lossy. skipped > 0 = unreadable rows in the
+        window; a resync from a partial seed would destroy them, so callers
+        must refuse or latch read-only, never save."""
+        self._ensure_db()
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT messages, storage_format FROM chats WHERE name = ?",
+                (chat_name,)).fetchone()
+            if not row:
+                return None, None, 0
+            if row["storage_format"] == "rows":
+                msgs, skips = self._read_rows_messages(conn, chat_name)
+                total = conn.execute(
+                    "SELECT COALESCE(MAX(seq) + 1, 0) FROM chat_messages "
+                    "WHERE chat_name = ?", (chat_name,)).fetchone()[0]
+                return msgs, {"offset": total - len(msgs), "count": len(msgs)}, (skips or None)
+            return json.loads(row["messages"]), None, None
+
     def make_stream_session(self, chat_name: str) -> Optional[Dict[str, Any]]:
         """Build a per-context stream session for `chat_name`: its settings + a
         ConversationHistory seeded from its stored messages. system_prompt/tools
-        are filled by the caller (the A1 override block in chat_streaming). None if missing."""
+        are filled by the caller (the A1 override block in chat_streaming).
+        None if missing, sealed, or carrying unreadable rows (a save from a
+        partial seed would destroy them — the caller refuses the turn)."""
         settings = self.read_chat_settings(chat_name)
         if settings is None:
             return None
+        if self._vault_hidden(chat_name):
+            return None
+        msgs, state, skips = self._read_store_messages(chat_name)
+        if msgs is None:
+            return None
+        if skips and skips.get("skipped"):
+            logger.warning(f"make_stream_session('{chat_name}'): {skips['skipped']} unreadable "
+                           f"row(s) in the window — refusing (a save would destroy them)")
+            return None
         hist = ConversationHistory(max_history=self.max_history)
-        hist.messages = self.read_chat_messages(chat_name) or []
+        hist.messages = msgs
+        if state is not None:
+            # Same values _load_chat would set for this store; harmless if the
+            # chat is also the active one (driver lane watching its call).
+            self._rows_state[chat_name] = state
         return {"chat": chat_name, "settings": settings,
                 "system_prompt": None, "tools": None, "history": hist}
 
@@ -3862,10 +4016,25 @@ class ChatSessionManager:
         settings["private_chat"] = bool(privacy_required
                                         or settings.get("private_chat"))
         hist = ConversationHistory(max_history=self.max_history)
+        # F1 (2026-09-08): RAW seed + watermark (see _read_store_messages) —
+        # the LLM-view seed made the worker's first save a lossy resync.
+        # Unreadable rows or a read error latch the chat read-only (the
+        # activation latch, same shape) so the worker's saves REFUSE rather
+        # than resync from a partial or empty seed.
         try:
-            hist.messages = self.read_chat_messages(chat_name) or []
-        except Exception:
+            msgs, state, skips = self._read_store_messages(chat_name)
+            hist.messages = msgs or []
+            if msgs is not None and state is not None:
+                self._rows_state[chat_name] = state
+            if skips and skips.get("skipped"):
+                self._rows_degraded[chat_name] = {**skips, "at": datetime.now().isoformat()}
+        except Exception as e:
             hist.messages = []
+            logger.warning(f"make_agent_override('{chat_name}'): seed read failed — "
+                           f"latched read-only: {e}")
+            self._rows_degraded[chat_name] = {
+                "skipped": 1, "causes": {"decrypt": 0, "parse": 0, "read_error": 1},
+                "at": datetime.now().isoformat()}
         return {"chat": chat_name, "settings": settings,
                 "system_prompt": "", "tools": None, "history": hist}
 
@@ -4015,20 +4184,13 @@ class ChatSessionManager:
                            f"(read-only until repaired)")
             return False
 
-        # Defer if the target is the active chat and a stream is running.
-        # Event-based wait — fires as soon as the last stream ends, no poll.
-        if chat_name == self.active_chat_name and self._is_streaming:
-            evt = getattr(self, '_no_streams_event', None)
-            if evt is not None:
-                got = evt.wait(timeout=max_wait_if_streaming)
-            else:
-                # Legacy fallback for fixtures that bypass __init__.
-                import time as _time
-                deadline = _time.time() + max_wait_if_streaming
-                while self._is_streaming and _time.time() < deadline:
-                    _time.sleep(0.2)
-                got = not self._is_streaming
-            if not got or self._is_streaming:
+        # Defer while THIS chat has a live stream — pointer-bound or a pinned
+        # by-name turn alike (F1, 2026-09-08). Event-based wait on the chat's
+        # OWN idle event: a turn on some other chat no longer holds a
+        # heartbeat append hostage, and a room's by-name turn is respected.
+        if self.is_streaming(chat_name):
+            got = self.chat_idle_event(chat_name).wait(timeout=max_wait_if_streaming)
+            if not got or self.is_streaming(chat_name):
                 # Write SKIPPED. Better to drop a heartbeat append than to
                 # write through and corrupt the chat's tool_call/tool_result
                 # invariants. Caller (heartbeat / cron / agent completion)
@@ -4558,7 +4720,7 @@ class ChatSessionManager:
         self._ensure_db()
         if self._vault_hidden(chat_name):
             return False   # sealed vault: behaves as nonexistent
-        if chat_name == self.active_chat_name and self._is_streaming:
+        if self.is_streaming(chat_name):
             logger.warning(f"clear_named_chat_messages skipped for '{chat_name}' — streaming in progress")
             return False
         try:

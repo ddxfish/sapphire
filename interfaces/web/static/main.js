@@ -8,6 +8,7 @@ import { initConvo } from './features/convo.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
 import { hasPendingActivate, fetchStatus } from './api.js';
+import { getBoundChat } from './core/bound-chat.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor, setDefaultBackground } from './features/chat-settings.js';
 import { setInstanceColor } from './features/logo.js';
@@ -605,8 +606,19 @@ function initEventBus() {
     let _voiceTurnActive = false;
     const _mirrored = () => getIsProc() && !getAbortController() && !_voiceTurnActive;
 
+    // F1 (2026-09-08): "not my turn" for this tab's rail. Bound to a session
+    // (a room claimed the organs) → only events naming THAT chat are ours,
+    // whatever the server's pointer says. Unbound → the server's `foreign`
+    // (chat != active) as before. Events without a chat name are legacy
+    // and treated as ours.
+    const _notMine = (data) => {
+        const bound = getBoundChat();
+        if (bound) return !!(data?.chat && data.chat !== bound);
+        return !!data?.foreign;
+    };
+
     eventBus.on(eventBus.Events.AI_TYPING_START, (data) => {
-        if (data?.foreign) return;
+        if (_notMine(data)) return;
         console.log('[EventBus] AI typing started');
         if (getAbortController() || _voiceTurnActive) return;
         setProc(true);
@@ -615,7 +627,7 @@ function initEventBus() {
     });
 
     eventBus.on(eventBus.Events.AI_TYPING_END, (data) => {
-        if (data?.foreign) return;
+        if (_notMine(data)) return;
         console.log('[EventBus] AI typing ended');
         if (_mirrored()) { ui.hideStatus(); setProc(false); }
         debouncedRefresh();
@@ -693,7 +705,7 @@ function initEventBus() {
         // render into the chat being viewed — it used to stream in, then vanish on
         // the end-of-turn reconcile (2026-07-04 outbound-call bug). Chunks/end are
         // gated on _voiceTurnActive, so skipping start skips the whole turn.
-        if (data?.foreign) return;
+        if (_notMine(data)) return;
         try {
             if (data?.user_text) ui.addUserMessage(data.user_text);
             ui.startStreaming();
@@ -719,7 +731,13 @@ function initEventBus() {
     });
 
     // Message events
-    eventBus.on(eventBus.Events.MESSAGE_ADDED, () => { if (_voiceTurnActive) return; debouncedRefresh(); });
+    eventBus.on(eventBus.Events.MESSAGE_ADDED, (data) => {
+        if (_voiceTurnActive) return;
+        // F1: a bound rail refetches only for its own chat's rows.
+        const bound = getBoundChat();
+        if (bound && data?.chat_name && data.chat_name !== bound) return;
+        debouncedRefresh();
+    });
     eventBus.on(eventBus.Events.MESSAGE_REMOVED, () => debouncedRefresh());
     eventBus.on(eventBus.Events.CHAT_CLEARED, () => debouncedRefresh());
     // Trim/compress rewrite a chat's history wholesale — if it's the open
@@ -800,6 +818,11 @@ function initEventBus() {
         // settles and this handler adopts it then).
         const name = data?.name;
         const sel = document.getElementById('chat-select');
+        // F1 (2026-09-08): a rail bound to a session by name does NOT follow
+        // the pointer — a phone or second tab switching chats used to repaint
+        // the room's borrowed rail with the other chat and redirect its next
+        // typed turn there. The picker still repaints (it's the pointer's).
+        if (getBoundChat()) { populateChatDropdown(); return; }
         // `sel.value !== name`: a same-chat re-activate from another client
         // (the server publishes on the no-op too) used to walk straight into
         // the direct chat-activated sidebar paint and wipe a Custom Context

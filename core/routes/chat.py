@@ -32,11 +32,33 @@ async def health_check():
 
 
 @router.get("/api/history")
-async def get_history(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Get history formatted for UI display with context usage info."""
+async def get_history(request: Request, chat: str = None, _=Depends(require_login), system=Depends(get_system)):
+    """Get history formatted for UI display with context usage info.
+
+    `chat` (F1, 2026-09-08): read a chat BY NAME — a room's rail bound to
+    its session while the operator's Chat view is elsewhere. Absent, or
+    naming the active chat, reads the live singleton exactly as before."""
     from core.chat.history import count_tokens, count_message_tokens
 
-    raw_messages = system.llm_chat.session_manager.get_messages_for_display()
+    sm = system.llm_chat.session_manager
+    chat = (chat or '').strip() or None
+    if chat and chat != sm.get_active_chat_name():
+        raw_messages = sm.get_display_messages_for(chat)
+        if raw_messages is None:
+            raise HTTPException(status_code=404, detail=f"Chat '{chat}' not found")
+        chat_name = chat
+        prompt_content = ""
+        try:
+            from core import prompts as _prompts
+            _pn = (sm.read_chat_settings(chat) or {}).get("prompt")
+            _pd = _prompts.get_prompt(_pn) if _pn else None
+            prompt_content = (_pd.get("content", "") if isinstance(_pd, dict) else "") or ""
+        except Exception:
+            prompt_content = ""
+    else:
+        raw_messages = sm.get_messages_for_display()
+        chat_name = sm.get_active_chat_name()
+        prompt_content = system.llm_chat.current_system_prompt or ""
     display_messages = format_messages_for_display(raw_messages)
 
     context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
@@ -47,7 +69,6 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
     )
 
     try:
-        prompt_content = system.llm_chat.current_system_prompt or ""
         prompt_tokens = count_tokens(prompt_content) if prompt_content else 0
     except Exception:
         prompt_tokens = 0
@@ -57,7 +78,7 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
 
     out = {
         "messages": display_messages,
-        "chat_name": system.llm_chat.session_manager.get_active_chat_name(),
+        "chat_name": chat_name,
         "context": {
             "used": total_used,
             "limit": context_limit,
@@ -66,7 +87,7 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
     }
     # F2 latch: unreadable rows were skipped at load — chat is read-only.
     # Absent key = healthy (additive; old frontends unaffected).
-    deg = system.llm_chat.session_manager.is_chat_degraded(out["chat_name"])
+    deg = sm.is_chat_degraded(out["chat_name"])
     if deg:
         out["degraded"] = deg
     return out
@@ -117,6 +138,19 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     images = data.get('images', [])
     files = data.get('files', [])
 
+    # F1 (2026-09-08): a turn addressed BY NAME — a room's rail bound to its
+    # session. Absent = the active chat (unchanged). The name must be a
+    # reachable chat: sealed or missing refuses HERE, never falls through
+    # to whatever happens to be active.
+    chat = str(data.get('chat') or '').strip() or None
+    if chat:
+        _sm = system.llm_chat.session_manager
+        if _sm.is_chat_hidden(chat):
+            return JSONResponse({"error": f"Chat '{chat}' is sealed in a locked vault."},
+                                status_code=409)
+        if _sm.read_chat_settings(chat) is None:
+            return JSONResponse({"error": f"Chat '{chat}' not found."}, status_code=404)
+
     # Per-request StreamingChat instance. Each /api/chat call gets its own
     # — no more singleton stomping between tabs. H4 2026-04-22.
     # exclusive: one operator turn per chat (2026-08-29) — a second send
@@ -125,12 +159,18 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     # frontend's !res.ok path reads err.error for the toast.
     from core.chat.chat import ChatBusy
     try:
-        stream, sid, active_chat = system.llm_chat.begin_stream(exclusive=True)
-    except ChatBusy:
-        logger.info("[CHAT-STREAM] 409 — turn already live on the active chat")
+        if chat:
+            stream, sid, active_chat = system.llm_chat.begin_stream(
+                chat_name=chat, exclusive=True, operator=True)
+        else:
+            stream, sid, active_chat = system.llm_chat.begin_stream(exclusive=True)
+    except ChatBusy as _busy:
+        logger.info(f"[CHAT-STREAM] 409 — turn already live on "
+                    f"'{getattr(_busy, 'chat_name', None) or chat or 'the active chat'}'")
         return JSONResponse(
             {"error": "Sapphire is still replying in this chat — wait for her to finish or press Stop."},
             status_code=409)
+    stream.operator_lane = True   # a human typed this (talk-stamp + vault touch ride)
     system.web_active_inc()
 
     # Release exactly once, from whichever side runs first. The generator's
@@ -151,11 +191,29 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
         system.llm_chat.end_stream(sid, active_chat)
         system.web_active_dec()
 
+    # ONE Context for the whole engine run (F1, 2026-09-08). Starlette drives
+    # a sync generator through iterate_in_threadpool, and anyio runs every
+    # next() in a fresh COPY of the request context — so a ContextVar set
+    # inside the engine (the A1 stream-brain override that pins a by-name
+    # turn to its chat) evaporated after the slice that set it: the user
+    # row landed in the named chat, the LLM loop and the final save ran on
+    # the active pointer, and the reset token raised "created in a
+    # different Context" (swallowed). The phone driver never saw it — it
+    # consumes the generator in one thread. Running every next() (and the
+    # close) through the same Context object keeps the engine's ContextVars
+    # alive for the turn; the event-loop side is untouched.
+    import contextvars as _cv
+    _engine_ctx = _cv.copy_context()
+
     def generate():
         gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files)
         try:
             chunk_count = 0
-            for event in gen:
+            while True:
+                try:
+                    event = _engine_ctx.run(next, gen)
+                except StopIteration:
+                    break
                 # Past llm_done the row is written: forward the tail as-is
                 # (the pump's own cancel_check bails it; `done` is withheld
                 # below and the browser's belt finalizes audio). A cancel
@@ -228,7 +286,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             # chat. close() forces it to run NOW, before the registration is
             # released (S1 #1 mitigation; full fix = stream-lifecycle session).
             try:
-                gen.close()
+                _engine_ctx.run(gen.close)   # the engine's finally runs in ITS context (override reset)
             except Exception as e:
                 logger.warning(f"[CHAT-STREAM] engine generator close failed: {e}")
             _release()
@@ -680,9 +738,22 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
 # HISTORY MANAGEMENT ROUTES
 # =============================================================================
 
+def _bound_belt(request: Request, system):
+    """F1 (2026-09-08): the message-edit routes act on the ACTIVE chat. A
+    rail bound to a session by name sends `?chat=`; when that isn't the
+    active chat any more (the pointer moved under the room) refuse, rather
+    than edit the wrong transcript. Absent = legacy caller, no check."""
+    bound = (request.query_params.get('chat') or '').strip()
+    if bound and bound != system.llm_chat.get_active_chat():
+        raise HTTPException(status_code=409, detail=(
+            f"This rail is bound to '{bound}' but the active chat moved elsewhere — "
+            f"editing works only while it's the active chat."))
+
+
 @router.delete("/api/history/messages")
 async def remove_history_messages(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove messages from history."""
+    _bound_belt(request, system)
     data = await request.json()
     count = data.get('count', 0) if data else 0
     user_message = data.get('user_message') if data else None
@@ -728,6 +799,7 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
 @router.post("/api/history/messages/remove-last-assistant")
 async def remove_last_assistant(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove only the last assistant message in a turn."""
+    _bound_belt(request, system)
     data = await request.json()
     timestamp = data.get('timestamp')
     if not timestamp:
@@ -744,6 +816,7 @@ async def remove_last_assistant(request: Request, _=Depends(require_login), syst
 @router.post("/api/history/messages/remove-from-assistant")
 async def remove_from_assistant(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove assistant message and everything after it."""
+    _bound_belt(request, system)
     data = await request.json()
     timestamp = data.get('timestamp')
     if not timestamp:
@@ -760,6 +833,7 @@ async def remove_from_assistant(request: Request, _=Depends(require_login), syst
 @router.delete("/api/history/tool-call/{tool_call_id}")
 async def remove_tool_call(tool_call_id: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove a specific tool call and its result."""
+    _bound_belt(request, system)
     try:
         if system.llm_chat.session_manager.remove_tool_call(tool_call_id):
             return {"status": "success", "message": "Tool call removed"}
@@ -772,6 +846,7 @@ async def remove_tool_call(tool_call_id: str, request: Request, _=Depends(requir
 @router.post("/api/history/messages/edit")
 async def edit_message(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Edit a message by timestamp."""
+    _bound_belt(request, system)
     data = await request.json()
     role = data.get('role')
     timestamp = data.get('timestamp')
@@ -831,11 +906,31 @@ async def import_history(request: Request, _=Depends(require_login), system=Depe
 # =============================================================================
 
 @router.get("/api/chats")
-async def list_chats(request: Request, type: str = None, stats: int = 0,
+async def list_chats(request: Request, type: str = None, kind: str = None,
+                     slim: int = 0, stats: int = 0,
                      _=Depends(require_login), system=Depends(get_system)):
-    """List chats. stats=1 adds size_bytes per chat (Chat Manager view)."""
+    """List chats. stats=1 adds size_bytes per chat (Chat Manager view).
+
+    kind= (F1, 2026-09-08) filters server-side on the chat's kind —
+    'chat' | 'game' (game + story sessions) | 'limbo'; `type` is the legacy
+    alias (sent for years, read for the first time today). slim=1 trims the
+    per-chat settings blob to the keys a picker paints — a room listing 300
+    sessions doesn't need every custom_context and ghost text."""
     try:
         chats = system.llm_chat.session_manager.list_chat_files(stats=bool(stats))
+        want = (kind or type or '').strip().lower()
+        if want:
+            chats = [c for c in chats if c.get('kind') == want]
+        if slim:
+            keep = ('mode', 'game_id', 'private_chat', 'archived', 'persona', 'prompt',
+                    'llm_primary', 'llm_model', 'toolset', 'trim_color',
+                    'private_display_name')
+            # New dicts, never in-place: the store's entries are this
+            # request's, but a projection that mutates its input is a trap
+            # for the next caller who shares the list.
+            chats = [{**c, 'settings': {k: (c.get('settings') or {})[k]
+                                        for k in keep if k in (c.get('settings') or {})}}
+                     for c in chats]
         active_chat = system.llm_chat.get_active_chat()
         return {"chats": chats, "active_chat": active_chat}
     except Exception as e:
@@ -866,7 +961,13 @@ async def create_chat(request: Request, _=Depends(require_login), system=Depends
         chat_name = data.get('name')
         if not chat_name or not chat_name.strip():
             raise HTTPException(status_code=400, detail="Chat name required")
-        if system.llm_chat.create_chat(chat_name):
+        # settings (F1, 2026-09-08): stamped at birth in the same INSERT —
+        # a session is never a plain chat for a beat. private_chat is
+        # refused there (vault flip owns private births).
+        settings = data.get('settings')
+        if settings is not None and not isinstance(settings, dict):
+            raise HTTPException(status_code=400, detail="settings must be an object")
+        if system.llm_chat.create_chat(chat_name, settings=settings):
             # Echo the SANITIZED name — the store lowercases/strips, and a
             # frontend keying on the raw input targets a nonexistent chat.
             from core.chat.history import sanitize_chat_name
@@ -935,6 +1036,12 @@ def _delete_one_chat(system, chat_name: str, origin=None):
         pass
     _fire_chat_hook("chat_deleted", {"name": chat_name})
     publish(Events.CHAT_DELETED, {"name": chat_name, "origin": origin})
+    if was_active:
+        # F1 (2026-09-08): the pointer MOVED — say so. Delete published only
+        # CHAT_DELETED, so every other tab kept painting the dead chat and a
+        # room bound to it typed into 'default' without knowing.
+        publish(Events.CHAT_SWITCHED, {"name": system.llm_chat.get_active_chat(),
+                                       "origin": None})
     return True, f"Deleted: {chat_name}"
 
 
@@ -1384,8 +1491,9 @@ async def chat_prompt_preview(chat_name: str, request: Request, _=Depends(requir
                 names = sorted(llm.function_manager.get_enabled_function_names() or [])
             except Exception:
                 names = []
+        from core.hooks import surface_for as _surface_for
         return {"chat": chat_name, "system_prompt": prompt, "ghost": ghost or "",
-                "tools": names, "surface": settings.get("surface") or "chat"}
+                "tools": names, "surface": _surface_for(settings)}
     except HTTPException:
         raise
     except Exception as e:

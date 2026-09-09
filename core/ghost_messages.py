@@ -157,10 +157,11 @@ def build_ghost_message(
 
     # Plugins via ghost_inject hook
     if hook_runner.has_handlers("ghost_inject"):
+        from core.hooks import surface_for as _surface_for
         ghost_event = HookEvent(
             input=user_input,
             metadata={"system": system},
-            surface=(chat_settings or {}).get("surface") or "chat",
+            surface=_surface_for(chat_settings),   # F1: derived from mode when unstamped
         )
         try:
             hook_runner.fire("ghost_inject", ghost_event)
