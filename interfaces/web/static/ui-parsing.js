@@ -707,13 +707,14 @@ const renderToolResult = (el, part) => {
     const toolName = part.name || 'Unknown Tool';
     const toolCallId = part.tool_call_id;
     // Tiles ride a UI marker (shared/gallery-marker.js); the accordion text drops it.
-    const { entries: galleryEntries, text: fullResult } =
+    const { entries: galleryEntries, title: galleryTitle, text: fullResult } =
         parseGalleryMarker(part.content || part.result || '');
 
     // Get truncation limit based on tool
     const maxLen = toolName === 'web_search' ? 1000 :
                   toolName === 'get_website' ? 800 :
                   toolName === 'web_search_images' ? 1500 :
+                  toolName === 'web_view_images' ? 1500 :
                   toolName === 'get_site_links' ? 1500 : 500;
 
     // Check for image markers. A tool can return SEVERAL (e.g. z-image returns a
@@ -754,7 +755,11 @@ const renderToolResult = (el, part) => {
         }
 
         el.appendChild(acc);
-        appendGallery(el, galleryEntries);      // a contact sheet AND tiles can share one result
+        // Her contact sheet stays in the accordion; the row IS the user's view of
+        // the same numbered set (the inline clone in core/events.js skips flagged
+        // accordions — a sheet AND a row would show the pictures twice).
+        if (galleryEntries.length) acc.dataset.gallery = '1';
+        appendGallery(el, galleryEntries, galleryTitle);
         return;
     }
 
@@ -782,12 +787,12 @@ const renderToolResult = (el, part) => {
 
     el.appendChild(acc);
 
-    appendGallery(el, galleryEntries);
+    appendGallery(el, galleryEntries, galleryTitle);
 };
 
 // Tiles under a tool result — the ONE renderer (history + live stream share it).
-const appendGallery = (el, entries) => {
-    const gallery = buildGallery(entries, Images.openImageModal);
+const appendGallery = (el, entries, title = '') => {
+    const gallery = buildGallery(entries, Images.openImageModal, title);
     if (gallery) el.appendChild(gallery);
 };
 

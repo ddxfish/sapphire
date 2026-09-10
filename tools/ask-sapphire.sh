@@ -83,7 +83,9 @@ body = {
     # (2026-04-20).
     "delete_after_run": True,
     "max_runs": 1,
-    "toolset": s.get('toolset') or s.get('ability') or 'all',
+    # ASK_TOOLSET=<name> overrides the chat's toolset for ONE message (dev:
+    # proving a new tool before the user toolsets learn its name). 2026-09-10.
+    "toolset": os.environ.get('ASK_TOOLSET') or s.get('toolset') or s.get('ability') or 'all',
     "prompt": s.get('persona') or s.get('prompt') or 'sapphire',
     # Forward chat's bound LLM provider/model. Without this, provider defaults
     # to 'auto' → first available → wrong model from global fallback order

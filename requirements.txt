@@ -51,7 +51,7 @@ openwakeword>=0.6.0
 onnxruntime>=1.20.0
 
 # Image resize for LLM
-Pillow>=10.0.0
+Pillow>=10.1.0
 
 # PDF parsing
 pypdf>=4.0.0

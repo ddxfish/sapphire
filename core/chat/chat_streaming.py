@@ -64,6 +64,22 @@ def stamp_private_if_unlocked(session_manager):
         logger.warning(f"[VAULT] talk-stamp failed — turn runs unstamped: {e}")
 
 
+def _stash_pasted(images):
+    """One img: handle per pasted image, or None where the store refused (that
+    one stays inline in the row). Bytes are stored as they arrive — the upload
+    route already applied IMAGE_UPLOAD_MAX_WIDTH; nothing resizes twice."""
+    import base64
+    from core import images as ci
+    out = []
+    for img in images:
+        try:
+            out.append(ci.stash(base64.b64decode(img.get("data", "")), visible=True))
+        except Exception as e:
+            logger.warning(f"[STREAM] pasted image kept inline (store refused: {e})")
+            out.append(None)
+    return out
+
+
 class StreamingChat:
     def __init__(self, main_chat):
         self.main_chat = main_chat
@@ -463,7 +479,16 @@ class StreamingChat:
                     return
                 user_input = hook_event.input  # may have been mutated
 
-            messages = self.main_chat._build_base_messages(user_input, images=images, files=files)
+            # Pasted images → the chat's image store NOW (visible=1: the model
+            # sees them this turn and the vision window can replay them), so
+            # the persisted row carries handles + receipts, never base64 (image
+            # upgrade 2026-09-10). Perception frames (images_ephemeral) stay
+            # model-only: never stashed, never persisted.
+            image_handles = []
+            if images and not skip_user_message and not getattr(self, 'images_ephemeral', False):
+                image_handles = _stash_pasted(images)
+            extra = {'image_handles': image_handles} if image_handles else {}   # old call shape otherwise
+            messages = self.main_chat._build_base_messages(user_input, images=images, files=files, **extra)
 
             if not skip_user_message:
                 # Build content list if files or images present, otherwise just text
@@ -482,12 +507,14 @@ class StreamingChat:
                     # `messages`); the persisted row keeps the words. F2's blob
                     # lane replaces this with a marker per frame.
                     if not getattr(self, 'images_ephemeral', False):
-                        for img in (images or []):
-                            user_content.append({
-                                "type": "image",
-                                "data": img.get("data", ""),
-                                "media_type": img.get("media_type", "image/jpeg")
-                            })
+                        handles = image_handles or [None] * len(images or [])
+                        for img, handle in zip(images or [], handles):
+                            part = {"type": "image", "media_type": img.get("media_type", "image/jpeg")}
+                            if handle:
+                                part["handle"] = handle          # the store has the bytes
+                            else:
+                                part["data"] = img.get("data", "")   # store refused → inline, as before
+                            user_content.append(part)
                     if len(user_content) == 1 and user_content[0].get("type") == "text":
                         self.main_chat.session_manager.add_user_message(user_input)
                     else:

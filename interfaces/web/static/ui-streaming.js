@@ -509,7 +509,7 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
 const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     let toolData = state.toolAccordions[toolId];
     // Tiles ride a UI marker; the accordion shows the text without it.
-    const { entries: galleryEntries, text: shownResult } = parseGalleryMarker(result);
+    const { entries: galleryEntries, title: galleryTitle, text: shownResult } = parseGalleryMarker(result);
 
     if (!toolData) {
         // Fallback: create accordion now
@@ -547,8 +547,11 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
 
     // Tiles under the accordion (shared renderer — the same one history uses).
     if (!isError && streamMsg) {
-        const gallery = buildGallery(galleryEntries, openImageModal);
-        if (gallery) toolData.acc.after(gallery);
+        const gallery = buildGallery(galleryEntries, openImageModal, galleryTitle);
+        if (gallery) {
+            toolData.acc.dataset.gallery = '1';    // the row shows the set; no inline clone
+            toolData.acc.after(gallery);
+        }
     }
 
     if (scrollCallback) scrollCallback();

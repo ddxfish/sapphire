@@ -63,13 +63,17 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 
 ### Images
 
-One primitive (`core/images.py`), one return contract, one handle. Every tool that returns an image gets an `(image img:<id>)` receipt line appended to its result; any image tool accepts that handle.
+One primitive (`core/images.py`), one return contract, one handle. Every tool that returns an image gets an `(image img:<id>)` receipt line appended to its result; any image tool accepts that handle. The viewing tools show the model ONE image — the picture, or a numbered contact sheet — and the user the same set as a numbered row of tiles (same numbers, so "#3" means the same picture to both). Each picture behind a sheet is an `img:` handle kept in the chat, so she can look closer or save any of them.
 
 | Tool | Module | What it does |
 |------|--------|--------------|
-| `web_search_images` | web.py | Bing-backed image search. The user gets clickable tiles (served through DuckDuckGo's image proxy); `view=true` also shows the model one image (`count=1`) or a numbered contact sheet |
-| `image_view` | mindpalace library_tools.py | Look at an image: `doc:<N>` (library), `img:<id>`, an absolute path, or a URL |
+| `web_view_images` | web.py | Search the web for images (`query`, `count` 1-12 default 6, `page`), or look at one image `url`. `view` defaults true. Safe search = Settings › Images |
+| `memory_view_image` | mindpalace library_tools.py | A remembered picture: library pictures by what's in them (`query`, `count`) as a numbered sheet with `[doc N]` ids; one `document_id`; or one picture from this chat by `image_id` (`img:<id>`) |
+| `local_view_images` | mindpalace library_tools.py | Image files on this machine: `paths` (one → the image; several → a sheet) or a `folder` (paged, subfolders listed) |
 | `memory_save_image` | mindpalace library_tools.py | Keep an image in the library under a topic (Knowledge tab; pixel + caption search; optional `private_key`) |
+| `get_website` (`show_image_urls`) | web.py | `true` appends the page's image URLs (alt, size) to the text; `only` returns just that list |
+
+Pasted images get the same treatment: they're kept in the chat's image store with an `img:` receipt she can hand to any image tool. **Images › Image memory turns** (default 3) keeps every image the model saw visible to it for that many turns; older ones she re-views by handle.
 | `telegram_send_image` | telegram plugin | Send an image (`source=` any handle; default = newest image of this chat) |
 | `generate_image` | sd-server plugin | Generate images on a local SD server (single or contact sheet) |
 
@@ -208,8 +212,8 @@ TOOL MODULES:
 - knowledge_tools.py (plugins/memory): save_person, save_knowledge, search_knowledge, delete_knowledge
 - goals_tools.py (plugins/memory): create_goal, list_goals, update_goal, delete_goal
 - Mind Palace engine (when enabled) swaps in its own memory tool surface: same core verbs plus update_memory(memory_id, ...), layered saves
-- web.py: web_search, get_website, get_wikipedia, research_topic, get_site_links, web_search_images(query, count?=6, view?=false)
-- mindpalace library_tools.py: library, read_document, image_view(source, private_key?) — source = doc:<N> | img:<id> | /abs/path | URL, memory_save_image(source, topic, caption?, private_key?); every image-returning tool appends an '(image img:<id>)' receipt line
+- web.py: web_search, get_website(url, show_image_urls?=false|true|only), get_wikipedia, research_topic, get_site_links, web_view_images(query? | url?, count?=6, page?=1, view?=true)
+- mindpalace library_tools.py: library, read_document, memory_view_image(query? + count? | document_id | image_id=img:<id>, private_key?), local_view_images(paths? | folder?, page?, count?), memory_save_image(source, topic, caption?, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
 - ai.py: ask_claude
 - meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools]
 - scene.py: set_scene(name) — chat scene background, 'none' clears

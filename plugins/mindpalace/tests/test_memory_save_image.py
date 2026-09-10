@@ -1,7 +1,7 @@
 """memory_save_image (2026-09-09): any core.images handle → a library image
 under a topic. Dedup by content hash, topic match either level (case-
 insensitive) else a new Category, private_key gate, receipt carries the id,
-and the doc: round-trip back through core.images / image_view.
+and the doc: round-trip back through core.images / memory_view_image.
 """
 import io
 
@@ -29,7 +29,7 @@ def test_save_from_path_creates_the_topic(tmp_path):
     p = tmp_path / 'cat photo.png'
     p.write_bytes(_png())
     text, ok = lib.save_image('default', str(p), 'Pets', caption='Sudo on the porch')
-    assert ok and 'Saved [doc ' in text and '▸ Pets' in text and 'image_view("doc:' in text
+    assert ok and 'Saved [doc ' in text and '▸ Pets' in text and 'memory_view_image(document_id=' in text
     (did, title, cid, pk, meta), = _docs()
     assert title == 'Sudo on the porch' and pk is None
     with lib.get_connection() as conn:
@@ -84,25 +84,30 @@ def test_bad_inputs_are_honest(tmp_path):
     assert len(_docs()) == 0
 
 
-def test_doc_round_trip_through_core_images_and_image_view(tmp_path, monkeypatch):
+def test_doc_round_trip_through_core_images_and_memory_view_image(tmp_path, monkeypatch):
     p = tmp_path / 'trip.png'
     p.write_bytes(_png((0, 200, 0), 300, 100))
     text, ok = lib.save_image('default', str(p), 'Trips', caption='lake at dusk')
     did = _docs()[0][0]
+    from plugins.mindpalace.tools import palace_tools as pt
     monkeypatch.setattr(ci, '_scope', lambda: 'default')
+    monkeypatch.setattr(pt, '_get_current_scope', lambda: 'default')
     r = ci.resolve(f'doc:{did}')
     assert r.origin == 'library' and r.media_type == 'image/png' and 'lake at dusk' in r.label
-    out, ok = lt.execute('image_view', {'source': f'doc:{did}'}, {})
+    out, ok = lt.execute('memory_view_image', {'document_id': did}, {})
     assert ok and out['images'][0]['media_type'] == 'image/jpeg'
     assert f'[doc {did}] lake at dusk' in out['text'] and '300x100' in out['text'] and 'library' in out['text']
     monkeypatch.setattr(ci, '_scope', lambda: 'other')
-    out, ok = lt.execute('image_view', {'source': f'doc:{did}'}, {})
+    out, ok = lt.execute('memory_view_image', {'document_id': did}, {})
     assert not ok and 'No image' in out
-    # img:/path/URL lanes need no memory scope — the palace gate must not block them
-    from plugins.mindpalace.tools import palace_tools as pt
+    # img:/path lanes need no memory scope — the palace gate must not block them
     monkeypatch.setattr(pt, '_get_current_scope', lambda: None)
-    out, ok = lt.execute('image_view', {'source': str(p)}, {})
+    out, ok = lt.execute('local_view_images', {'paths': [str(p)]}, {})
     assert ok and out['images'][0]['media_type'] == 'image/jpeg' and 'from disk' in out['text']
+    monkeypatch.setattr(ci, 'resolve', lambda src, **kw: ci.Resolved(_png(), 'image/png', 'img:x.png', 'chat'))
+    out, ok = lt.execute('memory_view_image', {'image_id': 'img:x.png'}, {})
+    assert ok and 'from this chat' in out['text']                 # the retired image_view's img: lane lives here
+    assert lt.execute('memory_view_image', {'image_id': 'doc:3'}, {})[1] is False
 
 
 def test_tool_execute_routes_to_save_image(monkeypatch, tmp_path):

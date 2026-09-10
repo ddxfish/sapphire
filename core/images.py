@@ -11,6 +11,12 @@ Rules — stated once, here:
 5. One return contract: `result()` → {"text", "images": [{data, media_type,
    display_only}]}. `_extract_tool_images` saves each image and appends an
    `(image img:<id>)` receipt the model can hand to any other image tool.
+6. `stash()` is the ONE lane for images a tool wants addressable but not
+   shown to the model this turn (search hits behind a contact sheet, the
+   individuals behind a grid, a pasted original): same table, vault path,
+   cascade and route as every tool image — never a disk cache. The tool's
+   text names the handles; the GALLERY marker names them for the browser
+   (shared/gallery-marker.js, v3). 2026-09-10.
 
 Handles `resolve()` understands:
     img:<id>     a tool image from this chat (the receipt line)
@@ -75,6 +81,54 @@ def _open(raw):
 def media_type(raw) -> str:
     fmt = (_open(raw).format or '').upper()
     return _MEDIA.get(fmt, f'image/{fmt.lower() or "octet-stream"}')
+
+
+_sniff = media_type     # stash()'s parameter shadows the name
+
+
+def new_id(media_type='image/jpeg') -> str:
+    """A tool_images row id: 12 hex + extension — the shape since day one."""
+    import uuid
+    ext = 'png' if 'png' in (media_type or '') else 'jpg'
+    return f"{uuid.uuid4().hex[:12]}.{ext}"
+
+
+def _disk_put(image_id, raw):
+    """History-less lane (isolated tool calls, no session): user/tool_images,
+    bounded to the newest 300 — it had no GC and grew forever."""
+    _DISK.mkdir(parents=True, exist_ok=True)
+    (_DISK / image_id).write_bytes(raw)
+    try:
+        for old in sorted(_DISK.iterdir(), key=lambda f: f.stat().st_mtime)[:-300]:
+            old.unlink()
+    except Exception as e:
+        logger.debug(f"[IMAGES] tool_images GC skipped: {e}")
+
+
+def stash(raw, media_type=None, *, visible=False, chat_name=None) -> str:
+    """Store bytes in the chat's image store NOW; return the `img:<id>` handle.
+
+    visible=False: the model never saw these pixels (they sit behind a sheet
+    or a grid) so the vision window never replays them; True = the model saw
+    them live (a pasted image). chat_name=None → the EFFECTIVE chat, never the
+    active one: a phone/background stream's image belongs to ITS chat (P3-T4).
+    '' is the ephemeral sentinel — no durable home → ImageError, so a cadence
+    frame can never leak into the store by accident.
+    """
+    mt = media_type or _sniff(raw)
+    image_id = new_id(mt)
+    try:
+        sm = _session_manager()
+    except Exception as e:
+        logger.debug(f"[IMAGES] no session for stash, disk lane: {e}")
+        sm = None
+    if sm is None:
+        _disk_put(image_id, raw)
+        return f"img:{image_id}"
+    owner = chat_name if chat_name is not None else sm._effective_chat_name()
+    if not sm.save_tool_image(image_id, raw, mt, chat_name=owner, visible=visible):
+        raise ImageError("couldn't store the image — this turn has no chat to keep it in")
+    return f"img:{image_id}"
 
 
 # ── resolve ──────────────────────────────────────────────────────────────────
@@ -183,6 +237,20 @@ def for_chat(raw, max_px=1536, quality=88) -> bytes:
     return buf.getvalue()
 
 
+def _badge_font(pt):
+    """Pillow's bundled TrueType (Aileron, Pillow ≥ 10.1) — the one font every
+    install has, no system fonts involved. Older Pillow: DejaVu if the OS has
+    it, else the 6×8 bitmap (the tiny-digit bug Krem saw)."""
+    from PIL import ImageFont
+    for load in (lambda: ImageFont.load_default(size=pt),
+                 lambda: ImageFont.truetype('DejaVuSans-Bold.ttf', pt)):
+        try:
+            return load()
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 def contact_sheet(raws, cell=400) -> bytes:
     """Numbered 1..N grid (ceil(sqrt) columns), JPEG bytes. The one grid.
     Undecodable entries keep their number so '#3' still means the 3rd."""
@@ -192,11 +260,9 @@ def contact_sheet(raws, cell=400) -> bytes:
     rows = math.ceil(n / cols)
     grid = Image.new('RGB', (cols * cell, rows * cell), (24, 24, 28))
     draw = ImageDraw.Draw(grid)
-    pt = max(14, cell // 10)
-    try:
-        font = ImageFont.truetype('DejaVuSans-Bold.ttf', pt)
-    except Exception:
-        font = ImageFont.load_default()
+    pt = max(20, cell // 6)          # a number she can read on a downscaled sheet
+    font = _badge_font(pt)
+    pad, inner = max(6, pt // 5), max(4, pt // 5)
     for i, raw in enumerate(raws):
         x, y = (i % cols) * cell, (i // cols) * cell
         try:
@@ -205,9 +271,11 @@ def contact_sheet(raws, cell=400) -> bytes:
             grid.paste(im, (x + (cell - im.width) // 2, y + (cell - im.height) // 2))
         except ImageError:
             draw.rectangle([x, y, x + cell, y + cell], fill=(40, 20, 20))
-        pad = max(4, pt // 4)
-        draw.rectangle([x + pad, y + pad, x + pad + pt + 10, y + pad + pt + 6], fill=(0, 0, 0))
-        draw.text((x + pad + 4, y + pad), str(i + 1), fill=(255, 255, 255), font=font)
+        label = str(i + 1)
+        l, t, r, b = draw.textbbox((0, 0), label, font=font)
+        draw.rectangle([x + pad, y + pad, x + pad + (r - l) + 2 * inner, y + pad + (b - t) + 2 * inner],
+                       fill=(0, 0, 0))
+        draw.text((x + pad + inner - l, y + pad + inner - t), label, fill=(255, 255, 255), font=font)
     buf = io.BytesIO()
     grid.save(buf, 'JPEG', quality=88)
     return buf.getvalue()

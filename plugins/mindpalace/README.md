@@ -19,7 +19,7 @@ read-only and never touched — switching back is always possible.
 Tools: `save_memory`, `search_memory`, `get_recent_memories`, `update_memory`,
 `delete_memory`, `read_self`, `update_self`, `read_ledger`, `create_goal`,
 `list_goals`, `update_goal`, `delete_goal`, `library`, `read_document`,
-`image_view`, `memory_save_image`, `import_v2`, `run_librarian`, plus the librarian verbs below.
+`memory_view_image`, `local_view_images`, `memory_save_image`, `import_v2`, `run_librarian`, plus the librarian verbs below.
 
 ## Goals (L4)
 

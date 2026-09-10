@@ -1,6 +1,7 @@
 # 2.12.9 - Images
 - AI can web search images and diplay or see them itself
 - AI can add images to its knowledge layer
+- AI can see images for X messages, not just current
 # 2.12.8 - QoL 
 - Password reset in Settings > System
 - Cancel running daemon

@@ -372,6 +372,14 @@
     "short": "Max width for uploaded images (0 = disabled)",
     "long": "Images wider than this are resized and compressed to JPEG 85% quality before storing in chat history. Reduces storage and speeds up LLM processing. Set to 0 to disable optimization and keep original images. Only applies if compression actually makes the image smaller."
   },
+  "IMAGE_MEMORY_TURNS": {
+    "short": "Turns an image stays visible to the model (0 = current turn only)",
+    "long": "Every image she or you put in the chat is shown to the model again for this many turns after it arrived — pasted images and the pictures her tools showed her (contact sheets, viewed images). She can refer back to them without re-viewing. Each replayed image costs roughly 1.5k tokens per turn, so 3 keeps a browsing session cheap. Older images stay in the chat forever and she can re-view any of them by handle (img:...)."
+  },
+  "WEB_IMAGES_SAFESEARCH": {
+    "short": "Adult-content filter for web image search",
+    "long": "Passed to the search engine on every web_view_images call. Off returns everything; moderate hides explicit images; strict hides explicit images and text. This only filters what the engine returns — it is not a content policy for the model."
+  },
   "MAX_TOOL_ITERATIONS": {
     "short": "how many total tool iterations can be called (these can be parallel)",
     "long": "How many iterations the AI can do tool calls for. Prevents runaway tool calling."

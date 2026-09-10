@@ -1063,7 +1063,7 @@ def test_vision_job_photo_block_and_cleanup(library, monkeypatch):
     text, found = library.search_library('default', 'PIXELS')
     assert found and '\U0001F5BC Photos — 1 of 1 matched' in text
     assert 'image RAG' in text                 # she's told HOW these matched
-    assert f'[doc {did}] beach' in text and 'image_view' in text
+    assert f'[doc {did}] beach' in text and 'memory_view_image' in text
     assert '§' not in text                     # never rendered as sections
     ok, _ = library.delete_document('default', did)
     assert ok
@@ -1139,7 +1139,7 @@ def test_backfill_vision_queues_the_missing(library):
 
 
 # --- Arc 2 I4 → 2026-09-09: image_source feeds core.images' doc: lane --------
-# (view_image retired; image_view("doc:N") is the one viewing door.)
+# (view_image retired 2026-09-09, image_view retired 2026-09-10; memory_view_image is the door.)
 
 def test_image_source_carries_the_photo_line(library):
     did, _ = library.import_image('default', 'porch.jpg', _jpeg_with_exif(),
@@ -1168,7 +1168,8 @@ def test_tool_surface_after_the_image_rebuild():
     assert 'memory_save_image' in lt.AVAILABLE_FUNCTIONS
     assert 'view_image' not in lt.AVAILABLE_FUNCTIONS
     names = [t['function']['name'] for t in lt.TOOLS]
-    assert {'memory_save_image', 'image_view'} <= set(names) and 'view_image' not in names
+    assert {'memory_save_image', 'memory_view_image'} <= set(names)
+    assert 'view_image' not in names and 'image_view' not in names
 
 
 # --- Captions are retrieval + presentation surface (Krem's tron report) ------

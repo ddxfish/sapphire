@@ -4356,6 +4356,83 @@ a.gallery-caption:hover {
     }
 }
 
+/* Gallery row (shared/gallery-marker.js v3, 2026-09-10): one titled strip per
+   tool call — tiles numbered like her contact sheet, fixed height, scrolls
+   sideways inside the bubble. The masonry .image-gallery above stays for runs
+   of markdown images. */
+.gallery-row {
+    margin: 10px 0;
+    max-width: 100%;
+}
+
+.gallery-row .gallery-title {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    margin: 0 0 6px 2px;
+}
+
+.gallery-row .gallery-track {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    padding-bottom: 6px;
+}
+
+.gallery-row .gallery-item {
+    position: relative;
+    flex: 0 0 auto;
+    width: 168px;
+    scroll-snap-align: start;
+    background: var(--bg-inset);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.gallery-row .gallery-item img {
+    width: 168px;
+    height: 150px;
+    object-fit: cover;
+    display: block;
+    cursor: pointer;
+    margin: 0;
+    border-radius: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.gallery-row .gallery-item img:hover {
+    opacity: 0.85;
+}
+
+.gallery-row .gallery-num {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 1;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    font-size: var(--font-sm);
+    font-weight: 700;
+    line-height: 22px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.gallery-row .gallery-caption {
+    display: block;
+    font-size: var(--font-xs);
+    padding: 4px 6px 6px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Legacy image markers whose bytes never lived in Sapphire (old SDXL proxy,
    route removed 2026-09-09) render as this instead of a broken icon. */
 span[data-image-gone] {

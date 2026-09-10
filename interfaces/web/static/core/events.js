@@ -128,6 +128,9 @@ function handleImageReady(event) {
 
     const message = loadedImg.closest('.message');
     if (!message) return;
+    // A result that carried a gallery row already shows its pictures (numbered,
+    // in the bubble); its contact sheet stays inside the accordion only.
+    if (loadedImg.closest('details')?.dataset.gallery) return;
 
     const content = message.querySelector('.message-content');
     if (!content) return;

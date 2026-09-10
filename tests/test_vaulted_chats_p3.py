@@ -355,7 +355,7 @@ class TestToolImageGate:
             def __init__(self):
                 self.owners = []
 
-            def save_tool_image(self, full_id, data, media_type, chat_name=None):
+            def save_tool_image(self, full_id, data, media_type, chat_name=None, visible=True):
                 self.owners.append(chat_name)
                 return True
 

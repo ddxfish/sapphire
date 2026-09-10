@@ -2708,7 +2708,7 @@ PHOTO_DESC_MAX = 256   # caption cap on the result LINE (full text stays put)
 
 def _photo_line(doc_id, title, meta_raw, description=None):
     """One photo, metadata only — caption · date · place · people. Pixels
-    cost context; image_view("doc:N") spends it deliberately. The caption is
+    cost context; memory_view_image(document_id=N) spends it deliberately. The caption is
     load-bearing: filenames like 'download (13)' say nothing."""
     try:
         m = json.loads(meta_raw or '{}')
@@ -2954,7 +2954,7 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
                 lines.extend(shown)
                 more = len(photos) - len(shown)
                 tail = f"; {more} more behind this search" if more else ""
-                lines.append(f'  [image_view("doc:N") shows a photo{tail}]')
+                lines.append(f'  [memory_view_image(document_id=N) shows a photo{tail}]')
     return '\n'.join(lines), True
 
 
@@ -3015,7 +3015,7 @@ def read_document_text(scope, doc_id, page=None, around=None, start=None,
 
 def image_source(scope, doc_id, private_key=None):
     """(path, label) of a library image — core.images' `doc:<N>` lane (the
-    image_view tool; replaced view_image 2026-09-09). label = the photo line
+    memory_view_image tool; replaced view_image 2026-09-09). label = the photo line
     (caption · date · place · people) + notes, so a look carries its context.
     LookupError carries the honest refusal (not hers / not an image / keyed
     without the word / file gone); the caller shows it verbatim."""
@@ -3090,7 +3090,7 @@ def save_image(scope, source, topic, caption=None, private_key=None):
     with get_connection() as conn:
         title = conn.execute('SELECT title FROM documents WHERE id = ?', (doc_id,)).fetchone()[0]
     keyed = ' (private)' if private_key else ''
-    return f'Saved [doc {doc_id}] "{title}" under ▸ {cname}{keyed}. image_view("doc:{doc_id}") shows it.', True
+    return f'Saved [doc {doc_id}] "{title}" under ▸ {cname}{keyed}. memory_view_image(document_id={doc_id}) shows it.', True
 
 
 def catalog_text(scope):

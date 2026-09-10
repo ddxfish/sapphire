@@ -77,8 +77,11 @@ class OpenAIResponsesProvider(BaseProvider):
     
     @property
     def supports_images(self) -> bool:
-        """Responses API supports multimodal."""
-        return True
+        """Responses API models are vision-capable by default — but the per-
+        provider `supports_images` flag (the vision checkbox) wins when set,
+        like every other provider. 2026-09-10."""
+        override = self.config.get('supports_images')
+        return True if override is None else bool(override)
     
     def health_check(self) -> bool:
         """Reachability probe via models.list(). ANY HTTP status response (4xx/5xx)
@@ -158,10 +161,18 @@ class OpenAIResponsesProvider(BaseProvider):
                                     "text": block.get('text', '')
                                 })
                             elif block.get('type') == 'image':
-                                resp_content.append({
-                                    "type": "input_image",
-                                    "image_url": f"data:{block.get('media_type', 'image/jpeg')};base64,{block.get('data', '')}"
-                                })
+                                # Only when the vision checkbox (supports_images) is on —
+                                # a text-only model 400s on an image item (2026-09-10).
+                                if self.supports_images:
+                                    resp_content.append({
+                                        "type": "input_image",
+                                        "image_url": f"data:{block.get('media_type', 'image/jpeg')};base64,{block.get('data', '')}"
+                                    })
+                                else:
+                                    resp_content.append({
+                                        "type": "input_text",
+                                        "text": "[image not sent: this model has no vision]"
+                                    })
                     input_items.append({
                         "type": "message",
                         "role": role,

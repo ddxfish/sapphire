@@ -243,6 +243,72 @@ def turn_spans(messages: List[Dict[str, Any]]) -> List[tuple]:
             for k, s in enumerate(starts)]
 
 
+_IMG_MARKER_RE = re.compile(r'<<IMG::tool:([^>]+)>>')
+_REPLAY_NOTE = ("[The image(s) that tool call returned, as shown to you and the user "
+                "at the time. Not a new message from the user.]")
+
+
+def _replay_images(msgs, refs, window, loader):
+    """The vision window. For the last `window` user turns, re-attach what the
+    model saw live: a user row's pasted images as blocks on that row; a tool
+    batch's visible images as ONE pseudo-user message after the batch (the
+    live cycle's _inject_tool_images shape, so providers see a familiar
+    transcript). Older turns keep text + receipts. refs[i] per msg =
+    [('id', tool_image_id) | ('inline', base64, media_type)]; loader(id) →
+    (bytes, media_type) | None (stashed/hidden/missing images stay out)."""
+    import base64 as _b64
+    start, seen = len(msgs), 0
+    for i in range(len(msgs) - 1, -1, -1):
+        if msgs[i]["role"] == "user":
+            seen += 1
+            start = i
+            if seen >= window:
+                break
+
+    def blocks(items):
+        out = []
+        for ref in items:
+            if ref[0] == 'inline':
+                out.append({"type": "image", "data": ref[1], "media_type": ref[2]})
+                continue
+            got = loader(ref[1])
+            if got:
+                out.append({"type": "image", "data": _b64.b64encode(got[0]).decode('ascii'),
+                            "media_type": got[1] or 'image/jpeg'})
+        return out
+
+    def flush(pending):
+        return {"role": "user", "content": [{"type": "text", "text": _REPLAY_NOTE}] + pending}
+
+    out, pending = list(msgs[:start]), []
+    for m, r in zip(msgs[start:], refs[start:]):
+        if m["role"] != "tool" and pending:
+            out.append(flush(pending))
+            pending = []
+        if m["role"] == "user" and r:
+            b = blocks(r)
+            if b:
+                text = m.get("content") or ""
+                m = dict(m, content=([{"type": "text", "text": text}] if text else []) + b)
+        elif m["role"] == "tool" and r:
+            pending.extend(blocks(r))
+        out.append(m)
+    if pending:
+        out.append(flush(pending))
+    return out
+
+
+_UI_MARKER_RE = re.compile(r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*')
+_LIVE_IMAGE_RE = re.compile(
+    r'<<IMG::tool:([^>]+)>>|\bimg:([A-Za-z0-9][\w-]*(?:\.[A-Za-z0-9]+)*)')
+
+
+def _live_image_ids(text: str) -> set:
+    """Every tool_images id a message text keeps alive: UI markers and img:
+    handles alike (a trailing '.' at a sentence end is not part of the id)."""
+    return {a or b for a, b in _LIVE_IMAGE_RE.findall(text or '')}
+
+
 def _extract_thinking_from_content(content: str) -> tuple:
     """
     Extract thinking from content that uses <think> tags.
@@ -461,7 +527,9 @@ class ConversationHistory:
         reserved_tokens: int = 0,
         provider: str = None,
         in_tool_cycle: bool = False,
-        context_limit: int = None
+        context_limit: int = None,
+        image_window: int = 0,
+        image_loader=None,
     ) -> List[Dict[str, Any]]:
         """
         Get messages formatted for LLM with TRIMMING applied.
@@ -474,6 +542,14 @@ class ConversationHistory:
                 the global CONTEXT_LIMIT setting. Continuity tasks that carry
                 their own limit (the librarian's night sessions) pass it here —
                 before this, the global setting silently capped them.
+            image_window: the vision window (IMAGE_MEMORY_TURNS) — re-attach,
+                for the last N user turns, the images the model saw live:
+                pasted images on their user row, a tool batch's visible images
+                as the pseudo-user message the live cycle appended. 0 = text
+                only (every image reaches the model only in the turn it
+                arrived). Text-only providers strip the blocks at conversion.
+            image_loader: id → (bytes, media_type) | None — the manager's
+                visible_tool_image (visible=1 rows only). None = no window.
         
         Notes:
             - Thinking is NEVER sent to LLMs (they don't need previous reasoning)
@@ -482,9 +558,11 @@ class ConversationHistory:
             - Set CONTEXT_LIMIT to 0 to disable token-based trimming
         """
         msgs = []
+        refs = []          # per llm_msg: the images that message carried live
         
         for msg in self.messages:
             role = msg["role"]
+            refs_here = []
             
             if role == "assistant":
                 # Get clean content (no thinking)
@@ -535,6 +613,8 @@ class ConversationHistory:
                     "name": msg.get("name", "tool"),
                     "content": msg.get("content", "")
                 }
+                if isinstance(llm_msg["content"], str):
+                    refs_here = [('id', i) for i in _IMG_MARKER_RE.findall(llm_msg["content"])]
                 
             elif role == "user":
                 content = msg.get("content", "")
@@ -550,6 +630,19 @@ class ConversationHistory:
                                 from core.chat.chat import _ext_to_lang
                                 lang = _ext_to_lang(block.get('filename', ''))
                                 text_parts.append(f"```{lang}\n# {block['filename']}\n{block.get('text', '')}\n```")
+                            elif block.get('type') == 'image':
+                                # A pasted image: the row keeps its handle (image
+                                # upgrade 2026-09-10) — the receipt line stays in
+                                # the text for every turn; the pixels come back
+                                # inside the vision window. Legacy rows carry the
+                                # base64 inline — replayable, no handle to name.
+                                handle = str(block.get('handle') or '')
+                                if handle.startswith('img:'):
+                                    refs_here.append(('id', handle[4:]))
+                                    text_parts.append(f"(image {handle})")
+                                elif block.get('data'):
+                                    refs_here.append(('inline', block['data'],
+                                                      block.get('media_type') or 'image/jpeg'))
                         elif isinstance(block, str):
                             text_parts.append(block)
                     content = '\n\n'.join(text_parts).strip()
@@ -559,15 +652,18 @@ class ConversationHistory:
                 # System or other - pass through
                 llm_msg = {"role": role, "content": msg.get("content", "")}
 
-            # <<TYPE::data>> markers (tool/event images, files) are UI-only.
-            # The live tool cycle strips them from its wire copy, but history
-            # replay didn't — every later turn re-sent them to the LLM as
-            # literal text. Same pattern as strip_ui_markers. 2026-08-09.
+            # <<TYPE::data>> markers (tool/event images, files) and the GALLERY
+            # marker (a tool's tile list for the browser) are UI-only. The live
+            # tool cycle strips them from its wire copy, but history replay
+            # didn't — every later turn re-sent them to the LLM as literal
+            # text (2026-08-09 for <<>>; the gallery JSON rode along unnoticed
+            # until 2026-09-10). Same pattern as strip_ui_markers.
             c = llm_msg.get("content")
-            if isinstance(c, str) and '<<' in c:
-                llm_msg["content"] = re.sub(r'<<[A-Z]+::[^>]+>>\s*', '', c).strip()
+            if isinstance(c, str) and ('<<' in c or '<!--GALLERY:' in c):
+                llm_msg["content"] = _UI_MARKER_RE.sub('', c).strip()
 
             msgs.append(llm_msg)
+            refs.append(refs_here)
         
         # TRIMMING STEP 1: Turn-based trimming (skip if max_history is 0)
         max_history = getattr(config, 'LLM_MAX_HISTORY', 30)
@@ -583,6 +679,13 @@ class ConversationHistory:
                     if msgs[0]["role"] == "user":
                         removed_users += 1
                     msgs.pop(0)
+                    refs.pop(0)
+
+        # VISION WINDOW (image upgrade 2026-09-10): after the turn trim, before
+        # the token trim — so the budget below sees the replayed images
+        # (count_message_tokens ~1.5k each) and evicts older TEXT to fit them.
+        if image_window > 0 and image_loader and any(refs):
+            msgs = _replay_images(msgs, refs, image_window, image_loader)
         
         # TRIMMING STEP 2: Token-based trimming (skip if context_limit is 0)
         if context_limit is None:
@@ -602,15 +705,17 @@ class ConversationHistory:
             # above at L122-160) handles dict-typed multimodal blocks
             # correctly and excludes images by default. Wildcard scout
             # 2026-05-07 multimodal #1.
+            # include_images=True: the only image blocks left in msgs are the
+            # vision window's (deliberately re-attached) — they must cost.
             total_tokens = sum(
-                count_message_tokens(m.get("content", ""), include_images=False)
+                count_message_tokens(m.get("content", ""), include_images=True)
                 for m in msgs
             )
 
             while total_tokens > effective_limit and len(msgs) > 1:
                 removed = msgs.pop(0)
                 total_tokens -= count_message_tokens(
-                    removed.get("content", ""), include_images=False
+                    removed.get("content", ""), include_images=True
                 )
 
         # Clean up orphaned tool results at the front.
@@ -1251,7 +1356,8 @@ class ChatSessionManager:
                         chat_name TEXT NOT NULL,
                         data BLOB NOT NULL,
                         media_type TEXT NOT NULL DEFAULT 'image/jpeg',
-                        created_at TEXT NOT NULL
+                        created_at TEXT NOT NULL,
+                        visible INTEGER NOT NULL DEFAULT 1
                     )
                 """)
 
@@ -1347,6 +1453,13 @@ class ChatSessionManager:
                 # = pre-encryption legacy, swept at every unlock.
                 if "vaulted" not in existing_cols:
                     conn.execute("ALTER TABLE chats ADD COLUMN vaulted INTEGER NOT NULL DEFAULT 0")
+                # tool_images.visible (image upgrade 2026-09-10): 1 = the model
+                # saw it live, so the vision window may replay it; 0 = stashed
+                # by a tool for the browser + handles only (search hits behind
+                # a contact sheet) — never replayed. Pre-column rows read as 1.
+                img_cols = {r[1] for r in conn.execute("PRAGMA table_info(tool_images)")}
+                if "visible" not in img_cols:
+                    conn.execute("ALTER TABLE tool_images ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
 
                 conn.commit()
             logger.debug(f"Database initialized at {self._db_path}")
@@ -4061,10 +4174,16 @@ class ChatSessionManager:
 
     def get_messages_for_llm(self, reserved_tokens: int = 0, provider: str = None) -> List[Dict[str, str]]:
         """Get messages for LLM with trimming applied."""
+        try:
+            window = max(0, int(getattr(config, 'IMAGE_MEMORY_TURNS', 0) or 0))
+        except (TypeError, ValueError):
+            window = 0
         return self._effective_chat().get_messages_for_llm(
             reserved_tokens,
             provider=provider,
-            in_tool_cycle=self._in_tool_cycle
+            in_tool_cycle=self._in_tool_cycle,
+            image_window=window,
+            image_loader=self.visible_tool_image,
         )
 
     def get_turn_count(self) -> int:
@@ -4324,8 +4443,10 @@ class ChatSessionManager:
 
     def _prune_orphaned_tool_images(self, chat_name: str) -> int:
         """Delete tool_images rows for this chat whose IDs are no longer
-        referenced by any message content. Called after any message-removal
-        path. Without this, image blobs accumulate forever (Scout 1 finding
+        referenced by any message content — a `<<IMG::tool:id>>` marker OR an
+        `img:id` handle (receipt lines, a tool's numbered list, the GALLERY
+        marker's items — stashed images have no UI marker, only the handle;
+        image upgrade 2026-09-10). Called after any message-removal path. Without this, image blobs accumulate forever (Scout 1 finding
         2026-04-19: DB bloat at 100KB–2MB per image × heavy-use chats).
         Returns count of rows deleted.
         """
@@ -4361,11 +4482,11 @@ class ChatSessionManager:
                                             f"vaulted rows unreadable (sealed)")
                                 return 0
                             v = dec
-                        live_ids.update(re.findall(r'<<IMG::tool:([^>]+)>>', v))
+                        live_ids.update(_live_image_ids(v))
                 else:
                     msgs_blob = row["messages"] or "[]"
                     # Extract all live IMG IDs from message content
-                    live_ids = set(re.findall(r'<<IMG::tool:([^>]+)>>', msgs_blob))
+                    live_ids = _live_image_ids(msgs_blob)
                 # Find stored image IDs for this chat that aren't in live_ids
                 stored = conn.execute(
                     "SELECT id FROM tool_images WHERE chat_name = ?", (chat_name,)
@@ -4989,8 +5110,11 @@ class ChatSessionManager:
         return False
 
     def save_tool_image(self, image_id: str, data: bytes, media_type: str = "image/jpeg",
-                        chat_name: str = None) -> bool:
+                        chat_name: str = None, visible: bool = True) -> bool:
         """Save a tool-returned image blob to the database.
+
+        visible: the model saw these pixels live (replayable by the vision
+        window). core.images.stash() writes False for handles-only images.
 
         chat_name defaults to the active chat. The continuity executor runs
         against a target chat WITHOUT switching active, so it passes chat_name
@@ -5016,9 +5140,11 @@ class ChatSessionManager:
                 if self._is_vaulted_conn(conn, owner):
                     payload = self._enc_value_bytes(data)
                 conn.execute(
-                    """INSERT OR REPLACE INTO tool_images (id, chat_name, data, media_type, created_at)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (image_id, owner, payload, media_type, datetime.now().isoformat())
+                    """INSERT OR REPLACE INTO tool_images
+                       (id, chat_name, data, media_type, created_at, visible)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (image_id, owner, payload, media_type, datetime.now().isoformat(),
+                     1 if visible else 0)
                 )
                 conn.commit()
             return True
@@ -5064,6 +5190,22 @@ class ChatSessionManager:
         except Exception as e:
             logger.error(f"Failed to get tool image '{image_id}': {e}")
             return None
+
+    def visible_tool_image(self, image_id: str) -> Optional[tuple]:
+        """(bytes, media_type) for the vision window — only an image the model
+        saw live (visible=1); None for a stashed handle, a sealed/hidden owner,
+        or a missing row. 2026-09-10."""
+        self._ensure_db()
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT visible FROM tool_images WHERE id = ?",
+                                   (image_id,)).fetchone()
+        except Exception as e:
+            logger.debug(f"visible_tool_image '{image_id}': {e}")
+            return None
+        if not row or not row[0]:
+            return None
+        return self.get_tool_image(image_id)
 
     def last_tool_image_id(self, chat_name: str = None) -> Optional[str]:
         """Newest tool image id for a chat (default: the effective chat) — the

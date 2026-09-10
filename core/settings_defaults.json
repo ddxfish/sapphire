@@ -258,6 +258,11 @@
     "SPICE_DELIVERY": "ghost",
     "IMAGE_UPLOAD_MAX_WIDTH": 1920
   },
+
+  "images": {
+    "IMAGE_MEMORY_TURNS": 3,
+    "WEB_IMAGES_SAFESEARCH": "off"
+  },
   
   "tools": {
     "TOOL_HISTORY_MAX_ENTRIES": 0,

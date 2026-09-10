@@ -440,15 +440,19 @@ class OpenAICompatProvider(BaseProvider):
             
             # Normalize content - handle multimodal content lists
             if isinstance(content, list):
-                # Check if content has images
-                has_images = any(
-                    isinstance(b, dict) and b.get('type') == 'image' 
+                # Images ride only when the vision checkbox (supports_images) is
+                # on. Pre-fix this "always sent images and let the provider
+                # reject" — with the vision window replaying last turn's contact
+                # sheet, a text-only model 400'd on the very next message
+                # (Krem, 2026-09-10). Off → the placeholder branch below, like
+                # the Anthropic converter.
+                has_images = self.supports_images and any(
+                    isinstance(b, dict) and b.get('type') == 'image'
                     for b in content
                 )
                 
                 if has_images:
-                    # Convert to OpenAI multimodal format — always send images,
-                    # let the provider reject if model doesn't support vision
+                    # Convert to OpenAI multimodal format
                     openai_content = []
                     for block in content:
                         if isinstance(block, dict):
@@ -483,8 +487,8 @@ class OpenAICompatProvider(BaseProvider):
                                 # Tool use blocks are handled via tool_calls field
                                 continue
                             elif block.get('type') == 'image':
-                                # Provider doesn't support images - add placeholder
-                                text_parts.append('[image]')
+                                # Vision off: the pixels stay home, the model is told why
+                                text_parts.append('[image not sent: this model has no vision]')
                         elif isinstance(block, str):
                             text_parts.append(block)
                     content = ' '.join(text_parts).strip()

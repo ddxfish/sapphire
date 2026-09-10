@@ -227,6 +227,7 @@ function await_createCodeBlock() {
 
 // Image modal functions (defined before createUserImageThumbnails which uses them)
 let modalGalleryImages = [];
+let modalFallbacks = [];
 let modalCurrentIndex = -1;
 
 const updateModalNav = () => {
@@ -255,7 +256,7 @@ const navigateModal = (delta) => {
     if (newIndex < 0 || newIndex >= modalGalleryImages.length) return;
     modalCurrentIndex = newIndex;
     const modalImg = document.getElementById('image-modal-img');
-    if (modalImg) modalImg.src = modalGalleryImages[modalCurrentIndex];
+    if (modalImg) modalImg.src = modalGalleryImages[modalCurrentIndex];   // onerror → fallback
     updateModalNav();
 };
 
@@ -266,17 +267,25 @@ export const closeImageModal = () => {
     modal.style.display = 'none';
     document.body.style.overflow = '';
     modalGalleryImages = [];
+    modalFallbacks = [];
     modalCurrentIndex = -1;
 };
 
-export const openImageModal = (src, galleryImages = null, currentIndex = -1) => {
+// fallbacks: one per galleryImages entry — shown when the full-size source
+// won't load (a web host refusing the proxied original; the tile is ours).
+export const openImageModal = (src, galleryImages = null, currentIndex = -1, fallbacks = null) => {
     const modal = document.getElementById('image-modal');
     const modalImg = document.getElementById('image-modal-img');
     if (!modal || !modalImg) return;
 
-    modalImg.src = src;
     modalGalleryImages = galleryImages || [];
+    modalFallbacks = fallbacks || [];
     modalCurrentIndex = currentIndex;
+    modalImg.onerror = () => {
+        const fb = modalFallbacks[modalCurrentIndex];
+        if (fb && modalImg.src !== fb && !modalImg.src.endsWith(fb)) modalImg.src = fb;
+    };
+    modalImg.src = src;
 
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -311,7 +320,10 @@ export const createUserImageThumbnails = (images) => {
     
     images.forEach(img => {
         const imgEl = document.createElement('img');
-        imgEl.src = `data:${img.media_type};base64,${img.data}`;
+        // Stored images (image upgrade 2026-09-10) come as {id}; the live send
+        // and legacy rows still carry base64.
+        imgEl.src = img.id ? `/api/tool-image/${encodeURIComponent(img.id)}`
+                           : `data:${img.media_type};base64,${img.data}`;
         imgEl.className = 'user-image-thumb';
         imgEl.alt = 'Attached image';
         imgEl.onclick = (e) => {

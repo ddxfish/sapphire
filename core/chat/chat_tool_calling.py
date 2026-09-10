@@ -61,7 +61,7 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     if keep_img:
         marker_pattern = r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*'
     else:
-        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:\[[^\n]*\]-->\s*'
+        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
 
     # Remove all markers
     clean = re.sub(marker_pattern, '', content)
@@ -289,16 +289,18 @@ def _extract_tool_images(result, history=None, provider=None, function_name=None
 
 
 def _save_tool_image(img, history=None):
-    """Save a base64 tool image to the chat history database. Returns image ID or None."""
+    """Save a base64 tool image to the chat history database. Returns image ID or None.
+    visible = the model was meant to see it (not display_only) — the vision
+    window replays only those. Ids + the history-less disk lane come from
+    core.images so stash() and this write the same shape. 2026-09-10."""
     import base64
+    from core import images as ci
 
     try:
-        img_id = uuid.uuid4().hex[:12]
         media_type = img.get("media_type", "image/jpeg")
-        ext = "png" if "png" in media_type else "jpg"
-        full_id = f"{img_id}.{ext}"
-
+        full_id = ci.new_id(media_type)
         img_bytes = base64.b64decode(img["data"])
+        visible = not img.get("display_only")
 
         if history and hasattr(history, 'save_tool_image'):
             # EFFECTIVE chat, not active: a phone/background stream's image
@@ -308,23 +310,12 @@ def _save_tool_image(img, history=None):
             owner = None
             if hasattr(history, '_effective_chat_name'):
                 owner = history._effective_chat_name()
-            history.save_tool_image(full_id, img_bytes, media_type, chat_name=owner)
+            history.save_tool_image(full_id, img_bytes, media_type, chat_name=owner, visible=visible)
             logger.info(f"[TOOL] Saved tool image to DB: {full_id}")
         else:
             # Fallback to disk if no history available (isolated tool calls)
-            from pathlib import Path
-            img_dir = Path(__file__).parent.parent.parent / "user" / "tool_images"
-            img_dir.mkdir(parents=True, exist_ok=True)
-            (img_dir / full_id).write_bytes(img_bytes)
+            ci._disk_put(full_id, img_bytes)
             logger.info(f"[TOOL] Saved tool image to disk (no history): {full_id}")
-            # Bound the fallback dir — it had no GC and grew forever
-            # (longevity: every history-less tool image since day one).
-            try:
-                files = sorted(img_dir.iterdir(), key=lambda p: p.stat().st_mtime)
-                for old in files[:-300]:
-                    old.unlink()
-            except Exception as gc_err:
-                logger.debug(f"[TOOL] tool_images GC skipped: {gc_err}")
 
         return full_id
     except Exception as e:

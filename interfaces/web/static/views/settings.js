@@ -18,6 +18,7 @@ import privacyTab from './settings-tabs/privacy.js';
 import wakewordTab from './settings-tabs/wakeword.js';
 import conversationTab from './settings-tabs/conversation.js';
 import pluginsTab from './settings-tabs/plugins.js';
+import imagesTab from './settings-tabs/images.js';
 
 import backupTab from './settings-tabs/backup.js';
 import systemTab from './settings-tabs/system.js';
@@ -28,7 +29,7 @@ import storeTab from './settings-tabs/store-tab.js';
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
 import { snapScroll } from '../shared/dom-guard.js';
 
-const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
+const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
 
 let container = null;
 let activeTab = 'dashboard';
@@ -489,6 +490,16 @@ function renderInput(key, value, type) {
         const opts = [
             ['ghost',  'Ghost message — labeled app context, cache-friendly (default)'],
             ['system', 'System prompt — unattributed, feels self-chosen; re-caches on rotation'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
+    if (key === 'WEB_IMAGES_SAFESEARCH') {
+        const opts = [
+            ['off',      'Off — everything the engine has (default)'],
+            ['moderate', 'Moderate — hides explicit images'],
+            ['strict',   'Strict — hides explicit images and text'],
         ];
         return `<select id="${id}" data-key="${key}">
             ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}

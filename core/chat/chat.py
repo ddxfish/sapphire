@@ -595,8 +595,15 @@ class LLMChat:
             logger.warning(f"_resolve_toolset_tools('{toolset_name}') failed: {e}")
             return None
 
-    def _build_base_messages(self, user_input: str, images: list = None, files: list = None):
+    def _build_base_messages(self, user_input: str, images: list = None, files: list = None,
+                             image_handles: list = None):
         system_prompt, user_name, dynamic_context = self._get_system_prompt()
+
+        # Receipts for pasted images (the store's img: handles) ride the wire
+        # text too, so she can hand THIS turn's image to any image tool.
+        receipts = [f"(image {h})" for h in (image_handles or []) if h]
+        if receipts:
+            user_input = "\n".join(([user_input] if user_input else []) + receipts)
 
         # Flatten files into user_input as fenced code blocks
         if files:
