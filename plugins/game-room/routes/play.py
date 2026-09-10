@@ -433,18 +433,20 @@ def cadence_pause(body=None, query=None, **_):
 
 
 def cadence_poke(body=None, query=None, **_):
-    """A game moment (event mode fires on it, no sooner than the min gap;
-    timer mode pulls its next turn forward to that floor)."""
+    """A game moment (event mode fires on it — every Nth when the spine says
+    so — no sooner than the min gap; timer mode pulls its next turn forward
+    to that floor). `force` = a terminal moment that skips the count."""
     body = body or {}
     session = _session(query, body)
     if not session:
         return ({'error': 'session required'}, 400)
     note = str(body.get('note') or '').strip()[:400]
+    force = bool(body.get('force'))
     if note:
         from core import perception
         percept = perception.peek(session) or {}
         perception.deposit(session, frames=percept.get('frames'), text=note, source='poke')
-    st = _cadence().poke(session, note)
+    st = _cadence().poke(session, note, force=force)
     return {'status': 'ok', 'cadence': st or {'armed': False}}
 
 

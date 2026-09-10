@@ -465,7 +465,7 @@ function makeCtx(me) {
         deposit: (o) => deposit(me, o),
         // a game moment — event mode fires on it (no sooner than the min gap).
         // The frame of THAT moment rides along when the game shows her the screen.
-        poke: (note) => pokeMoment(me, note),
+        poke: (note, opts) => pokeMoment(me, note, opts),
         cadence: () => me.cad,
     };
 }
@@ -1084,6 +1084,8 @@ function stopCadence(me) {
     me.cad = null;
 }
 
+const ordinal = n => n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[(n % 100 > 10 && n % 100 < 14) ? 0 : n % 10] || 'th');
+
 function paintCadence(me) {
     const pill = me.root?.querySelector('#gr-cad');
     const text = me.root?.querySelector('#gr-cad-text');
@@ -1096,7 +1098,11 @@ function paintCadence(me) {
     const moments = (me.spec.moments || []).join(', ');
     if (c.paused) label = 'her turns paused';
     else if (c.running) label = 'her turn…';
-    else if (c.mode === 'event') label = c.pending ? 'her turn: soon' : `her turns: ${moments || 'on game events'}`;
+    else if (c.mode === 'event') {
+        label = c.pending ? 'her turn: soon' : `her turns: ${moments || 'on game events'}`;
+        // every-N: the count so far rides the pill — "· every 3rd (1/3)"
+        if (!c.pending && c.every > 1) label += ` · every ${ordinal(c.every)}${c.pokes ? ` (${c.pokes}/${c.every})` : ''}`;
+    }
     else label = c.next_in != null ? `her turn in ${Math.ceil(c.next_in)}s` : 'her turns: on';
     if (c.skips) label += ` (waited ${c.skips}×)`;
     text.textContent = label;
@@ -1110,13 +1116,16 @@ function paintCadence(me) {
 // time. EVENT rooms capture at the moment instead (pokeMoment). A board may
 // deposit its own view (ctx.deposit).
 
-async function pokeMoment(me, note) {
+// opts.force = a terminal moment (the castle fell) — skips the every-N count.
+async function pokeMoment(me, note, opts = {}) {
     if (R !== me) return;
     if (me.cadSpec?.send_frames) {
         const f = grabFrame(me);
         if (f) await deposit(me, { frames: [f], text: note || '' });
     }
-    return me.ctx.api('room/cadence/poke', 'POST', { note: note || '' }).catch(() => {});
+    return me.ctx.api('room/cadence/poke', 'POST', { note: note || '', force: !!opts.force })
+        .then(r => { if (R === me && r?.cadence?.armed) { me.cad = r.cadence; paintCadence(me); } })
+        .catch(() => {});
 }
 
 function grabFrame(me) {

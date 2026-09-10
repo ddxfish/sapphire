@@ -56,8 +56,8 @@ def world(monkeypatch):
             calls.append(('pause', chat, paused))
             return {'armed': True, 'paused': paused}
 
-        def poke(self, chat, note=None):
-            calls.append(('poke', chat, note))
+        def poke(self, chat, note=None, force=False):
+            calls.append(('poke', chat, note, force))
             return {'armed': True, 'pending': True}
 
         def fire_once(self, chat, text, images=None, speak=None, source=None):
@@ -71,7 +71,7 @@ def world(monkeypatch):
 def test_cadence_spec_reads_the_resolved_spine(world):
     spec = gc.cadence_spec('tbl')
     assert spec == {'mode': 'event', 'min_s': 15, 'max_s': 180, 'paused': False,
-                    'send_frames': True, 'frames_per_tick': 6, 'speak': 'browser'}
+                    'send_frames': True, 'frames_per_tick': 6, 'every': 1, 'speak': 'browser'}
     assert gc.cadence_spec('pk')['mode'] == 'turn' and gc.cadence_spec('pk')['send_frames'] is False
 
 
@@ -109,7 +109,7 @@ def test_poke_deposits_the_note_and_pokes(world):
     from core import perception
     perception.clear('tbl')
     out = play.cadence_poke(body={'session': 'tbl', 'note': 'Wave 7 cleared.'})
-    assert out['cadence']['pending'] is True and world.calls[-1] == ('poke', 'tbl', 'Wave 7 cleared.')
+    assert out['cadence']['pending'] is True and world.calls[-1] == ('poke', 'tbl', 'Wave 7 cleared.', False)
     assert perception.take('tbl')['text'] == 'Wave 7 cleared.'
 
 
@@ -127,3 +127,13 @@ def test_session_end_disarms_and_runs_the_summary(world, monkeypatch):
     world.calls.clear()
     assert play.session_end(body={'session': 'tbl'}) == {'status': 'ok', 'summary': False}
     assert [c[0] for c in world.calls] == ['disarm']
+
+
+def test_poke_route_carries_force_and_every_rides_the_spec(world, monkeypatch):
+    from routes import play
+    play.cadence_poke(body={'session': 'tbl', 'note': 'The castle fell.', 'force': True})
+    assert world.calls[-1] == ('poke', 'tbl', 'The castle fell.', True)
+    import core.games_registry as reg
+    monkeypatch.setattr(reg, 'list_games', lambda: [
+        {'id': 'towerd', 'room_defaults': {'cadence_mode': 'event', 'cadence_every': 3}}])
+    assert gc.cadence_spec('tbl')['every'] == 3

@@ -294,3 +294,12 @@ def test_show_in_filters_the_sidebars_not_the_resolver(store, monkeypatch):
     assert gc.effective('doom')['new_session_toolset'] == 'none'
     from routes import play
     assert 'new_session_toolset' in {f['key'] for f in play.get_room_settings()['schema']}
+
+
+def test_cadence_every_sits_with_the_nature(store):
+    k = _key('cadence_every')
+    assert k['scope'] == ['game', 'session'] and k['show_in'] == ['room']
+    assert k['reveal_if'] == {'key': 'cadence_mode', 'is': ['event']}
+    assert gc.effective()['cadence_every'] == 1
+    gc.save_game_room_overrides('doom', {'cadence_every': 4})
+    assert gc.effective('doom')['cadence_every'] == 4

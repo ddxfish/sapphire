@@ -464,6 +464,13 @@ ROOM_KEYS = [
     {'key': 'cadence_max', 'label': 'max gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
      'min': 5, 'max': 3600, 'step': 5, 'default': 180, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
      'help': 'The longest wait before one of her unprompted turns. Never below the min.'},
+    # every-N (Krem 2026-09-10, Dark Horse): his waves take 30s, she answers
+    # slower than that — per event floods, per move is poker's shape, so an
+    # event game meters itself. Sits with the nature (no room layer, room-
+    # shown only) and reveals only in event mode.
+    {'key': 'cadence_every', 'label': 'every N events', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'is': ['event']},
+     'min': 1, 'max': 50, 'default': 1, 'tab': 'Cadence', 'scope': ['game', 'session'], 'show_in': ['room'],
+     'help': "Game-events mode: she takes a turn on every Nth moment the game posts (every 3rd wave), not each one — for a game whose moments come faster than she can answer. A game's terminal moments (the castle falls, the run ends) always come through."},
     {'key': 'cadence_paused', 'label': 'paused', 'type': 'checkbox',
      'default': False, 'tab': 'Cadence', 'scope': ['session'],
      'help': 'No unprompted turns in this session while on.'},
@@ -712,6 +719,7 @@ def cadence_spec(session):
             'min_s': eff.get('cadence_min') or 60, 'max_s': eff.get('cadence_max') or 180,
             'paused': bool(eff.get('cadence_paused')), 'send_frames': bool(eff.get('send_frames')),
             'frames_per_tick': int(eff.get('frames_per_tick') or 6),
+            'every': int(eff.get('cadence_every') or 1),
             'speak': eff.get('tts_route') or 'browser'}
 
 

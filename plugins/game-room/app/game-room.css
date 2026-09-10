@@ -654,8 +654,14 @@
 .td-stat b { color: var(--text, #e6e6ef); }
 .td-flex { flex: 1 1 auto; }
 .td-auto { display: flex; align-items: center; gap: 5px; font-size: 0.85em; color: var(--text-secondary, #8a8fa3); cursor: pointer; }
-.td-next { font-size: 0.8em; color: var(--text-secondary, #8a8fa3); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 22px; }
-.td-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--border, #2a3040); border-radius: 999px; background: var(--bg-primary, #0f1020); }
+/* One row, always (Krem 2026-09-10): a six-group wave used to wrap to two
+   rows and resize the whole board. Fixed height, no wrap, overflow hidden,
+   the right edge fades to nothing. Clustered groups sit side by side; the
+   arrows still mark release times. */
+.td-next { font-size: 0.8em; color: var(--text-secondary, #8a8fa3); display: flex; gap: 6px; flex-wrap: nowrap; align-items: center; height: 24px; overflow: hidden; white-space: nowrap;
+           mask-image: linear-gradient(to right, #000 88%, transparent); -webkit-mask-image: linear-gradient(to right, #000 88%, transparent); }
+.td-chip { display: inline-flex; flex: none; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--border, #2a3040); border-radius: 999px; background: var(--bg-primary, #0f1020); }
+.td-capn { margin-left: auto; padding-left: 8px; opacity: 0.65; font-size: 0.85em; }
 .td-chip i, .td-menu button i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .td-canvas-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
 #td-canvas { max-width: 100%; max-height: 100%; border-radius: 12px; border: 1px solid var(--border, #2a3040); }
@@ -699,9 +705,8 @@
 .td-card-sec { padding: 5px 8px 1px; font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary, #8a8fa3); }
 .td-card-delta { padding: 0 8px 5px; font-size: 0.83em; color: #7ee787; }
 .td-ticker-label { text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.08em; margin-right: 2px; }
-.td-col { display: inline-flex; flex-direction: column; gap: 3px; vertical-align: top; }
-.td-arrow { color: var(--text-muted, #565b6e); padding: 0 2px; }
-.td-next { align-items: flex-start; }
+.td-col { display: inline-flex; flex: none; gap: 4px; }
+.td-arrow { color: var(--text-muted, #565b6e); padding: 0 2px; flex: none; }
 
 /* targeting priority dial + see-through card */
 .td-menu { background: rgba(13, 15, 28, 0.82); backdrop-filter: blur(2.5px); }

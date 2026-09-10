@@ -330,3 +330,25 @@ def test_answer_with_thinking_speaks_only_the_words():
     assert out == 'Solid clear.' and published[-1][1]['text'] == 'Solid clear.'
     sysobj.tts.speak.assert_called_once_with('Solid clear.')
     llm.session_manager.remove_last_messages.assert_not_called()
+
+
+def test_event_every_n_pokes_and_force():
+    """Every-N (Dark Horse 2026-09-10): only the Nth poke since the last one
+    that became her turn is pending; `force` = a terminal moment that skips
+    the count; keepalive re-arms keep the count."""
+    cadence.arm('e', mode='event', min_s=1, max_s=1, every=3)
+    assert cadence.status('e')['every'] == 3 and cadence.status('e')['pokes'] == 0
+    assert cadence.poke('e', 'w1')['pending'] is False and cadence.status('e')['pokes'] == 1
+    assert cadence.poke('e', 'w2')['pending'] is False
+    st = cadence.poke('e', 'w3')
+    assert st['pending'] is True and st['pokes'] == 0                  # the 3rd is hers
+    cadence._records['e']['pending'] = None                            # (fired)
+    assert cadence.poke('e', 'w4')['pending'] is False
+    assert cadence.poke('e', 'the castle fell', force=True)['pending'] is True
+    cadence._records['e']['pending'] = None
+    cadence.poke('e', 'w5')
+    cadence.arm('e', mode='event', min_s=1, max_s=1, every=3)          # keepalive
+    assert cadence.status('e')['pokes'] == 1
+    # every=1 (the default) = every poke, as before
+    cadence.arm('f', mode='event', min_s=1, max_s=1)
+    assert cadence.poke('f', 'x')['pending'] is True

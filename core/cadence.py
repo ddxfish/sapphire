@@ -112,10 +112,11 @@ def default_prompt(percept):
 
 
 def arm(chat, *, mode='timer', min_s=60, max_s=180, paused=False, send_frames=False,
-        frames_per_tick=6, ttl=DEFAULT_TTL, owner=None, prompt=None, speak=None, title=None):
+        frames_per_tick=6, every=1, ttl=DEFAULT_TTL, owner=None, prompt=None, speak=None, title=None):
     """(Re)arm her unprompted turns on `chat`. Idempotent: an armed record
-    keeps its clock unless the range changed; the TTL always extends. Mode
-    'turn' disarms. Returns status()."""
+    keeps its clock (and its poke count) unless the range changed; the TTL
+    always extends. Mode 'turn' disarms. `every` = event mode fires on every
+    Nth poke (a wave game at every 3rd wave). Returns status()."""
     if not chat:
         return None
     mode = mode if mode in MODES else 'timer'
@@ -128,13 +129,14 @@ def arm(chat, *, mode='timer', min_s=60, max_s=180, paused=False, send_frames=Fa
         if fresh:
             rec = _records[chat] = {
                 'chat': chat, 'last_at': None, 'skips': 0, 'pending': None,
-                'running': False, 'next_at': None, 'fired': 0,
+                'running': False, 'next_at': None, 'fired': 0, 'pokes': 0,
             }
         range_changed = (not fresh) and (rec.get('min_s') != min_s or rec.get('max_s') != max_s or rec.get('mode') != mode)
         rec.update({
             'mode': mode, 'min_s': max(1.0, float(min_s)), 'max_s': max(1.0, float(max_s)),
             'paused': bool(paused), 'send_frames': bool(send_frames),
-            'frames_per_tick': int(frames_per_tick or 1), 'ttl_until': _now() + float(ttl),
+            'frames_per_tick': int(frames_per_tick or 1), 'every': max(1, int(every or 1)),
+            'ttl_until': _now() + float(ttl),
             'owner': owner, 'prompt': prompt, 'speak': speak, 'title': title,
         })
         if mode == 'timer' and (fresh or range_changed or rec['next_at'] is None):
@@ -170,14 +172,20 @@ def pause(chat, paused=True):
     return status(chat)
 
 
-def poke(chat, note=None):
+def poke(chat, note=None, force=False):
     """An event: 'a moment happened'. Event mode fires once the min gap has
-    passed since her last turn; timer mode pulls the next turn forward to
-    that same floor."""
+    passed since her last turn — on every Nth poke when armed with `every`
+    (the count runs from the last poke that became her turn); `force` marks
+    a terminal moment (the castle fell) that always comes through. Timer
+    mode pulls the next turn forward to that same floor."""
     with _lock:
         rec = _records.get(chat)
         if not rec:
             return None
+        if rec['mode'] == 'event' and not force and (rec['pokes'] + 1) % rec['every']:
+            rec['pokes'] += 1                 # counted, not yet her turn
+            return _status_locked(rec)
+        rec['pokes'] = 0
         rec['pending'] = str(note or '')[:400] or True
         if rec['mode'] == 'timer':
             floor = (rec['last_at'] or 0) + rec['min_s']
@@ -190,11 +198,15 @@ def status(chat):
         rec = _records.get(chat)
         if not rec:
             return {'armed': False, 'chat': chat}
-        nxt = rec['next_at']
-        return {
+        return _status_locked(rec)
+
+
+def _status_locked(rec):
+    chat, nxt = rec['chat'], rec['next_at']
+    return {
             'armed': True, 'chat': chat, 'mode': rec['mode'], 'paused': rec['paused'],
             'min_s': rec['min_s'], 'max_s': rec['max_s'], 'send_frames': rec['send_frames'],
-            'frames_per_tick': rec['frames_per_tick'],
+            'frames_per_tick': rec['frames_per_tick'], 'every': rec['every'], 'pokes': rec['pokes'],
             'next_in': (max(0.0, nxt - _now()) if (nxt and not rec['paused']) else None),
             'last_at': rec['last_at'], 'skips': rec['skips'], 'running': rec['running'],
             'pending': bool(rec['pending']), 'fired': rec['fired'],

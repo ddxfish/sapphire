@@ -727,4 +727,4 @@ COMMON PATTERNS:
 | Method | Path | Body / Query | Notes |
 |---|---|---|---|
 | POST | `/api/perception/{chat}` | `{frames: [{data, media_type}], text, source}` | Deposit what she should see next for `chat` (a game board, an mpv watcher). Latest wins; frames are model-only for the next unprompted turn, never persisted. 404 for an unknown or sealed chat. |
-| GET | `/api/cadence/{chat}` | — | The cadence organ's record for `chat`: `armed, mode (event\|timer), paused, next_in, last_at, skips, pending, fired, ttl_in`. Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`). |
+| GET | `/api/cadence/{chat}` | — | The cadence organ's record for `chat`: `armed, mode (event\|timer), paused, next_in, last_at, skips, pending, fired, every, pokes, ttl_in` (`every`/`pokes`: event mode fires on every Nth poke; the count since the last one that became her turn). Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`). |
