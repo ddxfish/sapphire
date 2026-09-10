@@ -181,10 +181,6 @@ def _clamp(v, default, lo, hi):
     return max(lo, min(n, hi)) if n else default
 
 
-def _marker(title, items):
-    return "<!--GALLERY:" + json.dumps({'title': title, 'items': items}) + "-->"
-
-
 def _memory_view_image(arguments):
     """image_id → a picture from this chat (no memory scope needed);
     document_id → one library image; query → the library's best pixel
@@ -222,22 +218,19 @@ def _memory_view_image(arguments):
     if not rows:
         why = '' if hits else ' (pixel search needs a vision-capable embedder; captions are searchable via search_memory)'
         return f"No library images match '{query}'{why}.", True
-    raws, lines, items = [], [], []
-    for i, r in enumerate(rows, 1):
+    entries = []
+    for r in rows:
         src, thumb, render, _ext = lib.image_paths(scope, r[0])
         pick = thumb or render or src
-        raws.append(pick.read_bytes() if pick else b'')
-        lines.append(f"{i}. {lib._photo_line(r[0], r[1], r[2], r[3]).strip()}")
-        items.append({'thumb': _ROUTE.format(did=r[0], what='thumb', scope=quote(scope)),
-                      'full': _ROUTE.format(did=r[0], what='file', scope=quote(scope)),
-                      'title': r[1] or ''})
+        entries.append({'raw': pick.read_bytes() if pick else None, 'stash': False,      # already stored: tiles off the route
+                        'thumb': _ROUTE.format(did=r[0], what='thumb', scope=quote(scope)),
+                        'full': _ROUTE.format(did=r[0], what='file', scope=quote(scope)),
+                        'title': r[1] or ''})
+    lines = [f"{i}. {lib._photo_line(r[0], r[1], r[2], r[3]).strip()}" for i, r in enumerate(rows, 1)]
+    images, tail = ci.gallery(f'library: {query}', entries)
     text = (f"{len(rows)} library image(s) for '{query}', best match first — numbered like the sheet; "
-            f"memory_view_image(document_id=N) for a close-up:\n" + "\n".join(lines))
-    if len(rows) == 1:
-        shaped, note = [ci.for_chat(raws[0])], "You're looking at it now."
-    else:
-        shaped, note = [ci.contact_sheet(raws)], f"You're looking at a contact sheet numbered 1-{len(rows)} in the order above."
-    return ci.result(f"{text}\n{note}\n{_marker(f'library: {query}', items)}", shaped), True
+            f"memory_view_image(document_id=N) for a close-up:\n" + "\n".join(lines) + "\n" + tail)
+    return (ci.result(text, images) if images else text), True
 
 
 def _local_view_images(arguments):
@@ -280,31 +273,26 @@ def _local_view_images(arguments):
         if ok and head and isinstance(out, dict):
             out['text'] = head + out['text']
         return out, ok
-    raws, lines, items = [], [], []
-    for i, q in enumerate(paths, 1):
+    entries, meta = [], []
+    for q in paths:
         try:
             r = ci.resolve(q)
             w, h = r.size
-            thumb = ci.for_chat(r.data, max_px=512)
+            entries.append({'raw': ci.for_chat(r.data, max_px=512), 'title': r.label})
+            meta.append((r.label, f"{w}x{h}", q))
         except ci.ImageError as e:
-            raws.append(b'')
-            lines.append(f"{i}. {q} — {e}")
-            continue
-        raws.append(thumb)
-        try:
-            handle = ci.stash(thumb)
-        except ci.ImageError as e:
-            logger.warning(f"[LIBRARY] local_view_images stash skipped: {e}")
-            handle = ''
-        lines.append(f"{i}. {r.label} — {w}x{h}{' — ' + handle if handle else ''}\n   {q}")
-        items.append({'handle': handle, 'title': r.label} if handle else {'thumb': '', 'title': r.label})
-    items = [it for it in items if it.get('handle') or it.get('thumb')]
-    if not any(raws):
-        return head + "None of those opened as images:\n" + "\n".join(lines), False
+            entries.append({'raw': None})
+            meta.append((q, str(e), None))
+    if not any(e['raw'] for e in entries):
+        return head + "None of those opened as images:\n" + "\n".join(
+            f"{i}. {m[0]} — {m[1]}" for i, m in enumerate(meta, 1)), False
+    images, tail = ci.gallery(title, entries)
+    lines = [f"{i}. {label} — {info}" + (f" — {e['handle']}" if e['handle'] else '') + (f"\n   {q}" if q else '')
+             for i, (e, (label, info, q)) in enumerate(zip(entries, meta), 1)]
     text = (head + f"{len(paths)} image(s) — numbered like the sheet; img: = a thumbnail kept in this chat "
-            f"(memory_view_image(image_id=...) to look again); memory_save_image(the path) keeps the original:\n" + "\n".join(lines))
-    note = f"You're looking at a contact sheet numbered 1-{len(paths)} in the order above."
-    return ci.result(f"{text}\n{note}\n{_marker(title, items)}", [ci.contact_sheet(raws)]), True
+            f"(memory_view_image(image_id=...) to look again); memory_save_image(the path) keeps the original:\n"
+            + "\n".join(lines) + "\n" + tail)
+    return ci.result(text, images), True
 
 
 def execute(function_name, arguments, config):

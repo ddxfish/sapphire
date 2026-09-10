@@ -6,6 +6,7 @@ mocked at core.net (rule 2: server fetches ride the facade).
 """
 import base64
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -211,3 +212,71 @@ def test_resolve_doc_errors(monkeypatch):
         ci.resolve('doc:7')
     with pytest.raises(ci.ImageError, match='not a library id'):
         ci.resolve('doc:abc')
+
+
+# ── gallery(): the one row-and-sheet builder (DRY lift 2026-09-10) ──────────
+
+def _stash_stub(monkeypatch):
+    calls = []
+
+    def fake(raw, media_type=None, *, visible=False, chat_name=None):
+        calls.append((raw, visible))
+        return f"img:g{len(calls)}.jpg"
+    monkeypatch.setattr(ci, 'stash', fake)
+    return calls
+
+
+def _marker(tail):
+    return json.loads(tail.split('<!--GALLERY:', 1)[1].rsplit('-->', 1)[0])
+
+
+def test_gallery_stashes_raw_into_handles_and_one_sheet(monkeypatch):
+    calls = _stash_stub(monkeypatch)
+    entries = [{'raw': _png(), 'title': 'a', 'page': 'https://p/1'}, {'raw': _png(color=(0, 255, 0)), 'title': 'b'}]
+    images, tail = ci.gallery('t', entries)
+    assert [e['handle'] for e in entries] == ['img:g1.jpg', 'img:g2.jpg'] and [v for _, v in calls] == [False, False]
+    assert len(images) == 1 and _im(images[0]).size == (800, 400)          # 2 cells → 2×1 grid
+    m = _marker(tail)
+    assert m['title'] == 't' and m['items'] == [{'handle': 'img:g1.jpg', 'title': 'a', 'page': 'https://p/1'},
+                                                {'handle': 'img:g2.jpg', 'title': 'b'}]
+    assert tail.startswith("You're looking at a contact sheet numbered 1-2")
+
+
+def test_gallery_thumb_route_rows_are_not_stashed(monkeypatch):
+    calls = _stash_stub(monkeypatch)
+    entries = [{'raw': _png(), 'stash': False, 'thumb': '/t/1', 'full': '/f/1', 'title': 'lib'},
+               {'raw': _png(), 'stash': False, 'thumb': '/t/2', 'full': '/f/2', 'title': ''}]
+    images, tail = ci.gallery('library', entries)
+    assert calls == [] and [e['handle'] for e in entries] == ['', '']
+    assert _marker(tail)['items'] == [{'thumb': '/t/1', 'full': '/f/1', 'title': 'lib'},
+                                      {'thumb': '/t/2', 'full': '/f/2', 'title': ''}]
+    assert len(images) == 1
+
+
+def test_gallery_failed_raw_keeps_numbering_and_falls_back_to_thumb(monkeypatch):
+    _stash_stub(monkeypatch)
+    entries = [{'raw': None, 'thumb': 'https://proxy/x', 'title': 'gone'}, {'raw': _png(), 'title': 'ok'}, {'raw': None}]
+    images, tail = ci.gallery('t', entries)
+    assert _im(images[0]).size == (800, 800)                                 # 3 cells → 2×2; blanks keep their number
+    assert _marker(tail)['items'] == [{'thumb': 'https://proxy/x', 'title': 'gone'}, {'handle': 'img:g1.jpg', 'title': 'ok'}]
+
+
+def test_gallery_view_false_still_stashes_and_returns_only_the_marker(monkeypatch):
+    calls = _stash_stub(monkeypatch)
+    images, tail = ci.gallery('t', [{'raw': _png()}, {'raw': _png()}], view=False)
+    assert images == [] and len(calls) == 2 and tail.startswith('<!--GALLERY:') and '\n' not in tail
+
+
+def test_gallery_single_shows_the_show_bytes(monkeypatch):
+    _stash_stub(monkeypatch)
+    images, tail = ci.gallery('t', [{'raw': _png(w=64, h=32), 'show': _png(w=3000, h=1000), 'title': 'one'}])
+    assert _im(images[0]).size == (1536, 512) and tail.startswith("You're looking at it now.")
+    images, _ = ci.gallery('t', [{'raw': _png(w=64, h=32)}])
+    assert _im(images[0]).size == (64, 32)
+
+
+def test_gallery_no_pixels_is_honest(monkeypatch):
+    calls = _stash_stub(monkeypatch)
+    images, tail = ci.gallery('t', [{'raw': None}, {'raw': None}])
+    assert images == [] and calls == [] and tail.startswith("(couldn't fetch the pixels")
+    assert _marker(tail)['items'] == []

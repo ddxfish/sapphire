@@ -387,47 +387,29 @@ def _fetch_any(*urls):
 
 
 def image_search_result(query: str, results: list, view: bool = True, page: int = 1):
-    """Her numbered list + the user's row (GALLERY marker v3). Every hit's
+    """Her numbered list + the user's row (core.images.gallery). Every hit's
     thumbnail is fetched through the facade and STASHED as an img: handle —
     ours: vault-aware, offline, saveable even when the host refuses hotlinks —
     and the same bytes make her contact sheet, so her #3 is the user's #3.
     view=true adds the pixels (the full image for one result, else the sheet).
     Returns str, or the images contract dict."""
     from core import images as ci
-    raws, lines, items = [], [], []
-    for i, r in enumerate(results, 1):
+    entries = [{'raw': _fetch_any(r['thumb']), 'thumb': ci.proxied(r['thumb']), 'full': ci.proxied(r['full']),
+                'title': r['title'], 'page': r['page']} for r in results]
+    if view and len(results) == 1:
+        entries[0]['show'] = _fetch_any(results[0]['full'])
+    where = f" (page {page})" if page and page > 1 else ''
+    images, tail = ci.gallery(f"{query}{where}", entries, view=view)
+    lines = []
+    for i, (r, e) in enumerate(zip(results, entries), 1):
         host = urllib.parse.urlsplit(r['page'] or r['full']).hostname or ''
         dims = f" — {r['dims']}" if r.get('dims') else ''
-        raw = _fetch_any(r['thumb'])
-        handle = ''
-        if raw:
-            try:
-                handle = ci.stash(raw)
-            except ci.ImageError as e:
-                logger.warning(f"[WEB] stash skipped: {e}")
-        raws.append(raw or b'')
-        tag = f" — {handle}" if handle else " — (thumbnail unavailable)"
+        tag = f" — {e['handle']}" if e['handle'] else " — (thumbnail unavailable)"
         lines.append(f"{i}. {r['title'] or '(untitled)'} — {host}{dims}{tag}\n   full: {r['full']}")
-        item = {'handle': handle} if handle else {'thumb': ci.proxied(r['thumb'])}
-        item.update({'full': ci.proxied(r['full']), 'title': r['title'], 'page': r['page']})
-        items.append(item)
-    where = f" (page {page})" if page and page > 1 else ''
     text = (f"Top {len(results)} images for '{query}'{where} — the user sees them as numbered tiles. "
             f"img: = the thumbnail kept in this chat (view or save it); full = the original on its host.\n"
-            + "\n".join(lines))
-    marker = "<!--GALLERY:" + json.dumps({'title': f"{query}{where}", 'items': items}) + "-->"
-    if not view:
-        return f"{text}\n{marker}"
-    if len(results) == 1:
-        raw = _fetch_any(results[0]['full']) or raws[0]
-        shaped = [ci.for_chat(raw)] if raw else []
-        note = "You're looking at it now."
-    else:
-        shaped = [ci.contact_sheet(raws)] if any(raws) else []
-        note = f"You're looking at a contact sheet numbered 1-{len(results)} in the order above."
-    if not shaped:
-        return f"{text}\n(couldn't fetch the pixels for you — the tiles still reached the user)\n{marker}"
-    return ci.result(f"{text}\n{note}\n{marker}", shaped)
+            + "\n".join(lines) + "\n" + tail)
+    return ci.result(text, images) if images else text
 
 
 def view_image_url(url: str):

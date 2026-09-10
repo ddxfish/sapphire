@@ -26,6 +26,7 @@ Handles `resolve()` understands:
 """
 import base64
 import io
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -279,6 +280,54 @@ def contact_sheet(raws, cell=400) -> bytes:
     buf = io.BytesIO()
     grid.save(buf, 'JPEG', quality=88)
     return buf.getvalue()
+
+
+def gallery(title, entries, *, view=True):
+    """The one row-and-sheet builder behind every image-list tool (web hits,
+    library matches, local folders, gallery plugins — 2026-09-10, DRY lift).
+
+    entries, in her numbering order, each a dict:
+      raw    bytes → stashed as an img: handle (the user's tile, her sheet cell);
+             None = unavailable (blank cell keeps its number; no tile unless thumb)
+      thumb  a route/URL the browser loads itself: with stash=False (library
+             rows, already stored) it IS the tile, otherwise the fallback tile
+      full / title / page   marker fields (full = lightbox target; absent → the tile)
+      show   bytes to show her instead of raw when this is the only entry
+      stash  False = never store raw (default True)
+    Sets entry['handle'] ('' when nothing was stashed). Returns (images, tail):
+      images  [] (view=False, or no pixels) | [the one image] | [contact sheet]
+      tail    the note she reads + the GALLERY v3 marker (the user's row)
+    Callers write their own numbered lines (entry['handle'] in hand) and return
+    result(text + "\\n" + tail, images) when images, else the plain string.
+    """
+    raws, items = [], []
+    for e in entries:
+        raw, handle = e.get('raw'), ''
+        if raw and e.get('stash', True):
+            try:
+                handle = stash(raw)
+            except ImageError as ex:
+                logger.warning(f"[IMAGES] gallery stash skipped: {ex}")
+        e['handle'] = handle
+        raws.append(raw or b'')
+        item = {'handle': handle} if handle else ({'thumb': e['thumb']} if e.get('thumb') else None)
+        if item is None:
+            continue
+        item.update({k: e[k] or '' for k in ('full', 'title', 'page') if k in e})
+        items.append(item)
+    marker = "<!--GALLERY:" + json.dumps({'title': title, 'items': items}) + "-->"
+    if not view:
+        return [], marker
+    if len(entries) == 1:
+        raw = entries[0].get('show') or raws[0]
+        images = [for_chat(raw)] if raw else []
+        note = "You're looking at it now."
+    else:
+        images = [contact_sheet(raws)] if any(raws) else []
+        note = f"You're looking at a contact sheet numbered 1-{len(entries)} in the order above."
+    if not images:
+        note = "(couldn't fetch the pixels for you — the tiles still reached the user)"
+    return images, f"{note}\n{marker}"
 
 
 # ── contract ─────────────────────────────────────────────────────────────────
