@@ -5047,6 +5047,72 @@ class ChatSessionManager:
             logger.info(f"Removed only assistant message at index {start_idx}")
             return True
 
+    # ── In-place Continue (2026-09-10) ──────────────────────────────────
+    # The reply's row never leaves history. continue_target hands the engine
+    # the prose to resume from; continue_assistant writes the result INTO
+    # that row. A Stop that generated nothing calls neither → nothing lost.
+    # (The old flow popped the row first and re-saved only prose the model
+    # produced — a cancel during prompt processing erased the sentence.)
+
+    @staticmethod
+    def _turn_tail(msgs, timestamp: str):
+        """Index of the LAST assistant row in the turn whose first assistant
+        row carries `timestamp` — the walk remove_last_assistant_in_turn and
+        edit_message_by_timestamp share. None when the turn isn't found."""
+        start = next((i for i, m in enumerate(msgs)
+                      if m.get('role') == 'assistant' and m.get('timestamp') == timestamp), None)
+        if start is None:
+            return None
+        tail = start
+        for i in range(start + 1, len(msgs)):
+            role = msgs[i].get('role')
+            if role == 'user':
+                break
+            if role == 'assistant':
+                tail = i
+        return tail
+
+    def continue_target(self, timestamp: str) -> Optional[str]:
+        """The prose a Continue resumes from, or None to refuse (untouched).
+
+        Only the chat's final row qualifies — nothing after it (not a tool
+        result, not a later turn) — and it must be plain prose (no
+        tool_calls, non-empty string content)."""
+        with self._lock:
+            msgs = self._effective_chat().messages
+            idx = self._turn_tail(msgs, timestamp)
+            if idx is None or idx != len(msgs) - 1:
+                return None
+            row = msgs[idx]
+            content = row.get('content')
+            if row.get('tool_calls') or not isinstance(content, str) or not content.strip():
+                return None
+            return content
+
+    def continue_assistant(self, timestamp: str, content: str,
+                           thinking: Optional[str] = None,
+                           metadata: Optional[Dict] = None) -> bool:
+        """Write a continuation into the row continue_target found: content =
+        prefill + new prose; thinking/metadata replace the old values when
+        the continuation produced them. In-place edit → full row resync."""
+        with self._lock:
+            eff = self._effective_chat()
+            idx = self._turn_tail(eff.messages, timestamp)
+            if idx is None:
+                logger.warning(f"continue_assistant: turn not found at {timestamp}")
+                return False
+            row = eff.messages[idx]
+            row['content'] = content
+            if thinking:
+                row['thinking'] = thinking
+            if metadata:
+                row['metadata'] = metadata
+            eff._needs_full_resync = True  # in-place edit bypasses the setter
+            self._save_current_chat()
+        publish(Events.MESSAGE_ADDED, {"role": "assistant", "chat_name": self._effective_chat_name()})
+        logger.info(f"[CONTINUE] row at {timestamp} continued in place ({len(content)} chars)")
+        return True
+
     def edit_message_by_timestamp(self, role: str, timestamp: str, new_content: str) -> bool:
         """
         Edit a message by timestamp.

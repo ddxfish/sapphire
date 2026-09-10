@@ -135,6 +135,11 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
 
     prefill = data.get('prefill')
     skip_user_message = data.get('skip_user_message', False)
+    # In-place Continue: the assistant turn's timestamp. The engine resumes
+    # the chat's last reply from its own row (no user row, row edited on
+    # success, untouched on Stop). prefill/skip_user_message stay as the
+    # raw external-prefill lane.
+    continue_from = str(data.get('continue_from') or '').strip() or None
     images = data.get('images', [])
     files = data.get('files', [])
 
@@ -206,7 +211,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     _engine_ctx = _cv.copy_context()
 
     def generate():
-        gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files)
+        gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files, continue_from=continue_from)
         try:
             chunk_count = 0
             while True:

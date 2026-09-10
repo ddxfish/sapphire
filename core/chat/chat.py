@@ -596,8 +596,21 @@ class LLMChat:
             return None
 
     def _build_base_messages(self, user_input: str, images: list = None, files: list = None,
-                             image_handles: list = None):
+                             image_handles: list = None, continue_mode: bool = False):
         system_prompt, user_name, dynamic_context = self._get_system_prompt()
+
+        if continue_mode:
+            # In-place Continue (2026-09-10): history's own tail IS the reply
+            # being resumed. No new user turn, no ghost, no RAG — any of those
+            # after the assistant row opens a fresh turn and the model answers
+            # it instead of continuing (the old flow re-sent the user text).
+            messages = [
+                {"role": "system", "content": system_prompt},
+                *self.session_manager.get_messages_for_llm(count_tokens(system_prompt)),
+            ]
+            if dynamic_context:
+                messages.insert(1, {"role": "system", "content": dynamic_context, "_dynamic": True})
+            return messages
 
         # Receipts for pasted images (the store's img: handles) ride the wire
         # text too, so she can hand THIS turn's image to any image tool.

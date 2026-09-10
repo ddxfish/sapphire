@@ -64,11 +64,6 @@ export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/his
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ user_message: userMessage }) 
 }, 10000);
-export const removeLastAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-last-assistant' + _boundQS(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ timestamp })
-}, 10000);
 export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant' + _boundQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -417,8 +412,11 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
     });
 };
 
-export const streamChatContinue = (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) =>
-    _streamTurn({ text, prefill, skip_user_message: true },
+// In-place Continue: `continue_from` names the assistant turn; the engine
+// resumes the chat's last reply from its own row (no user row is sent or
+// saved, the row is edited on success and untouched on Stop).
+export const streamChatContinue = (timestamp, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) =>
+    _streamTurn({ text: '', continue_from: timestamp },
                 { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
 
 // Avatar tag scanner — wraps onChunk to detect <<avatar: trackname>> in streamed responses

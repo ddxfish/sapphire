@@ -122,11 +122,24 @@ const processPendingToolEvents = (scrollCallback) => {
     }
 };
 
-export const startStreaming = (container, messageElement, scrollCallback) => {
+// `adopt` = { seed }: in-place Continue — the bubble is already on the page.
+// The old metrics footer goes (the continuation writes new ones) and, when
+// the reply ends in a plain paragraph, the new words keep writing INTO it:
+// paraBuf is seeded with that paragraph's source text so the sentence
+// carries on instead of restarting below.
+export const startStreaming = (container, messageElement, scrollCallback, adopt = null) => {
     _streamId++;  // new stream — invalidates any in-flight chunks from a previous one
     const contentDiv = messageElement.querySelector('.message-content');
-    const p = createElem('p');
-    contentDiv.appendChild(p);
+    let p = null, seeded = false;
+    if (adopt) {
+        contentDiv.querySelector('.message-metadata')?.remove();
+        const last = contentDiv.lastElementChild;
+        if (adopt.seed && last?.tagName === 'P' && !last.querySelector('img')) { p = last; seeded = true; }
+    }
+    if (!p) {
+        p = createElem('p');
+        contentDiv.appendChild(p);
+    }
 
     const existingThinks = container.querySelectorAll('details summary');
     const thinkCount = Array.from(existingThinks).filter(s => s.textContent.includes('Think')).length;
@@ -135,8 +148,9 @@ export const startStreaming = (container, messageElement, scrollCallback) => {
     streamContent = '';
     resetState(p);
     state.thinkCnt = thinkCount;
-    
-    container.appendChild(messageElement);
+    if (seeded) state.paraBuf = adopt.seed;
+
+    if (!adopt) container.appendChild(messageElement);
     if (scrollCallback) scrollCallback(true);
     
     // Process any tool events that arrived before streaming started

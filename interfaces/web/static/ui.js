@@ -242,6 +242,8 @@ const createToolbar = (idx, total, role = 'user') => {
     ];
 
     buttons.forEach(([cls, act, icon, title]) => {
+        // Continue resumes the chat's LAST reply in place — offered only there.
+        if (act === 'continue' && !(role === 'assistant' && idx === total - 1)) return;
         const btn = createElem('button', { class: cls, 'data-action': act, 'data-message-index': idx }, icon);
         btn.title = title;
         tb.appendChild(btn);
@@ -262,6 +264,12 @@ const updateToolbars = () => {
             const newToolbar = createToolbar(i, msgs.length, role);
             toolbar.replaceWith(newToolbar);
         } else {
+            // The Continue button follows the last reply as messages land.
+            const wantCont = role === 'assistant' && i === msgs.length - 1;
+            if (!!toolbar.querySelector('.continue-btn') !== wantCont) {
+                toolbar.replaceWith(createToolbar(i, msgs.length, role));
+                return;
+            }
             btns.forEach(btn => {
                 btn.dataset.messageIndex = i;
                 if (btn.classList.contains('trash-btn')) {
@@ -538,6 +546,15 @@ export const startStreaming = () => {
     msg.id = 'streaming-message';
     msg.dataset.streaming = 'true';
     return Streaming.startStreaming(chat, clone, scrollToBottomIfSticky);
+};
+
+// In-place Continue: adopt the reply's existing bubble as the streaming
+// message — nothing leaves the page, the new words land in it. `seed` is
+// the source text of its last paragraph (see ui-streaming startStreaming).
+export const continueStreaming = (msgEl, seed = '') => {
+    msgEl.id = 'streaming-message';
+    msgEl.dataset.streaming = 'true';
+    return Streaming.startStreaming(chat, msgEl, scrollToBottomIfSticky, { seed });
 };
 
 export const appendStream = (chunk) => {

@@ -210,7 +210,7 @@ class StreamingChat:
         except Exception as e:
             logger.warning(f"[CLEANUP] Failed to inject cancel tool results: {e}")
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None, continue_from: str = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
         - {"type": "stream_started"} immediately when processing begins
@@ -231,10 +231,13 @@ class StreamingChat:
             user_input: Text input from user
             prefill: Optional assistant prefill for continue mode
             skip_user_message: Don't add user message to history (continue mode)
+            continue_from: In-place Continue — the assistant turn's timestamp. The
+                chat's last reply is resumed from its OWN row (no user row, the row
+                is edited on success, untouched on Stop). Sets prefill/skip itself.
             images: Optional list of {"type": "image", "data": "...", "media_type": "..."}
             files: Optional list of {"filename": "...", "text": "..."}
         """
-        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, images={len(images) if images else 0}, files={len(files) if files else 0}")
+        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, continue_from={continue_from!r}, images={len(images) if images else 0}, files={len(files) if files else 0}")
 
         # Publish typing start event. D4: tag the surface so the operator's browser
         # ignores a phone call / background conversation's typing (target_chat set =
@@ -458,8 +461,23 @@ class StreamingChat:
             # global prompt from a foreign stream.
             self.main_chat.refresh_spice_if_needed()
 
+            # In-place Continue (2026-09-10): the reply's row stays in history.
+            # Resolve the prose she resumes from; refuse — nothing touched —
+            # unless that turn is the chat's last row and ends in plain prose.
+            if continue_from:
+                prefill = self.main_chat.session_manager.continue_target(continue_from)
+                if prefill is None:
+                    logger.info(f"[CONTINUE] refused — turn {continue_from} is not the chat's last prose row")
+                    yield {"type": "notice", "severity": "warning",
+                           "message": "Continue works on the last reply only, and only when it ended in prose."}
+                    yield self._emit_llm_done(tts_pump)
+                    yield {"type": "final", "text": "", "cancelled": False, "error": True}
+                    return
+                skip_user_message = True
+
             # Plugin pre_chat hook — can modify input, bypass LLM, or stop propagation
-            if hook_runner.has_handlers("pre_chat"):
+            # (not on a Continue: there is no new input to react to).
+            if hook_runner.has_handlers("pre_chat") and not continue_from:
                 hook_event = HookEvent(input=user_input, config=config,
                                        metadata={"system": self.main_chat.system})
                 hook_runner.fire("pre_chat", hook_event)
@@ -488,7 +506,18 @@ class StreamingChat:
             if images and not skip_user_message and not getattr(self, 'images_ephemeral', False):
                 image_handles = _stash_pasted(images)
             extra = {'image_handles': image_handles} if image_handles else {}   # old call shape otherwise
+            if continue_from:
+                extra['continue_mode'] = True
             messages = self.main_chat._build_base_messages(user_input, images=images, files=files, **extra)
+            if continue_from:
+                # History's own tail IS the prefill row. Trailing whitespace off
+                # (Claude rejects it), string content (llama.cpp continues a
+                # string tail only), no thinking keys on the row being resumed.
+                if not messages or messages[-1].get("role") != "assistant":
+                    messages.append({"role": "assistant", "content": ""})
+                messages[-1]["content"] = prefill.rstrip()
+                messages[-1].pop("thinking", None)
+                messages[-1].pop("thinking_raw", None)
 
             if not skip_user_message:
                 # Build content list if files or images present, otherwise just text
@@ -524,14 +553,21 @@ class StreamingChat:
             else:
                 logger.info("[CONTINUE] Skipping user message addition (continuing from existing)")
             
-            # Handle manual continue prefill
+            # Prefill lanes. External prefill (the raw API lane): appended as the
+            # tail message, echoed to the wire, and PREFIXED onto whatever row
+            # this turn writes (inline_prefill). In-place Continue: the prefill
+            # already is a row and stays on the page — nothing echoed, nothing
+            # prefixed onto tool rows; the final prose goes INTO that row.
             has_prefill = bool(prefill)
-            if has_prefill:
+            inline_prefill = has_prefill and not continue_from
+            if inline_prefill:
                 # Strip trailing whitespace - Claude API rejects it
                 clean_prefill = prefill.rstrip()
                 messages.append({"role": "assistant", "content": clean_prefill})
                 logger.info(f"[CONTINUE] Continuing with {len(clean_prefill)} char prefill")
                 yield {"type": "content", "text": prefill}  # Show original to user
+            elif has_prefill:
+                logger.info(f"[CONTINUE] in place from {continue_from}: {len(prefill)} char prefill")
             
             # Handle forced thinking prefill - disabled when continuing
             force_prefill = None
@@ -875,7 +911,7 @@ class StreamingChat:
                     tool_calls_to_execute = tool_calls[:config.MAX_PARALLEL_TOOLS]
                     
                     # Combine prefill with current content for history
-                    full_content = prefill + current_content if has_prefill else current_content
+                    full_content = prefill + current_content if inline_prefill else current_content
 
                     # When the content carries inline <think> reasoning (Qwen/GLM-style),
                     # keep only the thinking and drop the trailing decision-prose ("okay,
@@ -1095,7 +1131,7 @@ class StreamingChat:
                         logger.info(f"[TOOL] Text-based tool call detected: {text_tool_name}")
 
                         tool_call_count += 1
-                        full_content = prefill + current_content if has_prefill else current_content
+                        full_content = prefill + current_content if inline_prefill else current_content
 
                         # Execute text-based tool call (function_manager returns error if not active).
                         # allowed_tools + executor_snapshot were missing here for a year
@@ -1137,7 +1173,11 @@ class StreamingChat:
 
                     full_content = current_content
 
-                    if has_prefill:
+                    # In-place continue writes INTO the prefill row when the
+                    # continuation was pure prose (no tools ran); once tools
+                    # ran, the prefill row stays as-is and this is a new row.
+                    in_place = bool(continue_from) and tool_call_count == 0
+                    if has_prefill and (inline_prefill or in_place):
                         full_content = prefill + full_content
 
                     if force_prefill:
@@ -1166,11 +1206,17 @@ class StreamingChat:
                             metadata["cumulative_tokens"]["cache_write"] = cumulative_tokens["cache_write"]
 
                     # Save final response with thinking separated
-                    self.main_chat.session_manager.add_assistant_final(
-                        content=full_content,
-                        thinking=current_thinking if current_thinking else None,
-                        metadata=metadata
-                    )
+                    if in_place:
+                        self.main_chat.session_manager.continue_assistant(
+                            continue_from, full_content,
+                            thinking=current_thinking if current_thinking else None,
+                            metadata=metadata)
+                    else:
+                        self.main_chat.session_manager.add_assistant_final(
+                            content=full_content,
+                            thinking=current_thinking if current_thinking else None,
+                            metadata=metadata
+                        )
 
                     if hook_runner.has_handlers("post_chat"):
                         hook_runner.fire("post_chat", HookEvent(
@@ -1206,14 +1252,25 @@ class StreamingChat:
                     self._close_dangling_tool_calls()
                 partial = (current_content or "").strip()
                 save_content = ""
+                # In-place continue: partial prose goes INTO the prefill row;
+                # nothing generated → the row never left history, nothing lost.
+                in_place = bool(continue_from) and tool_call_count == 0
                 if partial:
-                    save_content = prefill + current_content if has_prefill else current_content
+                    save_content = (prefill + current_content
+                                    if has_prefill and (inline_prefill or in_place)
+                                    else current_content)
                     try:
-                        self.main_chat.session_manager.add_assistant_final(
-                            content=save_content,
-                            thinking=current_thinking if current_thinking else None,
-                            metadata=metadata,
-                        )
+                        if in_place:
+                            self.main_chat.session_manager.continue_assistant(
+                                continue_from, save_content,
+                                thinking=current_thinking if current_thinking else None,
+                                metadata=metadata)
+                        else:
+                            self.main_chat.session_manager.add_assistant_final(
+                                content=save_content,
+                                thinking=current_thinking if current_thinking else None,
+                                metadata=metadata,
+                            )
                     except Exception as e:
                         logger.warning(f"[STREAMING] partial save on cancel failed: {e}")
                 yield {"type": "final", "text": save_content,
@@ -1378,9 +1435,11 @@ class StreamingChat:
         except ConnectionError as e:
             logger.warning(f"[STREAMING] {e}")
             # Save error so history doesn't end with a dangling user message
-            self.main_chat.session_manager.add_assistant_final(
-                f"[Connection error: {e}]"
-            )
+            # (a Continue's history already ends on the reply row — leave it).
+            if not continue_from:
+                self.main_chat.session_manager.add_assistant_final(
+                    f"[Connection error: {e}]"
+                )
             # Synthetic tts_stream_end so the frontend's audio queue can
             # finalize even though we're aborting before flush_and_close.
             # Without this, isStreaming stays true / mute pill orphaned
@@ -1415,10 +1474,12 @@ class StreamingChat:
             except Exception:
                 pass
             # Save error so history doesn't end with a dangling user message
-            # (consecutive user messages break Claude's alternating requirement)
-            self.main_chat.session_manager.add_assistant_final(
-                f"[Error: {type(e).__name__}: {e}]"
-            )
+            # (consecutive user messages break Claude's alternating requirement;
+            # a Continue's history already ends on the reply row — leave it).
+            if not continue_from:
+                self.main_chat.session_manager.add_assistant_final(
+                    f"[Error: {type(e).__name__}: {e}]"
+                )
             if tts_pump._stream_started and not tts_pump._closed:
                 yield {
                     "type": "tts_stream_end",

@@ -60,7 +60,7 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | POST | `/api/chat` | Send message, get response |
-| POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409**. Optional `chat` in the body addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed → 409, missing → 404 |
+| POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409**. Optional `chat` in the body addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed → 409, missing → 404. `continue_from` (an assistant turn's timestamp) resumes the chat's last reply in place: no user row is sent or saved, the row is edited on success and untouched on Stop |
 | POST | `/api/cancel` | Cancel active stream (`?chat=` scopes to one chat) |
 | GET | `/api/events` | SSE event stream (real-time UI updates) |
 | GET | `/api/history` | Get chat message history (`?chat=` reads a chat by name; absent = active) |
