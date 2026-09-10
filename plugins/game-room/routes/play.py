@@ -40,8 +40,15 @@ def _session(query=None, body=None):
     return s or None
 
 
-def _out(engine, state, session=None):
+def _out(engine, state, session=None, seat=True):
     view = engine.redact(state) if state else {'session': None}
+    if not seat:
+        # Silent verbs (real-time checkpoints — Dark Horse every wave end)
+        # used to re-resolve the seat provider here, under the session lock:
+        # `provider_info` walks the registry's availability probes, so every
+        # wave paid a health check the board never asked for (S2 #11). No
+        # `seat` key = the host keeps the one it has.
+        return view
     cfg = gc.session_cfg(session)
     view['seat'] = {**cfg, 'resolved': gc.provider_info(
         cfg.get('provider'), cfg.get('model', ''),
@@ -166,7 +173,7 @@ def act(game, body=None, query=None, **_):
             gc.run_ai_turns(engine, state, cfg, gcfg)
             rows = gc.table_pair(engine, state, before, action, args, say[:400], cfg, gcfg)
         gc.save_state(game, state, session)
-        out = _out(engine, state, session)
+        out = _out(engine, state, session, seat=not silent)
     return _with_last(out, rows, gc.append_table(session, rows))
 
 

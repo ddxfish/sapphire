@@ -26,7 +26,7 @@
     "plugin.json": "sha256:1d06546845319b86a571d841ae287d6e5b3d20ec764e7c324526ba5b56150850",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
-    "routes/play.py": "sha256:0868db25b24fb8f4db471bdb3f4212f1950015f5b5b9fe7eb908836866b18f02",
+    "routes/play.py": "sha256:18618d8d908ee6be1a7359a6e413dcb1c7ca88a3e3377ffb6372d4f8ff273abe",
     "routes/story_routes.py": "sha256:f5b28ee481dad4fbd32dc057e595c95ce50801b053a65e0ebce8d51d8becf42f",
     "tests/conftest.py": "sha256:32f9c70044d21c2529e3613c9992dc635b2605d0383925110a425e498c7af8f2",
     "tests/fixtures/stories/goblin-den/rooms/1-cave-mouth.json": "sha256:befb3fe7b4ccc87d62aad4c98ca703176a3279d626c5518ca74e7b5c86b489c9",
@@ -46,7 +46,7 @@
     "tests/test_fixwave_hunt.py": "sha256:a2264152e44a9e869d2ca2fcd7b63bb039170209575b9e16c87e7f077c928686",
     "tests/test_one_move_per_turn.py": "sha256:7f7e938a36b893a89137e03303ebb47a1ed6a67792012cb1ca24cb5146a68a80",
     "tests/test_open_mansion.py": "sha256:75f0b8bc50f552a951e84c145791d7575d0c2cbdecb775007f82aaeb19e8a443",
-    "tests/test_rail_port.py": "sha256:36e6eb6d17c6e64c872b96b8ac0aca03fcbbeca15e86baae7390831d584d3e3b",
+    "tests/test_rail_port.py": "sha256:d144b442da2ebbea8160f10799788c080f850b67709a6dccc3faad248af6b268",
     "tests/test_regen_rewind.py": "sha256:ef10c7626e0d3162b216164b6095d264439e3c0b850d8e21262e8b2618850060",
     "tests/test_save_paths.py": "sha256:9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "tests/test_seal_wait.py": "sha256:fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
@@ -63,5 +63,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "oaRf7zZ/R0OKLwDDeXj0WkkfPizNvrEGcA054Cp+zVdR+Oc6+bg1JiBuhj8YenS+QL+kMz8Q4Vo6EEjFqboSDQ=="
+  "signature": "3p2A3NzhYj39JkBxfuNJrUHny2Pe9i03HkR6cB1EQJhGBFUUclQ/3/WiCxQxKMuBxKxbRud1d4c9muxeXa3zDg=="
 }

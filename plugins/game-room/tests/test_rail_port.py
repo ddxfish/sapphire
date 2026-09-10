@@ -416,3 +416,29 @@ def test_poker_describe_action():
     assert poker.describe_action('raise', {'amount': 60}) == 'raise to 60'
     assert poker.describe_action('start') == 'deal'
     assert poker.describe_action('weird') == 'weird'
+
+
+def test_silent_verb_skips_the_seat_resolve(monkeypatch, hermetic_chat_store):
+    """S2 #11 (2026-09-10): a real-time game checkpoints every wave end as a
+    silent verb; re-resolving the seat provider there ran the registry's
+    availability probes under the session lock. Silent = no `seat` key (the
+    host keeps the one it has); a spoken move still carries it."""
+    from routes import play
+    eng = types.SimpleNamespace(
+        whose_turn=lambda st: 'player',
+        apply_action=lambda st, who, a, args: None,
+        redact=lambda st: {'talk': st['talk']},
+        describe_action=lambda a, args=None: a)
+    probes = []
+    monkeypatch.setattr(gc, 'get_game', lambda gid: ({}, eng))
+    monkeypatch.setattr(gc, 'run_ai_turns', lambda e, st, c, g: None)
+    monkeypatch.setattr(gc, 'session_cfg', lambda s: {'provider': 'x'})
+    monkeypatch.setattr(gc, 'game_settings', lambda g: {})
+    monkeypatch.setattr(gc, 'append_table', lambda session, rows: False)
+    monkeypatch.setattr(gc, 'provider_info',
+                        lambda *a, **k: probes.append(a) or {'provider': 'x', 'model': 'm'})
+    gc.save_state('g', _state(), session='tbl')
+    out = play.act('g', body={'action': '_checkpoint', 'args': {}, 'session': 'tbl'})
+    assert 'seat' not in out and probes == []
+    out = play.act('g', body={'action': 'call', 'session': 'tbl'})
+    assert out['seat']['resolved'] == {'provider': 'x', 'model': 'm'} and len(probes) == 1
