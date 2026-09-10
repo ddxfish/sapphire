@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 TICK_S = 1.0
 DEFAULT_TTL = 90.0
-MODES = ('turn', 'event', 'timer')
+MODES = ('off', 'turn', 'event', 'timer')
+EVENT_FLOOR_S = 3.0      # event mode's only clock: a breath between her turns, not a knob
 # A thinking model that never leaves its <think> block: past this many chars
 # of unfinished thinking the turn is cancelled and the pair dropped — an
 # unattended turn has no one to wait for it (Krem's 8K-token think loop
@@ -115,14 +116,20 @@ def arm(chat, *, mode='timer', min_s=60, max_s=180, paused=False, send_frames=Fa
         frames_per_tick=6, every=1, ttl=DEFAULT_TTL, owner=None, prompt=None, speak=None, title=None):
     """(Re)arm her unprompted turns on `chat`. Idempotent: an armed record
     keeps its clock (and its poke count) unless the range changed; the TTL
-    always extends. Mode 'turn' disarms. `every` = event mode fires on every
-    Nth poke (a wave game at every 3rd wave). Returns status()."""
+    always extends. Modes 'off' and 'turn' disarm (turn = she answers moves
+    through the seat instead). `every` = event mode fires on every Nth poke
+    (a wave game at every 3rd wave); event mode ignores min/max — its floor
+    is EVENT_FLOOR_S, the organ's own (one lever per nature, Krem
+    2026-09-10: every-N is the frequency, a random clock is the timer's).
+    Returns status()."""
     if not chat:
         return None
     mode = mode if mode in MODES else 'timer'
-    if mode == 'turn':
+    if mode in ('off', 'turn'):
         disarm(chat)
         return status(chat)
+    if mode == 'event':
+        min_s = max_s = EVENT_FLOOR_S
     with _lock:
         rec = _records.get(chat)
         fresh = rec is None

@@ -100,3 +100,12 @@ def test_moments_pass_through_capped():
                                   'moments': ['after each wave', 'when the castle falls', {'no': 1}] + ['x'] * 9}, 'p')
     got = {g['id']: g for g in m.list_games()}['td']['moments']
     assert got[:2] == ['after each wave', 'when the castle falls'] and len(got) == 6
+
+
+def test_cadence_event_noun_passes_through_when_it_is_a_word():
+    m = _fresh()
+    assert m.register_game('td', {'surfaces': ['room'], 'entry_js': 'a.js', 'cadence_event': ' Wave '}, 'p')
+    assert m.register_game('pk', {'surfaces': ['room'], 'entry_js': 'b.js', 'cadence_event': 'no way!'}, 'p')
+    assert m.register_game('nn', {'surfaces': ['room'], 'entry_js': 'c.js'}, 'p')
+    got = {g['id']: g['cadence_event'] for g in m.list_games()}
+    assert got == {'td': 'wave', 'pk': '', 'nn': ''}

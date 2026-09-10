@@ -452,18 +452,26 @@ ROOM_KEYS = [
     # nature, so this key has no room layer and never shows in the library
     # (a room-level "timer" read as "this applies to poker"). The gap and
     # frame rows hide in turn mode.
+    # ONE LEVER PER NATURE (coffee sip 2026-09-10): off = nothing; per move
+    # = nothing to set (the seat answers each move — dies with the seat
+    # collapse); per event = every N <the game's word>; timer = min/max gap.
+    # Event mode's clock is the organ's own floor, not a knob (max was dead
+    # there; min duplicated every-N). A game names its moment in its
+    # manifest (`cadence_event`: wave, hand) — room_schema(game_id=) reads
+    # "every N waves"; the pill "her turn every 3rd wave".
     {'key': 'cadence_mode', 'label': 'her turns', 'type': 'select',
-     'options': [{'value': 'turn', 'label': 'per move (turn-based)'},
-                 {'value': 'event', 'label': 'on game events'},
+     'options': [{'value': 'off', 'label': 'off'},
+                 {'value': 'turn', 'label': 'per move'},
+                 {'value': 'event', 'label': 'per event'},
                  {'value': 'timer', 'label': 'on a timer'}],
      'default': 'timer', 'tab': 'Cadence', 'scope': ['game', 'session'], 'show_in': ['room'],
-     'help': "Turn-based: she speaks only in reply to your moves and messages (poker). Game events: the game says when a moment happened (a wave cleared) and she gets a turn, no sooner than the min gap. Timer: her turns come on a random clock between min and max (watching you play Doom, a movie)."},
-    {'key': 'cadence_min', 'label': 'min gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
+     'help': "Off: no unprompted turns (a game without her, or you want quiet). Per move: she answers each of your moves and messages through her seat (poker). Per event: the game posts its moments (a wave cleared) and every Nth one is her turn. Timer: her turns come on a random clock between min and max seconds (watching you play Doom, a movie)."},
+    {'key': 'cadence_min', 'label': 'min gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'is': ['timer']},
      'min': 5, 'max': 3600, 'step': 5, 'default': 60, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
-     'help': 'The shortest wait before one of her unprompted turns. Each turn waits a random gap between min and max seconds.'},
-    {'key': 'cadence_max', 'label': 'max gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
+     'help': 'Timer only: the shortest wait before one of her unprompted turns. Each turn waits a random gap between min and max seconds.'},
+    {'key': 'cadence_max', 'label': 'max gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'is': ['timer']},
      'min': 5, 'max': 3600, 'step': 5, 'default': 180, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
-     'help': 'The longest wait before one of her unprompted turns. Never below the min.'},
+     'help': 'Timer only: the longest wait before one of her unprompted turns. Never below the min.'},
     # every-N (Krem 2026-09-10, Dark Horse): his waves take 30s, she answers
     # slower than that — per event floods, per move is poker's shape, so an
     # event game meters itself. Sits with the nature (no room layer, room-
@@ -474,12 +482,12 @@ ROOM_KEYS = [
     {'key': 'cadence_paused', 'label': 'paused', 'type': 'checkbox',
      'default': False, 'tab': 'Cadence', 'scope': ['session'],
      'help': 'No unprompted turns in this session while on.'},
-    {'key': 'send_frames', 'label': 'show screen', 'type': 'checkbox', 'reveal_if': {'key': 'cadence_mode', 'not': ['turn']},
+    {'key': 'send_frames', 'label': 'show screen', 'type': 'checkbox', 'reveal_if': {'key': 'cadence_mode', 'is': ['event', 'timer']},
      'default': True, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
      'help': 'Send her frames of the screen with each unprompted turn. Off = words only (a card game, a text state).'},
-    {'key': 'frames_per_tick', 'label': 'frames/turn', 'type': 'number', 'reveal_if': 'send_frames',
+    {'key': 'frames_per_tick', 'label': 'frames/turn', 'type': 'number', 'reveal_if': ['send_frames', {'key': 'cadence_mode', 'is': ['timer']}],
      'min': 1, 'max': 12, 'default': 6, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
-     'help': 'How many frames each turn carries, spread over the gap (6 over a minute = one every 10 seconds).'},
+     'help': 'Timer only: how many frames each turn carries, spread over the gap (6 over a minute = one every 10 seconds). An event turn carries the one frame taken at the moment.'},
     {'key': 'frame_short_edge_px', 'label': 'frame size (px)', 'type': 'number', 'reveal_if': 'send_frames',
      'min': 256, 'max': 1080, 'step': 32, 'default': 512, 'tab': 'Cadence', 'scope': ['room', 'game'],
      'help': "Frames are scaled so their short edge is this many pixels. Smaller = cheaper tokens; 512 reads a HUD fine."},
@@ -519,10 +527,12 @@ def shown_in(field, surface):
     return not surface or surface in (field.get('show_in') or SURFACES)
 
 
-def room_schema(scope=None, with_options=False, surface=None):
+def room_schema(scope=None, with_options=False, surface=None, game_id=None):
     """The declared keys (a copy), optionally only those a layer may set,
     optionally only those a sidebar shows, optionally with dynamic option
-    lists filled (providers/prompts/toolsets)."""
+    lists filled (providers/prompts/toolsets), optionally worded for one
+    game (its `cadence_event` noun: "every N waves")."""
+    noun = cadence_noun(game_id) if game_id else ''
     out = []
     for k in ROOM_KEYS:
         if scope and scope not in k['scope']:
@@ -532,8 +542,28 @@ def room_schema(scope=None, with_options=False, surface=None):
         f = dict(k)
         if with_options and f.get('dynamic'):
             f['options'] = [{'value': '', 'label': '(default)'}] + _dynamic_options(f['dynamic'])
+        if noun and f['key'] == 'cadence_every':
+            f['label'] = f'every N {_plural(noun)}'
+            f['help'] = f"Per event: every Nth {noun} is her turn (3 = every third {noun}). The game's terminal moments always come through."
         out.append(f)
     return out
+
+
+def _plural(noun):
+    return noun if noun.endswith('s') else noun + 's'
+
+
+def cadence_noun(game_id):
+    """The game's own word for its moment (manifest `cadence_event`: wave,
+    hand) — '' when it names none."""
+    try:
+        import core.games_registry as reg
+        for g in reg.list_games():
+            if g.get('id') == game_id:
+                return str(g.get('cadence_event') or '').strip()
+    except Exception:
+        pass
+    return ''
 
 
 def _dynamic_options(kind):

@@ -240,12 +240,15 @@ def test_costume_hook_injects_the_games_line(store, monkeypatch):
 
 def test_cadence_mode_declared_and_hides_the_clock_rows():
     mode = _key('cadence_mode')
-    assert [o['value'] for o in mode['options']] == ['turn', 'event', 'timer'] and mode['default'] == 'timer'
+    assert [o['value'] for o in mode['options']] == ['off', 'turn', 'event', 'timer'] and mode['default'] == 'timer'
     # nature, not taste: no room layer, never in the library (a room-level
     # "timer" read as "this applies to poker" — Krem 2026-09-09)
     assert mode['scope'] == ['game', 'session'] and mode['show_in'] == ['room']
-    assert _key('cadence_min')['reveal_if'] == {'key': 'cadence_mode', 'not': ['turn']}
-    assert _key('send_frames')['reveal_if'] == {'key': 'cadence_mode', 'not': ['turn']}
+    # one lever per nature: the clock is the timer's, every-N is the event's
+    assert _key('cadence_min')['reveal_if'] == {'key': 'cadence_mode', 'is': ['timer']}
+    assert _key('cadence_max')['reveal_if'] == {'key': 'cadence_mode', 'is': ['timer']}
+    assert _key('send_frames')['reveal_if'] == {'key': 'cadence_mode', 'is': ['event', 'timer']}
+    assert _key('frames_per_tick')['reveal_if'] == ['send_frames', {'key': 'cadence_mode', 'is': ['timer']}]
 
 
 def test_game_declaration_sits_between_room_and_override(store, monkeypatch):
@@ -303,3 +306,15 @@ def test_cadence_every_sits_with_the_nature(store):
     assert gc.effective()['cadence_every'] == 1
     gc.save_game_room_overrides('doom', {'cadence_every': 4})
     assert gc.effective('doom')['cadence_every'] == 4
+
+
+def test_room_schema_words_every_n_with_the_games_noun(store, monkeypatch):
+    import core.games_registry as reg
+    monkeypatch.setattr(reg, 'list_games', lambda: [
+        {'id': 'td', 'cadence_event': 'wave'}, {'id': 'pk', 'cadence_event': ''}])
+    row = {f['key']: f for f in gc.room_schema('game', surface='room', game_id='td')}['cadence_every']
+    assert row['label'] == 'every N waves' and 'every third wave' in row['help']
+    row = {f['key']: f for f in gc.room_schema('game', surface='room', game_id='pk')}['cadence_every']
+    assert row['label'] == 'every N events'
+    assert {f['key']: f for f in gc.room_schema('game', surface='room')}['cadence_every']['label'] == 'every N events'
+    assert gc.coerce_field(_key('cadence_mode'), 'off') == 'off'

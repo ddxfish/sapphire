@@ -352,3 +352,14 @@ def test_event_every_n_pokes_and_force():
     # every=1 (the default) = every poke, as before
     cadence.arm('f', mode='event', min_s=1, max_s=1)
     assert cadence.poke('f', 'x')['pending'] is True
+
+
+def test_off_disarms_and_event_mode_owns_its_floor():
+    """One lever per nature (2026-09-10): 'off' disarms like 'turn'; event
+    mode ignores the caller's min/max — its clock is the organ's floor."""
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    assert cadence.arm('c', mode='off')['armed'] is False and 'c' not in cadence._records
+    st = cadence.arm('c', mode='event', min_s=60, max_s=180, every=2)
+    assert st['min_s'] == st['max_s'] == cadence.EVENT_FLOOR_S and st['every'] == 2
+    st = cadence.arm('c', mode='event', min_s=5, max_s=5, every=2)      # keepalive with other numbers
+    assert st['min_s'] == cadence.EVENT_FLOOR_S and st['next_in'] is None

@@ -5,10 +5,10 @@
     "app/game-room.css": "sha256:f7c9a81d386a18ca4b17179f3ec6de27e6ac38ed602a2330260d44c7567f4a73",
     "app/index.js": "sha256:05a7f894ab21274c0dac978a2ffe578e36f3002214ccadfd92eb0c7fe1136c39",
     "app/prompt-preview.js": "sha256:e9152e125a03e8e3bbfecb558d76a0707f6fb3f6da4127c27bdee35d04193f69",
-    "app/room-host.js": "sha256:bd20ebb1bbc65c9449a600f1b65cc0717fa1178da4bfe02cc3b98bbfe932cb58",
-    "app/settings-modal.js": "sha256:172c4c8b496007fef5075e609dba8b4d0a8c9cbf559c3f83a6d52d72eac85155",
+    "app/room-host.js": "sha256:33d4b264588864335b774cb9f725fcc1a237023c4ae746e30be3aecb312ff72e",
+    "app/settings-modal.js": "sha256:ed4707051fc8dd807478447a0b47951b31e59cbc09df8b9377b2753c2078dd98",
     "app/story-room.js": "sha256:3f5adad1fe9ccc6233cfeae7e9a07a9eba7743c129f3e51e381db5bb158985f8",
-    "gameroom_core.py": "sha256:c4fbd806d4d0ab70bd12ab621bbc09cd0fc1f3ff08b94e4da18bf4378d379f4a",
+    "gameroom_core.py": "sha256:ae0368784839a773b2310048ef5bd16c82e870a6ecd39aa85904ea09ca2c9b5e",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
@@ -26,7 +26,7 @@
     "plugin.json": "sha256:1d06546845319b86a571d841ae287d6e5b3d20ec764e7c324526ba5b56150850",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
-    "routes/play.py": "sha256:53378e7513b2207f697954fbf174cb2b0017367c5b7ec226fc723f2dbf43a6bc",
+    "routes/play.py": "sha256:8d7bfa64e9d11baf38e58474ba49a46ae143cd363627e0410e23c3900a6601e7",
     "routes/story_routes.py": "sha256:f5b28ee481dad4fbd32dc057e595c95ce50801b053a65e0ebce8d51d8becf42f",
     "tests/conftest.py": "sha256:32f9c70044d21c2529e3613c9992dc635b2605d0383925110a425e498c7af8f2",
     "tests/fixtures/stories/goblin-den/rooms/1-cave-mouth.json": "sha256:befb3fe7b4ccc87d62aad4c98ca703176a3279d626c5518ca74e7b5c86b489c9",
@@ -51,7 +51,7 @@
     "tests/test_save_paths.py": "sha256:9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "tests/test_seal_wait.py": "sha256:fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
     "tests/test_sealed_editor_grammar.py": "sha256:c63e18929859e883ed18b5a39ef37417de59968de410bb6b8fd733293c170bc1",
-    "tests/test_settings_spine.py": "sha256:4064eb21f21ac4d6775d87676f37d6e1bf21e7e2efca13cbc154fed85643bd7b",
+    "tests/test_settings_spine.py": "sha256:7d688a77ecd74a90e413eab9080c251e5de11f069551473b16f8251f33c10e8c",
     "tests/test_show_fx.py": "sha256:65beb06d88e6d0980caec96bac7156b7fb2460ec061d682eb9d4cdfa6ee9b65b",
     "tests/test_start_items.py": "sha256:d1f82a067aef5c1c64f4a0d8990008a3fba51c1cd24cb17ad6d1a9e4259893e1",
     "tests/test_story_engine.py": "sha256:67cbbe8b96bd98f201dbb50a834935899bbeddb45ac4fe607d14af81aa841031",
@@ -63,5 +63,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "sDhmwOZOXVgHy5P2IW4ZpHtn5ruhQIH5mXD951ldyolWamgERohIsmIT6ONShe5aJ/oPE1HLdmUvejoFk0WMCw=="
+  "signature": "HZbj2r1olrWtdvCfmnnKKHRx5i6+IgzUewFYAFD05yj69UFRpG2LFjK+ua2cfu0J/JdmRr7oUikBqyEI+n5dCA=="
 }

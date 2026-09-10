@@ -86,6 +86,10 @@ def register_game(game_id, spec, plugin_name):
                 # the room's pill says what she's waiting for (2026-09-09).
                 'moments': [str(m)[:60] for m in (spec.get('moments') or [])
                             if isinstance(m, (str, int, float))][:6],
+                # The game's word for its moment (2026-09-10): "wave", "hand"
+                # — the room's every-N row and pill read "every 3rd wave".
+                'cadence_event': (str(spec.get('cadence_event') or '').strip().lower()[:16]
+                                  if str(spec.get('cadence_event') or '').strip().isalpha() else ''),
                 'room_defaults': {str(k)[:64]: v for k, v in (spec.get('room_defaults') or {}).items()
                                   if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 2000}
                                  if isinstance(spec.get('room_defaults'), dict) else {},

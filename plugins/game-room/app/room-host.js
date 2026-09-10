@@ -1099,9 +1099,11 @@ function paintCadence(me) {
     if (c.paused) label = 'her turns paused';
     else if (c.running) label = 'her turn…';
     else if (c.mode === 'event') {
-        label = c.pending ? 'her turn: soon' : `her turns: ${moments || 'on game events'}`;
-        // every-N: the count so far rides the pill — "· every 3rd (1/3)"
-        if (!c.pending && c.every > 1) label += ` · every ${ordinal(c.every)}${c.pokes ? ` (${c.pokes}/${c.every})` : ''}`;
+        // every-N with the game's own word: "her turn every 3rd wave (1/3)"
+        const noun = me.spec.event, count = c.pokes ? ` (${c.pokes}/${c.every})` : '';
+        if (c.pending) label = 'her turn: soon';
+        else if (noun) label = c.every > 1 ? `her turn every ${ordinal(c.every)} ${noun}${count}` : `her turn every ${noun}`;
+        else label = `her turns: ${moments || 'on game events'}` + (c.every > 1 ? ` · every ${ordinal(c.every)}${count}` : '');
     }
     else label = c.next_in != null ? `her turn in ${Math.ceil(c.next_in)}s` : 'her turns: on';
     if (c.skips) label += ` (waited ${c.skips}×)`;
@@ -1338,6 +1340,7 @@ export async function openGame(root, gameMeta, sessionName, opts = {}) {
         loading: 'Setting the table...',
         stage: { mode: gameMeta.stage_mode || 'side', keepsFocus: !!gameMeta.keeps_focus },
         moments: gameMeta.moments || [],
+        event: gameMeta.cadence_event || '',      // its word for a moment: "wave", "hand"
         // Module bust = boot version + registry generation: a plugin hot
         // reload/toggle bumps the generation, so an updated board module is
         // fetched fresh while an unchanged one stays memoized (the old

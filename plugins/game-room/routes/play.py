@@ -187,7 +187,7 @@ def get_game_settings(game, **_):
     schema = getattr(engine, 'SETTINGS', None) or []
     return {'game': game, 'title': meta.get('title', game),
             'schema': schema, 'settings': gc.game_settings(game),
-            'room': {'schema': gc.room_schema('game', with_options=True, surface='room'),
+            'room': {'schema': gc.room_schema('game', with_options=True, surface='room', game_id=game),
                      'notes': gc.TAB_NOTES.get('room', {}),
                      'inherited': gc.inherited_for_game(game),
                      'overrides': gc.game_room_overrides(game),
@@ -268,7 +268,7 @@ def get_session_settings(query=None, **_):
     gid = str(s.get('game_id') or '')
     if s.get('mode') != 'game' or gid.startswith('story:'):
         gid = ''
-    return {'schema': gc.room_schema('session', with_options=True, surface='room'),
+    return {'schema': gc.room_schema('session', with_options=True, surface='room', game_id=gc.game_session(session)),
             'inherited': gc.effective(gid or None),      # room ⊕ declared ⊕ the game's overrides
             'overrides': gc.session_room_overrides(chat_settings=s),
             'effective': gc.effective(gid or None, chat_settings=s)}
