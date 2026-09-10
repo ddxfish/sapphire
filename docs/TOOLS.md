@@ -68,7 +68,7 @@ One primitive (`core/images.py`), one return contract, one handle. Every tool th
 | Tool | Module | What it does |
 |------|--------|--------------|
 | `web_search_images` | web.py | Bing-backed image search. The user gets clickable tiles (served through DuckDuckGo's image proxy); `view=true` also shows the model one image (`count=1`) or a numbered contact sheet |
-| `image_view` | images.py | Look at an image: `img:<id>`, `doc:<N>` (library), an absolute path, or a URL |
+| `image_view` | mindpalace library_tools.py | Look at an image: `doc:<N>` (library), `img:<id>`, an absolute path, or a URL |
 | `memory_save_image` | mindpalace library_tools.py | Keep an image in the library under a topic (Knowledge tab; pixel + caption search; optional `private_key`) |
 | `telegram_send_image` | telegram plugin | Send an image (`source=` any handle; default = newest image of this chat) |
 | `generate_image` | sd-server plugin | Generate images on a local SD server (single or contact sheet) |
@@ -152,13 +152,13 @@ One primitive (`core/images.py`), one return contract, one handle. Every tool th
 
 ### Where Tools Live
 
-Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, images, meta/self-modification, ai, network, notepad, docs, scene, schedule).
+Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, meta/self-modification, ai, network, notepad, docs, scene, schedule).
 
 | Path | Purpose | Git Tracked |
 |------|---------|-------------|
 | `plugins/memory/tools/` | Memory, knowledge, goals, people tools | Yes |
 | `plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents, calendar, sd-server, clock, ...) | Yes |
-| `functions/` | Standalone tools (web, images, meta, ai, network, notepad, docs, scene, schedule) | Yes |
+| `functions/` | Standalone tools (web, meta, ai, network, notepad, docs, scene, schedule) | Yes |
 | `user/plugins/*/tools/` | AI-created tool plugins | No |
 
 ### Enable/Disable
@@ -209,8 +209,7 @@ TOOL MODULES:
 - goals_tools.py (plugins/memory): create_goal, list_goals, update_goal, delete_goal
 - Mind Palace engine (when enabled) swaps in its own memory tool surface: same core verbs plus update_memory(memory_id, ...), layered saves
 - web.py: web_search, get_website, get_wikipedia, research_topic, get_site_links, web_search_images(query, count?=6, view?=false)
-- images.py: image_view(source, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
-- mindpalace library_tools.py: library, read_document, memory_save_image(source, topic, caption?, private_key?)
+- mindpalace library_tools.py: library, read_document, image_view(source, private_key?) — source = doc:<N> | img:<id> | /abs/path | URL, memory_save_image(source, topic, caption?, private_key?); every image-returning tool appends an '(image img:<id>)' receipt line
 - ai.py: ask_claude
 - meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools]
 - scene.py: set_scene(name) — chat scene background, 'none' clears

@@ -1168,7 +1168,7 @@ def test_tool_surface_after_the_image_rebuild():
     assert 'memory_save_image' in lt.AVAILABLE_FUNCTIONS
     assert 'view_image' not in lt.AVAILABLE_FUNCTIONS
     names = [t['function']['name'] for t in lt.TOOLS]
-    assert 'memory_save_image' in names and 'view_image' not in names
+    assert {'memory_save_image', 'image_view'} <= set(names) and 'view_image' not in names
 
 
 # --- Captions are retrieval + presentation surface (Krem's tron report) ------

@@ -92,13 +92,17 @@ def test_doc_round_trip_through_core_images_and_image_view(tmp_path, monkeypatch
     monkeypatch.setattr(ci, '_scope', lambda: 'default')
     r = ci.resolve(f'doc:{did}')
     assert r.origin == 'library' and r.media_type == 'image/png' and 'lake at dusk' in r.label
-    import functions.images as fi
-    out, ok = fi.execute('image_view', {'source': f'doc:{did}'}, {})
+    out, ok = lt.execute('image_view', {'source': f'doc:{did}'}, {})
     assert ok and out['images'][0]['media_type'] == 'image/jpeg'
     assert f'[doc {did}] lake at dusk' in out['text'] and '300x100' in out['text'] and 'library' in out['text']
     monkeypatch.setattr(ci, '_scope', lambda: 'other')
-    out, ok = fi.execute('image_view', {'source': f'doc:{did}'}, {})
+    out, ok = lt.execute('image_view', {'source': f'doc:{did}'}, {})
     assert not ok and 'No image' in out
+    # img:/path/URL lanes need no memory scope — the palace gate must not block them
+    from plugins.mindpalace.tools import palace_tools as pt
+    monkeypatch.setattr(pt, '_get_current_scope', lambda: None)
+    out, ok = lt.execute('image_view', {'source': str(p)}, {})
+    assert ok and out['images'][0]['media_type'] == 'image/jpeg' and 'from disk' in out['text']
 
 
 def test_tool_execute_routes_to_save_image(monkeypatch, tmp_path):

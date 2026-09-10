@@ -1,8 +1,9 @@
 # plugins/mindpalace/tools/library_tools.py
 # Library (Knowledge v3) — her tool surface (P3b, 2026-07-17).
-# Three tools: `library` (the card catalog — drawers WITH descriptions, that's
+# Four tools: `library` (the card catalog — drawers WITH descriptions, that's
 # how she finds where to look), `read_document` (sequential reading + range
-# digs) and `memory_save_image` (any image → the library; image_view shows one). Search itself lives inside search_memory: layer='knowledge'
+# digs), `image_view` (look at a picture — mostly hers from the library, but
+# any img:/path/URL handle) and `memory_save_image` (any image → the library). Search itself lives inside search_memory: layer='knowledge'
 # reroutes to the library engine, mixed searches get a library append
 # (palace_tools). save_memory layer='knowledge' becomes a library note —
 # her muscle memory keeps working, the storage underneath got a building.
@@ -16,7 +17,7 @@ ENABLED = True
 EMOJI = '🏛'
 GROUP = 'Mind Palace'
 
-AVAILABLE_FUNCTIONS = ['library', 'read_document', 'memory_save_image']
+AVAILABLE_FUNCTIONS = ['library', 'read_document', 'image_view', 'memory_save_image']
 
 TOOLS = [
     {
@@ -61,6 +62,26 @@ TOOLS = [
         "network": True,
         "is_local": False,
         "function": {
+            "name": "image_view",
+            "description": ("Look at an image. source = doc:<N> (a library image), img:<id> (the "
+                            "'(image img:...)' handle a tool gave you), an absolute file path, or an "
+                            "image URL. You see it; the user sees it too. For keyed library images pass "
+                            "private_key."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "doc:<N>, img:<id>, /absolute/path, or https://..."},
+                    "private_key": {"type": "string", "description": "Gate word for a keyed library image (optional)"}
+                },
+                "required": ["source"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "network": True,
+        "is_local": False,
+        "function": {
             "name": "memory_save_image",
             "description": ("Keep an image in the library under a topic (Knowledge tab; searchable by "
                             "pixels and caption; look at it later with image_view(\"doc:N\")). source = "
@@ -91,8 +112,31 @@ def _pt():
     return palace_tools
 
 
+def _image_view(arguments):
+    """image_view: any core.images handle → one resized image on the rail.
+    Lived in functions/images.py for a day (2026-09-09); moved here because
+    it mostly reads her own pictures — the doc: lane resolves scope itself,
+    so this runs BEFORE the memory-scope gate (img:/path/URL need none)."""
+    from core import images as ci
+    source = (arguments.get('source') or '').strip()
+    try:
+        r = ci.resolve(source, private_key=arguments.get('private_key'))
+        w, h = r.size
+        shaped = ci.for_chat(r.data)
+    except ci.ImageError as e:
+        return str(e), False
+    except Exception as e:
+        logger.error(f"[LIBRARY] image_view {source!r}: {type(e).__name__}: {e}")
+        return f"Couldn't open that image: {e}", False
+    origin = {'chat': 'from this chat', 'library': 'from the library',
+              'file': 'from disk', 'web': 'from the web'}[r.origin]
+    return ci.result(f"{r.label} — {w}x{h} — {origin}. You're looking at it now.", [shaped]), True
+
+
 def execute(function_name, arguments, config):
     try:
+        if function_name == 'image_view':
+            return _image_view(arguments)
         pt = _pt()
         scope = pt._get_current_scope()
         if scope is None:
