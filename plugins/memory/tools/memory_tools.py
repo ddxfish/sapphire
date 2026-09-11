@@ -667,6 +667,31 @@ def get_scopes():
         return [{"name": "default", "count": 0}]
 
 
+def status_summary(scope=None):
+    """Memory-at-a-glance for the status plugin (get_self_info + the Status
+    app) — answered here because memory.db is ours (the status plugin used to
+    run this SQL itself, 2026-09-11). Counts only. Never creates the DB: a
+    status poll on a box that hasn't saved a memory yet leaves no file."""
+    out = {'memories': 0, 'memory_scopes': {}, 'scopes': {}, 'current': None}
+    try:
+        if not _get_db_path().exists():
+            return out
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
+            out['memory_scopes'] = {row[0]: row[1] for row in cursor.fetchall()}
+            out['memories'] = sum(out['memory_scopes'].values())
+            cursor.execute('SELECT name FROM memory_scopes')
+            out['scopes'] = {row[0]: 0 for row in cursor.fetchall()}
+        for name, n in out['memory_scopes'].items():
+            out['scopes'][name] = out['scopes'].get(name, 0) + n
+        if scope:
+            out['current'] = {'scope': scope, 'memories': out['memory_scopes'].get(scope, 0)}
+    except Exception as e:
+        logger.warning(f"status_summary failed: {e}")
+    return out
+
+
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:

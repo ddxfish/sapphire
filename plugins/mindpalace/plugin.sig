@@ -1,10 +1,10 @@
 {
   "plugin": "mindpalace",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "files": {
     "README.md": "sha256:e8268a919ca1eee89e5d888174e035e525f0da9bf957faddc93ba13f08fe1621",
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
-    "plugin.json": "sha256:7ebfac5c9c5da251ab4c1bd8902d69b4e3e9903b6a7ced9132342979e26a0c99",
+    "plugin.json": "sha256:2afaa81eee4604d12b50c97ba64778a537c56ca287e0e27223cce4e6891f9414",
     "routes/browse.py": "sha256:524c98e6c6350c8695ec513e7a8e0a21f077b73954fde8e7b4569baeaef908f3",
     "routes/goals_routes.py": "sha256:5bd7a69960707327c0cb17b92238e8547ba95f338ef2224d2e0bd7580afd64c0",
     "routes/library_routes.py": "sha256:7392b8a14071e09a2b9cf47e2f87c7c98fbc2775f0ee60932c9e741c103162fe",
@@ -63,7 +63,7 @@
     "tools/library.py": "sha256:b8f00c9fa5993c0d5babf689e265863adbf83b2666c65bf82499989a8ba92bc6",
     "tools/library_tools.py": "sha256:d370b1165f0ef9acfd7eedab6dddba3701d62e000686ea0e973b90e9da2eb5cb",
     "tools/metadata.py": "sha256:8ca10bffed6064e3167127e3ef5ba25cd60076b03a0101c9eaf7bd2042aac7ed",
-    "tools/palace_tools.py": "sha256:ab0ea64af8792193e956a56dfafc32030481c71fcafb60288734f3d3f8e1ad8b",
+    "tools/palace_tools.py": "sha256:2689b2675d585f55fc0af16006c445ccd7edaefcf2607829f1bcd4cd6fcebeae",
     "tools/prompt_audit.py": "sha256:5efeab54b0b6b2d5edea18003f28240687af83c4ea7ac5d28a3b06f5719b967b",
     "tools/self_tools.py": "sha256:b2b88427b35affd02af5957bdba5426ee00b8c0c5e2588b65480a5eb03141780",
     "tools/spider.py": "sha256:7447f2e6841c889014175ce186ba1d1da7f5c637c9dd32c0b97b7d117c1f9457",
@@ -71,5 +71,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "t6oGit62HpbwQnTXmR9ClrCKlCFpJpyd1ui8mNs12sI5Zr4nEeOdVG3c2NxoB7nlnaWm7CGkVAIxmOpA7tt+Ag=="
+  "signature": "Ih5hVrezpMd1eO1XXP70QceSdumuRfPHmy/Zf3uDAXL5wfQ7a+lhK/8G81wdU7+J81osyj7djBCuGHI5AbMLAw=="
 }

@@ -1027,6 +1027,127 @@ def get_scopes():
         return [{"name": "default", "count": 0}]
 
 
+def status_summary(scope=None):
+    """Mind-at-a-glance for the status plugin (get_self_info + the Status app),
+    answered HERE because mind.db is ours: status used to run raw SQL against
+    the classic v1 files (user/memory.db, user/knowledge.db), which import
+    copies and never deletes, so a palace box reported ghost v1 counts as
+    current (2026-09-11). Counts only — no content, and NO ledger watermark
+    stamp: a status glance must never eat her "new since last read" window.
+    Cheap by design (the Status app polls every 10s): every query rides an
+    index; the dashboard/librarian helpers that scan rows are not used.
+    scope=None → totals only (memory is off for this chat)."""
+    out = {'scopes': {}, 'layers': {}, 'entities': 0, 'library_docs': 0,
+           'current': None}
+    try:
+        if not _ensure_db():
+            return out
+        dark_sql, dark_params = _dark_clause('c')
+        with _get_connection() as conn:
+            cur = conn.cursor()
+            rows = cur.execute(
+                'SELECT c.scope, c.layer, COUNT(*) FROM chunks c'
+                + (f' WHERE {dark_sql}' if dark_sql else '')
+                + ' GROUP BY c.scope, c.layer', dark_params).fetchall()
+            for s, layer, n in rows:
+                out['scopes'][s] = out['scopes'].get(s, 0) + n
+                out['layers'][layer] = out['layers'].get(layer, 0) + n
+            for (name,) in cur.execute('SELECT name FROM mind_scopes').fetchall():
+                out['scopes'].setdefault(name, 0)
+            out['scopes'].setdefault('default', 0)
+            out['entities'] = cur.execute('SELECT COUNT(*) FROM entities').fetchone()[0]
+            if scope:
+                out['current'] = _scope_status(cur, scope, dark_sql, dark_params)
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] status_summary failed: {e}")
+        return out
+    # Library (knowledge's v3 home) lives in its own DB; get_connection only
+    # runs the idempotent schema script — no worker, no folder scan.
+    try:
+        from plugins.mindpalace.tools import library
+        with library.get_connection() as conn:
+            out['library_docs'] = conn.execute(
+                'SELECT COUNT(*) FROM documents').fetchone()[0]
+            if out['current'] is not None:
+                out['current']['library_docs'] = conn.execute(
+                    'SELECT COUNT(*) FROM documents WHERE scope = ?',
+                    (scope,)).fetchone()[0]
+    except Exception as e:
+        logger.debug(f"[MINDPALACE] status_summary library count skipped: {e}")
+    return out
+
+
+def _scope_status(cur, scope, dark_sql, dark_params):
+    """The current scope's block for status_summary. Counts only."""
+    from datetime import timedelta
+
+    def one(sql, params=()):
+        return cur.execute(sql, params).fetchone()[0]
+
+    week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec='seconds')
+    d = {
+        'scope': scope,
+        'events': one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=?", (scope,)),
+        'events_7d': one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? "
+                         "AND created >= ?", (scope, week)),
+        'entities': one("SELECT COUNT(*) FROM entities WHERE scope=?", (scope,)),
+        'knowledge': one("SELECT COUNT(*) FROM chunks WHERE layer='knowledge' AND scope=?", (scope,)),
+        'favorites': one("SELECT COUNT(*) FROM chunks WHERE scope=? AND favorite=1", (scope,)),
+        'goals_active': 0, 'self_sections': 0, 'ledger_unread': 0,
+        'global_overlay': 0, 'librarian': None,
+    }
+    # Goals + self-sheet: filtered in Python like goal_tools._top_level and
+    # self_tools._current_sections (json_extract in a WHERE aborts the whole
+    # SELECT on one malformed meta row). Both sets are small.
+    for (meta,) in cur.execute("SELECT meta FROM chunks WHERE layer='goals' AND scope=?",
+                               (scope,)).fetchall():
+        try:
+            m = json.loads(meta) if meta else {}
+        except Exception:
+            m = {}
+        if (not m.get('progress_of') and not m.get('parent_goal')
+                and (m.get('goal_status') or 'active') in ('active', 'in_progress')):
+            d['goals_active'] += 1
+    for (meta,) in cur.execute("SELECT meta FROM chunks WHERE layer='self' AND scope=? "
+                               "AND label='self-sheet'", (scope,)).fetchall():
+        try:
+            m = json.loads(meta) if meta else {}
+        except Exception:
+            m = {}
+        if m.get('section') and not m.get('superseded_at'):
+            d['self_sections'] += 1
+    # Unread ledger rows = the same window read_self shows, WITHOUT stamping it.
+    row = cur.execute('SELECT last_read_ts FROM ledger_reads WHERE scope=?', (scope,)).fetchone()
+    if row and row[0]:
+        d['ledger_unread'] = one('SELECT COUNT(*) FROM ledger WHERE scope=? AND parent_id IS NULL '
+                                 'AND ts > ?', (scope, row[0]))
+    else:
+        d['ledger_unread'] = one('SELECT COUNT(*) FROM ledger WHERE scope=? AND parent_id IS NULL',
+                                 (scope,))
+    if scope != 'global':   # what her reads overlay on top of this scope
+        d['global_overlay'] = one("SELECT COUNT(*) FROM chunks c WHERE c.scope='global'"
+                                  + (f' AND {dark_sql}' if dark_sql else ''), dark_params)
+    # Librarian: master toggle mirrors librarian._enabled (fails toward off);
+    # librarian_state is the librarian's table — absent until its first pass.
+    enabled = False
+    try:
+        from core.plugin_loader import plugin_loader
+        enabled = bool(plugin_loader.get_plugin_settings('mindpalace').get('librarian_enabled'))
+    except Exception:
+        pass
+    last = None
+    try:
+        last = cur.execute('SELECT pass, last_pass FROM librarian_state WHERE scope=? '
+                           'AND last_pass IS NOT NULL ORDER BY last_pass DESC LIMIT 1',
+                           (scope,)).fetchone()
+    except sqlite3.OperationalError:
+        pass
+    d['librarian'] = {'enabled': enabled,
+                      'last_pass': last[0] if last else None,
+                      'last_pass_at': last[1] if last else None}
+    return d
+
+
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:

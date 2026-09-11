@@ -2,7 +2,7 @@
   "name": "mindpalace",
   "short_display_name": "Mind",
   "short_name": "Mind Palace",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
   "author": "sapphire",
   "icon": "🏛️",

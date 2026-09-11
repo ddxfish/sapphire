@@ -34,6 +34,45 @@ TOOLS = [
 ]
 
 
+def _scope_line(cur):
+    """One line of counts for the current scope — keys differ per plugin
+    (palace: events/entities/knowledge/library_docs/goals/self; classic:
+    memories/people/knowledge/goals), so print what's there."""
+    parts = []
+    if "memories" in cur:
+        parts.append(f"{cur['memories']} memories")
+    if "events" in cur:
+        wk = f" ({cur['events_7d']} this week)" if cur.get("events_7d") else ""
+        parts.append(f"{cur['events']} events{wk}")
+    if "entities" in cur:
+        parts.append(f"{cur['entities']} entities")
+    if "people" in cur:
+        parts.append(f"{cur['people']} people")
+    if "library_docs" in cur:
+        parts.append(f"{cur['library_docs']} library docs")
+    if cur.get("knowledge") or ("knowledge" in cur and "library_docs" not in cur):
+        parts.append(f"{cur['knowledge']} knowledge")
+    if "goals_active" in cur:
+        parts.append(f"{cur['goals_active']} active goals")
+    if "self_sections" in cur:
+        n = cur["self_sections"]
+        parts.append(f"self-sheet {n} sections" if n else "no self-sheet")
+    if cur.get("favorites"):
+        parts.append(f"{cur['favorites']} favorites")
+    if cur.get("global_overlay"):
+        parts.append(f"+{cur['global_overlay']} global")
+    return " · ".join(parts) or "empty"
+
+
+def _librarian_str(lib):
+    lib = lib or {}
+    if not lib.get("enabled"):
+        return "off"
+    if not lib.get("last_pass"):
+        return "on (no pass yet)"
+    return f"on (last pass: {lib['last_pass']} {(lib.get('last_pass_at') or '')[:10]})".rstrip()
+
+
 def execute(function_name, arguments, config=None):
     if function_name != "get_self_info":
         return f"Unknown function: {function_name}", False
@@ -43,7 +82,17 @@ def execute(function_name, arguments, config=None):
 
     try:
         from plugins.status.routes.status import get_full_status_sync
-        data = get_full_status_sync()
+        # This turn's memory scope — the ContextVar is set on every channel
+        # (web, wake, phone, continuity), so it's the truth here; None means
+        # memory is off for this chat (or no memory plugin registered one).
+        scope = None
+        try:
+            from core.chat.function_manager import SCOPE_REGISTRY
+            reg = SCOPE_REGISTRY.get('memory')
+            scope = reg['var'].get() if reg else None
+        except Exception:
+            pass
+        data = get_full_status_sync(scope=scope)
 
         if "error" in data:
             return f"Status unavailable: {data['error']}", False
@@ -70,7 +119,9 @@ def execute(function_name, arguments, config=None):
         lines.append(f"Parallel: {s.get('parallel_tool_calls', 1)} | Max iterations: {s.get('max_iterations', 10)} | Theme: {s.get('theme', 'default')}")
         if s.get('user_timezone'):
             lines.append(f"App timezone: {s['user_timezone']}")
-        lines.append(f"Scopes: memory={s.get('memory_scope', '?')}, knowledge={s.get('knowledge_scope', '?')}")
+        sc = s.get('scopes') or {}
+        if sc:
+            lines.append("Scopes: " + ", ".join(f"{k}={'off' if v is None else v}" for k, v in sc.items()))
 
         # Services
         svc = data.get("services", {})
@@ -100,17 +151,32 @@ def execute(function_name, arguments, config=None):
         if backup.get("count") is not None:
             lines.append(f"Backups: {backup['count']}{' (latest: ' + backup.get('latest_date', '?') + ')' if backup.get('latest') else ''}")
 
-        # Mind
+        # Mind — the loaded memory plugin answered for itself (status.py
+        # _memory_plugin); the palace and the classic plugin return different
+        # keys, so render whichever are present.
         mind = data.get("mind", {})
-        if mind:
-            scopes = mind.get("scopes", [])
-            lines.append(f"Mind scopes: {', '.join(scopes) if scopes else 'none'}")
-            lines.append(f"  Memories: {mind.get('memories', 0)} total")
-            mem_scopes = mind.get("memory_scopes", {})
-            if mem_scopes:
-                lines.append(f"    by scope: {', '.join(f'{k}: {v}' for k, v in mem_scopes.items())}")
-            lines.append(f"  People: {mind.get('people', 0)} total")
-            lines.append(f"  Knowledge: {mind.get('knowledge_total', 0)} entries")
+        engine = mind.get("engine")
+        if not engine:
+            lines.append("Mind: no memory plugin loaded")
+        else:
+            scopes = mind.get("scopes") or {}
+            scope_str = ", ".join(f"{k} ({v})" for k, v in sorted(scopes.items())) or "none"
+            lines.append(f"Mind: {mind.get('engine_label') or engine} | scopes: {scope_str}")
+            layers = mind.get("layers")
+            if layers is not None:   # palace
+                lay = ", ".join(f"{k} {v}" for k, v in sorted(layers.items(), key=lambda kv: -kv[1])) or "empty"
+                lines.append(f"  Layers (chunks): {lay} | Entity cards: {mind.get('entities', 0)} | Library: {mind.get('library_docs', 0)} docs")
+            if "memories" in mind:   # classic
+                lines.append(f"  Memories: {mind.get('memories', 0)} | People: {mind.get('people', 0)} | "
+                             f"Knowledge: {mind.get('knowledge_total', 0)} entries | Active goals: {mind.get('goals_active', 0)}")
+            cur = mind.get("current")
+            if cur is None:
+                lines.append("  This chat: memory off")
+            else:
+                lines.append(f"  This scope ({cur.get('scope', '?')}): {_scope_line(cur)}")
+                if "ledger_unread" in cur:
+                    lines.append(f"  Ledger: {cur['ledger_unread']} new since last read | "
+                                 f"Librarian: {_librarian_str(cur.get('librarian'))}")
 
         # Metrics
         m = data.get("metrics", {})

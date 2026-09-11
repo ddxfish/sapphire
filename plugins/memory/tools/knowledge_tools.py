@@ -434,6 +434,37 @@ def get_scopes():
         return [{"name": "default", "count": 0}]
 
 
+def status_summary(scope=None):
+    """People + knowledge counts for the status plugin — answered here
+    because knowledge.db is ours (2026-09-11). Counts only; never creates
+    the DB."""
+    out = {'people': 0, 'people_by_scope': {}, 'knowledge_total': 0,
+           'knowledge_scopes': {}, 'scopes': {}, 'current': None}
+    try:
+        if not _get_db_path().exists():
+            return out
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM people GROUP BY scope')
+            out['people_by_scope'] = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT t.scope, COUNT(e.id) FROM knowledge_tabs t '
+                           'LEFT JOIN knowledge_entries e ON e.tab_id = t.id GROUP BY t.scope')
+            out['knowledge_scopes'] = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT name FROM knowledge_scopes')
+            out['scopes'] = {row[0]: 0 for row in cursor.fetchall()}
+        out['people'] = sum(out['people_by_scope'].values())
+        out['knowledge_total'] = sum(out['knowledge_scopes'].values())
+        for counts in (out['people_by_scope'], out['knowledge_scopes']):
+            for name, n in counts.items():
+                out['scopes'][name] = out['scopes'].get(name, 0) + n
+        if scope:
+            out['current'] = {'people': out['people_by_scope'].get(scope, 0),
+                              'knowledge': out['knowledge_scopes'].get(scope, 0)}
+    except Exception as e:
+        logger.warning(f"knowledge status_summary failed: {e}")
+    return out
+
+
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:

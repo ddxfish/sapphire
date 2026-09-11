@@ -72,11 +72,38 @@ function renderDashboard(el, d) {
     // Tool names (collapsible)
     const toolNames = sess.tool_names || [];
 
-    // Mind scopes
-    const allScopes = mind.scopes || [];
-    const memScopes = mind.memory_scopes || {};
-    const knowledgeScopes = mind.knowledge_scopes || {};
-    const peopleScopes = mind.people_by_scope || {};
+    // Mind — the loaded memory plugin answered for itself (palace and classic
+    // return different keys; render whichever are present)
+    const mindScopes = mind.scopes || {};
+    const mindScopeStr = Object.keys(mindScopes).length
+        ? Object.entries(mindScopes).sort().map(([k, v]) => `${k} (${v})`).join(', ') : 'none';
+    const cur = mind.current;
+    const mindLines = [];
+    if (!mind.engine) mindLines.push(['Engine', 'no memory plugin loaded']);
+    else {
+        mindLines.push(['Engine', mind.engine_label || mind.engine]);
+        mindLines.push(['Scopes', mindScopeStr]);
+        if (mind.layers) {
+            const lay = Object.entries(mind.layers).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty';
+            mindLines.push(['Layers (chunks)', lay]);
+            mindLines.push(['Entity cards', `${mind.entities || 0}`]);
+            mindLines.push(['Library', `${mind.library_docs || 0} docs`]);
+        }
+        if ('memories' in mind) {
+            mindLines.push(['Memories', `${mind.memories || 0}`]);
+            mindLines.push(['People', `${mind.people || 0}`]);
+            mindLines.push(['Knowledge', `${mind.knowledge_total || 0} entries`]);
+            mindLines.push(['Active goals', `${mind.goals_active || 0}`]);
+        }
+        if (!cur) mindLines.push(['This chat', 'memory off']);
+        else {
+            mindLines.push([`This scope (${cur.scope || '?'})`, scopeLine(cur)]);
+            if ('ledger_unread' in cur) {
+                mindLines.push(['Ledger', `${cur.ledger_unread} new since last read`]);
+                mindLines.push(['Librarian', librarianStr(cur.librarian)]);
+            }
+        }
+    }
 
     el.innerHTML = `
         <div class="status-dashboard">
@@ -103,8 +130,7 @@ function renderDashboard(el, d) {
                         ${field('LLM', `${sess.llm_primary || 'auto'}${sess.llm_model ? ' (' + sess.llm_model + ')' : ''}`)}
                         ${field('Toolset', `${sess.toolset || '?'} (${sess.function_count || 0} tools)`)}
                         ${field('Parallel / Iters', `${sess.parallel_tool_calls || 1} parallel, ${sess.max_iterations || 10} max iterations`)}
-                        ${field('Memory', sess.memory_scope || 'default')}
-                        ${field('Knowledge', sess.knowledge_scope || 'default')}
+                        ${Object.entries(sess.scopes || {}).map(([k, v]) => field(`Scope: ${k}`, v === null ? 'off' : v)).join('')}
                         ${field('Theme', sess.theme || 'default')}
                     </div>
                 </div>
@@ -269,13 +295,7 @@ function renderDashboard(el, d) {
                 <div class="status-card" style="grid-column: 1 / -1">
                     <div class="status-card-title">Mind</div>
                     <div class="status-grid">
-                        ${field('Scopes', allScopes.length ? allScopes.join(', ') : 'none')}
-                        ${field('Memories', `${mind.memories || 0} total`)}
-                        ${Object.keys(memScopes).length ? field('  by scope', Object.entries(memScopes).map(([k,v]) => `${k}: ${v}`).join(', ')) : ''}
-                        ${field('People', `${mind.people || 0} total`)}
-                        ${Object.keys(peopleScopes).length ? field('  by scope', Object.entries(peopleScopes).map(([k,v]) => `${k}: ${v}`).join(', ')) : ''}
-                        ${field('Knowledge', `${mind.knowledge_total || 0} entries`)}
-                        ${Object.keys(knowledgeScopes).length ? field('  by scope', Object.entries(knowledgeScopes).map(([k,v]) => `${k}: ${v}`).join(', ')) : ''}
+                        ${mindLines.map(([k, v]) => field(k, v)).join('')}
                     </div>
                 </div>
             </div>
@@ -420,7 +440,7 @@ function renderDashboard(el, d) {
             `LLM: ${sess.llm_primary} (${sess.llm_model || 'default'})`,
             `Toolset: ${sess.toolset} (${sess.function_count} tools) | Parallel: ${sess.parallel_tool_calls || 1} | Max Iters: ${sess.max_iterations || 10}`,
             `Theme: ${sess.theme || 'default'}`,
-            `Scopes: memory=${sess.memory_scope || 'default'}, knowledge=${sess.knowledge_scope || 'default'}`,
+            Object.keys(sess.scopes || {}).length ? `Scopes: ${Object.entries(sess.scopes).map(([k, v]) => `${k}=${v === null ? 'off' : v}`).join(', ')}` : '',
             ``,
             `=== Services ===`,
             `TTS: ${svc.tts?.provider || 'off'}${svc.tts?.voice ? ' (' + svc.tts.voice + ')' : ''} | STT: ${svc.stt?.provider || 'off'}`,
@@ -449,10 +469,7 @@ function renderDashboard(el, d) {
             backup.count !== undefined ? `${backup.count} backups${backup.latest ? ', latest: ' + (backup.latest_date || backup.latest) : ''}` : 'unavailable',
             ``,
             `=== Mind ===`,
-            `Scopes: ${allScopes.join(', ') || 'none'}`,
-            `Memories: ${mind.memories || 0} total${Object.keys(memScopes).length ? ' (' + Object.entries(memScopes).map(([k,v]) => `${k}: ${v}`).join(', ') + ')' : ''}`,
-            `People: ${mind.people || 0} total${Object.keys(peopleScopes).length ? ' (' + Object.entries(peopleScopes).map(([k,v]) => `${k}: ${v}`).join(', ') + ')' : ''}`,
-            `Knowledge: ${mind.knowledge_total || 0} entries${Object.keys(knowledgeScopes).length ? ' (' + Object.entries(knowledgeScopes).map(([k,v]) => `${k}: ${v}`).join(', ') + ')' : ''}`,
+            ...mindLines.map(([k, v]) => `${k}: ${v}`),
             ``,
             metrics.total_tokens ? `=== Tokens (7d) ===\n${(metrics.total_tokens || 0).toLocaleString()} total, ${metrics.total_calls || 0} calls` : '',
             ``,
@@ -588,6 +605,30 @@ function _devTag(svc) {
     const warn = actual && cfg && actual !== cfg ? ' ⚠' : '';
     return ` <span class="status-dev-tag" title="${esc(tooltip)}" style="opacity:0.7;font-size:0.85em">[${label}${warn}]</span>`;
 }
+// Current-scope counts line — keys differ per memory plugin (mirrors
+// status_tool._scope_line so the page and the tool read the same).
+function scopeLine(cur) {
+    const parts = [];
+    if ('memories' in cur) parts.push(`${cur.memories} memories`);
+    if ('events' in cur) parts.push(`${cur.events} events${cur.events_7d ? ` (${cur.events_7d} this week)` : ''}`);
+    if ('entities' in cur) parts.push(`${cur.entities} entities`);
+    if ('people' in cur) parts.push(`${cur.people} people`);
+    if ('library_docs' in cur) parts.push(`${cur.library_docs} library docs`);
+    if (cur.knowledge || ('knowledge' in cur && !('library_docs' in cur))) parts.push(`${cur.knowledge} knowledge`);
+    if ('goals_active' in cur) parts.push(`${cur.goals_active} active goals`);
+    if ('self_sections' in cur) parts.push(cur.self_sections ? `self-sheet ${cur.self_sections} sections` : 'no self-sheet');
+    if (cur.favorites) parts.push(`${cur.favorites} favorites`);
+    if (cur.global_overlay) parts.push(`+${cur.global_overlay} global`);
+    return parts.join(' \u00B7 ') || 'empty';
+}
+
+function librarianStr(lib) {
+    lib = lib || {};
+    if (!lib.enabled) return 'off';
+    if (!lib.last_pass) return 'on (no pass yet)';
+    return `on (last pass: ${lib.last_pass} ${(lib.last_pass_at || '').slice(0, 10)})`.trim();
+}
+
 function field(label, value) {
     return `<div class="status-field"><span class="status-field-label">${esc(label)}</span><span class="status-field-value">${esc(value)}</span></div>`;
 }

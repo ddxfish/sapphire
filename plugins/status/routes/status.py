@@ -92,7 +92,9 @@ def _get_disk_info(user_dir: Path) -> dict:
     except Exception:
         pass
     db_sizes = {}
-    for name in ("chats.db", "memory.db", "knowledge.db"):
+    # Real files by relative path. The old trio (chats.db / memory.db /
+    # knowledge.db) was the v1 layout; chats.db never lived at user/ at all.
+    for name in _DB_FILES:
         p = user_dir / name
         try:
             if p.exists():
@@ -253,6 +255,98 @@ def _run_custom_commands(commands_text: str, max_per_output: int = 500, timeout_
     return results
 
 
+_DB_FILES = ("history/sapphire_history.db", "memory/mind.db", "memory/library.db",
+             "memory.db", "knowledge.db", "goals.db", "metrics/token_usage.db")
+
+_FROM_CHAT = object()   # get_full_status_sync(scope=): "derive from chat settings"
+
+
+def _norm_scope(val):
+    """Chat-settings scope value → ContextVar value ('none'/'' → off/default,
+    mirrors apply_scopes_from_settings)."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        v = val.strip()
+        if v.lower() == 'none':
+            return None
+        return v or 'default'
+    return val
+
+
+def _memory_plugin():
+    """(name, label, [status_summary callables]) of the LOADED memory plugin
+    (manifest essential: "memory"), or (None, None, []).
+
+    Discovery = loader `loaded` flag + sys.modules lookup of each tool file's
+    canonical module (the name register_plugin_tools installs). NEVER a bare
+    import: the plugin dirs are namespace packages, so importing a not-loaded
+    plugin execs a fresh copy from disk with its module-level side effects.
+    Generic over any plugin in the memory group — the classic plugin answers
+    from three modules, the palace from one; each answers only for the DB it
+    owns (B ruling, 2026-09-11)."""
+    try:
+        from core.plugin_loader import plugin_loader
+        # list() snapshot: a concurrent rescan() pops from _plugins mid-iteration
+        for name, info in list(plugin_loader._plugins.items()):
+            if not info.get("loaded"):
+                continue
+            manifest = info.get("manifest", {}) or {}
+            if manifest.get("essential") != "memory":
+                continue
+            label = manifest.get("short_name") or manifest.get("display_name") or name
+            dirname = Path(str(info.get("path") or name)).name
+            fns = []
+            for rel in (manifest.get("capabilities", {}) or {}).get("tools", []) or []:
+                canonical = "plugins." + ".".join([dirname] + list(Path(rel).with_suffix('').parts))
+                fn = getattr(sys.modules.get(canonical), "status_summary", None)
+                if callable(fn):
+                    fns.append(fn)
+            return name, label, fns
+    except Exception as e:
+        logger.debug(f"memory plugin discovery failed: {e}")
+    return None, None, []
+
+
+def _get_mind_info(scope, plugin):
+    """Merge the memory plugin's status_summary answers into one dict:
+    `scopes` counts are summed, `current` blocks are folded into one, every
+    other key is taken as-is. engine=None → no memory plugin loaded."""
+    name, label, fns = plugin
+    mind = {"engine": name, "engine_label": label, "scopes": {}, "current": None}
+    if not name:
+        return mind
+    for fn in fns:
+        try:
+            part = dict(fn(scope) or {})
+        except Exception as e:
+            logger.debug(f"status_summary failed ({getattr(fn, '__module__', '?')}): {e}")
+            continue
+        for k, v in (part.pop("scopes", None) or {}).items():
+            mind["scopes"][k] = mind["scopes"].get(k, 0) + v
+        cur = part.pop("current", None)
+        if cur:
+            mind["current"] = {**(mind["current"] or {}), **cur}
+        mind.update(part)
+    return mind
+
+
+def _session_scopes(chat_settings, plugin_name):
+    """{scope_key: value} for the scopes the loaded memory plugin registered
+    (the registry is the truth — the old block hardcoded memory + knowledge,
+    and 'knowledge' isn't a scope under the palace)."""
+    out = {}
+    try:
+        from core.chat.function_manager import SCOPE_REGISTRY
+        for key, reg in list(SCOPE_REGISTRY.items()):
+            if reg.get('plugin') != plugin_name or not reg.get('setting'):
+                continue
+            out[key] = _norm_scope(chat_settings.get(reg['setting'], reg.get('default')))
+    except Exception:
+        pass
+    return out
+
+
 def _is_docker():
     try:
         return Path('/.dockerenv').exists() or 'docker' in Path('/proc/1/cgroup').read_text()
@@ -276,8 +370,15 @@ async def get_full_status(**kwargs):
     return get_full_status_sync()
 
 
-def get_full_status_sync():
-    """GET /api/plugin/status/full — comprehensive system snapshot."""
+def get_full_status_sync(scope=_FROM_CHAT):
+    """GET /api/plugin/status/full — comprehensive system snapshot.
+
+    scope: the memory scope the Mind block reports "this scope" for. The tool
+    passes the turn's ContextVar (authoritative on every channel — web, wake,
+    phone, continuity all set it); the web page has no turn, and the
+    ContextVar's default is the string 'default' (indistinguishable from a
+    real one), so the route derives it from the chat's memory_scope setting.
+    None = memory off for this chat."""
     try:
         import config
         from core.api_fastapi import get_system, APP_VERSION
@@ -332,6 +433,9 @@ def get_full_status_sync():
                 _tc = _c
         except Exception:
             pass
+        memory_plugin = _memory_plugin()
+        if scope is _FROM_CHAT:
+            scope = _norm_scope(chat_settings.get("memory_scope", "default"))
         active_session = {
             "chat": chat_name,
             "prompt": chat_settings.get("prompt", ""),
@@ -341,8 +445,7 @@ def get_full_status_sync():
             "toolset": _tc.get("toolset") or fm.current_toolset_name,
             "function_count": len(fm._enabled_tools),
             "tool_names": sorted(t['function']['name'] for t in fm._enabled_tools),
-            "memory_scope": chat_settings.get("memory_scope", "default"),
-            "knowledge_scope": chat_settings.get("knowledge_scope", "default"),
+            "scopes": _session_scopes(chat_settings, memory_plugin[0]),
             "parallel_tool_calls": getattr(config, 'MAX_PARALLEL_TOOLS', 1),
             "max_iterations": getattr(config, 'MAX_TOOL_ITERATIONS', 10),
             "theme": getattr(config, 'THEME', 'default'),
@@ -541,59 +644,14 @@ def get_full_status_sync():
         except Exception:
             pass
 
-        # Mind / Knowledge / Memory stats
-        mind_info = {"scopes": [], "memories": 0, "memory_scopes": {}, "people": 0, "people_by_scope": {},
-                     "knowledge_total": 0, "knowledge_scopes": {}}
+        # Mind — asked of the LOADED memory plugin through its own
+        # status_summary() (see _memory_plugin). The old block ran raw SQL
+        # against user/memory.db + user/knowledge.db — the classic v1 files,
+        # which the palace's import copies and never deletes — so a palace box
+        # reported ghost v1 counts as current and a fresh box reported zeros,
+        # every failure swallowed into "0" (2026-09-11).
+        mind_info = _get_mind_info(scope, memory_plugin)
         user_dir = Path(__file__).parent.parent.parent.parent / "user"
-        try:
-            import sqlite3
-
-            # Memories (user/memory.db)
-            mem_path = user_dir / "memory.db"
-            if mem_path.exists():
-                conn = sqlite3.connect(str(mem_path))
-                c = conn.cursor()
-                try:
-                    c.execute("SELECT scope, COUNT(*) FROM memories GROUP BY scope")
-                    mind_info["memory_scopes"] = {r[0]: r[1] for r in c.fetchall()}
-                    mind_info["memories"] = sum(mind_info["memory_scopes"].values())
-                except Exception:
-                    pass
-                try:
-                    c.execute("SELECT name FROM memory_scopes")
-                    mind_info["scopes"] = sorted(set(mind_info.get("scopes", []) + [r[0] for r in c.fetchall()]))
-                except Exception:
-                    pass
-                conn.close()
-
-            # Knowledge + People (user/knowledge.db)
-            kb_path = user_dir / "knowledge.db"
-            if kb_path.exists():
-                conn = sqlite3.connect(str(kb_path))
-                c = conn.cursor()
-                # People
-                try:
-                    c.execute("SELECT scope, COUNT(*) FROM people GROUP BY scope")
-                    mind_info["people_by_scope"] = {r[0]: r[1] for r in c.fetchall()}
-                    mind_info["people"] = sum(mind_info["people_by_scope"].values())
-                except Exception:
-                    pass
-                # Knowledge entries by scope (via tabs)
-                try:
-                    c.execute("SELECT t.scope, COUNT(e.id) FROM knowledge_tabs t LEFT JOIN knowledge_entries e ON e.tab_id = t.id GROUP BY t.scope")
-                    mind_info["knowledge_scopes"] = {r[0]: r[1] for r in c.fetchall()}
-                    mind_info["knowledge_total"] = sum(mind_info["knowledge_scopes"].values())
-                except Exception:
-                    pass
-                # Collect all scope names
-                try:
-                    c.execute("SELECT name FROM knowledge_scopes")
-                    mind_info["scopes"] = sorted(set(mind_info.get("scopes", []) + [r[0] for r in c.fetchall()]))
-                except Exception:
-                    pass
-                conn.close()
-        except Exception:
-            pass
 
         # Hardware / disk / activity / upcoming tasks / custom commands.
         # Each gatherer is independently try/except'd inside — failures
