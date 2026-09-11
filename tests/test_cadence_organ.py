@@ -125,24 +125,29 @@ def test_tick_expires_dead_records_and_fires_due_ones(monkeypatch):
 # ── the turn door ───────────────────────────────────────────────────────────
 
 class _Stream:
-    def __init__(self, events):
+    def __init__(self, events, rows=0):
         self.events = events
+        self.rows = rows            # rows this turn "persists" on the live list
+        self.sink = None
         self.seen = None
         self.suppress_tts = False
         self.images_ephemeral = False
 
     def chat_stream(self, text, images=None):
         self.seen = (text, images)
+        if self.sink is not None:
+            self.sink.extend([{'role': 'row'}] * self.rows)
         for ev in self.events:
             yield ev
 
 
-def _system(events, active='other', busy=False):
-    stream = _Stream(events)
+def _system(events, active='other', busy=False, rows=0):
+    stream = _Stream(events, rows)
     llm = MagicMock()
     llm.begin_stream = MagicMock(side_effect=(ChatBusy('c') if busy else None), return_value=(stream, 'sid', 'c'))
     llm.session_manager.get_active_chat_name.return_value = active
     llm.session_manager.is_streaming.return_value = False
+    stream.sink = llm.session_manager.current_chat.messages = [{'role': 'user'}, {'role': 'assistant'}]
     sysobj = types.SimpleNamespace(llm_chat=llm, tts=MagicMock())
     return sysobj, stream, llm
 
@@ -294,7 +299,7 @@ def test_think_loop_is_cancelled_and_the_pair_dropped():
     big = '<think>' + 'x' * (cadence.THINK_BUDGET_CHARS + 10)
     events = [{'type': 'content', 'text': big[:3000]}, {'type': 'content', 'text': big[3000:]},
               {'type': 'content', 'text': 'more thinking'}, {'type': 'final', 'text': big + 'more thinking', 'cancelled': True}]
-    sysobj, stream, llm = _system(events, active='c')
+    sysobj, stream, llm = _system(events, active='c', rows=2)
     llm.session_manager.remove_last_messages.return_value = True
     cadence._system = sysobj
     published = []
@@ -363,3 +368,57 @@ def test_off_disarms_and_event_mode_owns_its_floor():
     assert st['min_s'] == st['max_s'] == cadence.EVENT_FLOOR_S and st['every'] == 2
     st = cadence.arm('c', mode='event', min_s=5, max_s=5, every=2)      # keepalive with other numbers
     assert st['min_s'] == cadence.EVENT_FLOOR_S and st['next_in'] is None
+
+
+def test_drop_counts_the_rows_this_turn_added_not_a_fixed_two():
+    """A think loop after a tool call persisted FOUR rows (cue, assistant+
+    tool_calls, tool, think-only) — dropping two orphaned the tool_call
+    (provider 400 next turn). The drop is the live list's growth."""
+    big = '<think>' + 'x' * (cadence.THINK_BUDGET_CHARS + 10)
+    events = [{'type': 'tool_start', 'name': 'x'}, {'type': 'tool_end', 'name': 'x'},
+              {'type': 'content', 'text': big}, {'type': 'final', 'text': big, 'cancelled': True}]
+    sysobj, stream, llm = _system(events, active='c', rows=4)
+    llm.session_manager.remove_last_messages.return_value = True
+    cadence._system = sysobj
+    with patch('core.cadence.publish'):
+        cadence.run_turn('c', 'cue')
+    llm.session_manager.remove_last_messages.assert_called_once_with(4)
+    # nothing measurable (not the live chat) = nothing touched
+    sysobj2, _, llm2 = _system(events, active='elsewhere', rows=4)
+    cadence._system = sysobj2
+    with patch('core.cadence.publish'):
+        cadence.run_turn('c', 'cue')
+    llm2.session_manager.remove_last_messages.assert_not_called()
+
+
+def test_tool_only_turn_is_an_answer_not_a_drop():
+    """She moved (a tool call) and said nothing: keep the rows, speak nothing."""
+    events = [{'type': 'tool_start', 'name': 'poker_move'}, {'type': 'tool_end', 'name': 'poker_move'},
+              {'type': 'final', 'text': '', 'cancelled': False}]
+    sysobj, stream, llm = _system(events, active='c', rows=4)
+    cadence._system = sysobj
+    published = []
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))):
+        out = cadence.run_turn('c', 'cue', speak='speakers')
+    assert out == ''
+    llm.session_manager.remove_last_messages.assert_not_called()
+    end = published[-1][1]
+    assert end['dropped'] is False and end['speak'] is None and end['text'] == ''
+    sysobj.tts.speak.assert_not_called()
+
+
+def test_refused_turn_is_never_her_answer():
+    """A by-name turn the engine refuses (🔒 chat unreachable) yields its
+    notice as content + final error — it was captioned and SPOKEN as hers."""
+    notice = "🔒 Chat 'c' isn't reachable right now (missing or sealed) — the turn was not run."
+    events = [{'type': 'content', 'text': notice}, {'type': 'final', 'text': notice, 'cancelled': False, 'error': True}]
+    sysobj, stream, llm = _system(events, active='c', rows=0)
+    cadence._system = sysobj
+    published = []
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))), \
+            pytest.raises(RuntimeError):
+        cadence.run_turn('c', 'cue', speak='speakers')
+    end = published[-1][1]
+    assert end['text'] == '' and end['speak'] is None
+    sysobj.tts.speak.assert_not_called()
+    llm.session_manager.remove_last_messages.assert_not_called()

@@ -460,12 +460,12 @@ ROOM_KEYS = [
     # manifest (`cadence_event`: wave, hand) — room_schema(game_id=) reads
     # "every N waves"; the pill "her turn every 3rd wave".
     {'key': 'cadence_mode', 'label': 'her turns', 'type': 'select',
-     'options': [{'value': 'off', 'label': 'off'},
+     'options': [{'value': 'off', 'label': 'none'},
                  {'value': 'turn', 'label': 'per move'},
                  {'value': 'event', 'label': 'per event'},
                  {'value': 'timer', 'label': 'on a timer'}],
      'default': 'timer', 'tab': 'Cadence', 'scope': ['game', 'session'], 'show_in': ['room'],
-     'help': "Off: no unprompted turns (a game without her, or you want quiet). Per move: she answers each of your moves and messages through her seat (poker). Per event: the game posts its moments (a wave cleared) and every Nth one is her turn. Timer: her turns come on a random clock between min and max seconds (watching you play Doom, a movie)."},
+     'help': "None: no unprompted turns (a game without her, or you want quiet). Per move: she answers each of your moves and messages through her seat (poker). Per event: the game posts its moments (a wave cleared) and every Nth one is her turn. Timer: her turns come on a random clock between min and max seconds (watching you play Doom, a movie)."},
     {'key': 'cadence_min', 'label': 'min gap (s)', 'type': 'number', 'reveal_if': {'key': 'cadence_mode', 'is': ['timer']},
      'min': 5, 'max': 3600, 'step': 5, 'default': 60, 'tab': 'Cadence', 'scope': ['room', 'game', 'session'],
      'help': 'Timer only: the shortest wait before one of her unprompted turns. Each turn waits a random gap between min and max seconds.'},

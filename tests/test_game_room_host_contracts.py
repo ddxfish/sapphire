@@ -108,3 +108,18 @@ def test_cadence_organ_is_core_and_the_room_arms_it():
     assert {"room/cadence/arm", "room/cadence/pause", "room/cadence/poke", "room/session-end"} <= routes
     engine = (ROOT / "core" / "chat" / "chat_streaming.py").read_text(encoding="utf-8")
     assert "images_ephemeral" in engine
+
+
+MAIN = (ROOT / "interfaces" / "web" / "static" / "main.js").read_text(encoding="utf-8")
+
+
+def test_organ_voice_honors_the_mute_gates():
+    # her unprompted turns speak behind the same 🔇 / TTS gates as seat quips
+    assert "me.spec.cadence && me.voiceOn && me.ttsEnabled) speakText(" in HOST
+
+
+def test_bound_rail_gates_every_voice_turn_event_alike():
+    # start/chunk/end all gate on _notMine — a bound rail whose turn is
+    # `foreign` (pointer elsewhere) used to paint the start and then freeze
+    assert MAIN.count("if (_notMine(data) || !_voiceTurnActive) return;") == 2
+    assert "data?.foreign || !_voiceTurnActive" not in MAIN

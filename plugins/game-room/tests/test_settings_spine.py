@@ -318,3 +318,8 @@ def test_room_schema_words_every_n_with_the_games_noun(store, monkeypatch):
     assert row['label'] == 'every N events'
     assert {f['key']: f for f in gc.room_schema('game', surface='room')}['cadence_every']['label'] == 'every N events'
     assert gc.coerce_field(_key('cadence_mode'), 'off') == 'off'
+
+
+def test_cadence_mode_none_is_the_off_switch():
+    opts = {o['value']: o['label'] for o in _key('cadence_mode')['options']}
+    assert opts['off'] == 'none'

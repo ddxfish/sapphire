@@ -717,12 +717,16 @@ function initEventBus() {
             if (!getAbortController()) setProc(true);
         } catch (e) { console.warn('[VOICE_TURN] start failed', e); }
     });
+    // Chunks/end gate the SAME way start does (_notMine): a rail bound by
+    // name to a session whose turn is `foreign` (pointer elsewhere) used to
+    // paint the start bubble, then get no chunks and no end — Stop lit and
+    // every refresh suppressed until reload (scout 3, 2026-09-10).
     eventBus.on('voice_turn_chunk', (data) => {
-        if (data?.foreign || !_voiceTurnActive) return;
+        if (_notMine(data) || !_voiceTurnActive) return;
         try { ui.appendStream(data?.text || ''); } catch (e) { /* ignore */ }
     });
     eventBus.on('voice_turn_end', async (data) => {
-        if (data?.foreign || !_voiceTurnActive) return;
+        if (_notMine(data) || !_voiceTurnActive) return;
         _voiceTurnActive = false;
         try {
             if (!getAbortController()) setProc(false);

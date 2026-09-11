@@ -87,17 +87,32 @@ def _unfinished_thinking(buf):
     return 0 if re.search(r'</(?:seed:think|seed:cot_budget_reflect|think)>', tail) else len(tail)
 
 
-def _drop_last_turn(chat, reason):
-    """A no-answer turn leaves no trace: the cue row + her think-only row go.
-    Only when the chat is the live one (by-name row surgery is later);
-    otherwise the pair stays and the reason is logged."""
+def _live_row_count(sm, chat):
+    """Rows on the live chat's list, or None when `chat` isn't the live one
+    (by-name row surgery is later — those rows stay and get logged)."""
     try:
-        sm = _system.llm_chat.session_manager
         if sm.get_active_chat_name() == chat:
-            ok = sm.remove_last_messages(2)
-            logger.info(f"[CADENCE] '{chat}': {reason} — pair dropped ({'ok' if ok else 'nothing to drop'})")
-            return bool(ok)
-        logger.info(f"[CADENCE] '{chat}': {reason} — pair left in place (chat not live)")
+            return len(sm.current_chat.messages)
+    except Exception:
+        pass
+    return None
+
+
+def _drop_last_turn(chat, reason, count):
+    """A no-answer turn leaves no trace: every row THIS turn added goes (the
+    cue row + her think-only row — or more: a turn that ran a tool is four
+    rows, and dropping a fixed two left an assistant tool_call without its
+    tool row = provider 400 next turn; scout 3, 2026-09-10). `count` is the
+    live list's growth measured around the turn; 0/None = nothing known to
+    drop, so nothing is touched — a wrong count could eat the user's rows."""
+    try:
+        if not count or count <= 0:
+            logger.info(f"[CADENCE] '{chat}': {reason} — rows left in place (chat not live)")
+            return False
+        sm = _system.llm_chat.session_manager
+        ok = sm.remove_last_messages(count)
+        logger.info(f"[CADENCE] '{chat}': {reason} — {count} row(s) dropped ({'ok' if ok else 'nothing to drop'})")
+        return bool(ok)
     except Exception as e:
         logger.warning(f"[CADENCE] '{chat}': drop after {reason} failed: {e}")
     return False
@@ -249,6 +264,8 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
                                       "chat": chat, "foreign": foreign, "source": source})
     parts, cancelled, errored, overthought = [], False, None, False
     thinking_chars = 0             # provider-side thinking events (Claude-style)
+    tools_ran = False              # a tool-only turn (a move, no words) is an answer
+    rows_before = _live_row_count(sm, chat)
     try:
         for ev in stream.chat_stream(text, images=images or None):
             if not isinstance(ev, dict):
@@ -260,9 +277,17 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
                                                   "chat": chat, "foreign": foreign})
             elif et == 'thinking':
                 thinking_chars += len(ev.get('text') or '')
+            elif et == 'tool_end':
+                tools_ran = True
             elif et == 'final':
                 cancelled = bool(ev.get('cancelled'))
-                if ev.get('text'):
+                if ev.get('error'):
+                    # a refused turn (🔒 chat unreachable): the engine yields
+                    # its notice as content — that is NOT her answer; it used
+                    # to be captioned and spoken aloud (scout 3, 2026-09-10)
+                    errored = ev.get('text') or 'turn refused'
+                    parts = []
+                elif ev.get('text'):
                     parts = [ev['text']]
             elif et == 'error':
                 errored = ev.get('text') or 'stream error'
@@ -278,14 +303,17 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
     finally:
         llm.end_stream(sid, chat_name)
     final = visible_text(''.join(parts)) if not cancelled or overthought else ''
-    if overthought or (not final and not errored):
+    dropped = False
+    if overthought or (not final and not errored and not tools_ran):
         # no answer (a think loop, an empty reply): nothing to show, speak, or keep
         final = ''
-        _drop_last_turn(chat, 'thinking never finished' if overthought else 'empty answer')
+        rows_after = _live_row_count(sm, chat)
+        added = (rows_after - rows_before) if (rows_before is not None and rows_after is not None) else None
+        dropped = _drop_last_turn(chat, 'thinking never finished' if overthought else 'empty answer', added)
     publish(Events.VOICE_TURN_END, {"message_id": mid, "chat": chat, "foreign": foreign,
                                     "text": final,
                                     "speak": (speak if (final and not errored) else None),
-                                    "source": source, "dropped": bool(overthought or not final)})
+                                    "source": source, "dropped": dropped})
     if errored:
         raise RuntimeError(errored)
     if speak == 'speakers' and final:

@@ -1301,8 +1301,9 @@ function bindWatch() {
         } else if (me.spec.sayRidesMoves) {
             captionFromRail(me);
         }
-        // 'browser' voice route: this tab speaks it
-        if (d?.speak === 'browser' && d?.text && me.spec.cadence) speakText(me, String(d.text).slice(0, 2000));
+        // 'browser' voice route: this tab speaks it — behind the same 🔇 /
+        // TTS gates as her seat quips (speakNew); an organ turn ignored them
+        if (d?.speak === 'browser' && d?.text && me.spec.cadence && me.voiceOn && me.ttsEnabled) speakText(me, String(d.text).slice(0, 2000));
         if (me.cad) { me.cad.running = false; me.cad.last_at = Date.now() / 1000; me.cad.pending = false; paintCadence(me); }
     });
     eventBus.on('voice_turn_start', (d) => {

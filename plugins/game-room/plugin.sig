@@ -5,10 +5,10 @@
     "app/game-room.css": "sha256:f7c9a81d386a18ca4b17179f3ec6de27e6ac38ed602a2330260d44c7567f4a73",
     "app/index.js": "sha256:05a7f894ab21274c0dac978a2ffe578e36f3002214ccadfd92eb0c7fe1136c39",
     "app/prompt-preview.js": "sha256:e9152e125a03e8e3bbfecb558d76a0707f6fb3f6da4127c27bdee35d04193f69",
-    "app/room-host.js": "sha256:33d4b264588864335b774cb9f725fcc1a237023c4ae746e30be3aecb312ff72e",
+    "app/room-host.js": "sha256:d18740d9b93d77a8202e682630c5575a8b9cb8e98f80235b8ff8b6e8e0c4a23b",
     "app/settings-modal.js": "sha256:ed4707051fc8dd807478447a0b47951b31e59cbc09df8b9377b2753c2078dd98",
     "app/story-room.js": "sha256:3f5adad1fe9ccc6233cfeae7e9a07a9eba7743c129f3e51e381db5bb158985f8",
-    "gameroom_core.py": "sha256:ae0368784839a773b2310048ef5bd16c82e870a6ecd39aa85904ea09ca2c9b5e",
+    "gameroom_core.py": "sha256:db5f463fa39299ee45a1aae71e099df2a51722533b4561ae10606fdeeb10187b",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
@@ -51,7 +51,7 @@
     "tests/test_save_paths.py": "sha256:9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "tests/test_seal_wait.py": "sha256:fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
     "tests/test_sealed_editor_grammar.py": "sha256:c63e18929859e883ed18b5a39ef37417de59968de410bb6b8fd733293c170bc1",
-    "tests/test_settings_spine.py": "sha256:7d688a77ecd74a90e413eab9080c251e5de11f069551473b16f8251f33c10e8c",
+    "tests/test_settings_spine.py": "sha256:9428d450a9b100fe8ac41fa02cffd3718269200e36aa66242ed381caca954a22",
     "tests/test_show_fx.py": "sha256:65beb06d88e6d0980caec96bac7156b7fb2460ec061d682eb9d4cdfa6ee9b65b",
     "tests/test_start_items.py": "sha256:d1f82a067aef5c1c64f4a0d8990008a3fba51c1cd24cb17ad6d1a9e4259893e1",
     "tests/test_story_engine.py": "sha256:67cbbe8b96bd98f201dbb50a834935899bbeddb45ac4fe607d14af81aa841031",
@@ -63,5 +63,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "HZbj2r1olrWtdvCfmnnKKHRx5i6+IgzUewFYAFD05yj69UFRpG2LFjK+ua2cfu0J/JdmRr7oUikBqyEI+n5dCA=="
+  "signature": "Paoh2WfTOdQuujXTQznx4VmI9r+xjqC2Qnp9NGLxMbMA+CGuy0e8wFeVF1AI9U0tZxqDiZWL2Y9T5c0ukjFODg=="
 }
