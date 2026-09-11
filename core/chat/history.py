@@ -5113,6 +5113,15 @@ class ChatSessionManager:
         logger.info(f"[CONTINUE] row at {timestamp} continued in place ({len(content)} chars)")
         return True
 
+    def _publish_edited(self, role: str) -> None:
+        """An edit repaints OTHER tabs: MESSAGE_ADDED stamped with the editing
+        tab's origin, which event-bus.js drops as its own echo — that tab
+        already swapped its one bubble (edit wave 2026-09-10)."""
+        from core.request_context import session_origin
+        publish(Events.MESSAGE_ADDED, {"role": role, "edited": True,
+                                        "chat_name": self._effective_chat_name(),
+                                        "origin": session_origin.get()})
+
     def edit_message_by_timestamp(self, role: str, timestamp: str, new_content: str) -> bool:
         """
         Edit a message by timestamp.
@@ -5137,6 +5146,7 @@ class ChatSessionManager:
                     self.current_chat._needs_full_resync = True  # in-place edit
                     self._save_current_chat()
                     logger.info(f"Edited user message at {timestamp}")
+                    self._publish_edited('user')
                     return True
             return False
         
@@ -5158,19 +5168,19 @@ class ChatSessionManager:
                 if self.current_chat.messages[i].get('role') == 'assistant':
                     last_assistant_idx = i
             
-            # The editor shows thinking inline as <think>…</think> (the display
-            # reconstruction). Split it back out, or the old `thinking` field
-            # survives alongside the inline tag → double think block on render.
+            # The editor shows PROSE only (edit wave 2026-09-10): the stored
+            # `thinking` survives an edit untouched. Inline <think> tags in the
+            # new text (a raw-API caller, an old client) still split out and
+            # replace it — never both, or the render shows two think blocks.
             clean, thinking = _extract_thinking_from_content(new_content)
             target = self.current_chat.messages[last_assistant_idx]
             target['content'] = clean
             if thinking:
                 target['thinking'] = thinking
-            else:
-                target.pop('thinking', None)
             self.current_chat._needs_full_resync = True  # in-place edit
             self._save_current_chat()
             logger.info(f"Edited assistant message at index {last_assistant_idx} (turn started at {start_idx})")
+            self._publish_edited('assistant')
             return True
         
         return False

@@ -27,12 +27,18 @@ const noteDegraded = (name, deg) => {
         + `Manager, or clear/start a new chat.`, 'warning', 0);
 };
 
+// A refresh that arrived while an edit was open. Save/cancel swap only the
+// edited bubble; they replay a held refresh so no event is lost.
+let _heldRefresh = false;
+export const takeHeldRefresh = () => { const h = _heldRefresh; _heldRefresh = false; return h; };
+
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // Hold the render while a message edit is open — renderHistory rebuilds the
     // whole transcript, so a background refresh (SSE event, autoRefresh poll)
-    // would destroy the edit textarea and the unsaved text in it. Save/cancel
-    // exit edit mode first and refresh explicitly.
+    // would destroy the edit textarea and the unsaved text in it. The editor's
+    // exit path replays it (takeHeldRefresh).
     if (document.querySelector('#chat-container .message.editing')) {
+        _heldRefresh = true;
         return { hist: null, len: lastLen };
     }
     try {

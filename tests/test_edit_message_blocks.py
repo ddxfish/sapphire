@@ -70,7 +70,10 @@ def test_assistant_edit_splits_think_back_out(mgr):
     assert shown.count("<think>") == 1
 
 
-def test_assistant_edit_without_think_drops_thinking(mgr):
+def test_assistant_edit_without_think_keeps_thinking(mgr):
+    """Edit wave 2026-09-10: the editor shows prose only, so a tagless edit
+    leaves the stored thinking alone (it used to drop it — the editor then
+    showed the think block inline and removing it meant "delete")."""
     mgr.add_user_message("q")
     mgr.add_assistant_final("old body", thinking="old think")
     ts = mgr.get_messages()[1]["timestamp"]
@@ -79,4 +82,4 @@ def test_assistant_edit_without_think_drops_thinking(mgr):
 
     msg = mgr.get_messages()[1]
     assert msg["content"] == "just body"
-    assert "thinking" not in msg
+    assert msg["thinking"] == "old think"

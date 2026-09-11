@@ -67,43 +67,64 @@ export async function handleRegen(idx) {
     if (len !== null) setHistLen(len);
 }
 
+const THINK_RE = /<(?:seed:)?think[^>]*>[\s\S]*?<\/(?:seed:think|seed:cot_budget_reflect|think)>/gi;
+const _msgEls = () => document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
+
+// Edit wave (2026-09-10): the editor shows the prose only (thinking stays on
+// the row, server-side), the bubble keeps its tool half, Save/Cancel swap
+// just this one message from history — the transcript is never rebuilt, so
+// a reply streaming below is untouched — and a refresh held while the
+// editor was open is replayed on exit. Esc cancels, Ctrl/Cmd+Enter saves.
 export async function handleEdit(idx) {
     const hist = await api.fetchHistory();
     const msg = hist[idx];
-    const msgEl = document.querySelectorAll('#chat-container .message:not(.status):not(.error)')[idx];
+    const msgEl = _msgEls()[idx];
+    if (!msg || !msgEl) return;
 
     // User bubbles carry `content` (the markdown you typed). Assistant turns
-    // carry `parts`; the server edits the LAST assistant message of the turn,
-    // so show the last content part — that's the text the save overwrites.
+    // carry `parts`; the server edits the LAST assistant row of the turn, so
+    // show its content part — minus the reconstructed <think> block.
     let text = msg.content || '';
     if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
         const last = msg.parts.filter(p => p.type === 'content').pop();
-        if (last) text = last.text || '';
+        text = last ? (last.text || '') : '';
     }
-    ui.enterEditMode(msgEl, idx, msg.timestamp, text);
-    
-    document.getElementById('save-edit').onclick = async () => {
-        const newText = document.getElementById('edit-textarea').value;
-        const timestamp = msgEl.dataset.editTimestamp;
+    text = text.replace(THINK_RE, '').trim();
+    if (!text) {
+        ui.showToast('Nothing to edit here — that reply is thinking only', 'warning');
+        return;
+    }
 
-        try {
-            console.log('[EDIT DEBUG] Editing message with timestamp:', timestamp);
-            await api.editMessage(msg.role, timestamp, newText);
-            // Clear .editing BEFORE refreshing — fetchAndRender holds renders
-            // while an edit is open, so refresh() would no-op otherwise.
-            ui.exitEditMode(msgEl, false);
-            await refresh(false);
-        } catch (e) {
-            console.error('Edit failed:', e);
-            ui.showToast(`Edit failed: ${e.message}`, 'error');
-            ui.exitEditMode(msgEl, true);  // Restore on error (element still exists)
+    let settled = false, saving = false;
+    const exit = async (fresh) => {          // fresh = payload to paint, or null to refetch
+        if (settled) return;
+        settled = true;
+        let payload = fresh, total = hist.length;
+        if (!payload) {
+            const now = await api.fetchHistory();
+            payload = now[idx] || msg;
+            total = now.length;
         }
+        ui.replaceMessage(msgEl, payload, idx, total);
+        if (chat.takeHeldRefresh()) await refresh(false);   // events that arrived mid-edit
     };
-
-    document.getElementById('cancel-edit').onclick = () => {
-        ui.exitEditMode(msgEl, true);
-        refresh(false);  // catch up on refreshes held back during the edit
-    };
+    ui.enterEditMode(msgEl, text, {
+        onSave: async (newText) => {
+            if (settled || saving) return;
+            if (!newText.trim()) { ui.showToast('Message cannot be empty', 'error'); return; }
+            saving = true;
+            try {
+                await api.editMessage(msg.role, msg.timestamp, newText);
+            } catch (e) {
+                saving = false;
+                console.error('Edit failed:', e);
+                ui.showToast(`Edit failed: ${e.message}`, 'error');
+                return;                       // stay in the editor, text intact
+            }
+            await exit(null);
+        },
+        onCancel: () => exit(msg),
+    });
 }
 
 export async function handleContinue(idx) {

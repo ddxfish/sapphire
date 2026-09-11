@@ -175,6 +175,17 @@ class TestEngine:
         sm.add_assistant_final.assert_not_called()
         sm.continue_assistant.assert_not_called()
 
+    def test_empty_continuation_toasts_and_writes_nothing(self):
+        """Fireworks/OpenAI/GLM answer a trailing assistant message with nothing:
+        the row stays as it was and the wire carries a notice (→ toast)."""
+        _, out, main, _ = _run([{"type": "done", "response": None}])
+        sm = main.session_manager
+        sm.continue_assistant.assert_not_called()
+        sm.add_assistant_final.assert_not_called()
+        notices = [e for e in out if isinstance(e, dict) and e.get("type") == "notice"]
+        assert notices and "unchanged" in notices[0]["message"]
+        assert _final(out)["text"] == PREFILL
+
     def test_refused_when_the_turn_is_not_the_last_prose_row(self):
         _, out, main, provider = _run([{"type": "done", "response": None}], prefill=None)
         provider.chat_completion_stream.assert_not_called()

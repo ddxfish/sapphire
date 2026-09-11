@@ -1206,7 +1206,14 @@ class StreamingChat:
                             metadata["cumulative_tokens"]["cache_write"] = cumulative_tokens["cache_write"]
 
                     # Save final response with thinking separated
-                    if in_place:
+                    if in_place and not current_content.strip():
+                        # Providers without prefill (Fireworks, OpenAI, GLM/Z.AI)
+                        # answer a trailing assistant message with nothing. The
+                        # row is untouched — say so instead of a silent no-op.
+                        logger.info("[CONTINUE] provider added nothing — row left as it was")
+                        yield {"type": "notice", "severity": "warning",
+                               "message": "Nothing to add — this provider doesn't continue a reply in place. The message is unchanged."}
+                    elif in_place:
                         self.main_chat.session_manager.continue_assistant(
                             continue_from, full_content,
                             thinking=current_thinking if current_thinking else None,

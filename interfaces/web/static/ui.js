@@ -837,40 +837,60 @@ export const extractProseText = (el) => {
 // EDIT MODE
 // =============================================================================
 
-// `text` is the stored markdown source (caller pulls it from the history
-// payload). The textarea used to be filled by scraping the rendered DOM back
-// to text, which lost every markdown mark — `*stage directions*` came back
-// bare and single newlines vanished (`<br>` has empty textContent). Set via
-// .value, not innerHTML, so the message text is never parsed as markup.
-export const enterEditMode = (msgEl, idx, timestamp, text) => {
+// Edit wave (2026-09-10). `text` is the stored markdown source of the prose
+// being edited (the caller pulls it from the history payload, thinking
+// stripped). The bubble is NOT gutted: everything past the last tool
+// accordion / gallery row — the prose of the turn's last row, the part the
+// server overwrites — is hidden and the editor box goes in its place, so a
+// tool turn keeps its tool half on screen. Exit = replaceMessage() from
+// history; the old innerHTML save/restore dropped every gallery and
+// accordion click handler. Esc cancels, Ctrl/Cmd+Enter saves.
+export const enterEditMode = (msgEl, text, { onSave, onCancel }) => {
     const content = msgEl.querySelector('.message-content');
     const toolbar = msgEl.querySelector('.toolbar');
-    
-    content.dataset.original = content.innerHTML;
-    content.dataset.editTimestamp = timestamp;
-    msgEl.dataset.editTimestamp = timestamp;
-    
-    content.innerHTML = `
-        <textarea id="edit-textarea" class="edit-textarea" rows="10"></textarea>
+    const kids = Array.from(content.children);
+    let cut = 0;
+    for (let i = kids.length - 1; i >= 0; i--) {
+        if (kids[i].matches('details.accordion-tool, .gallery-row')) { cut = i + 1; break; }
+    }
+    kids.slice(cut).forEach(k => { k.style.display = 'none'; });
+
+    const box = createElem('div', { class: 'edit-box' });
+    box.innerHTML = `
+        <textarea id="edit-textarea" class="edit-textarea" rows="3"></textarea>
         <div class="edit-actions">
-            <button id="save-edit" class="btn btn-primary" data-index="${idx}">Save</button>
-            <button id="cancel-edit" class="btn btn-secondary">Cancel</button>
+            <button id="save-edit" class="btn btn-primary" title="Ctrl+Enter">Save</button>
+            <button id="cancel-edit" class="btn btn-secondary" title="Esc">Cancel</button>
         </div>
     `;
-    const ta = document.getElementById('edit-textarea');
+    content.appendChild(box);
+    const ta = box.querySelector('textarea');
     ta.value = text;
-    toolbar.style.display = 'none';
+    const fit = () => {
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight + 2, Math.round(window.innerHeight * 0.6)) + 'px';
+    };
+    ta.addEventListener('input', fit);
+    ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onSave(ta.value); }
+    });
+    box.querySelector('#save-edit').onclick = () => onSave(ta.value);
+    box.querySelector('#cancel-edit').onclick = () => onCancel();
+    if (toolbar) toolbar.style.display = 'none';
     msgEl.classList.add('editing');
+    fit();
     ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
 };
 
-export const exitEditMode = (msgEl, restore = true) => {
-    const content = msgEl.querySelector('.message-content');
-    const toolbar = msgEl.querySelector('.toolbar');
-    if (restore) content.innerHTML = content.dataset.original;
-    toolbar.style.display = '';
-    msgEl.classList.remove('editing');
-    delete content.dataset.original;
+// Re-render ONE message from its history payload, in place — the swap the
+// end-of-turn path uses. Never the whole transcript.
+export const replaceMessage = (msgEl, msg, idx, total) => {
+    const { clone, msg: fresh } = createMessage(msg, idx, total, true);
+    msgEl.replaceWith(clone);
+    updateToolbars();
+    return fresh;
 };
 
 // =============================================================================
