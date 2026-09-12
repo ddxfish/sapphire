@@ -1,17 +1,27 @@
 {
   "name": "discord",
+  "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.0.0",
-  "description": "Discord — bot accounts, messaging, daemon listener",
+  "version": "0.1.0",
+  "description": "Discord cognitive agent — bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
   "icon": "🎮",
   "priority": 50,
   "default_enabled": false,
-  "pip_dependencies": ["discord.py"],
+  "pip_dependencies": [
+    "py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@6e71bfffb520f77948ff28544949925a55767ee7",
+    "davey>=0.1.4",
+    "PyNaCl",
+    "dateparser>=1.2.0",
+    "vaderSentiment"
+  ],
   "settingsUI": "plugin",
   "capabilities": {
     "tools": ["tools/discord_tools.py"],
+    "hooks": {
+      "prompt_inject": "hooks/voice_prompt_inject.py"
+    },
     "scopes": [
       {
         "key": "discord",
@@ -55,23 +65,61 @@
             "type": "boolean",
             "label": "Auto-reply in channel",
             "default": true,
-            "help": "ON (default): AI's response posts back to the channel — what you want for a mention-reply bot. OFF: listen-only mode (e.g. pipe to TTS, save to memory, or trigger other tools without replying in Discord). The 5-second cooldown floor protects your bot token from rate-limit bans either way."
+            "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
           },
           {
             "key": "cooldown",
             "type": "number",
             "label": "Reply cooldown (seconds)",
             "default": 0,
-            "help": "Minimum seconds between replies in the same channel. 0 = no limit. 60 = max once per minute."
+            "help": "Minimum seconds between replies in the same channel. 0 = no limit."
           }
         ]
       }]
     },
     "routes": [
-      {"method": "GET",    "path": "accounts",         "handler": "routes/accounts.py:list_accounts"},
-      {"method": "POST",   "path": "accounts",         "handler": "routes/accounts.py:add_account"},
-      {"method": "DELETE", "path": "accounts/{name}",   "handler": "routes/accounts.py:delete_account"},
-      {"method": "POST",   "path": "accounts/{name}/test", "handler": "routes/accounts.py:test_account"}
+      {"method": "GET",    "path": "accounts",                    "handler": "api/accounts.py:list_accounts"},
+      {"method": "POST",   "path": "accounts",                    "handler": "api/accounts.py:add_account"},
+      {"method": "DELETE", "path": "accounts/{name}",             "handler": "api/accounts.py:delete_account"},
+      {"method": "POST",   "path": "accounts/{name}/test",        "handler": "api/accounts.py:test_account"},
+      {"method": "GET",    "path": "settings",                    "handler": "api/settings.py:get_settings"},
+      {"method": "POST",   "path": "settings",                    "handler": "api/settings.py:save_settings"},
+      {"method": "GET",    "path": "health",                      "handler": "api/traces.py:get_health"},
+      {"method": "GET",    "path": "traces",                      "handler": "api/traces.py:list_traces"},
+      {"method": "GET",    "path": "profiles",                    "handler": "api/profiles.py:list_profiles"},
+      {"method": "GET",    "path": "proactive/targets",           "handler": "api/channels.py:list_proactive_targets"},
+      {"method": "GET",    "path": "voice/targets",               "handler": "api/channels.py:list_voice_targets"},
+      {"method": "GET",    "path": "bots/allowlist",              "handler": "api/channels.py:list_bot_allowlist_candidates"},
+      {"method": "GET",    "path": "presence/presets",            "handler": "api/presence.py:list_presets"},
+      {"method": "GET",    "path": "voice/sessions",              "handler": "api/voice.py:list_voice_sessions"},
+      {"method": "GET",    "path": "voice/diagnostics",           "handler": "api/voice.py:voice_diagnostics"},
+      {"method": "GET",    "path": "voice/auto-join",             "handler": "api/voice.py:auto_join_status"},
+      {"method": "GET",    "path": "proactive/diagnostics",       "handler": "api/proactive.py:proactive_diagnostics"},
+      {"method": "POST",   "path": "proactive/test",              "handler": "api/proactive.py:test_proactive"},
+      {"method": "GET",    "path": "admin/summary",               "handler": "api/admin.py:operator_summary"},
+      {"method": "POST",   "path": "admin/purge",                 "handler": "api/admin.py:purge_retention"},
+      {"method": "POST",   "path": "admin/forget-user",           "handler": "api/admin.py:forget_user"},
+      {"method": "POST",   "path": "admin/import-leona",          "handler": "api/admin.py:import_from_leona"}
+    ],
+    "schedule": [
+      {
+        "name": "morning_greeting",
+        "cron": "0 * * * *",
+        "handler": "schedule/morning_greeting.py",
+        "description": "Post configured morning greetings (checks UTC hour each hour)"
+      },
+      {
+        "name": "quiet_outreach",
+        "cron": "*/15 * * * *",
+        "handler": "schedule/quiet_outreach.py",
+        "description": "Proactive conversation starters when configured channels go quiet"
+      },
+      {
+        "name": "sleep_goodnight",
+        "cron": "*/15 * * * *",
+        "handler": "schedule/sleep_goodnight.py",
+        "description": "Goodnight messages and sleep state (checks sleep UTC hour with variable minute)"
+      }
     ]
   }
 }
