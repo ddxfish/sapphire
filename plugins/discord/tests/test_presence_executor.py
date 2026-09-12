@@ -65,7 +65,7 @@ class AsyncMessageTransport:
         self.sync_calls += 1
         return {'status': 'sent', 'channel_id': str(channel)}
 
-    async def send_message_async(self, channel, text, reply_to_message_id=None, account_name=None):
+    async def send_message_async(self, channel, text, reply_to_message_id=None, account_name=None, guild_id=None):
         self.async_calls += 1
         return {'status': 'sent', 'channel_id': str(channel)}
 

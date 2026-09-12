@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
-from plugins.discord.models.settings import CognitiveSettings, EffectiveSettings, ProactiveSettings
+from plugins.discord.models.settings import CognitiveSettings, EffectiveSettings, ProactiveSettings, ProfileSettings
 from plugins.discord.sapphire.llm_settings import (
     cognitive_llm_from_settings,
+    distill_llm_from_settings,
     llm_event_fields,
     proactive_llm_from_settings,
 )
@@ -58,3 +59,16 @@ def test_proactive_llm_goodnight_inherits_greeting_override():
     )
     assert proactive_llm_from_settings(settings, kind='greeting') == ('claude', 'sonnet')
     assert proactive_llm_from_settings(settings, kind='goodnight') == ('claude', 'sonnet')
+
+
+def test_distill_llm_inherits_reply_then_override():
+    settings = EffectiveSettings(
+        cognitive=CognitiveSettings(llm_primary='ollama', llm_model='llama3.2'),
+        profile=ProfileSettings(),
+    )
+    assert distill_llm_from_settings(settings) == ('ollama', 'llama3.2')
+    settings.profile = ProfileSettings(
+        distill_model_provider='openai',
+        distill_model_name='gpt-4o-mini',
+    )
+    assert distill_llm_from_settings(settings) == ('openai', 'gpt-4o-mini')

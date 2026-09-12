@@ -24,6 +24,33 @@ def _event_guild_id() -> str:
     return ''
 
 
+def _stop_playback_only(voice_client) -> None:
+    """Stop the audio player WITHOUT touching recording.
+
+    py-cord's VoiceClient.stop() also destroys the recording reader
+    (client.py: self._reader.stop()) despite its "stops playing audio"
+    docstring — one call from any playback path leaves the bot deaf for the
+    rest of the session (every "first reply works, then silence" failure,
+    2026-08-01). Recording teardown belongs to stop_recording()/disconnect.
+    """
+    player = getattr(voice_client, '_player', None)
+    if player:
+        try:
+            player.stop()
+        except Exception:
+            logger.debug('Playback-only stop: player stop failed', exc_info=True)
+    future = getattr(voice_client, '_player_future', None)
+    if future:
+        try:
+            voice_client.loop.call_soon_threadsafe(
+                voice_client._set_future_result_if_pending, future, None,
+            )
+        except Exception:
+            pass
+    voice_client._player = None
+    voice_client._player_future = None
+
+
 def _build_reference(channel_id: int, message_id: str | int):
     import discord
     try:
@@ -112,6 +139,56 @@ class DiscordExecution:
     async def resolve_channel_id(self, account_name: str | None, channel_ref: str | int) -> str:
         _, channel = await self._resolve_channel(account_name, channel_ref)
         return str(channel.id)
+
+    async def resolve_voice_channel(self, account_name: str | None, channel_ref: str | int) -> dict:
+        """Resolve a voice channel by id or name (_resolve_channel is text-only)."""
+        name, state = self._state_for_account(account_name)
+        client = state.get('client')
+        if not client:
+            raise RuntimeError(f"Account '{name}' has no Discord client")
+        ref = str(channel_ref or '').strip().lstrip('#')
+        if not ref:
+            raise RuntimeError('Voice channel is required')
+
+        def _payload(ch):
+            return {
+                'channel_id': str(ch.id),
+                'guild_id': str(getattr(getattr(ch, 'guild', None), 'id', '') or ''),
+                'channel_name': getattr(ch, 'name', '') or '',
+            }
+
+        if ref.isdigit():
+            channel = client.get_channel(int(ref))
+            if channel is None:
+                channel = await client.fetch_channel(int(ref))
+            if channel is None:
+                raise RuntimeError(f'Voice channel {ref} not found')
+            if not hasattr(channel, 'connect'):
+                raise RuntimeError(f"Channel '{getattr(channel, 'name', ref)}' is not a voice channel")
+            return _payload(channel)
+
+        def _squash(text: str) -> str:
+            return ''.join(c for c in str(text).lower() if c.isalnum())
+
+        target = ref.lower()
+        squashed = _squash(ref)
+        preferred_guild_id = str(_event_guild_id() or '').strip()
+        guilds = list(getattr(client, 'guilds', []) or [])
+        if preferred_guild_id:
+            guild = client.get_guild(int(preferred_guild_id))
+            if guild:
+                guilds = [guild] + [g for g in guilds if g.id != guild.id]
+        fallback = None
+        for guild in guilds:
+            for ch in getattr(guild, 'voice_channels', []) or []:
+                ch_name = getattr(ch, 'name', '') or ''
+                if ch_name.lower() == target:
+                    return _payload(ch)
+                if fallback is None and squashed and _squash(ch_name) == squashed:
+                    fallback = ch
+        if fallback is not None:
+            return _payload(fallback)
+        raise RuntimeError(f"Voice channel '{channel_ref}' not found")
 
     async def trigger_typing(self, account_name: str | None, channel_id: str | int) -> None:
         try:
@@ -386,7 +463,7 @@ class DiscordExecution:
             }
         key = (name, str(channel_id))
         if voice_client.is_playing():
-            voice_client.stop()
+            _stop_playback_only(voice_client)
         await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
         old_path = self._playback_paths.pop(key, None)
         if old_path:
@@ -418,7 +495,7 @@ class DiscordExecution:
         name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
         await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
         if voice_client.is_playing():
-            voice_client.stop()
+            _stop_playback_only(voice_client)
             return {'status': 'stopped', 'account_name': name, 'channel_id': str(channel_id)}
         return {'status': 'idle', 'account_name': name, 'channel_id': str(channel_id)}
 
@@ -442,7 +519,7 @@ class DiscordExecution:
             except Exception:
                 return
         if voice_client and voice_client.is_playing():
-            voice_client.stop()
+            _stop_playback_only(voice_client)
 
     async def start_streaming_playback(self, account_name: str | None, channel_id: str | int) -> dict:
         from plugins.discord.transport.discord_streaming_playback import (

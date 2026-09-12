@@ -37,10 +37,14 @@ class VisionBridge:
         settings,
         filename: str = '',
         content_type: str = '',
+        reply_llm_provider: str = '',
     ) -> dict:
         payload = {
             'source_url': source_url,
             'media_kind': media_kind,
+            'llm_provider': getattr(settings, 'vision_llm_provider', 'auto'),
+            'llm_model': getattr(settings, 'vision_llm_model', ''),
+            'reply_llm_provider': reply_llm_provider,
             'provider': getattr(settings, 'vision_provider', ''),
             'model': getattr(settings, 'vision_model', ''),
             'base_url': getattr(settings, 'vision_base_url', ''),
@@ -51,8 +55,6 @@ class VisionBridge:
             'filename': filename,
             'content_type': content_type,
         }
-        if not self.provider_client and not str(payload['base_url']).strip():
-            return self._fallback(source_url, filename=filename, content_type=content_type)
         try:
             raw = self._describe(payload)
         except Exception as exc:
@@ -70,11 +72,17 @@ class VisionBridge:
         if hasattr(self.provider_client, 'describe_image'):
             return self.provider_client.describe_image(payload.get('source_url'))
 
+        # House path first: the vision call rides a Sapphire-registered LLM
+        # provider (same credentials as everything else — no 4th key slot).
+        # The legacy sidecar endpoint (hidden base_url/api_key settings) stays
+        # as a fallback so pre-registry configs keep working.
+        house_provider = self._resolve_house_provider(payload)
         base_url = str(payload.get('base_url') or '').strip()
-        if not base_url:
-            raise AttributeError('provider client does not support vision description')
+        if house_provider is None and not base_url:
+            raise AttributeError('no vision-capable LLM provider configured')
 
-        provider = self._detect_provider(str(payload.get('provider') or ''), base_url)
+        provider = 'house' if house_provider is not None else self._detect_provider(
+            str(payload.get('provider') or ''), base_url)
         self._debug(
             payload,
             'vision_provider_detected',
@@ -115,9 +123,122 @@ class VisionBridge:
             str(payload.get('gif_mode') or 'first_frame'),
         )
 
+        if provider == 'house':
+            return self._describe_via_house(house_provider, payload, image_bytes, media_type)
         if provider == 'ollama':
             return self._describe_via_ollama(payload, image_bytes)
         return self._describe_via_openai_compat(payload, image_bytes, media_type)
+
+    def _resolve_house_provider(self, payload: dict):
+        """Resolve a Sapphire-registered LLM provider for the vision call.
+
+        Override semantics, not a competing default: an explicit selection is
+        used as-is; 'auto' means "daemon chooses" — the same chain her replies
+        ride (Reply LLM override if set, else the app's provider fallback
+        order). If the daemon's provider can't see images, vision quietly
+        degrades to filename descriptions — it never hops to some other
+        provider the user didn't pick.
+        Returns a provider instance, or None (legacy sidecar / fallback).
+        """
+        key = str(payload.get('llm_provider') or 'auto').strip().lower()
+        model = str(payload.get('llm_model') or '').strip()
+        timeout = float(payload.get('timeout_seconds') or 30)
+        try:
+            import config
+            from core.chat.llm_providers import get_provider_by_key
+        except Exception:
+            return None
+        providers_config = {
+            **dict(getattr(config, 'LLM_PROVIDERS', {}) or {}),
+            **dict(getattr(config, 'LLM_CUSTOM_PROVIDERS', {}) or {}),
+        }
+        if key and key != 'auto':
+            try:
+                return get_provider_by_key(key, providers_config, timeout, model_override=model)
+            except Exception as exc:
+                logger.warning('Vision LLM provider %r unavailable: %s', key, exc)
+                return None
+
+        candidate = None
+        reply_key = str(payload.get('reply_llm_provider') or '').strip().lower()
+        if reply_key and reply_key != 'auto':
+            try:
+                candidate = get_provider_by_key(reply_key, providers_config, timeout)
+            except Exception:
+                candidate = None
+            if candidate is not None and not self._provider_sees(candidate):
+                # A pinned reply provider that can't see degrades gracefully —
+                # never hop to a provider the user didn't pick.
+                logger.info('Vision skipped: daemon-chosen provider %s does not support images',
+                            candidate.__class__.__name__)
+                return None
+        if candidate is None:
+            # Same ordering Auto mode uses (no per-provider health pings —
+            # this runs per image). Blind providers are SKIPPED, per the
+            # settings docstring: 'auto' = first registered provider that
+            # supports images — not first provider that constructs.
+            order = list(getattr(config, 'LLM_FALLBACK_ORDER', None) or providers_config.keys())
+            for candidate_key in order:
+                conf = providers_config.get(candidate_key)
+                if not isinstance(conf, dict) or not conf.get('enabled', False):
+                    continue
+                if not conf.get('use_as_fallback', True):
+                    continue
+                try:
+                    candidate = get_provider_by_key(candidate_key, providers_config, timeout)
+                except Exception:
+                    candidate = None
+                if candidate is not None and not self._provider_sees(candidate):
+                    candidate = None
+                if candidate:
+                    break
+        if candidate is None:
+            logger.info('Vision skipped: no vision-capable LLM provider available')
+            return None
+        return candidate
+
+    @staticmethod
+    def _provider_sees(provider) -> bool:
+        """supports_images is a @property on BaseProvider — accessing it with
+        a () call raised TypeError('bool' is not callable), which the old bare
+        except swallowed into 'does not support images'. Vision-auto could
+        never succeed for ANY provider. 2026-08-06."""
+        try:
+            supported = provider.supports_images
+            if callable(supported):  # tolerate a plain-method provider impl
+                supported = supported()
+            return bool(supported)
+        except Exception:
+            return False
+
+    def _describe_via_house(self, provider, payload: dict, image_bytes: bytes, media_type: str) -> dict:
+        encoded = base64.b64encode(image_bytes).decode('ascii')
+        messages = [{
+            'role': 'user',
+            'content': [
+                {'type': 'text', 'text': self._prompt_for_media(str(payload.get('media_kind') or 'image'))},
+                # Core's internal multimodal block shape — each provider class
+                # converts to its own wire format (openai image_url, etc.).
+                {'type': 'image', 'data': encoded, 'media_type': media_type or 'image/png'},
+            ],
+        }]
+        self._debug(
+            payload,
+            'vision_request_started',
+            'Vision request started',
+            {'provider': 'house', 'model': str(payload.get('llm_model') or 'default'),
+             'media_kind': str(payload.get('media_kind') or '')},
+            'Vision request started via house provider (model=%s)',
+            str(payload.get('llm_model') or 'default'),
+        )
+        response = provider.chat_completion(
+            messages,
+            generation_params={'max_tokens': 300, 'temperature': 0.2},
+        )
+        summary = str(getattr(response, 'content', '') or '').strip()
+        if not summary:
+            raise ValueError('house vision provider returned an empty description')
+        return {'summary': summary}
 
     def _detect_provider(self, configured: str, base_url: str) -> str:
         configured = configured.strip().lower()
@@ -248,7 +369,7 @@ class VisionBridge:
         return 'Describe this image briefly in one or two sentences. Mention any obvious text if present.'
 
     def _fetch_bytes(self, source_url: str) -> tuple[bytes, str]:
-        import requests as req
+        from core import net
 
         source_url = str(source_url or '').strip()
         if not source_url:
@@ -257,7 +378,7 @@ class VisionBridge:
         last_err = None
         for attempt in range(3):
             try:
-                response = req.get(
+                response = net.get(
                     source_url,
                     headers=_FETCH_HEADERS,
                     timeout=30,

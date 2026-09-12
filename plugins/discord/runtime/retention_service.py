@@ -32,14 +32,15 @@ class RetentionService:
         if retention.profile_buffer_days > 0:
             cutoff = now - retention.profile_buffer_days * 86400
             cursor = conn.execute(
-                'DELETE FROM profile_buffers WHERE created_at < ? AND processed = 1',
+                'DELETE FROM profile_buffers WHERE created_at < ?',
                 (cutoff,),
             )
             results['profile_buffers'] = cursor.rowcount
         conn.commit()
         return {'status': 'purged', 'results': results}
 
-    def forget_user(self, account_name: str, user_id: str, *, memory_repository=None, profile_repository=None) -> dict:
+    def forget_user(self, account_name: str, user_id: str, *, memory_repository=None, profile_repository=None,
+                    milestone_repository=None, interest_repository=None) -> dict:
         removed = {'account_name': account_name, 'user_id': user_id}
         if profile_repository:
             profile_repository.forget_user(account_name, user_id)
@@ -47,11 +48,19 @@ class RetentionService:
         if memory_repository:
             memory_repository.forget_user(account_name, user_id)
             removed['pinned_memories'] = True
+        if milestone_repository:
+            milestone_repository.forget_user(account_name, user_id)
+            removed['milestones'] = True
+        if interest_repository:
+            interest_repository.forget_user(account_name, user_id)
+            removed['interests'] = True
         conn = self.sqlite_service.connection()
-        conn.execute(
+        cursor = conn.execute(
             'DELETE FROM messages WHERE author_id = ?',
             (user_id,),
         )
-        removed['messages'] = conn.total_changes
+        # rowcount, not conn.total_changes — that's a connection-lifetime
+        # counter and reported meaningless inflated numbers to the user.
+        removed['messages'] = cursor.rowcount
         conn.commit()
         return {'status': 'forgotten', **removed}

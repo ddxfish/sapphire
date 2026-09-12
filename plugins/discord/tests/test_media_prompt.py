@@ -45,3 +45,12 @@ def test_build_reply_content_adds_attachment_note_when_user_also_wrote_text():
 
     assert 'what do you think?' in content
     assert 'also attached media' in content
+
+
+def test_build_reply_content_never_returns_empty():
+    # Text-less message with media processing OFF (fresh-install default):
+    # empty content made core's event formatter dump the raw JSON payload —
+    # llm routing metadata — into her prompt and history. 2026-08-06.
+    content = build_reply_content('', [])
+    assert content.strip()
+    assert 'no text' in content

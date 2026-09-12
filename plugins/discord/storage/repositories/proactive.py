@@ -88,6 +88,16 @@ class ProactiveRepository:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_buffered_channels(self, account_name: str) -> list[str]:
+        """Channels with unprocessed sleep-buffer rows — the wake-replay
+        roster. (Iterating greeting_targets instead orphaned mentions from
+        every other channel forever.)"""
+        rows = self.sqlite_service.connection().execute(
+            'SELECT DISTINCT channel_id FROM sleep_buffer WHERE account_name = ? AND processed = 0',
+            (account_name,),
+        ).fetchall()
+        return [str(row['channel_id']) for row in rows]
+
     def mark_buffered_processed(self, buffer_ids: list[int]) -> None:
         if not buffer_ids:
             return

@@ -30,6 +30,13 @@ def prepare_continuity_payload(payload: dict) -> dict:
             'Do NOT set reply_to_message_id — there is no real message to quote.'
         )
 
+    if str(prepared.get('proactive_kind') or '').strip():
+        additions.append(
+            'IMPORTANT: This is a scheduled proactive post, not a reply to a live message. '
+            'Write one new message for the channel following the instructions below. '
+            'Do NOT set reply_to_message_id — there is no message to quote.'
+        )
+
     reply_instructions = _reply_instruction_text(prepared)
     if reply_instructions:
         additions.append(f'Reply instructions: {reply_instructions}')

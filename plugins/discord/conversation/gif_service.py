@@ -1,10 +1,8 @@
-"""GIF search, cooldown, and outbound sending."""
+"""GIF search and outbound sending."""
 
 from __future__ import annotations
 
-import random
 import re
-import time
 from urllib.parse import unquote_plus
 
 from plugins.discord.conversation.gif_search import search_gif_url
@@ -60,7 +58,6 @@ def user_requested_gif(user_text: str) -> bool:
 class GifService:
     def __init__(self, *, trace_repository=None):
         self.trace_repository = trace_repository
-        self._last_sent_at: dict[tuple[str, str], float] = {}
 
     def gif_allowed(self, settings) -> bool:
         media = getattr(settings, 'media', None) if settings else None
@@ -96,18 +93,7 @@ class GifService:
             })
         return url or None
 
-    def should_auto_gif(self, account_name: str, channel_id: str, settings) -> bool:
-        if not self.gif_allowed(settings):
-            return False
-        chance = float(settings.media.gif_auto_chance or 0.0)
-        if chance <= 0:
-            return False
-        cooldown = max(0, int(settings.media.gif_cooldown_seconds))
-        key = (account_name, channel_id)
-        now = time.time()
-        if cooldown and now - self._last_sent_at.get(key, 0) < cooldown:
-            return False
-        return random.random() < chance
-
-    def mark_sent(self, account_name: str, channel_id: str) -> None:
-        self._last_sent_at[(account_name, channel_id)] = time.time()
+    # Spontaneous auto-GIFs (should_auto_gif/mark_sent + the gif_auto_chance
+    # and gif_cooldown_seconds settings) were cut 2026-08-05: the enforcement
+    # point had zero callers, and she can already send GIFs at will via
+    # [gif:...] or the discord_send_gif tool.

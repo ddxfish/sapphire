@@ -79,8 +79,6 @@ def test_handle_llm_response_skips_synthetic_reply_target_and_completes_task():
     transport = FakeTransport()
     world = FakeWorldModel()
     orchestrator = CognitiveOrchestrator(
-        intent_engine=None,
-        world_state_builder=None,
         world_model_service=world,
     )
     service = ConversationService(
@@ -111,8 +109,6 @@ def test_handle_llm_response_completes_task_when_tool_already_sent():
     transport = FakeTransport()
     world = FakeWorldModel()
     orchestrator = CognitiveOrchestrator(
-        intent_engine=None,
-        world_state_builder=None,
         world_model_service=world,
     )
     style = ReplyStyleService()

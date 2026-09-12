@@ -14,9 +14,9 @@ class PresenceSettings:
     sleep_activity: str = 'custom: sleeping'
     cycling_enabled: bool = False
     cycle_interval_seconds: int = 300
-    llm_status_chance: float = 0.0
     activity_presets: list = field(default_factory=list)
     activities_custom: list = field(default_factory=list)
+    situation_presence_enabled: bool = False
 
 
 @dataclass
@@ -75,11 +75,20 @@ class ProactiveSettings:
 @dataclass
 class ProfileSettings:
     enabled: bool = True
-    distillation_enabled: bool = False
     birthday_capture_enabled: bool = True
     birthday_followups_enabled: bool = True
     birthday_bulk_enabled: bool = True
-    birthday_bulk_threshold: int = 3
+    birthday_bulk_threshold: int = 2
+    # Opt-in ambient chat → fact distill (plugin-local; not Sapphire core Mind).
+    ambient_distill_enabled: bool = False
+    ambient_distill_interval_hours: float = 1.0
+    ambient_distill_min_messages: int = 8
+    ambient_distill_max_facts: int = 3
+    distill_model_provider: str = ''
+    distill_model_name: str = ''
+    # Soft social modulation from relationship scores.
+    relationship_policy_enabled: bool = True
+    relationship_policy_strength: str = 'normal'  # subtle | normal | bold
 
 
 @dataclass
@@ -91,9 +100,14 @@ class MediaSettings:
     gif_content_filter: str = 'medium'
     gif_auto_chance: float = 0.0
     gif_cooldown_seconds: int = 300
-    meme_enabled: bool = False
     image_understanding_enabled: bool = False
-    vision_provider: str = 'openai_compat'
+    # House vision: which Sapphire-registered LLM captions images.
+    # 'auto' = first registered provider that supports images.
+    vision_llm_provider: str = 'auto'
+    vision_llm_model: str = ''
+    # Legacy sidecar endpoint (hidden from UI since 1.13.0; kept as fallback
+    # for pre-registry configs). 'auto' = detect from base URL.
+    vision_provider: str = 'auto'
     vision_base_url: str = ''
     vision_model: str = ''
     vision_api_key: str = ''
@@ -119,11 +133,14 @@ class VoiceSettings:
     addressing_aliases: list = field(default_factory=list)
     conversation_prompt_template: str = ''
     max_conversation_sessions: int = 2
+    turn_cues_enabled: bool = True
+    llm_provider: str = ''  # stamped onto the voice chat as llm_primary ('' = leave alone)
+    llm_model: str = ''
 
 
 @dataclass
 class RetentionSettings:
-    enabled: bool = True
+    enabled: bool = False
     message_days: int = 90
     trace_days: int = 14
     transcript_days: int = 30
@@ -133,6 +150,8 @@ class RetentionSettings:
 @dataclass
 class ConversationSettings:
     reply_mode: str = 'default'
+    human_response_chance: float = 15.0
+    bot_response_chance: float = 15.0
     name_match_enabled: bool = False
     name_match_case_sensitive: bool = False
     batching_seconds: int = 8
@@ -140,13 +159,16 @@ class ConversationSettings:
     typing_indicator_enabled: bool = True
     human_pause_enabled: bool = True
     read_delay_enabled: bool = True
+    # account:channel_id entries — fully ignore inbound (and skip proactive) for these.
+    ignored_channels: list = field(default_factory=list)
 
 
 @dataclass
 class ReactionSettings:
     enabled: bool = True
     silent_enabled: bool = True
-    reaction_chance: float = 50.0
+    sentiment_backend: str = 'vader'  # vader | twitter_roberta
+    reaction_chance: float = 10.0
     reaction_cooldown_seconds: int = 30
     react_on_reply_path: bool = True
     read_only_enabled: bool = True
@@ -170,9 +192,12 @@ class CognitiveSettings:
     task_follow_up_enabled: bool = True
     commitment_followups_enabled: bool = True
     reminder_followups_enabled: bool = True
-    affect_modulation_enabled: bool = True
     llm_primary: str = 'auto'
     llm_model: str = ''
+    # Human world-model roadmap features
+    situation_enabled: bool = True
+    situation_in_prompt: bool = True
+    intention_competition_enabled: bool = False
 
 
 @dataclass
@@ -266,6 +291,7 @@ class SettingsStore:
         effective = EffectiveSettings()
         overlays = [
             self.global_overlay,
+            core_global_overlay(),
             self.guild_overrides.get(guild_id or ''),
             self.channel_overrides.get(channel_id or ''),
             self.dm_overrides.get(dm_id or ''),
@@ -281,6 +307,36 @@ def _merge_overlay(target: SettingsOverlay, source: SettingsOverlay) -> None:
         values = dict(getattr(target, key))
         values.update(getattr(source, key))
         setattr(target, key, values)
+
+
+def overlay_from_flat(flat: dict | None) -> SettingsOverlay:
+    """Map core's flat dotted-key settings dict (section.field) to an overlay."""
+    nested: dict = {}
+    for key, value in (flat or {}).items():
+        section, dot, field_name = key.partition('.')
+        if dot and field_name:
+            nested.setdefault(section, {})[field_name] = value
+    return SettingsOverlay.from_dict(nested)
+
+
+def core_global_overlay() -> SettingsOverlay:
+    """Global settings layer, read live from core (manifest defaults + user/webui/plugins/discord.json).
+
+    Live per-resolve so a Settings save reaches the reply path immediately —
+    no daemon reload needed. Falls back to an empty overlay outside Sapphire
+    (unit tests, standalone tooling).
+    """
+    try:
+        from core.plugin_loader import plugin_loader
+        if not plugin_loader.get_plugin_info('discord'):
+            # Plugin system not booted (unit tests, standalone tooling) — the
+            # import alone succeeds anywhere the repo root is on sys.path, so
+            # gate on actual registration, not importability.
+            return SettingsOverlay()
+        flat = plugin_loader.get_plugin_settings('discord') or {}
+    except Exception:
+        return SettingsOverlay()
+    return overlay_from_flat(flat)
 
 
 def _apply_overlay(effective: EffectiveSettings, overlay: SettingsOverlay) -> None:

@@ -42,7 +42,7 @@ def _service(tmp_path):
     )
 
 
-def test_record_observation_updates_channel_and_user(tmp_path):
+def test_text_observation_updates_channel_and_user(tmp_path):
     service = _service(tmp_path)
     obs = _observation()
 

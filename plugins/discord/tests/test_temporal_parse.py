@@ -116,9 +116,18 @@ def test_reminder_without_dateparser(monkeypatch):
 def test_commitment_next_week():
     result = extract_commitment_run_at("next week I'll be pushing to the dev build", _now())
     assert result is not None
-    run_at, body = result
+    run_at, body, when_label = result
     assert (run_at - _now()).days >= 6
     assert 'dev build' in body.lower()
+    assert when_label
+
+
+def test_commitment_in_three_days_has_when_label():
+    result = extract_commitment_run_at('in 3 days I will ship the hotfix', _now())
+    assert result is not None
+    _run_at, body, when_label = result
+    assert 'hotfix' in body.lower()
+    assert when_label
 
 
 def test_birthday_does_not_create_commitment():

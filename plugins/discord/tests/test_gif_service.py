@@ -69,3 +69,13 @@ def test_parse_llm_output_strips_placeholder_url():
 def test_user_requested_gif_detects_ask():
     assert user_requested_gif('can you still send gifs?') is True
     assert user_requested_gif('hello there') is False
+
+
+def test_giphy_rating_maps_same_direction_as_tenor():
+    # off = unfiltered, high = strictest — was inverted (off→'g', high→'pg-13').
+    from plugins.discord.conversation.gif_search import _map_giphy_rating
+    assert _map_giphy_rating('off') == 'r'
+    assert _map_giphy_rating('low') == 'pg-13'
+    assert _map_giphy_rating('medium') == 'pg'
+    assert _map_giphy_rating('high') == 'g'
+    assert _map_giphy_rating('garbage') == 'pg'

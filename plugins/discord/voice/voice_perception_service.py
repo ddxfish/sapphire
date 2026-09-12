@@ -60,14 +60,6 @@ class VoicePerceptionService:
             confidence=confidence,
             transcript_segment_id=segment_id,
         )
-        if self.world_model_service:
-            self.world_model_service._record_observation('voice_transcript', session.channel_id, {
-                'session_id': session_id,
-                'segment_id': segment_id,
-                'speaker_id': speaker_id,
-                'text': text,
-                'confidence': confidence,
-            })
         if self.trace_repository:
             self.trace_repository.record_trace('voice_transcript', 'Transcribed voice segment', {
                 'session_id': session_id,

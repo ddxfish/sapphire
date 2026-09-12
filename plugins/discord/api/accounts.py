@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from plugins.discord.api.storage_access import open_storage
 from plugins.discord.daemon import get_runtime, run_coroutine
+from plugins.discord.lib.token_check import check_bot_token
 
 
 def _sanitize_account_name(raw: str) -> str:
@@ -34,10 +35,10 @@ async def add_account(**kwargs):
         return {'error': 'Bot token required'}
     with open_storage() as storage:
         storage.account_repository.upsert_account(name, token=token)
-    runtime = get_runtime()
-    if runtime and runtime.transport:
-        run_coroutine(runtime.transport.connect_account(name, token))
-    return {'status': 'added', 'account_name': name, 'connected': bool(runtime and runtime.transport)}
+    from core.event_bus import publish, Events
+    publish(Events.SCOPE_CHANGED, {"kind": "discord", "action": "added", "name": name})
+    return {'status': 'added', 'account_name': name, 'connected': False,
+            'note': 'Bot connects when an enabled daemon task selects it'}
 
 
 async def delete_account(**kwargs):
@@ -49,6 +50,8 @@ async def delete_account(**kwargs):
         run_coroutine(runtime.transport.disconnect_account(name)).result(timeout=5)
     with open_storage() as storage:
         storage.account_repository.delete_account(name)
+    from core.event_bus import publish, Events
+    publish(Events.SCOPE_CHANGED, {"kind": "discord", "action": "deleted", "name": name})
     return {'status': 'deleted', 'account_name': name}
 
 
@@ -59,10 +62,31 @@ async def test_account(**kwargs):
         if not account:
             return {'success': False, 'error': f"Account '{name}' not found"}
         token = storage.account_repository.get_token(name) or ''
-    runtime = get_runtime()
-    if runtime and runtime.transport:
-        future = run_coroutine(runtime.transport.test_account_token(token))
-        return future.result(timeout=5)
-    if not token:
-        return {'success': False, 'error': 'Token missing'}
-    return {'success': True, 'message': 'Token stored (daemon offline — format check only)'}
+    result = await check_bot_token(token)
+    if result.get('success'):
+        with open_storage() as storage:
+            # A valid token says nothing about the CONNECTION — keep state and
+            # last_error (e.g. missing portal intents) intact, only refresh identity.
+            storage.account_repository.update_connection_state(
+                name,
+                account.get('state') or 'disconnected',
+                bot_name=result.get('bot_name', ''),
+                bot_id=result.get('bot_id', ''),
+                last_error=str(account.get('last_error') or ''),
+            )
+        runtime = get_runtime()
+        if runtime and runtime.transport and name not in set(runtime.transport.list_connected()):
+            # Token proven good but bot offline — the earlier failure (e.g. portal
+            # intents) may be fixed now, so skip the backoff and retry immediately.
+            try:
+                run_coroutine(runtime.retry_account_connect(name))
+                result['reconnect'] = 'started'
+            except Exception:
+                pass
+    return result
+
+
+async def test_token(**kwargs):
+    """Validate a raw token before an account is saved (Add Bot form)."""
+    body = kwargs.get('body') or {}
+    return await check_bot_token(body.get('token', ''))

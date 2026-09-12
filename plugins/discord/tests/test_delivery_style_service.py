@@ -66,7 +66,8 @@ def test_quote_reply_skips_joke_comment(monkeypatch):
         settings=settings,
         trigger_content='that was wild',
     )
-    assert plan.reply_to_message_id is None
+    # '' = deliberately unquoted (None would mean 'no plan' and re-quote)
+    assert plan.reply_to_message_id == ''
 
 
 def test_edit_history_prompt_hint():

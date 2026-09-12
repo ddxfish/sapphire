@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 CHAT_PREFIX = 'discord'
 KOKORO_VOICE_PREFIXES = ('af_', 'am_', 'bf_', 'bm_')
 DEFAULT_DISCORD_TTS_VOICE = 'af_heart'
+# Provider read deadline for voice turns; the driver's silent-regen retry
+# (set_llm_timeout in the runner) pairs with it — same pattern as the phone.
+VOICE_LLM_TIMEOUT_SECONDS = 20.0
 
 
 def is_kokoro_streaming_voice(voice: str) -> bool:
@@ -35,6 +38,8 @@ def ensure_discord_voice_chat_settings(
     *,
     bot_names: list[str] | None = None,
     conversation_prompt_template: str = '',
+    llm_provider: str = '',
+    llm_model: str = '',
 ) -> None:
     """Ensure discord VC chats use Kokoro TTS voice + voice-mode prompt context."""
     llm = getattr(system, 'llm_chat', None)
@@ -49,6 +54,19 @@ def ensure_discord_voice_chat_settings(
     voice = str(settings.get('tts_voice') or '').strip()
     if not is_kokoro_streaming_voice(voice):
         updates['tts_voice'] = default_discord_tts_voice(system)
+    # Voice-surface model pin: rides the core per-chat llm_primary/llm_model
+    # selection. Empty/'auto' leaves the chat's own values alone (the UI
+    # provider dropdown stores 'auto' when untouched).
+    llm_provider = str(llm_provider or '').strip()
+    if llm_provider == 'auto':
+        llm_provider = ''
+    llm_model = str(llm_model or '').strip()
+    if llm_provider and str(settings.get('llm_primary') or '') != llm_provider:
+        updates['llm_primary'] = llm_provider
+    if llm_provider and str(settings.get('llm_model') or '') != llm_model:
+        updates['llm_model'] = llm_model
+    if not settings.get('llm_request_timeout'):
+        updates['llm_request_timeout'] = VOICE_LLM_TIMEOUT_SECONDS
     merged_ctx = merge_voice_context(
         settings.get('custom_context', ''),
         bot_names=bot_names,
@@ -150,6 +168,8 @@ def ensure_voice_chat(
     label: str = '',
     bot_names: list[str] | None = None,
     conversation_prompt_template: str = '',
+    llm_provider: str = '',
+    llm_model: str = '',
 ) -> str:
     """Create the per-VC chat in llm_chat if missing. Returns stored chat_name."""
     chat_name = resolve_voice_chat_name(system, guild_id, channel_id)
@@ -165,6 +185,8 @@ def ensure_voice_chat(
                     chat_name,
                     bot_names=bot_names,
                     conversation_prompt_template=conversation_prompt_template,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
                 )
                 return chat_name
         except Exception:
@@ -180,5 +202,7 @@ def ensure_voice_chat(
         chat_name,
         bot_names=bot_names,
         conversation_prompt_template=conversation_prompt_template,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
     )
     return chat_name

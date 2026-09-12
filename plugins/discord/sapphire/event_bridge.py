@@ -4,8 +4,9 @@ from plugins.discord.sapphire.continuity_payload import prepare_continuity_paylo
 
 
 class SapphireEventBridge:
-    def __init__(self, plugin_loader):
+    def __init__(self, plugin_loader, *, llm_debug_service=None):
         self.plugin_loader = plugin_loader
+        self.llm_debug_service = llm_debug_service
         self._pending_payloads = {}
 
     def emit(self, event_name: str, payload: str) -> bool:
@@ -14,6 +15,9 @@ class SapphireEventBridge:
         return False
 
     def emit_discord_message(self, payload: dict) -> bool:
+        debug_extra = payload.pop('_debug_prompt_context', None)
+        if self.llm_debug_service:
+            self.llm_debug_service.record_prompt(payload, extra=debug_extra or {})
         prepared = prepare_continuity_payload(payload)
         accepted = self.emit('discord_message', json.dumps(prepared))
         if accepted:

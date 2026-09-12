@@ -83,8 +83,11 @@ Override via plugin settings key `database_path` if needed.
 | Debug traces | `traces` | 14 days |
 | Voice transcripts | `voice_transcripts` | 30 days |
 | Processed profile buffers | `profile_buffers` | 7 days |
-| User profiles & affect | `profiles` | Until forget-user |
-| Pinned memories | `memories` | Until forget-user |
+| User profiles & affect | `user_profiles` / `profile_facts` | Until forget-user (facts support soft-forget) |
+| Relationship milestones | `relationship_milestones` | Until forget-user |
+| Interest topics | `interest_topics` | Until forget-user |
+| Shared server lore | `server_lore` | Until soft-forget / delete |
+| Pinned memories | `pinned_memories` | Until forget-user |
 | World-model tasks | `tasks` | Until completed/purged |
 | Proactive sleep state | `proactive_state` | Per channel |
 | Bot tokens | `accounts` (encrypted at rest via Sapphire storage) | Until account deleted |
@@ -367,6 +370,7 @@ Content-Type: application/json
 | `safety.quiet_hours_enabled` + start/end | Idle presence, skip proactive outreach (mentions still allowed) |
 | `safety.allow_direct_messages` | Drop DM observations when false |
 | `channel.reply_mode` | Hard gate: `mentions_only`, `default`, `disabled` |
+| `channel.human_response_chance` / `channel.bot_response_chance` | Organic (unaddressed) reply % in `default` mode; mentions/DMs bypass |
 | `bot.reply_mode` + allowlist | Control bot-to-bot debate sessions |
 
 ### Policy engine (automatic)

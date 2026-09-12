@@ -125,6 +125,8 @@ class DiscordConversationRunner:
             )
             if settings
             else '',
+            llm_provider=str(getattr(settings.voice, 'llm_provider', '') or '') if settings else '',
+            llm_model=str(getattr(settings.voice, 'llm_model', '') or '') if settings else '',
         )
         driver, gate, source, frame_feed = self._build_stack(
             system,
@@ -134,6 +136,22 @@ class DiscordConversationRunner:
             settings=settings,
         )
         transcribe_fn = driver._transcribe_fn
+        if settings is None or getattr(settings.voice, 'turn_cues_enabled', True):
+            # Turn cues (v2.9 soundscape): think-pulse 1/s during STT+LLM dead
+            # air, ding on barge-in, glitch sound on turn failure — same palette
+            # as the phone surface.
+            try:
+                driver.set_cues(source.play_cue)
+            except Exception as exc:
+                logger.warning('Voice cue wiring failed: %s', exc)
+        try:
+            # One-shot silent regen if the first LLM token stalls (triple
+            # think-tick instead of dead air, per the phone surface). Pairs
+            # with the llm_request_timeout ensure_voice_chat stamps on the chat.
+            from plugins.discord.sapphire.voice_chat import VOICE_LLM_TIMEOUT_SECONDS
+            driver.set_llm_timeout(VOICE_LLM_TIMEOUT_SECONDS)
+        except Exception as exc:
+            logger.debug('Voice llm timeout wiring failed: %s', exc)
 
         with self._lock:
             if session.session_id in self._sessions:
@@ -232,6 +250,7 @@ class DiscordConversationRunner:
         driver = rec['driver']
         driver._discord_pending_text = raw
         logger.info('[DISCORD] utterance bridge submitting turn: %r', raw[:200])
+        self._signal_thinking(rec)
         driver._spawn(driver._run_turn, b'\x00\x00' * 16000)
         return {'status': 'submitted'}
 
@@ -244,8 +263,26 @@ class DiscordConversationRunner:
             return {'status': 'not_active'}
         driver = rec['driver']
         logger.info('[DISCORD] utterance bridge submitting pcm turn (%s bytes)', len(pcm))
+        self._signal_thinking(rec)
         driver._spawn(driver._run_turn, pcm)
         return {'status': 'submitted'}
+
+    def _signal_thinking(self, rec) -> None:
+        """Typing indicator in the voice channel's text chat while the turn runs.
+
+        Discord clears it after ~10s or on message send; the LLM+TTS window is
+        shorter, so a single trigger covers the whole 'is she working?' gap.
+        """
+        source = rec.get('source')
+        if not self.transport or source is None:
+            return
+        try:
+            self.transport.trigger_typing_sync(
+                source.channel_id,
+                account_name=source.account_name,
+            )
+        except Exception as exc:
+            logger.debug('Voice thinking indicator failed: %s', exc)
 
     def interrupt_active_turn(self, session_id: str) -> bool:
         if not self.is_turn_active(session_id):

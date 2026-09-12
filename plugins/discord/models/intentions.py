@@ -63,12 +63,6 @@ class SendGifIntention(BaseIntention):
 
 
 @dataclass
-class SendMemeIntention(BaseIntention):
-    meme_url: str = ''
-    theme: str = ''
-
-
-@dataclass
 class UpdatePresenceIntention(BaseIntention):
     status: str = 'online'
     activity: str = ''

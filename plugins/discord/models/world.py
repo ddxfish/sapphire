@@ -70,11 +70,3 @@ class RelationshipState:
     interest: float = 0.5
     familiarity: float = 0.0
 
-
-@dataclass
-class AgentAffect:
-    energy: float = 0.7
-    sociability: float = 0.6
-    irritability: float = 0.2
-    playfulness: float = 0.5
-    stress: float = 0.2

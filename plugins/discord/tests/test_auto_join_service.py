@@ -7,6 +7,15 @@ class FakeVoiceService:
     def __init__(self):
         self.joins = []
         self.leaves = []
+        self.listener_ensures = []
+
+    def ensure_listener(self, account_name, channel_id, guild_id=''):
+        self.listener_ensures.append((account_name, channel_id, guild_id))
+        return {'status': 'listening', 'channel_id': str(channel_id)}
+
+    async def ensure_listener_async(self, account_name, channel_id, guild_id=''):
+        self.listener_ensures.append((account_name, channel_id, guild_id))
+        return {'status': 'listening', 'channel_id': str(channel_id)}
 
     def join(self, intention):
         self.joins.append(intention)

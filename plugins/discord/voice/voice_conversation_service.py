@@ -19,12 +19,14 @@ class VoiceConversationService:
         settings_store=None,
         reply_style_service=None,
         trace_repository=None,
+        llm_debug_service=None,
     ):
         self.voice_execution_service = voice_execution_service
         self.voice_session_repository = voice_session_repository
         self.settings_store = settings_store
         self.reply_style_service = reply_style_service
         self.trace_repository = trace_repository
+        self.llm_debug_service = llm_debug_service
 
     def handle_transcript(self, session, perception_result: dict) -> dict:
         if perception_result.get('status') != 'transcribed':
@@ -68,10 +70,34 @@ class VoiceConversationService:
             return {'status': 'skipped', 'reason': 'empty'}
         logger.info('Voice conversation heard: %r', user_text[:200])
         prompt = self._build_prompt(session, user_text)
+        debug_id = ''
+        llm_primary = ''
+        llm_model = ''
+        if settings:
+            from plugins.discord.sapphire.llm_settings import cognitive_llm_from_settings
+
+            llm_primary, llm_model = cognitive_llm_from_settings(settings)
+        if self.llm_debug_service:
+            debug_id = self.llm_debug_service.record_voice_prompt(
+                session_id=str(getattr(session, 'session_id', '') or ''),
+                account_name=str(getattr(session, 'account_name', '') or ''),
+                channel_id=str(getattr(session, 'channel_id', '') or ''),
+                prompt=prompt,
+                user_text=user_text,
+                llm_primary=llm_primary,
+                llm_model=llm_model,
+            )
         reply = self._llm_reply(prompt, settings=settings)
+        spoken = self._extract_spoken_reply(reply) if reply else ''
+        if self.llm_debug_service and debug_id:
+            self.llm_debug_service.record_voice_response(
+                debug_id,
+                raw_text=reply or '',
+                spoken_text=spoken,
+            )
         if not reply:
             return {'status': 'skipped', 'reason': 'empty_reply'}
-        reply = self._extract_spoken_reply(reply)
+        reply = spoken
         if not reply:
             return {'status': 'skipped', 'reason': 'empty_reply'}
         intention = SpeakVoiceIntention(

@@ -52,23 +52,32 @@ class ReactionService:
         if reply_planned and not reaction.react_on_reply_path:
             return None
 
-        if read_only:
-            if respond_trigger or not reaction.read_only_enabled:
-                return None
-            if random.random() >= READ_ONLY_REACT_CHANCE:
-                return None
-        else:
-            chance = max(0.0, min(100.0, float(reaction.reaction_chance)))
-            if chance <= 0:
-                return None
-            if random.random() >= (chance / 100.0):
-                return None
+        force_react = bool(world_state.get('force_react'))
+        mult = float(world_state.get('reaction_multiplier') or 1.0)
+        if not force_react:
+            if read_only:
+                # No respond_trigger bail here: a mention in a reply-disabled
+                # channel arrives read_only WITH respond_trigger set — read-only
+                # mode's flagship case, which the old check silenced entirely.
+                if not reaction.read_only_enabled:
+                    return None
+                chance = max(0.0, min(1.0, READ_ONLY_REACT_CHANCE * mult))
+                if random.random() >= chance:
+                    return None
+            else:
+                chance = max(0.0, min(100.0, float(reaction.reaction_chance) * mult))
+                if chance <= 0:
+                    return None
+                if random.random() >= (chance / 100.0):
+                    return None
 
         context_text = self._recent_context_text(trigger)
+        backend = getattr(reaction, 'sentiment_backend', 'vader') or 'vader'
         emoji = pick_reaction_emoji(
             trigger.clean_content,
             context_text=context_text,
             channel_name=trigger.channel_name,
+            backend=backend,
         )
         if not emoji:
             return None

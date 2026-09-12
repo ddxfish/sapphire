@@ -50,7 +50,7 @@ class FakeGuild:
 
 
 class FakeVisionBridge:
-    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type=''):
+    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
         assert source_url == 'https://cdn/a.png'
         assert media_kind == 'image'
         assert filename == 'cat.png'
@@ -66,7 +66,7 @@ class FakeVisionBridge:
 
 
 class RaisingVisionBridge:
-    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type=''):
+    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
         raise RuntimeError('bridge exploded')
 
 
@@ -172,7 +172,7 @@ def test_adapt_dm_typing_event():
     assert obs.guild_id == ''
 
 
-def test_adapt_message_records_media_observation(tmp_path):
+def test_adapt_message_records_media_without_observation_row(tmp_path):
     world = _world(tmp_path)
     media_service = MediaService(
         media_repository=MediaRepository(world.channel_repository.sqlite_service),
@@ -194,22 +194,11 @@ def test_adapt_message_records_media_observation(tmp_path):
     assert len(stored) == 1
     assert stored[0]['interpretation']['summary'] == 'a cat picture'
 
+    # Observation writes were removed (tier-2 strip) — media lives only in media_repository.
     rows = world.channel_repository.sqlite_service.connection().execute(
         "SELECT payload_json FROM observations WHERE observation_type = 'media_observation'"
     ).fetchall()
-
-    assert len(rows) == 1
-    assert json.loads(rows[0]['payload_json']) == {
-        'message_id': '111',
-        'author_id': '7',
-        'account_name': 'alpha',
-        'media_kind': 'image',
-        'summary': 'a cat picture',
-        'entities': ['cat'],
-        'ocr_text': '',
-        'confidence': 0.9,
-        'source': 'vision',
-    }
+    assert rows == []
 
 
 def test_adapt_message_records_media_detected_trace(tmp_path):

@@ -53,7 +53,6 @@ def deliver_gif_and_reaction(
     url = gif_service.search_gif_url(gif_query, settings=settings)
     if url:
         transport.send_gif_sync(channel_id, url, account_name=account_name or None)
-        gif_service.mark_sent(account_name, channel_id)
         reply_style.mark_gif_sent(message_id)
         return
 

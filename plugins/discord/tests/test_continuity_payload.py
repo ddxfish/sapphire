@@ -33,6 +33,21 @@ def test_task_follow_up_appends_follow_up_hint_to_recent_history():
     assert prepared['task_follow_up'] == 'true'
 
 
+def test_proactive_kind_appends_proactive_hint_to_recent_history():
+    payload = {
+        'content': 'Post a short good-morning message.',
+        'recent_history': ['Alice: night all'],
+        'proactive_kind': 'greeting',
+    }
+
+    prepared = prepare_continuity_payload(payload)
+
+    assert prepared['recent_history'][:1] == ['Alice: night all']
+    assert 'scheduled proactive post' in prepared['recent_history'][-1]
+    assert 'reply_to_message_id' in prepared['recent_history'][-1]
+    assert prepared['proactive_kind'] == 'greeting'
+
+
 def test_reply_instructions_appended_to_recent_history():
     payload = {
         'content': 'wake up',

@@ -77,9 +77,6 @@ class VoiceEventBridge:
             self._handle_voice_turn(event_type, chat, data)
             return
 
-        if event_type in (events.TTS_PLAYING, events.TTS_STOPPED) and surface == 'discord':
-            self._trace('voice_tts_state', event_type, data)
-
     def _handle_voice_turn(self, event_type: str, chat_name: str, data: dict) -> None:
         session = self._session_for_chat(chat_name)
         payload = {
@@ -91,12 +88,6 @@ class VoiceEventBridge:
         if event_type.endswith('start'):
             payload['user_text'] = str(data.get('user_text') or '')[:500]
             self._trace('voice_conversation_turn', 'Conversation turn started', payload)
-            if session and payload.get('user_text') and self.world_model_service:
-                self.world_model_service._record_observation('voice_conversation_turn', session.channel_id, {
-                    'session_id': session.session_id,
-                    'text': payload['user_text'],
-                    'chat': chat_name,
-                })
         elif event_type.endswith('chunk'):
             text = str(data.get('text') or '')
             if text:

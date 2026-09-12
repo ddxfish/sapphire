@@ -23,6 +23,5 @@ class MediaArtifact:
 
 @dataclass
 class MemeClassification:
-    is_meme: bool = False
     sentiment: str = 'neutral'
     role: str = 'generic'

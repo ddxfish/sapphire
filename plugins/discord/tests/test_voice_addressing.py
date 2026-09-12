@@ -29,8 +29,15 @@ def test_directed_voice_phrase_without_bot_name():
 
 def test_should_address_bot_name_mode_requires_bot_name():
     assert should_address_bot('Remy, can you hear me?', ['Remmi'])
-    assert not should_address_bot('Testing, testing, one, two, three.', ['Remmi'])
     assert not should_address_bot('pass the salt please', ['Remmi'])
+    assert not should_address_bot('I think we should go tomorrow', ['Remmi'])
+
+
+def test_should_address_bot_directed_phrases_pass_without_name():
+    # Mic-check phrases are bot-directed even when STT mangles the name.
+    assert should_address_bot('can you hear me okay?', ['Remmi'])
+    assert should_address_bot('are you there?', ['Remmi'])
+    assert should_address_bot('Testing, testing, one, two, three.', ['Remmi'])
 
 
 def test_is_stop_command():

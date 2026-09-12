@@ -10,22 +10,22 @@ class PromptContextService:
         self,
         *,
         message_repository,
-        observation_interpreter=None,
         memory_service=None,
         profile_service=None,
-        attention_service=None,
         media_service=None,
         trace_service=None,
         edit_history_service=None,
+        channel_situation_service=None,
+        settings_store=None,
     ):
         self.message_repository = message_repository
-        self.observation_interpreter = observation_interpreter
         self.memory_service = memory_service
         self.profile_service = profile_service
-        self.attention_service = attention_service
         self.media_service = media_service
         self.trace_service = trace_service
         self.edit_history_service = edit_history_service
+        self.channel_situation_service = channel_situation_service
+        self.settings_store = settings_store
 
     def build(self, batch) -> dict:
         last = batch.observations[-1]
@@ -39,7 +39,6 @@ class PromptContextService:
             media_by_message,
             exclude_message_id=last.message_id,
         )
-        interpretation = self.observation_interpreter.interpret(last) if self.observation_interpreter else {}
         context = {
             'recent_history': transcript,
             'channel_id': last.channel_id,
@@ -47,7 +46,6 @@ class PromptContextService:
             'guild_name': last.guild_name,
             'guild_id': last.guild_id,
             'author_id': last.author_id,
-            'trigger': interpretation,
             'attachments': last.attachments,
         }
         if self.memory_service:
@@ -70,16 +68,49 @@ class PromptContextService:
                     'pinned': len(pinned),
                 })
         if self.profile_service:
-            profile_context = self.profile_service.build_context(last.account_name, last.author_id)
-            affect = self.profile_service.get_affect(last.account_name)
+            profile_context = self.profile_service.build_context(
+                last.account_name,
+                last.author_id,
+                guild_id=last.guild_id,
+                channel_id=last.channel_id,
+            )
             context['profile'] = profile_context
-            context['affect'] = affect.to_dict()
-        if self.attention_service:
-            context['activation'] = self.attention_service.channel_activation(last.account_name, last.channel_id)
+            # Soft-ack milestones once they've been offered to the prompt so
+            # they don't repeat every message — noticing once is enough.
+            pending_ids = [
+                int(row['id'])
+                for row in (profile_context.get('milestones') or [])
+                if row.get('id') is not None
+            ]
+            if pending_ids:
+                self.profile_service.acknowledge_milestones(pending_ids)
         if self.edit_history_service:
             edit_hint = self.edit_history_service.build_prompt_hint(last.account_name, last.channel_id)
             if edit_hint:
                 context['edit_history_hint'] = edit_hint
+        if self.channel_situation_service:
+            settings = None
+            if self.settings_store:
+                settings = self.settings_store.resolve(
+                    guild_id=last.guild_id,
+                    channel_id=last.channel_id,
+                    dm_id=last.channel_id if last.is_dm else None,
+                )
+            cognitive = getattr(settings, 'cognitive', None) if settings else None
+            if cognitive is None or (
+                getattr(cognitive, 'situation_enabled', True)
+                and getattr(cognitive, 'situation_in_prompt', True)
+            ):
+                situation = self.channel_situation_service.build(
+                    last.account_name,
+                    last.channel_id,
+                    guild_id=last.guild_id or '',
+                    channel_name=last.channel_name or '',
+                )
+                context['situation'] = situation.to_dict()
+                hint = situation.prompt_hint()
+                if hint:
+                    context['situation_hint'] = hint
         if self.media_service:
             media_context = []
             media_message_id = self._media_context_message_id(batch)

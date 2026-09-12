@@ -1,6 +1,5 @@
-"""Tests for daemon state helpers and core compat shim."""
+"""Tests for daemon state helpers."""
 
-from plugins.discord.lib.core_compat import ensure_execution_context_images_support
 from plugins.discord.runtime import daemon_state
 
 
@@ -89,17 +88,3 @@ def test_legacy_get_client_and_clients_view():
     assert daemon_mod.get_client('bot') is None
 
     daemon_state.handle = None
-
-
-def test_execution_context_images_shim_is_idempotent():
-    try:
-        ensure_execution_context_images_support()
-        from core.continuity.execution_context import ExecutionContext
-    except ModuleNotFoundError:
-        import pytest
-        pytest.skip('core continuity stack not available in test env')
-
-    first = ExecutionContext.run
-    ensure_execution_context_images_support()
-    assert ExecutionContext.run is first
-    assert 'images' in __import__('inspect').signature(ExecutionContext.run).parameters

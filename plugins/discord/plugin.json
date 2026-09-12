@@ -2,11 +2,12 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "0.1.0",
-  "description": "Discord cognitive agent — bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
+  "version": "1.23.0",
+  "min_core_version": "2.10.1",
+  "description": "Discord cognitive agent \u2014 bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
-  "icon": "🎮",
+  "icon": "\ud83c\udfae",
   "priority": 50,
   "default_enabled": false,
   "pip_dependencies": [
@@ -18,7 +19,9 @@
   ],
   "settingsUI": "plugin",
   "capabilities": {
-    "tools": ["tools/discord_tools.py"],
+    "tools": [
+      "tools/discord_tools.py"
+    ],
     "hooks": {
       "prompt_inject": "hooks/voice_prompt_inject.py"
     },
@@ -35,78 +38,253 @@
     ],
     "daemon": {
       "entry": "daemon.py",
-      "event_sources": [{
-        "name": "discord_message",
-        "label": "Discord Message",
-        "description": "New message received in a Discord channel",
-        "filter_fields": [
-          {"key": "mentioned", "label": "bot was @mentioned (True/False)"},
-          {"key": "guild_name", "label": "server name"},
-          {"key": "channel_name", "label": "channel name"},
-          {"key": "username", "label": "sender username"},
-          {"key": "content_contains", "label": "keyword in message"},
-          {"key": "channel_name_not", "label": "exclude channel name"},
-          {"key": "guild_name_not", "label": "exclude server name"},
-          {"key": "username_not", "label": "exclude username"},
-          {"key": "guild_id", "label": "server ID (advanced)"},
-          {"key": "channel_id", "label": "channel ID (advanced)"}
-        ],
-        "task_fields": [
-          {
-            "key": "account",
-            "type": "select",
-            "label": "Bot Account",
-            "required": true,
-            "dynamic": "/api/plugin/discord/accounts",
-            "help": "Which Discord bot this daemon listens on. Only this bot will be connected."
-          },
-          {
-            "key": "auto_reply",
-            "type": "boolean",
-            "label": "Auto-reply in channel",
-            "default": true,
-            "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
-          },
-          {
-            "key": "cooldown",
-            "type": "number",
-            "label": "Reply cooldown (seconds)",
-            "default": 0,
-            "help": "Minimum seconds between replies in the same channel. 0 = no limit."
-          }
-        ]
-      }]
+      "event_sources": [
+        {
+          "name": "discord_message",
+          "label": "Discord Message",
+          "description": "New message received in a Discord channel",
+          "filter_fields": [
+            {
+              "key": "mentioned",
+              "label": "bot was @mentioned (True/False)"
+            },
+            {
+              "key": "guild_name",
+              "label": "server name"
+            },
+            {
+              "key": "channel_name",
+              "label": "channel name"
+            },
+            {
+              "key": "username",
+              "label": "sender username"
+            },
+            {
+              "key": "content_contains",
+              "label": "keyword in message"
+            },
+            {
+              "key": "channel_name_not",
+              "label": "exclude channel name"
+            },
+            {
+              "key": "guild_name_not",
+              "label": "exclude server name"
+            },
+            {
+              "key": "username_not",
+              "label": "exclude username"
+            },
+            {
+              "key": "guild_id",
+              "label": "server ID (advanced)"
+            },
+            {
+              "key": "channel_id",
+              "label": "channel ID (advanced)"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot this daemon listens on. Only bots selected by an enabled daemon task are connected."
+            },
+            {
+              "key": "auto_reply",
+              "type": "boolean",
+              "label": "Auto-reply in channel",
+              "default": true,
+              "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
+            },
+            {
+              "key": "cooldown",
+              "type": "number",
+              "label": "Reply cooldown (seconds)",
+              "default": 0,
+              "help": "Minimum seconds between replies in the same channel. 0 = no limit."
+            }
+          ]
+        }
+      ]
     },
     "routes": [
-      {"method": "GET",    "path": "accounts",                    "handler": "api/accounts.py:list_accounts"},
-      {"method": "POST",   "path": "accounts",                    "handler": "api/accounts.py:add_account"},
-      {"method": "DELETE", "path": "accounts/{name}",             "handler": "api/accounts.py:delete_account"},
-      {"method": "POST",   "path": "accounts/{name}/test",        "handler": "api/accounts.py:test_account"},
-      {"method": "GET",    "path": "settings",                    "handler": "api/settings.py:get_settings"},
-      {"method": "POST",   "path": "settings",                    "handler": "api/settings.py:save_settings"},
-      {"method": "GET",    "path": "health",                      "handler": "api/traces.py:get_health"},
-      {"method": "GET",    "path": "traces",                      "handler": "api/traces.py:list_traces"},
-      {"method": "GET",    "path": "profiles",                    "handler": "api/profiles.py:list_profiles"},
-      {"method": "GET",    "path": "proactive/targets",           "handler": "api/channels.py:list_proactive_targets"},
-      {"method": "GET",    "path": "voice/targets",               "handler": "api/channels.py:list_voice_targets"},
-      {"method": "GET",    "path": "bots/allowlist",              "handler": "api/channels.py:list_bot_allowlist_candidates"},
-      {"method": "GET",    "path": "presence/presets",            "handler": "api/presence.py:list_presets"},
-      {"method": "GET",    "path": "voice/sessions",              "handler": "api/voice.py:list_voice_sessions"},
-      {"method": "GET",    "path": "voice/diagnostics",           "handler": "api/voice.py:voice_diagnostics"},
-      {"method": "GET",    "path": "voice/auto-join",             "handler": "api/voice.py:auto_join_status"},
-      {"method": "GET",    "path": "proactive/diagnostics",       "handler": "api/proactive.py:proactive_diagnostics"},
-      {"method": "POST",   "path": "proactive/test",              "handler": "api/proactive.py:test_proactive"},
-      {"method": "GET",    "path": "admin/summary",               "handler": "api/admin.py:operator_summary"},
-      {"method": "POST",   "path": "admin/purge",                 "handler": "api/admin.py:purge_retention"},
-      {"method": "POST",   "path": "admin/forget-user",           "handler": "api/admin.py:forget_user"},
-      {"method": "POST",   "path": "admin/import-leona",          "handler": "api/admin.py:import_from_leona"}
+      {
+        "method": "GET",
+        "path": "accounts",
+        "handler": "api/accounts.py:list_accounts"
+      },
+      {
+        "method": "POST",
+        "path": "accounts",
+        "handler": "api/accounts.py:add_account"
+      },
+      {
+        "method": "POST",
+        "path": "accounts/test",
+        "handler": "api/accounts.py:test_token"
+      },
+      {
+        "method": "DELETE",
+        "path": "accounts/{name}",
+        "handler": "api/accounts.py:delete_account"
+      },
+      {
+        "method": "POST",
+        "path": "accounts/{name}/test",
+        "handler": "api/accounts.py:test_account"
+      },
+      {
+        "method": "GET",
+        "path": "settings",
+        "handler": "api/settings.py:get_settings"
+      },
+      {
+        "method": "POST",
+        "path": "settings",
+        "handler": "api/settings.py:save_settings"
+      },
+      {
+        "method": "GET",
+        "path": "health",
+        "handler": "api/traces.py:get_health"
+      },
+      {
+        "method": "GET",
+        "path": "traces",
+        "handler": "api/traces.py:list_traces"
+      },
+      {
+        "method": "GET",
+        "path": "profiles",
+        "handler": "api/profiles.py:list_profiles"
+      },
+      {
+        "method": "GET",
+        "path": "profiles/facts",
+        "handler": "api/profiles.py:list_profile_facts"
+      },
+      {
+        "method": "GET",
+        "path": "profiles/facts/review",
+        "handler": "api/profiles.py:list_distill_review"
+      },
+      {
+        "method": "POST",
+        "path": "profiles/facts",
+        "handler": "api/profiles.py:add_profile_fact"
+      },
+      {
+        "method": "POST",
+        "path": "profiles/facts/update",
+        "handler": "api/profiles.py:update_profile_fact"
+      },
+      {
+        "method": "GET",
+        "path": "profiles/milestones",
+        "handler": "api/profiles.py:list_milestones"
+      },
+      {
+        "method": "GET",
+        "path": "profiles/interests",
+        "handler": "api/profiles.py:list_interests"
+      },
+      {
+        "method": "GET",
+        "path": "lore",
+        "handler": "api/profiles.py:list_lore"
+      },
+      {
+        "method": "POST",
+        "path": "lore",
+        "handler": "api/profiles.py:mutate_lore"
+      },
+      {
+        "method": "POST",
+        "path": "memory/test",
+        "handler": "api/profiles.py:memory_test"
+      },
+      {
+        "method": "GET",
+        "path": "proactive/targets",
+        "handler": "api/channels.py:list_proactive_targets"
+      },
+      {
+        "method": "GET",
+        "path": "voice/targets",
+        "handler": "api/channels.py:list_voice_targets"
+      },
+      {
+        "method": "GET",
+        "path": "bots/allowlist",
+        "handler": "api/channels.py:list_bot_allowlist_candidates"
+      },
+      {
+        "method": "GET",
+        "path": "presence/presets",
+        "handler": "api/presence.py:list_presets"
+      },
+      {
+        "method": "GET",
+        "path": "voice/sessions",
+        "handler": "api/voice.py:list_voice_sessions"
+      },
+      {
+        "method": "GET",
+        "path": "voice/diagnostics",
+        "handler": "api/voice.py:voice_diagnostics"
+      },
+      {
+        "method": "GET",
+        "path": "voice/auto-join",
+        "handler": "api/voice.py:auto_join_status"
+      },
+      {
+        "method": "GET",
+        "path": "proactive/diagnostics",
+        "handler": "api/proactive.py:proactive_diagnostics"
+      },
+      {
+        "method": "POST",
+        "path": "proactive/test",
+        "handler": "api/proactive.py:test_proactive"
+      },
+      {
+        "method": "GET",
+        "path": "admin/summary",
+        "handler": "api/admin.py:operator_summary"
+      },
+      {
+        "method": "POST",
+        "path": "admin/purge",
+        "handler": "api/admin.py:purge_retention"
+      },
+      {
+        "method": "POST",
+        "path": "admin/forget-user",
+        "handler": "api/admin.py:forget_user"
+      },
+      {
+        "method": "GET",
+        "path": "debug/llm",
+        "handler": "api/debug.py:list_llm_debug"
+      },
+      {
+        "method": "GET",
+        "path": "debug/cognition",
+        "handler": "api/debug.py:get_cognition_debug"
+      }
     ],
     "schedule": [
       {
         "name": "morning_greeting",
         "cron": "0 * * * *",
         "handler": "schedule/morning_greeting.py",
-        "description": "Post configured morning greetings (checks UTC hour each hour)"
+        "description": "Post configured morning greetings (checks server-local hour each hour)"
       },
       {
         "name": "quiet_outreach",
@@ -118,7 +296,1150 @@
         "name": "sleep_goodnight",
         "cron": "*/15 * * * *",
         "handler": "schedule/sleep_goodnight.py",
-        "description": "Goodnight messages and sleep state (checks sleep UTC hour with variable minute)"
+        "description": "Goodnight messages and sleep state (checks sleep server-local hour with variable minute)"
+      },
+      {
+        "name": "retention_purge",
+        "cron": "30 4 * * *",
+        "handler": "schedule/retention_purge.py",
+        "description": "Daily purge of plugin data older than the Retention day limits"
+      },
+      {
+        "name": "ambient_distill",
+        "cron": "*/15 * * * *",
+        "handler": "schedule/ambient_distill.py",
+        "description": "Opt-in ambient chat distill into profile facts (honors profile.ambient_distill_interval_hours, default 1h)"
+      }
+    ],
+    "settings": [
+      {
+        "key": "cognitive.task_follow_up_enabled",
+        "type": "boolean",
+        "label": "Task follow-ups",
+        "default": true,
+        "tab": "Tasks",
+        "help": "Deliver due follow-ups from voice sessions, reminders, and commitments."
+      },
+      {
+        "key": "cognitive.commitment_followups_enabled",
+        "type": "boolean",
+        "label": "Commitment follow-ups",
+        "default": true,
+        "tab": "Tasks",
+        "help": "When someone says they will do something, follow up later."
+      },
+      {
+        "key": "cognitive.reminder_followups_enabled",
+        "type": "boolean",
+        "label": "Reminder requests",
+        "default": true,
+        "tab": "Tasks",
+        "help": "\"Remind me in 5 minutes to\u2026\" queues a task and @mentions them when due."
+      },
+      {
+        "key": "profile.birthday_capture_enabled",
+        "type": "boolean",
+        "label": "Learn birthdays",
+        "default": true,
+        "tab": "Tasks",
+        "help": "Capture birthdays mentioned in chat onto user profiles."
+      },
+      {
+        "key": "profile.birthday_followups_enabled",
+        "type": "boolean",
+        "label": "Birthday wishes",
+        "default": true,
+        "tab": "Tasks",
+        "help": "Wish users a happy birthday on the day."
+      },
+      {
+        "key": "profile.birthday_bulk_enabled",
+        "type": "boolean",
+        "label": "Bulk birthday message",
+        "default": true,
+        "tab": "Tasks",
+        "help": "One combined message when several birthdays land on the same day."
+      },
+      {
+        "key": "profile.birthday_bulk_threshold",
+        "type": "number",
+        "label": "Bulk birthday threshold",
+        "default": 2,
+        "tab": "Tasks",
+        "help": "Combine into one message at this many same-day birthdays."
+      },
+      {
+        "key": "cognitive.llm_primary",
+        "type": "string",
+        "label": "Reply LLM provider",
+        "default": "auto",
+        "hidden": true
+      },
+      {
+        "key": "cognitive.llm_model",
+        "type": "string",
+        "label": "Reply LLM model",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "profile.enabled",
+        "type": "boolean",
+        "label": "Memory",
+        "default": true,
+        "tab": "Memory",
+        "help": "ON (default): she builds per-user memory from Discord \u2014 facts, birthdays, and names, kept per bot account in the plugin's own database (never in her core Mind). OFF: no new capture and replies stop using stored facts; existing data stays until you Forget users below."
+      },
+      {
+        "key": "profile.ambient_distill_enabled",
+        "type": "boolean",
+        "label": "Learn from ambient chat",
+        "default": false,
+        "tab": "Memory",
+        "help": "OFF (default): only explicit facts (/remember, tools, UI) and lightweight interests. ON: buffer member chat and periodically distill durable personal facts with an LLM into the plugin DB (never core Mind)."
+      },
+      {
+        "key": "profile.ambient_distill_interval_hours",
+        "type": "number",
+        "label": "Ambient distill interval (hours)",
+        "default": 1.0,
+        "tab": "Memory",
+        "help": "How often distill may run per bot account. Default 1 hour. Cron checks every 15 minutes; values below 0.25 are clamped to 15 minutes."
+      },
+      {
+        "key": "profile.ambient_distill_min_messages",
+        "type": "number",
+        "label": "Min buffered messages before distill",
+        "default": 8,
+        "tab": "Memory",
+        "help": "A person needs at least this many new buffered lines before the LLM distill runs for them."
+      },
+      {
+        "key": "profile.ambient_distill_max_facts",
+        "type": "number",
+        "label": "Max new facts per distill pass",
+        "default": 3,
+        "tab": "Memory",
+        "help": "Upper bound on facts written for one person in a single distill pass."
+      },
+      {
+        "key": "profile.relationship_policy_enabled",
+        "type": "boolean",
+        "label": "Relationship-aware social timing",
+        "default": true,
+        "tab": "Cognition",
+        "help": "ON (default): familiarity and fondness softly scale organic replies, reactions, and outreach. Hard cooldowns and safety gates still win."
+      },
+      {
+        "key": "profile.relationship_policy_strength",
+        "type": "string",
+        "label": "Relationship policy strength",
+        "default": "normal",
+        "tab": "Cognition",
+        "help": "How strongly relationship scores reshape social chances.",
+        "options": [
+          {"label": "Subtle", "value": "subtle"},
+          {"label": "Normal", "value": "normal"},
+          {"label": "Bold", "value": "bold"}
+        ]
+      },
+      {
+        "key": "cognitive.situation_enabled",
+        "type": "boolean",
+        "label": "Channel situation model",
+        "default": true,
+        "tab": "Cognition",
+        "help": "Build a short-lived channel vibe snapshot (quiet / calm / lively / playful / heated) from recent messages for prompts and gates."
+      },
+      {
+        "key": "cognitive.situation_in_prompt",
+        "type": "boolean",
+        "label": "Inject situation into prompts",
+        "default": true,
+        "tab": "Cognition",
+        "help": "When situation is on, add a compact channel-situation block to reply instructions (data fence, not instructions)."
+      },
+      {
+        "key": "cognitive.intention_competition_enabled",
+        "type": "boolean",
+        "label": "Intention competition (reply / react / silent)",
+        "default": false,
+        "tab": "Cognition",
+        "help": "OFF (default): legacy organic % roll, then optional silent react on miss. ON: score reply vs react-only vs silence from situation + relationship (mentions/DMs still always reply)."
+      },
+      {
+        "key": "presence.situation_presence_enabled",
+        "type": "boolean",
+        "label": "Situation-aware presence",
+        "default": false,
+        "tab": "Presence",
+        "help": "OFF (default): presence from sleep/quiet/cycling presets. ON: bias awake status/activity from the primary greeting channel's situation (sleep and quiet hours still override)."
+      },
+      {
+        "key": "profile.distill_model_provider",
+        "type": "string",
+        "label": "Ambient distill model provider",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "profile.distill_model_name",
+        "type": "string",
+        "label": "Ambient distill model name",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "channel.reply_mode",
+        "type": "string",
+        "label": "Reply mode",
+        "default": "default",
+        "tab": "Conversation",
+        "help": "First gate before the LLM. Mentions only is the usual choice for public servers. Default also rolls Human/Bot organic reply chance on unaddressed channel messages.",
+        "options": [
+          {
+            "label": "Default \u2014 reply when addressed, plus organic chance",
+            "value": "default"
+          },
+          {
+            "label": "Mentions only \u2014 require @mention or name match",
+            "value": "mentions_only"
+          },
+          {
+            "label": "Reply to all \u2014 answer every allowed message",
+            "value": "all"
+          },
+          {
+            "label": "Disabled \u2014 never auto-reply in channels",
+            "value": "disabled"
+          }
+        ]
+      },
+      {
+        "key": "channel.ignored_channels",
+        "type": "list",
+        "label": "Ignored channels",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "channel.human_response_chance",
+        "type": "number",
+        "label": "Human organic reply chance (%)",
+        "default": 15.0,
+        "tab": "Conversation",
+        "help": "In Default reply mode only: percent chance (0-100) to reply to a human message that did not address her (@mention / name match). Mentions and DMs always reply. 0 = never chime in unprompted."
+      },
+      {
+        "key": "channel.bot_response_chance",
+        "type": "number",
+        "label": "Bot organic reply chance (%)",
+        "default": 15.0,
+        "tab": "Conversation",
+        "help": "In Default reply mode only: percent chance (0-100) to reply to an eligible bot message that did not address her. Still requires Bot-to-bot replies and allowlist/mode gates. Mentions bypass this roll. 0 = never."
+      },
+      {
+        "key": "channel.name_match_enabled",
+        "type": "boolean",
+        "label": "Respond to bot name (soft mention)",
+        "default": false,
+        "tab": "Conversation",
+        "help": "Reply when a message contains the bot's name anywhere in the text, no @mention needed. OFF (default): only real @mentions count."
+      },
+      {
+        "key": "channel.name_match_case_sensitive",
+        "type": "boolean",
+        "label": "Case-sensitive name match",
+        "default": false,
+        "tab": "Conversation",
+        "help": "ON: the name must match capitalization exactly. OFF (default): any capitalization counts. Only applies when name match is on."
+      },
+      {
+        "key": "channel.batching_seconds",
+        "type": "number",
+        "label": "Batch window (seconds)",
+        "default": 8,
+        "tab": "Conversation",
+        "help": "Collect rapid messages into one reply. Typing extends; questions halve."
+      },
+      {
+        "key": "channel.strip_think_tags",
+        "type": "boolean",
+        "label": "Strip thinking tags",
+        "default": true,
+        "tab": "Conversation",
+        "help": "ON (default): removes <think> reasoning blocks from replies before posting. OFF: raw thinking text posts to the channel."
+      },
+      {
+        "key": "channel.typing_indicator_enabled",
+        "type": "boolean",
+        "label": "Typing indicator",
+        "default": true,
+        "tab": "Conversation",
+        "help": "ON (default): shows typing\u2026 before each message, paced like a human typing the reply (roughly 0.5-12 seconds by length). OFF: posts instantly with no indicator."
+      },
+      {
+        "key": "channel.human_pause_enabled",
+        "type": "boolean",
+        "label": "Human pause",
+        "default": true,
+        "tab": "Conversation",
+        "help": "Brief pause before sending, scaled to reply length."
+      },
+      {
+        "key": "channel.read_delay_enabled",
+        "type": "boolean",
+        "label": "Read delay",
+        "default": true,
+        "tab": "Conversation",
+        "help": "Wait as if reading the message before typing starts."
+      },
+      {
+        "key": "bot.enabled",
+        "type": "boolean",
+        "label": "Bot-to-bot replies",
+        "default": true,
+        "tab": "Conversation",
+        "help": "ON (default): messages from other bots can get replies, governed by Bot reply mode. OFF: bot messages are always ignored. Humans are unaffected."
+      },
+      {
+        "key": "bot.reply_mode",
+        "type": "string",
+        "label": "Bot reply mode",
+        "default": "allowlist",
+        "tab": "Conversation",
+        "options": [
+          {
+            "label": "Never reply to bots",
+            "value": "never"
+          },
+          {
+            "label": "Allowlist only",
+            "value": "allowlist"
+          },
+          {
+            "label": "Only when a bot @mentions",
+            "value": "mentions_only"
+          }
+        ],
+        "help": "Which bots can get a reply \u2014 a bot must always address her (@mention, name, or replying to her last message). Never: ignore all bots. Allowlist (default): only bots checked in Allowlisted Bots below. Mentions only: any bot that addresses her."
+      },
+      {
+        "key": "bot.session_human_window_seconds",
+        "type": "number",
+        "label": "Human debate window (seconds)",
+        "default": 300,
+        "tab": "Conversation",
+        "help": "After a human addresses her, bots may volley reply-chains freely for this many seconds (a debate window). Minimum 60. Direct @mentions/name calls are always allowed regardless."
+      },
+      {
+        "key": "bot.session_silence_seconds",
+        "type": "number",
+        "label": "Session silence timeout (seconds)",
+        "default": 150,
+        "tab": "Conversation",
+        "help": "A bot debate goes quiet after this many seconds without a volley \u2014 reply-chains stop until a human re-opens the window. Minimum 30."
+      },
+      {
+        "key": "bot.session_safety_max_exchanges",
+        "type": "number",
+        "label": "Safety cap (exchanges)",
+        "default": 20,
+        "tab": "Conversation",
+        "help": "Hard stop per debate: after this many replies to bots in a channel, further bot replies are blocked until a human re-engages her (which starts a fresh debate)."
+      },
+      {
+        "key": "bot.allowlist_ids",
+        "type": "list",
+        "label": "Allowlisted bots",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "bot.proactive_enabled",
+        "type": "boolean",
+        "label": "Bot proactive",
+        "default": false,
+        "hidden": true
+      },
+      {
+        "key": "bot.proactive_cooldown_hours",
+        "type": "number",
+        "label": "Bot proactive cooldown (hours)",
+        "default": 12,
+        "hidden": true
+      },
+      {
+        "key": "reaction.enabled",
+        "type": "boolean",
+        "label": "Reactions enabled",
+        "default": true,
+        "tab": "Social",
+        "help": "Let her react to messages with emoji on her own (sentiment-based). OFF: no autonomous reactions \u2014 reactions she writes into a reply herself still go through."
+      },
+      {
+        "key": "reaction.silent_enabled",
+        "type": "boolean",
+        "label": "Autonomous silent reactions",
+        "default": true,
+        "tab": "Social",
+        "help": "React with an emoji without replying."
+      },
+      {
+        "key": "reaction.sentiment_backend",
+        "type": "string",
+        "label": "Sentiment backend",
+        "default": "vader",
+        "hidden": true
+      },
+      {
+        "key": "reaction.reaction_chance",
+        "type": "number",
+        "label": "Reaction chance (%)",
+        "default": 10.0,
+        "tab": "Social",
+        "help": "Chance (0-100%) she silently reacts to an incoming message with an emoji. Messages she isn't going to answer use a fixed 5% roll instead. 0 = never."
+      },
+      {
+        "key": "reaction.reaction_cooldown_seconds",
+        "type": "number",
+        "label": "Reaction cooldown (seconds)",
+        "default": 30,
+        "tab": "Social",
+        "help": "Minimum seconds between her self-initiated reactions in the same channel. 0 = no cooldown."
+      },
+      {
+        "key": "reaction.react_on_reply_path",
+        "type": "boolean",
+        "label": "React on reply path",
+        "default": true,
+        "tab": "Social",
+        "help": "ON (default): she may also react to messages she's answering. OFF: react only to messages she's leaving alone."
+      },
+      {
+        "key": "reaction.read_only_enabled",
+        "type": "boolean",
+        "label": "Read-only reactions",
+        "default": true,
+        "tab": "Social",
+        "help": "React even on messages that will not get a reply."
+      },
+      {
+        "key": "delivery.message_edits_enabled",
+        "type": "boolean",
+        "label": "Message edits",
+        "default": true,
+        "tab": "Social",
+        "help": "Master switch for editing her own messages after sending \u2014 typo fixes, [edit:] corrections, and random afterthoughts. OFF: messages are never edited once sent."
+      },
+      {
+        "key": "delivery.auto_typo_enabled",
+        "type": "boolean",
+        "label": "Auto typos",
+        "default": false,
+        "tab": "Social",
+        "help": "Occasionally send a typo, then fix it with an edit."
+      },
+      {
+        "key": "delivery.auto_typo_chance",
+        "type": "number",
+        "label": "Auto typo chance (%)",
+        "default": 12.0,
+        "tab": "Social",
+        "help": "Chance (0-100%) a reply goes out with a common misspelling, then gets edited to the fix seconds later. Skipped when answering a question; needs Message edits ON."
+      },
+      {
+        "key": "delivery.auto_typo_delay_min",
+        "type": "number",
+        "label": "Typo fix delay min (seconds)",
+        "default": 2.0,
+        "tab": "Social",
+        "help": "Shortest wait (seconds) before the typo-fix edit lands. Values under 0.5 are treated as 0.5."
+      },
+      {
+        "key": "delivery.auto_typo_delay_max",
+        "type": "number",
+        "label": "Typo fix delay max (seconds)",
+        "default": 6.0,
+        "tab": "Social",
+        "help": "Longest wait (seconds) before the typo-fix edit. If set below the min, the two swap."
+      },
+      {
+        "key": "delivery.quote_reply_enabled",
+        "type": "boolean",
+        "label": "Smart quote-replies",
+        "default": true,
+        "tab": "Social",
+        "help": "ON (default): quote-reply when context calls for it \u2014 always for questions, usually in busy channels, rarely in DMs, never on jokes or images. OFF: plain messages, no quote header."
+      },
+      {
+        "key": "delivery.post_send_edit_enabled",
+        "type": "boolean",
+        "label": "Random post-send edits",
+        "default": true,
+        "tab": "Social",
+        "help": "About 4% of replies get a human touch after sending: a subtle typo fixed by edit, or an afterthought ('lol', 'actually') edited in 2-5 seconds later. Needs Message edits ON."
+      },
+      {
+        "key": "proactive.greeting_enabled",
+        "type": "boolean",
+        "label": "Morning greetings",
+        "default": false,
+        "tab": "Proactive",
+        "help": "ON: posts a morning greeting to each Greeting Channel at the greeting hour, written through the normal persona pipeline. OFF (default): no morning posts."
+      },
+      {
+        "key": "proactive.greeting_utc_hour",
+        "type": "number",
+        "label": "Greeting hour (server local)",
+        "default": 9,
+        "tab": "Proactive",
+        "help": "Hour (0-23, server local time) when the morning greeting posts. Also the sleep-schedule wake hour and the start of the birthday-wish window."
+      },
+      {
+        "key": "proactive.greeting_use_llm",
+        "type": "boolean",
+        "label": "AI-generated greeting",
+        "default": true,
+        "tab": "Proactive",
+        "help": "ON (default): the AI writes each greeting, guided by the Greeting instructions. OFF: posts the Greeting instructions text verbatim (or the fallback if blank)."
+      },
+      {
+        "key": "proactive.greeting_message",
+        "type": "textarea",
+        "label": "Greeting instructions",
+        "default": "",
+        "tab": "Proactive",
+        "rows": 3,
+        "help": "With AI-generated greeting ON: instructions guiding the AI's greeting (blank = built-in default). With it OFF: this exact text is posted instead."
+      },
+      {
+        "key": "proactive.greeting_fallback",
+        "type": "string",
+        "label": "Greeting fallback",
+        "default": "Good morning!",
+        "tab": "Proactive",
+        "help": "Posted as-is when the AI can't generate a greeting, or when AI-generated greeting is OFF and no instructions are set."
+      },
+      {
+        "key": "proactive.outreach_enabled",
+        "type": "boolean",
+        "label": "Quiet outreach",
+        "default": false,
+        "tab": "Proactive",
+        "help": "Start a conversation when configured channels go quiet."
+      },
+      {
+        "key": "proactive.outreach_stale_minutes",
+        "type": "number",
+        "label": "Outreach after quiet (minutes)",
+        "default": 120,
+        "tab": "Proactive",
+        "help": "Minutes of channel silence before she may start a conversation in a Greeting Channel. Checked every 15 minutes; skipped during sleep and just before the greeting hour."
+      },
+      {
+        "key": "proactive.sleep_schedule_enabled",
+        "type": "boolean",
+        "label": "Sleep schedule",
+        "default": false,
+        "tab": "Proactive",
+        "help": "ON: posts a goodnight at the sleep hour, then sleeps until the greeting hour \u2014 presence shows sleeping, non-mention chat is ignored, and mentions are buffered (enough mentions force a temporary wake). OFF (default): always awake."
+      },
+      {
+        "key": "proactive.sleep_utc_hour",
+        "type": "number",
+        "label": "Sleep hour (server local)",
+        "default": 22,
+        "tab": "Proactive",
+        "help": "Hour (0-23, server local time) when sleep starts; runs until the greeting hour (wraps past midnight). Set equal to the greeting hour to disable the window."
+      },
+      {
+        "key": "proactive.goodnight_use_llm",
+        "type": "boolean",
+        "label": "AI-generated goodnight",
+        "default": true,
+        "tab": "Proactive",
+        "help": "ON (default): the AI writes the goodnight, guided by the Goodnight instructions. OFF: posts the Goodnight instructions text verbatim (or the fallback if blank)."
+      },
+      {
+        "key": "proactive.goodnight_message",
+        "type": "textarea",
+        "label": "Goodnight instructions",
+        "default": "",
+        "tab": "Proactive",
+        "rows": 3,
+        "help": "With AI-generated goodnight ON: instructions guiding the AI's goodnight (blank = built-in default). With it OFF: this exact text is posted instead."
+      },
+      {
+        "key": "proactive.goodnight_fallback",
+        "type": "string",
+        "label": "Goodnight fallback",
+        "default": "Goodnight everyone!",
+        "tab": "Proactive",
+        "help": "Posted as-is when the AI can't generate a goodnight, or when AI-generated goodnight is OFF and no instructions are set."
+      },
+      {
+        "key": "proactive.forced_wake_mention_threshold",
+        "type": "number",
+        "label": "Forced-wake mentions",
+        "default": 2,
+        "tab": "Proactive",
+        "help": "Mentions while asleep that force a wake-up."
+      },
+      {
+        "key": "proactive.forced_wake_minutes",
+        "type": "number",
+        "label": "Forced-wake window (minutes)",
+        "default": 30,
+        "tab": "Proactive",
+        "help": "How long she stays awake and answers after repeated mentions wake her during sleep (default 30). Afterwards she sleeps again until the greeting hour."
+      },
+      {
+        "key": "proactive.birthday_wish_spread_end_hour",
+        "type": "number",
+        "label": "Birthday wish spread end hour",
+        "default": 20,
+        "tab": "Proactive",
+        "help": "Birthday wishes post at a per-person random time between the greeting hour and this hour (0-23, server local) instead of all at once."
+      },
+      {
+        "key": "proactive.greeting_targets",
+        "type": "list",
+        "label": "Greeting channels",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "proactive.greeting_model_provider",
+        "type": "string",
+        "label": "Greeting model provider",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "proactive.greeting_model_name",
+        "type": "string",
+        "label": "Greeting model",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "proactive.goodnight_model_provider",
+        "type": "string",
+        "label": "Goodnight model provider",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "proactive.goodnight_model_name",
+        "type": "string",
+        "label": "Goodnight model",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "proactive.birthday_wish_fallback",
+        "type": "string",
+        "label": "Birthday fallback",
+        "default": "Happy birthday! \ud83c\udf82",
+        "hidden": true
+      },
+      {
+        "key": "proactive.birthday_use_llm",
+        "type": "boolean",
+        "label": "AI birthday wishes",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "proactive.outreach_cooldown_hours",
+        "type": "number",
+        "label": "Outreach cooldown (hours)",
+        "default": 6,
+        "hidden": true
+      },
+      {
+        "key": "proactive.greeting_outreach_lead_hours",
+        "type": "number",
+        "label": "Outreach lead (hours)",
+        "default": 2,
+        "hidden": true
+      },
+      {
+        "key": "proactive.sleep_buffered_reply_max",
+        "type": "number",
+        "label": "Wake replay max",
+        "default": 3,
+        "tab": "Proactive",
+        "help": "On waking (at the greeting hour), answer up to this many mentions she slept through, per channel. 0 = don't answer missed pings."
+      },
+      {
+        "key": "presence.status",
+        "type": "string",
+        "label": "Awake status",
+        "default": "online",
+        "tab": "Presence",
+        "options": [
+          {
+            "label": "Online",
+            "value": "online"
+          },
+          {
+            "label": "Idle",
+            "value": "idle"
+          },
+          {
+            "label": "Do not disturb",
+            "value": "dnd"
+          },
+          {
+            "label": "Invisible",
+            "value": "invisible"
+          }
+        ],
+        "help": "Discord status shown while awake: Online, Idle, Do Not Disturb, or Invisible."
+      },
+      {
+        "key": "presence.activity",
+        "type": "string",
+        "label": "Default activity",
+        "default": "",
+        "tab": "Presence",
+        "help": "Activity line under the bot's name while awake \u2014 'playing: chess', 'listening: lo-fi', 'watching: the server', 'competing: trivia', or plain text for a custom status. Empty = none. Ignored while cycling is on."
+      },
+      {
+        "key": "presence.quiet_status",
+        "type": "string",
+        "label": "Quiet / sleep status",
+        "default": "idle",
+        "tab": "Presence",
+        "options": [
+          {
+            "label": "Online",
+            "value": "online"
+          },
+          {
+            "label": "Idle",
+            "value": "idle"
+          },
+          {
+            "label": "Do not disturb",
+            "value": "dnd"
+          },
+          {
+            "label": "Invisible",
+            "value": "invisible"
+          }
+        ],
+        "help": "Status shown during quiet hours and while asleep."
+      },
+      {
+        "key": "presence.cycling_enabled",
+        "type": "boolean",
+        "label": "Cycle activities",
+        "default": false,
+        "tab": "Presence",
+        "help": "ON: while awake, rotate a random activity from the checked presets plus Custom activities every cycle interval. OFF (default): keep the single Default activity."
+      },
+      {
+        "key": "presence.cycle_interval_seconds",
+        "type": "number",
+        "label": "Cycle interval (seconds)",
+        "default": 300,
+        "tab": "Presence",
+        "help": "Seconds between activity changes while cycling. Minimum 60."
+      },
+      {
+        "key": "presence.activities_custom",
+        "type": "list",
+        "label": "Custom activities",
+        "default": [],
+        "tab": "Presence",
+        "help": "Extra activities added to the cycling pool alongside the checked presets. Same format as Default activity; enter '-' for a no-activity turn."
+      },
+      {
+        "key": "presence.activity_presets",
+        "type": "list",
+        "label": "Activity presets",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "safety.allow_direct_messages",
+        "type": "boolean",
+        "label": "Allow DMs",
+        "default": true,
+        "tab": "Safety",
+        "help": "ON (default): the bot replies to direct messages. OFF: she won't reply to DMs (they are still stored in the plugin database, and scheduled reminders she owes someone may still deliver by DM)."
+      },
+      {
+        "key": "safety.rate_limit_seconds",
+        "type": "number",
+        "label": "Reply cooldown (seconds)",
+        "default": 30,
+        "tab": "Safety",
+        "help": "Minimum seconds between replies in the same channel, DMs included (default 30). 0 = no limit. This is the only throttle on the reply pipeline."
+      },
+      {
+        "key": "safety.proactive_cooldown_hours",
+        "type": "number",
+        "label": "Proactive cooldown (hours)",
+        "default": 6,
+        "tab": "Safety",
+        "help": "Minimum hours between proactive posts of the same kind (greeting, outreach, goodnight, birthday) in one channel. Reminder and commitment follow-ups bypass this."
+      },
+      {
+        "key": "safety.quiet_hours_enabled",
+        "type": "boolean",
+        "label": "Quiet hours",
+        "default": false,
+        "tab": "Safety",
+        "help": "Presence only: during the quiet window her status switches to the Quiet / sleep status. Replies and proactive posts still send \u2014 use the Sleep schedule to actually go quiet."
+      },
+      {
+        "key": "safety.quiet_hours_start",
+        "type": "number",
+        "label": "Quiet start (server local hour)",
+        "default": 0,
+        "tab": "Safety",
+        "help": "Hour (0-23, server local) quiet hours begin. Start later than end wraps past midnight; start equal to end disables."
+      },
+      {
+        "key": "safety.quiet_hours_end",
+        "type": "number",
+        "label": "Quiet end (server local hour)",
+        "default": 0,
+        "tab": "Safety",
+        "help": "Hour (0-23, server local) quiet hours end. Example: start 22, end 7 covers overnight."
+      },
+      {
+        "key": "media.enabled",
+        "type": "boolean",
+        "label": "Media pipeline",
+        "default": false,
+        "tab": "Media",
+        "help": "ON: images and GIFs posted in chat are detected, stored, and described by the Vision LLM below so her replies can reference them. OFF: attachments are ignored. Does not affect GIF replies."
+      },
+      {
+        "key": "media.image_understanding_enabled",
+        "type": "boolean",
+        "label": "Image understanding",
+        "default": false,
+        "tab": "Media",
+        "help": "Caption images/GIFs with the vision endpoint so replies can reference them."
+      },
+      {
+        "key": "media.vision_llm_provider",
+        "type": "string",
+        "label": "Vision LLM provider",
+        "default": "auto",
+        "hidden": true
+      },
+      {
+        "key": "media.vision_llm_model",
+        "type": "string",
+        "label": "Vision LLM model",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "media.vision_timeout_seconds",
+        "type": "number",
+        "label": "Vision timeout (seconds)",
+        "default": 30,
+        "tab": "Media",
+        "help": "How long to wait for the vision model before giving up (default 30). On timeout the image gets a filename-only description."
+      },
+      {
+        "key": "media.vision_gif_mode",
+        "type": "string",
+        "label": "Vision GIF mode",
+        "default": "first_frame",
+        "tab": "Media",
+        "options": [
+          {
+            "label": "First frame",
+            "value": "first_frame"
+          },
+          {
+            "label": "Whole GIF (raw)",
+            "value": "sampled_frames"
+          }
+        ],
+        "help": "First frame (default): the GIF's first frame is sent to the vision model as a PNG \u2014 works everywhere. Whole GIF sends the raw animated file as-is; only useful if your endpoint accepts animated GIFs."
+      },
+      {
+        "key": "media.vision_debug_enabled",
+        "type": "boolean",
+        "label": "Vision debug logging",
+        "default": false,
+        "tab": "Media",
+        "help": "Logs every vision call (provider detection, request start/success/failure) to Traces and the app log. OFF (default): only fallbacks and errors are traced."
+      },
+      {
+        "key": "media.gif_enabled",
+        "type": "boolean",
+        "label": "GIF replies",
+        "default": false,
+        "tab": "Media",
+        "help": "ON: she can reply with real GIFs \u2014 she writes [gif:search terms] or calls the send-GIF tool and it's swapped for a GIF from your provider. Requires a GIF API key."
+      },
+      {
+        "key": "media.gif_api_key",
+        "type": "password",
+        "label": "GIF API key",
+        "default": "",
+        "tab": "Media",
+        "help": "API key for the selected GIF provider. GIF replies stay off until this is set, even with the toggle on."
+      },
+      {
+        "key": "media.gif_provider",
+        "type": "string",
+        "label": "GIF provider",
+        "default": "klipy",
+        "tab": "Media",
+        "options": [
+          {
+            "label": "Klipy",
+            "value": "klipy"
+          },
+          {
+            "label": "Giphy",
+            "value": "giphy"
+          },
+          {
+            "label": "Tenor",
+            "value": "tenor"
+          }
+        ],
+        "help": "Which service her GIF searches use: Klipy, Giphy, or Tenor. The API key must match the provider."
+      },
+      {
+        "key": "media.gif_content_filter",
+        "type": "string",
+        "label": "GIF content filter",
+        "default": "medium",
+        "tab": "Media",
+        "options": [
+          {
+            "label": "Off",
+            "value": "off"
+          },
+          {
+            "label": "Low",
+            "value": "low"
+          },
+          {
+            "label": "Medium",
+            "value": "medium"
+          },
+          {
+            "label": "High",
+            "value": "high"
+          }
+        ],
+        "help": "Safety level for GIF search results: Off (unfiltered) to High (strictest). Applies the same direction on Klipy, Giphy, and Tenor."
+      },
+      {
+        "key": "voice.enabled",
+        "type": "boolean",
+        "label": "Voice",
+        "help": "Let her join voice channels",
+        "default": false,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.mode",
+        "type": "string",
+        "label": "Voice mode",
+        "help": "What she does in a channel",
+        "default": "listen_only",
+        "tab": "Voice",
+        "options": [
+          {
+            "label": "Listen only",
+            "value": "listen_only"
+          },
+          {
+            "label": "Transcribe only",
+            "value": "transcribe_only"
+          },
+          {
+            "label": "Summarize only",
+            "value": "summarize_only"
+          },
+          {
+            "label": "Conversational",
+            "value": "conversational"
+          }
+        ]
+      },
+      {
+        "key": "voice.transcription_enabled",
+        "type": "boolean",
+        "label": "Transcription",
+        "help": "Archive what she hears as text",
+        "default": false,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.speaking_enabled",
+        "type": "boolean",
+        "label": "Speaking",
+        "help": "Let her talk back out loud",
+        "default": false,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.turn_cues_enabled",
+        "type": "boolean",
+        "label": "Turn cues",
+        "help": "Tick while she thinks, ding on barge-in",
+        "default": true,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.llm_provider",
+        "type": "string",
+        "label": "Voice LLM provider",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "voice.llm_model",
+        "type": "string",
+        "label": "Voice LLM model",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "voice.emergency_disabled",
+        "type": "boolean",
+        "label": "Emergency stop",
+        "help": "Kill switch \u2014 overrides all voice settings",
+        "default": false,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.join_targets",
+        "type": "list",
+        "label": "Auto-join voice channels",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "voice.conversation_prompt_template",
+        "type": "textarea",
+        "label": "Voice conversation prompt",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "voice.min_silence_seconds",
+        "type": "number",
+        "label": "Min silence (seconds)",
+        "default": 1.5,
+        "hidden": true
+      },
+      {
+        "key": "voice.speak_cooldown_seconds",
+        "type": "number",
+        "label": "Speak cooldown (seconds)",
+        "default": 2.0,
+        "hidden": true
+      },
+      {
+        "key": "voice.rolling_summary_seconds",
+        "type": "number",
+        "label": "Rolling summary (seconds)",
+        "default": 0,
+        "hidden": true
+      },
+      {
+        "key": "voice.streaming_playback_enabled",
+        "type": "boolean",
+        "label": "Streaming playback",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "voice.conversation_core_enabled",
+        "type": "boolean",
+        "label": "Core conversation engine",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "voice.addressing_mode",
+        "type": "string",
+        "label": "Addressing mode",
+        "help": "When she treats speech as meant for her",
+        "default": "bot_name",
+        "tab": "Voice",
+        "options": [
+          {
+            "label": "Name required each time",
+            "value": "bot_name"
+          },
+          {
+            "label": "Always respond",
+            "value": "always"
+          }
+        ]
+      },
+      {
+        "key": "voice.addressing_aliases",
+        "type": "list",
+        "label": "Name aliases",
+        "help": "Extra names that count as hers (sapph, saphire...)",
+        "default": [],
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.max_conversation_sessions",
+        "type": "number",
+        "label": "Max conversation sessions",
+        "default": 2,
+        "hidden": true
+      },
+      {
+        "key": "retention.enabled",
+        "type": "boolean",
+        "label": "Retention purge",
+        "default": false,
+        "tab": "Retention",
+        "help": "OFF (default): nothing is ever purged. ON: a daily purge (4:30 AM server time) deletes plugin rows older than the day limits below \u2014 enabling this is a conscious choice; the first run on a long-lived database deletes everything beyond the windows."
+      },
+      {
+        "key": "retention.message_days",
+        "type": "number",
+        "label": "Keep messages (days)",
+        "default": 90,
+        "tab": "Retention",
+        "help": "Purge deletes the plugin's stored copies of Discord messages older than this many days (default 90). 0 = keep forever. Nothing is deleted on Discord itself."
+      },
+      {
+        "key": "retention.trace_days",
+        "type": "number",
+        "label": "Keep traces (days)",
+        "default": 14,
+        "tab": "Retention",
+        "help": "Purge deletes decision traces (the Traces view) older than this many days (default 14). 0 = keep forever."
+      },
+      {
+        "key": "retention.transcript_days",
+        "type": "number",
+        "label": "Keep transcripts (days)",
+        "default": 30,
+        "tab": "Retention",
+        "help": "Purge deletes voice-channel transcripts older than this many days (default 30). 0 = keep forever."
+      },
+      {
+        "key": "retention.profile_buffer_days",
+        "type": "number",
+        "label": "Keep profile buffers (days)",
+        "default": 7,
+        "hidden": true
       }
     ]
   }

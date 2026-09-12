@@ -19,8 +19,9 @@ def test_recovers_opus_with_rtp_padding_before_trailer():
     opus = b'\xfc\x03'
     supp_size = 8
     trailer = b'\x00' * (supp_size - 3) + bytes([supp_size]) + b'\xfa\xfa'
+    # RFC 3550: pad count byte is the LAST octet and includes itself.
     pad_n = 3
-    payload = opus + trailer + bytes([pad_n]) * pad_n + bytes([pad_n])
+    payload = opus + trailer + b'\x00' * (pad_n - 1) + bytes([pad_n])
     recovered = recover_passthrough_opus(packet, payload)
     assert recovered.startswith(opus)
 

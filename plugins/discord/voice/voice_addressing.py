@@ -7,7 +7,7 @@ import re
 
 # Obvious directed-at-bot phrases when STT misses the bot's name.
 _DIRECTED_VOICE_PATTERNS = (
-    r'\bcan you hear me\b',
+    r'\byou hear me\b',
     r'\bare you there\b',
     r'\bdo you copy\b',
     r'\bis (?:this|that) working\b',
@@ -46,7 +46,9 @@ def should_address_bot(text: str, bot_names: list[str], *, addressing_mode: str 
     mode = str(addressing_mode or 'bot_name').strip().lower()
     if mode == 'always':
         return True
-    return mentions_bot(text, bot_names)
+    # Obvious directed phrases count even when STT mangles the name —
+    # "can you hear me" with no match answered by silence reads as broken.
+    return mentions_bot(text, bot_names) or directed_voice_phrase(text)
 
 
 def _token_matches_name(token: str, name: str, *, fuzzy_threshold: float = 0.82) -> bool:
@@ -54,7 +56,11 @@ def _token_matches_name(token: str, name: str, *, fuzzy_threshold: float = 0.82)
     name_n = name.lower().strip()
     if not token_n or not name_n:
         return False
-    if token_n == name_n or token_n in name_n or name_n in token_n:
+    if token_n == name_n:
+        return True
+    # Substring only for tokens long enough to be a name fragment — an
+    # unguarded check made the token 'I' match inside 'Remmi'/'sapphire'.
+    if len(token_n) >= 3 and (token_n in name_n or name_n in token_n):
         return True
     if len(token_n) >= 3 and len(name_n) >= 3 and token_n[:3] == name_n[:3]:
         if abs(len(token_n) - len(name_n)) <= 2:

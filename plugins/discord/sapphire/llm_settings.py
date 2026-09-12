@@ -59,6 +59,17 @@ def proactive_llm_from_settings(settings, *, kind: str = 'greeting') -> tuple[st
     return provider, model
 
 
+def distill_llm_from_settings(settings) -> tuple[str, str]:
+    """Resolve ambient-distill LLM, inheriting from Reply LLM when unset."""
+    profile = getattr(settings, 'profile', None)
+    cognitive_primary, cognitive_model = cognitive_llm_from_settings(settings)
+    if profile is None:
+        return cognitive_primary, cognitive_model
+    provider = str(getattr(profile, 'distill_model_provider', '') or '').strip()
+    model = str(getattr(profile, 'distill_model_name', '') or '').strip()
+    return (provider or cognitive_primary), (model or cognitive_model)
+
+
 def resolve_discord_llm_provider(system, provider_key: str, model_name: str = ''):
     """Return (provider_key, provider, gen_params) for plugin-configured LLM calls."""
     llm = getattr(system, 'llm_chat', None)
@@ -71,11 +82,23 @@ def resolve_discord_llm_provider(system, provider_key: str, model_name: str = ''
     model = str(model_name or '').strip()
 
     if primary in ('', 'auto'):
-        selected_key, provider, model_override = llm._select_provider()
-        effective_model = model_override or provider.model
-        gen_params = get_generation_params(selected_key, effective_model, _providers_config())
-        if model_override:
-            gen_params['model'] = model_override
+        # Auto = global fallback order — NEVER llm._select_provider(), which
+        # reads the operator's active WEB chat settings: a Discord voice reply
+        # in auto mode was literally running on whatever provider the browser
+        # tab had selected. Mirror the continuity executor's auto path instead.
+        # 2026-08-06.
+        import config
+        from core.chat.llm_providers import get_first_available_provider
+        providers_config = _providers_config()
+        fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
+        result = get_first_available_provider(
+            providers_config, fallback_order,
+            getattr(config, 'LLM_REQUEST_TIMEOUT', 60.0))
+        if not result:
+            logger.warning('Discord LLM auto mode: no providers available')
+            return None, None, None
+        selected_key, provider = result
+        gen_params = get_generation_params(selected_key, provider.model, providers_config)
         return selected_key, provider, gen_params
 
     import config
@@ -94,3 +117,65 @@ def resolve_discord_llm_provider(system, provider_key: str, model_name: str = ''
     gen_params = get_generation_params(primary, effective_model, _providers_config())
     gen_params['model'] = effective_model
     return primary, provider, gen_params
+
+
+def resolve_task_llm(
+    task: dict | None,
+    event_data: dict | None = None,
+    *,
+    plugin_loader=None,
+) -> dict[str, str]:
+    """Best-effort provider/model resolution mirroring the continuity executor."""
+    task = dict(task or {})
+    event_data = dict(event_data or {})
+    configured_primary = str(task.get('provider') or 'auto').strip() or 'auto'
+    configured_model = str(task.get('model') or '').strip()
+    event_primary = str(event_data.get('llm_primary') or '').strip()
+    event_model = str(event_data.get('llm_model') or '').strip()
+
+    effective_primary = configured_primary
+    effective_model = configured_model
+    if event_primary and event_primary not in ('', 'auto'):
+        effective_primary = event_primary
+        effective_model = event_model
+
+    resolved_primary = effective_primary
+    resolved_model = effective_model
+
+    if resolved_primary in ('', 'auto') and plugin_loader is not None:
+        from plugins.discord.sapphire.scheduler_bridge import SapphireSchedulerBridge
+
+        account = str(event_data.get('account') or '').strip()
+        daemon_primary, daemon_model = SapphireSchedulerBridge(plugin_loader).daemon_task_llm(
+            'discord_message',
+            account=account or None,
+        )
+        if daemon_primary:
+            resolved_primary = daemon_primary
+            resolved_model = daemon_model or resolved_model
+
+    if resolved_primary in ('', 'auto'):
+        try:
+            from core.api_fastapi import get_system
+
+            selected_key, _provider, gen_params = resolve_discord_llm_provider(
+                get_system(),
+                'auto',
+                resolved_model,
+            )
+            if selected_key:
+                resolved_primary = selected_key
+                resolved_model = str((gen_params or {}).get('model') or resolved_model or '')
+        except Exception:
+            logger.debug('Could not resolve auto LLM provider for debug', exc_info=True)
+
+    return {
+        'configured_primary': configured_primary,
+        'configured_model': configured_model,
+        'event_primary': event_primary,
+        'event_model': event_model,
+        'resolved_primary': resolved_primary,
+        'resolved_model': resolved_model,
+        'task_name': str(task.get('name') or ''),
+        'task_id': str(task.get('id') or ''),
+    }

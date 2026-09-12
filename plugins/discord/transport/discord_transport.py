@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -93,7 +94,9 @@ class DiscordTransport:
         if self.client_factory is not None:
             return self.client_factory(intents=self._build_intents())
         import discord
-        return discord.Client(intents=self._build_intents())
+        # discord.Bot (py-cord) = Client + application command support; needed
+        # for /voice slash commands. Auto-syncs commands on connect.
+        return discord.Bot(intents=self._build_intents())
 
     async def connect_account(self, name: str, token: str) -> dict:
         current = self._accounts.get(name)
@@ -101,6 +104,11 @@ class DiscordTransport:
             return self.account_health(name)
 
         client = self._make_client()
+        try:
+            from plugins.discord.transport.discord_slash import register_slash_commands
+            register_slash_commands(client, name)
+        except Exception:
+            logger.exception('Slash command registration failed for %s', name)
         state = {
             'name': name,
             'state': 'connecting',
@@ -120,6 +128,7 @@ class DiscordTransport:
                 state['state'] = 'connected'
                 state['bot_name'] = getattr(user, 'name', '') or ''
                 state['bot_id'] = str(getattr(user, 'id', '') or '')
+                state.pop('failed_at', None)
                 if self.account_repository:
                     self.account_repository.update_connection_state(name, 'connected', bot_name=state['bot_name'], bot_id=state['bot_id'], last_error='')
                 await self._notify_account_connected(name)
@@ -146,6 +155,7 @@ class DiscordTransport:
                     state['state'] = 'connected'
                     state['bot_name'] = getattr(user, 'name', '') or ''
                     state['bot_id'] = str(getattr(user, 'id', '') or '')
+                    state.pop('failed_at', None)
                     await self._notify_account_connected(name)
             except asyncio.CancelledError:
                 raise
@@ -159,6 +169,7 @@ class DiscordTransport:
                 logger.error('Discord connection failed for %s: %s', name, exc)
                 state['state'] = 'error'
                 state['last_error'] = str(exc)
+                state['failed_at'] = time.monotonic()
                 if self.account_repository:
                     self.account_repository.update_connection_state(name, 'error', last_error=str(exc))
 
@@ -196,6 +207,16 @@ class DiscordTransport:
         for name in list(self._accounts.keys()):
             await self.disconnect_account(name)
 
+    def last_connect_failure(self, name: str) -> float:
+        """Monotonic timestamp of the last async login failure, 0.0 if none."""
+        state = self._accounts.get(str(name or '')) or {}
+        return float(state.get('failed_at') or 0.0)
+
+    def clear_connect_failure(self, name: str) -> None:
+        state = self._accounts.get(str(name or ''))
+        if state:
+            state.pop('failed_at', None)
+
     def list_connected(self) -> list[str]:
         return sorted(name for name, state in self._accounts.items() if state.get('state') == 'connected')
 
@@ -217,10 +238,8 @@ class DiscordTransport:
         return {'name': name, 'state': state.get('state', 'disconnected'), 'bot_name': state.get('bot_name', ''), 'bot_id': state.get('bot_id', ''), 'last_error': state.get('last_error', '')}
 
     async def test_account_token(self, token: str) -> dict:
-        token = str(token or '').strip()
-        if not token:
-            return {'success': False, 'error': 'Bot token required'}
-        return {'success': True, 'message': 'Token format accepted'}
+        from plugins.discord.lib.token_check import check_bot_token
+        return await check_bot_token(token)
 
     def list_servers(self):
         servers = []
@@ -738,6 +757,9 @@ class DiscordTransport:
 
     def resolve_channel_id_sync(self, channel_ref, account_name=None):
         return self._run_on_loop(self._execution.resolve_channel_id(account_name, channel_ref), timeout=30)
+
+    def resolve_voice_channel_sync(self, channel_ref, account_name=None):
+        return self._run_on_loop(self._execution.resolve_voice_channel(account_name, channel_ref), timeout=30)
 
     async def send_gif_async(self, channel, query, account_name=None):
         url = str(query or '').strip()

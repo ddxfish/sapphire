@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import asdict
 
+from plugins.discord.conversation.ignored_channels import is_channel_ignored
 from plugins.discord.models.observations import TextMessageObservation, TypingObservation
 
 
@@ -20,6 +21,10 @@ class DiscordEventAdapter:
         commitment_service=None,
         birthday_service=None,
         mention_map_service=None,
+        distill_service=None,
+        channel_situation_service=None,
+        cognition_debug_service=None,
+        llm_debug_service=None,
     ):
         self.message_repository = message_repository
         self.trace_repository = trace_repository
@@ -31,6 +36,10 @@ class DiscordEventAdapter:
         self.commitment_service = commitment_service
         self.birthday_service = birthday_service
         self.mention_map_service = mention_map_service
+        self.distill_service = distill_service
+        self.channel_situation_service = channel_situation_service
+        self.cognition_debug_service = cognition_debug_service
+        self.llm_debug_service = llm_debug_service
 
     def adapt_message_event(self, account_name: str, self_user_id: int | str | None, message) -> TextMessageObservation | None:
         author_id = str(getattr(message.author, 'id', ''))
@@ -94,6 +103,13 @@ class DiscordEventAdapter:
             if birthday_hints:
                 existing = list(getattr(observation, 'follow_up_hints', None) or [])
                 observation.follow_up_hints = existing + birthday_hints
+        if self.distill_service and self.settings_store:
+            settings = self.settings_store.resolve(
+                guild_id=observation.guild_id,
+                channel_id=observation.channel_id,
+                dm_id=observation.channel_id if observation.is_dm else None,
+            )
+            self.distill_service.buffer_observation(observation, settings)
         if self.proactive_repository:
             self.proactive_repository.record_channel_activity(observation.account_name, observation.channel_id, observation.created_at)
         if self.media_service and observation.attachments:
@@ -147,27 +163,35 @@ class DiscordEventAdapter:
                             'error_type': fallback.get('error_type'),
                             'error_message': fallback.get('error_message', ''),
                         })
-                    if self.world_model_service:
-                        self.world_model_service.record_media_observation(
-                            account_name=observation.account_name,
-                            channel_id=observation.channel_id,
-                            message_id=observation.message_id,
-                            author_id=observation.author_id,
-                            media_kind=stored.media_kind,
-                            interpretation=stored.interpretation or {},
-                        )
-        if self.sleep_service and self.settings_store:
+        if self.settings_store:
             settings = self.settings_store.resolve(
                 guild_id=observation.guild_id,
                 channel_id=observation.channel_id,
                 dm_id=observation.channel_id if observation.is_dm else None,
             )
-            if self.sleep_service.should_drop_observation(observation, settings):
+            if is_channel_ignored(observation.account_name, observation.channel_id, settings):
+                if self.trace_repository:
+                    self.trace_repository.record_trace('event_dropped', 'Ignored channel', {
+                        'message_id': observation.message_id,
+                        'channel_id': observation.channel_id,
+                        'account_name': observation.account_name,
+                    })
+                if self.cognition_debug_service:
+                    self.cognition_debug_service.record_gate(
+                        gate='channel_ignored',
+                        account_name=observation.account_name,
+                        channel_id=observation.channel_id,
+                        channel_name=observation.channel_name,
+                        detail={'reason': 'ignored_channels', 'message_id': observation.message_id},
+                    )
+                return None
+            if self.sleep_service and self.sleep_service.should_drop_observation(observation, settings):
                 if self.trace_repository:
                     self.trace_repository.record_trace('event_dropped', 'Sleep dormant message ignored', {
                         'message_id': observation.message_id,
                         'channel_id': observation.channel_id,
                     })
+                self._record_sleep_dormant_cognition(observation, settings)
                 return None
         if self.mention_map_service:
             self.mention_map_service.update_from_discord_message(account_name, message, observation)
@@ -177,7 +201,71 @@ class DiscordEventAdapter:
                 'channel_id': observation.channel_id,
                 'is_dm': observation.is_dm,
             })
+        # Companion seam: other plugins (e.g. a cognition sidecar) can observe
+        # every processed inbound message without touching this pipeline.
+        try:
+            from core.event_bus import publish
+            publish('discord_message_observed', {
+                'account': account_name,
+                'guild_id': observation.guild_id,
+                'guild_name': observation.guild_name,
+                'channel_id': observation.channel_id,
+                'channel_name': observation.channel_name,
+                'author_id': observation.author_id,
+                'username': observation.username,
+                'display_name': observation.display_name,
+                'message_id': observation.message_id,
+                'content': observation.clean_content,
+                'is_dm': observation.is_dm,
+                'mentioned': observation.mentioned,
+                'author_is_bot': getattr(observation, 'author_is_bot', False),
+            })
+        except Exception:
+            pass
         return observation
+
+    def _record_sleep_dormant_cognition(self, observation, settings) -> None:
+        """Keep Cognition preview honest when sleep drops chat before conversation."""
+        if self.channel_situation_service and getattr(
+            getattr(settings, 'cognitive', None), 'situation_enabled', True,
+        ):
+            try:
+                self.channel_situation_service.build(
+                    observation.account_name,
+                    observation.channel_id,
+                    guild_id=observation.guild_id or '',
+                    channel_name=observation.channel_name or '',
+                    use_cache_seconds=0,
+                )
+            except Exception:
+                pass
+        if self.cognition_debug_service:
+            self.cognition_debug_service.record_gate(
+                gate='sleep_dormant',
+                account_name=observation.account_name,
+                channel_id=observation.channel_id,
+                channel_name=observation.channel_name,
+                detail={
+                    'reason': 'sleep_dormant',
+                    'message_id': observation.message_id,
+                    'hint': 'Channel is asleep — unaddressed messages are ignored. @mention her or wait until wake.',
+                },
+            )
+        if self.llm_debug_service:
+            self.llm_debug_service.record_rejection(
+                message_id=observation.message_id,
+                account=observation.account_name,
+                guild_id=observation.guild_id,
+                guild_name=observation.guild_name,
+                channel_id=observation.channel_id,
+                channel_name=observation.channel_name,
+                username=observation.display_name or observation.username,
+                author_id=observation.author_id,
+                content=observation.clean_content,
+                reason='sleep_dormant',
+                stage='sleep',
+                detail={'hint': 'Asleep — unaddressed chatter never reaches intention scoring.'},
+            )
 
     async def adapt_typing_event(self, account_name: str, self_user_id: int | str | None, channel, user, when=None) -> TypingObservation | None:
         author_id = str(getattr(user, 'id', ''))

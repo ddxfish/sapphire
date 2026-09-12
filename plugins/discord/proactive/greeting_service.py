@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from plugins.discord.conversation.ignored_channels import is_channel_ignored
 from plugins.discord.lib.server_time import now_local
 from plugins.discord.models.intentions import GreetChannelIntention
 from plugins.discord.proactive.targets import parse_target
@@ -28,6 +29,8 @@ class GreetingService:
             if not parsed or parsed[0] != account_name:
                 continue
             channel_id = parsed[1]
+            if is_channel_ignored(account_name, channel_id, settings):
+                continue
             if self.sleep_service:
                 self.sleep_service.wake_channel(account_name, channel_id)
             elif self.proactive_repository.get_sleep_state(account_name, channel_id).get('is_asleep'):

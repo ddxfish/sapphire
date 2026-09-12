@@ -269,3 +269,110 @@ def test_duplicate_task_follow_up_send_is_suppressed(monkeypatch):
     assert ok is True
     assert 'already delivered' in msg.lower()
     assert runtime.transport.calls == []
+
+
+class FakeVoiceService:
+    def __init__(self, join_status='joined'):
+        self.join_status = join_status
+        self.joins = []
+        self.leaves = []
+
+    def join(self, intention):
+        self.joins.append(intention)
+        if self.join_status == 'joined':
+            return {'status': 'joined', 'session': {}}
+        if self.join_status == 'blocked':
+            return {'status': 'blocked', 'reason': 'voice_disabled'}
+        return {'status': 'error', 'reason': 'voice_connect_failed'}
+
+    def leave(self, intention):
+        self.leaves.append(intention)
+        return {'status': 'left'}
+
+
+class FakeVoiceTransport:
+    def __init__(self, connections=None):
+        self._rows = connections or []
+
+    def list_connections(self, account_name=None):
+        return list(self._rows)
+
+
+def _voice_runtime(join_status='joined', connections=None):
+    runtime = FakeRuntime()
+    runtime.voice_service = FakeVoiceService(join_status)
+    runtime.voice_transport = FakeVoiceTransport(connections)
+    runtime.transport.resolve_voice_channel_sync = lambda ref, account_name=None: {
+        'channel_id': '555', 'guild_id': 'g1', 'channel_name': 'Voice Chat 1',
+    }
+    return runtime
+
+
+def test_discord_join_voice_joins_resolved_channel(monkeypatch):
+    runtime = _voice_runtime()
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_account.set('alpha')
+
+    msg, ok = tools.execute('discord_join_voice', {'channel': 'voice chat 1'})
+
+    assert ok is True
+    assert 'Voice Chat 1' in msg
+    intention = runtime.voice_service.joins[0]
+    assert intention.account_name == 'alpha'
+    assert intention.channel_id == '555'
+    assert intention.guild_id == 'g1'
+    assert intention.reason == 'tool_request'
+
+
+def test_discord_join_voice_blocked_points_at_settings(monkeypatch):
+    runtime = _voice_runtime(join_status='blocked')
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_account.set('alpha')
+
+    msg, ok = tools.execute('discord_join_voice', {'channel': 'voice chat 1'})
+
+    assert ok is False
+    assert 'disabled' in msg.lower()
+
+
+def test_discord_join_voice_unresolved_channel_errors(monkeypatch):
+    runtime = _voice_runtime()
+
+    def _boom(ref, account_name=None):
+        raise RuntimeError(f"Voice channel '{ref}' not found")
+
+    runtime.transport.resolve_voice_channel_sync = _boom
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_account.set('alpha')
+
+    msg, ok = tools.execute('discord_join_voice', {'channel': 'nope'})
+
+    assert ok is False
+    assert 'not found' in msg.lower()
+    assert runtime.voice_service.joins == []
+
+
+def test_discord_leave_voice_without_channel_leaves_all(monkeypatch):
+    runtime = _voice_runtime(connections=[
+        {'channel_id': '555', 'guild_id': 'g1'},
+        {'channel_id': '777', 'guild_id': 'g2'},
+    ])
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_account.set('alpha')
+
+    msg, ok = tools.execute('discord_leave_voice', {})
+
+    assert ok is True
+    assert [i.channel_id for i in runtime.voice_service.leaves] == ['555', '777']
+
+
+def test_discord_leave_voice_not_connected(monkeypatch):
+    runtime = _voice_runtime(connections=[])
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_account.set('alpha')
+
+    msg, ok = tools.execute('discord_leave_voice', {})
+
+    assert ok is True
+    assert 'not connected' in msg.lower()
+    assert runtime.voice_service.leaves == []

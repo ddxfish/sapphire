@@ -1,4 +1,3 @@
-from plugins.discord.models.profiles import AgentAffect
 from plugins.discord.models.settings import EffectiveSettings, PresenceSettings, ProactiveSettings
 from plugins.discord.presence.presence_catalog import load_awake_presets, load_sleep_statuses
 from plugins.discord.transport.discord_presence import DiscordPresenceService
@@ -22,9 +21,7 @@ def test_awake_presence_during_day():
         presence=PresenceSettings(status='online', activity='Chatting'),
         proactive=ProactiveSettings(sleep_schedule_enabled=True, sleep_utc_hour=22, greeting_utc_hour=9),
     )
-    affect = AgentAffect(energy=0.8, sociability=0.7)
-
-    choice = service.select_presence(settings, affect, asleep=False, forced_wake=False, local_hour=12)
+    choice = service.select_presence(settings, asleep=False, forced_wake=False, local_hour=12)
 
     assert choice['status'] == 'online'
     assert choice['activity'] == 'Chatting'
@@ -37,7 +34,7 @@ def test_sleep_presence_when_asleep():
         proactive=ProactiveSettings(sleep_schedule_enabled=True),
     )
 
-    choice = service.select_presence(settings, AgentAffect(), asleep=True, forced_wake=False, local_hour=23)
+    choice = service.select_presence(settings, asleep=True, forced_wake=False, local_hour=23)
 
     assert choice['mode'] == 'sleep'
     assert choice['status'] == 'idle'
@@ -60,6 +57,6 @@ def test_cycling_picks_from_pool():
             activity_presets=['clear', 'listening_chat'],
         ),
     )
-    choice = service.select_presence(settings, AgentAffect(), asleep=False, forced_wake=False, local_hour=12)
+    choice = service.select_presence(settings, asleep=False, forced_wake=False, local_hour=12)
     assert choice['mode'] == 'awake'
     assert choice['activity'] in {'', 'listening: chat'}

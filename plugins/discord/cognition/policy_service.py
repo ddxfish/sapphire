@@ -20,7 +20,7 @@ class PolicyService:
         self._last_reply_at[key] = now
         return {'allowed': True, 'reason': 'allowed'}
 
-    def evaluate_proactive_intention(self, intention, settings, *, affect: dict | None = None) -> dict:
+    def evaluate_proactive_intention(self, intention, settings) -> dict:
         metadata = getattr(intention, 'metadata', None) or {}
         if metadata.get('task_id') or str(getattr(intention, 'reason', '')).startswith('task:'):
             return {'allowed': True, 'reason': 'scheduled_task'}
@@ -30,21 +30,7 @@ class PolicyService:
         now = time.time()
         if now - self._last_proactive_at.get(key, 0) < cooldown_hours * 3600:
             return {'allowed': False, 'reason': 'proactive_cooldown'}
-        affect = affect or {}
-        if float(affect.get('irritability', 0.2)) > 0.85:
-            return {'allowed': False, 'reason': 'high_irritability'}
-        if float(affect.get('energy', 0.7)) < 0.15 and action in {'outreach', 'greet_channel'}:
-            return {'allowed': False, 'reason': 'low_energy'}
         self._last_proactive_at[key] = now
-        return {'allowed': True, 'reason': 'allowed'}
-
-    def evaluate_media_send(self, settings, *, fondness: float = 0.5, irritability: float = 0.2) -> dict:
-        if not settings.media.enabled:
-            return {'allowed': False, 'reason': 'media_disabled'}
-        if fondness < 0.2:
-            return {'allowed': False, 'reason': 'low_fondness'}
-        if irritability > 0.8:
-            return {'allowed': False, 'reason': 'high_irritability'}
         return {'allowed': True, 'reason': 'allowed'}
 
     def evaluate_voice_speak(self, intention, settings) -> dict:

@@ -37,7 +37,6 @@ def test_voice_turn_start_records_trace_and_world_model():
     })
     assert traces
     assert traces[0][0] == 'voice_conversation_turn'
-    world._record_observation.assert_called_once()
 
 
 def test_non_discord_chat_ignored():

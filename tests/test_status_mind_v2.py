@@ -91,7 +91,7 @@ def test_palace_totals_layers_and_current_scope(palace):
     _chunk(palace, 'events', 'trinity')
     _chunk(palace, 'events', 'trinity', favorite=1)
     _entity(palace, 'Krem', 'default')
-    _entity(palace, 'Rook', 'trinity')
+    _entity(palace, 'Ada', 'trinity')
     _sql(palace, "INSERT INTO mind_scopes (name, created) VALUES ('empty', ?)", (_iso(),))
 
     out = palace.status_summary('trinity')

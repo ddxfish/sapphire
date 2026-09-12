@@ -125,8 +125,9 @@ class CommitmentService:
         parsed = extract_commitment_run_at(text, now)
         if not parsed:
             return []
-        run_at_dt, commitment = parsed
+        run_at_dt, commitment, when_label = parsed
         display = observation.display_name or observation.username or 'they'
+        when_bit = f' {when_label}' if when_label else ''
         return [{
             'task_type': 'commitment_follow_up',
             'run_at': run_at_dt.timestamp(),
@@ -137,11 +138,12 @@ class CommitmentService:
                 'display_name': display,
                 'quote': text[:500],
                 'commitment': commitment,
+                'when_label': when_label,
                 'mention': f'<@{observation.author_id}>',
                 'instruction': (
-                    f"Earlier {display} said they would: \"{commitment}\". "
-                    f"Write a friendly follow-up that @mentions them and asks how it went — "
-                    f"curious, not pushy. One or two sentences."
+                    f"Earlier {display} mentioned{when_bit} that they would: \"{commitment}\". "
+                    f"Write a friendly follow-up that @mentions them and gently asks how it went — "
+                    f"curious and natural, not pushy or corporate. One or two short sentences."
                 ),
             },
         }]

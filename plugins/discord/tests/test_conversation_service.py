@@ -1,9 +1,6 @@
 from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.conversation_service import ConversationService
 from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
-from plugins.discord.cognition.goal_engine import GoalEngine
-from plugins.discord.cognition.intent_engine import IntentEngine
-from plugins.discord.cognition.world_state_builder import WorldStateBuilder
 from plugins.discord.models.observations import TextMessageObservation
 from plugins.discord.models.settings import SettingsStore
 
@@ -83,10 +80,7 @@ def test_emit_reply_includes_vision_description_in_content():
         prompt_context_service=FakeContext({'recent_history': [], 'media': media_context}),
         trace_repository=FakeTraceRepo(),
         settings_store=SettingsStore(),
-        cognitive_orchestrator=CognitiveOrchestrator(
-            intent_engine=IntentEngine(goal_engine=GoalEngine()),
-            world_state_builder=WorldStateBuilder(),
-        ),
+        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     emitted = service.process_batch(batch)
@@ -102,15 +96,9 @@ def test_emit_reply_intention_for_batch():
     batch = batch_service.flush_ready(now=10.0)[0]
     bridge = FakeBridge()
     from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
-    from plugins.discord.cognition.goal_engine import GoalEngine
-    from plugins.discord.cognition.intent_engine import IntentEngine
-    from plugins.discord.cognition.world_state_builder import WorldStateBuilder
     from plugins.discord.models.settings import SettingsStore
 
-    orchestrator = CognitiveOrchestrator(
-        intent_engine=IntentEngine(goal_engine=GoalEngine()),
-        world_state_builder=WorldStateBuilder(),
-    )
+    orchestrator = CognitiveOrchestrator()
     store = SettingsStore()
     service = ConversationService(
         event_bridge=bridge,
@@ -141,10 +129,7 @@ def test_rejected_event_does_not_create_pending_metadata():
         prompt_context_service=FakeContext(),
         trace_repository=traces,
         settings_store=SettingsStore(),
-        cognitive_orchestrator=CognitiveOrchestrator(
-            intent_engine=IntentEngine(goal_engine=GoalEngine()),
-            world_state_builder=WorldStateBuilder(),
-        ),
+        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     emitted = service.process_batch(batch)
@@ -174,10 +159,7 @@ def test_emit_reply_omits_plugin_scheduled_without_follow_up_hints():
         trace_repository=FakeTraceRepo(),
         settings_store=SettingsStore(),
         mention_map_service=FakeMentionMap(),
-        cognitive_orchestrator=CognitiveOrchestrator(
-            intent_engine=IntentEngine(goal_engine=GoalEngine()),
-            world_state_builder=WorldStateBuilder(),
-        ),
+        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     assert service.process_batch(batch) is True
@@ -200,10 +182,7 @@ def test_emit_reply_sets_plugin_scheduled_for_follow_up_hints():
         trace_repository=FakeTraceRepo(),
         settings_store=SettingsStore(),
         mention_map_service=FakeMentionMap(),
-        cognitive_orchestrator=CognitiveOrchestrator(
-            intent_engine=IntentEngine(goal_engine=GoalEngine()),
-            world_state_builder=WorldStateBuilder(),
-        ),
+        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     assert service.process_batch(batch) is True

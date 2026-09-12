@@ -43,7 +43,13 @@ class SQLiteService:
 
 
 def resolve_default_db_path(plugin_name: str = 'discord') -> Path:
-    root = Path(__file__).resolve().parents[3] / 'user' / 'plugin_state'
+    # Walk up with .absolute() (never .resolve(): symlinked plugin dirs would
+    # escape the project) until the repo root (the dir holding core/) — a fixed
+    # parent count breaks when the plugin moves between plugins/ and user/plugins/.
+    root = Path(__file__).absolute().parent
+    while root != root.parent and not (root / 'core').is_dir():
+        root = root.parent
+    root = root / 'user' / 'plugin_state'
     base = root / plugin_name
     default_path = base / 'discord.sqlite3'
     if plugin_name == 'discord' and not base.exists():

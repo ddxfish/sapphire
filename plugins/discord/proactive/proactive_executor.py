@@ -9,9 +9,23 @@ from plugins.discord.models.intentions import (
     OutreachIntention,
     ReplyMessageIntention,
     SendGifIntention,
-    SendMemeIntention,
     UpdatePresenceIntention,
 )
+
+
+_PROACTIVE_KINDS = (
+    (GreetChannelIntention, 'greeting'),
+    (BirthdayWishIntention, 'birthday'),
+    (GoodnightIntention, 'goodnight'),
+    (OutreachIntention, 'outreach'),
+)
+
+
+def _proactive_kind(intention) -> str:
+    for cls, kind in _PROACTIVE_KINDS:
+        if isinstance(intention, cls):
+            return kind
+    return ''
 
 
 class ProactiveExecutor:
@@ -53,8 +67,6 @@ class ProactiveExecutor:
             return self._send_text(intention, marker='wake_reply', reply_to=intention.message_id or None)
         if isinstance(intention, SendGifIntention):
             return self._send_gif(intention)
-        if isinstance(intention, SendMemeIntention):
-            return self._send_meme(intention)
         if isinstance(intention, UpdatePresenceIntention):
             return self._update_presence(intention)
         return {'status': 'unsupported', 'intention_type': getattr(intention, 'intention_type', '')}
@@ -98,8 +110,6 @@ class ProactiveExecutor:
             )
         if isinstance(intention, SendGifIntention):
             return await self._send_gif_async(intention)
-        if isinstance(intention, SendMemeIntention):
-            return await self._send_meme_async(intention)
         if isinstance(intention, UpdatePresenceIntention):
             return await self.execute_presence_async(intention)
         return {'status': 'unsupported', 'intention_type': getattr(intention, 'intention_type', '')}
@@ -112,6 +122,9 @@ class ProactiveExecutor:
             return {'status': 'skipped', 'reason': 'no_transport'}
         if isinstance(intention, ReplyMessageIntention) and intention.metadata.get('use_llm'):
             return self._send_via_llm(intention, marker=marker)
+        queued = self._queue_proactive_event(intention, marker=marker, on_sent=on_sent, account_name=account_name)
+        if queued is not None:
+            return queued
         if not self.transport:
             return {'status': 'skipped', 'reason': 'no_transport'}
         account_name = account_name or getattr(intention, 'account_name', None) or None
@@ -137,6 +150,9 @@ class ProactiveExecutor:
             return {'status': 'skipped', 'reason': 'no_transport'}
         if isinstance(intention, ReplyMessageIntention) and intention.metadata.get('use_llm'):
             return await self._send_via_llm_async(intention, marker=marker)
+        queued = self._queue_proactive_event(intention, marker=marker, on_sent=on_sent, account_name=account_name)
+        if queued is not None:
+            return queued
         if not self.transport:
             return {'status': 'skipped', 'reason': 'no_transport'}
         account_name = account_name or getattr(intention, 'account_name', None) or None
@@ -156,6 +172,38 @@ class ProactiveExecutor:
         if self.trace_repository:
             self.trace_repository.record_trace('proactive_sent', f'Sent {marker}', {'channel_id': intention.channel_id, 'reason': intention.reason})
         return {'status': 'sent', 'transport': result}
+
+    def _queue_proactive_event(self, intention, *, marker: str, on_sent=None, account_name=None) -> dict | None:
+        """Route a proactive post through the continuity pipeline; None = use the static text path."""
+        kind = _proactive_kind(intention)
+        if not kind or not self.event_bridge or not self.settings_store or not self.proactive_message_service:
+            return None
+        account_name = account_name or getattr(intention, 'account_name', '') or ''
+        channel_id = str(intention.channel_id or '')
+        guild_id = self._guild_id_for_channel(channel_id)
+        settings = self.settings_store.resolve(guild_id=guild_id or None, channel_id=channel_id)
+        payload = self.proactive_message_service.build_event_payload(
+            intention, settings, kind=kind, account_name=account_name, guild_id=guild_id,
+        )
+        if not payload:
+            return None
+        accepted = self.event_bridge.emit_discord_message(payload)
+        if not accepted:
+            if self.trace_repository:
+                self.trace_repository.record_trace('proactive_llm_fallback', f'No task accepted {marker} event — using static text', {
+                    'kind': kind,
+                    'channel_id': channel_id,
+                    'account_name': account_name,
+                })
+            return None
+        if on_sent:
+            on_sent(intention)
+        if self.trace_repository:
+            self.trace_repository.record_trace('proactive_sent', f'Queued {marker} via pipeline', {
+                'channel_id': channel_id,
+                'reason': intention.reason,
+            })
+        return {'status': 'sent', 'delivery': 'pipeline'}
 
     def _send_via_llm(self, intention: ReplyMessageIntention, *, marker: str) -> dict:
         payload = dict(intention.metadata.get('event_payload') or {})
@@ -222,18 +270,7 @@ class ProactiveExecutor:
     def _send_task_follow_up_direct(self, intention: ReplyMessageIntention, payload: dict, *, marker: str, reason: str) -> dict:
         if not self.transport:
             return {'status': 'skipped', 'reason': reason, 'accepted': False}
-        author_id = str(payload.get('author_id') or '')
-        mention = f'<@{author_id}>' if author_id else ''
-        reminder = str(payload.get('reminder') or '').strip()
-        when_label = str(payload.get('when_label') or '').strip()
-        if reminder:
-            prefix = f'{mention} ' if mention else ''
-            timing = f' ({when_label})' if when_label else ''
-            text = f'{prefix}Reminder{timing}: {reminder}'
-        else:
-            text = str(payload.get('reply_instructions') or payload.get('content') or intention.prompt)
-            if mention and mention not in text:
-                text = f'{mention} {text}'
+        text = self._human_task_follow_up_text(intention, payload)
         result = self.transport.send_message_sync(
             intention.channel_id,
             text,
@@ -247,18 +284,7 @@ class ProactiveExecutor:
     async def _send_task_follow_up_direct_async(self, intention: ReplyMessageIntention, payload: dict, *, marker: str, reason: str) -> dict:
         if not self.transport:
             return {'status': 'skipped', 'reason': reason, 'accepted': False}
-        author_id = str(payload.get('author_id') or '')
-        mention = f'<@{author_id}>' if author_id else ''
-        reminder = str(payload.get('reminder') or '').strip()
-        when_label = str(payload.get('when_label') or '').strip()
-        if reminder:
-            prefix = f'{mention} ' if mention else ''
-            timing = f' ({when_label})' if when_label else ''
-            text = f'{prefix}Reminder{timing}: {reminder}'
-        else:
-            text = str(payload.get('reply_instructions') or payload.get('content') or intention.prompt)
-            if mention and mention not in text:
-                text = f'{mention} {text}'
+        text = self._human_task_follow_up_text(intention, payload)
         result = await self.transport.send_message_async(
             intention.channel_id,
             text,
@@ -269,6 +295,33 @@ class ProactiveExecutor:
             self.trace_repository.record_trace('proactive_sent', f'Sent {marker} via direct transport', {'channel_id': intention.channel_id, 'reason': intention.reason, 'task_id': intention.metadata.get('task_id'), 'fallback': reason})
         return {'status': 'sent', 'transport': result, 'fallback': reason}
 
+    def _human_task_follow_up_text(self, intention: ReplyMessageIntention, payload: dict) -> str:
+        """Build a human-shaped fallback — never dump internal reply_instructions."""
+        author_id = str(payload.get('author_id') or payload.get('user_id') or '')
+        mention = f'<@{author_id}>' if author_id else str(payload.get('mention') or '').strip()
+        reminder = str(payload.get('reminder') or '').strip()
+        when_label = str(payload.get('when_label') or '').strip()
+        commitment = str(payload.get('commitment') or '').strip()
+        task_type = str((intention.metadata or {}).get('task_type') or '')
+        if reminder:
+            prefix = f'{mention} ' if mention else ''
+            timing = f' ({when_label})' if when_label else ''
+            return f'{prefix}Reminder{timing}: {reminder}'
+        if intention.metadata.get('buffered'):
+            text = str(intention.prompt or '')
+            if mention and mention not in text:
+                text = f'{mention} {text}'
+            return text
+        if commitment or task_type == 'commitment_follow_up':
+            prefix = f'{mention} ' if mention else ''
+            when_bit = f' about {when_label}' if when_label else ''
+            body = commitment or 'that thing you mentioned'
+            return f'{prefix}Hey — how did{when_bit} "{body}" go?'
+        text = str(intention.prompt or '').strip() or 'Just checking in.'
+        if mention and mention not in text:
+            text = f'{mention} {text}'
+        return text
+
     def _send_gif(self, intention: SendGifIntention) -> dict:
         if not self.transport or not self.gif_service:
             return {'status': 'skipped'}
@@ -277,7 +330,6 @@ class ProactiveExecutor:
         if not url:
             return {'status': 'skipped', 'reason': 'no_gif'}
         result = self.transport.send_gif_sync(intention.channel_id, url)
-        self.gif_service.mark_sent(intention.account_name, intention.channel_id)
         return {'status': 'sent', 'transport': result}
 
     async def _send_gif_async(self, intention: SendGifIntention) -> dict:
@@ -288,19 +340,6 @@ class ProactiveExecutor:
         if not url:
             return {'status': 'skipped', 'reason': 'no_gif'}
         result = await self.transport.send_gif_async(intention.channel_id, url)
-        self.gif_service.mark_sent(intention.account_name, intention.channel_id)
-        return {'status': 'sent', 'transport': result}
-
-    def _send_meme(self, intention: SendMemeIntention) -> dict:
-        if not self.transport:
-            return {'status': 'skipped'}
-        result = self.transport.send_gif_sync(intention.channel_id, intention.meme_url)
-        return {'status': 'sent', 'transport': result}
-
-    async def _send_meme_async(self, intention: SendMemeIntention) -> dict:
-        if not self.transport:
-            return {'status': 'skipped'}
-        result = await self.transport.send_gif_async(intention.channel_id, intention.meme_url)
         return {'status': 'sent', 'transport': result}
 
     def _update_presence(self, intention: UpdatePresenceIntention) -> dict:

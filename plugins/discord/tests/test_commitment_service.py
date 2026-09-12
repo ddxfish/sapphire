@@ -81,6 +81,13 @@ def test_in_three_days_commitment_schedules_task(tmp_path):
     assert len(created) == 1
     tasks = world.list_tasks('alpha', status='pending')
     assert tasks[0]['task_type'] == 'commitment_follow_up'
+    payload = tasks[0].get('payload_json')
+    if isinstance(payload, str):
+        import json
+        payload = json.loads(payload)
+    assert payload.get('when_label')
+    assert 'hotfix' in (payload.get('commitment') or '').lower()
+    assert 'mentioned' in (payload.get('instruction') or '').lower()
 
 
 def test_casual_message_not_scheduled(tmp_path):

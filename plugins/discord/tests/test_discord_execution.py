@@ -63,3 +63,43 @@ def test_build_reference_ignores_non_numeric_message_ids():
     assert _build_reference(12345, '') is None
     if hasattr(discord, 'MessageReference') or hasattr(discord, 'Object'):
         assert _build_reference(12345, '1521787194761678918') is not None
+
+
+def test_stop_playback_only_leaves_recording_reader_alive():
+    """VoiceClient.stop() kills the recording reader as a side effect —
+    playback teardown must never touch it (deafness class, 2026-08-01)."""
+    from plugins.discord.transport.discord_execution import _stop_playback_only
+
+    calls = []
+
+    class FakePlayer:
+        def stop(self):
+            calls.append('player_stop')
+
+    class FakeReader:
+        def stop(self):
+            calls.append('reader_stop')
+
+    class FakeLoop:
+        def call_soon_threadsafe(self, fn, *args):
+            calls.append('future_resolved')
+
+    class FakeVoiceClient:
+        def __init__(self):
+            self._player = FakePlayer()
+            self._player_future = object()
+            self._reader = FakeReader()
+            self.loop = FakeLoop()
+
+        def _set_future_result_if_pending(self, *args):
+            pass
+
+    vc = FakeVoiceClient()
+    _stop_playback_only(vc)
+
+    assert 'player_stop' in calls
+    assert 'future_resolved' in calls
+    assert 'reader_stop' not in calls
+    assert vc._player is None
+    assert vc._player_future is None
+    assert isinstance(vc._reader, FakeReader)

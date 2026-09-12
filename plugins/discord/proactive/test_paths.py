@@ -242,15 +242,9 @@ def _execute_test_intention(runtime, intention, settings, *, dry_run: bool) -> d
 
     metadata = getattr(intention, 'metadata', None) or {}
     if metadata.get('manual_test'):
-        affect = {}
-        if runtime.profile_service:
-            affect = runtime.profile_service.get_affect(intention.account_name).to_dict()
         decision = {'allowed': True, 'reason': 'manual_test'}
     else:
-        affect = {}
-        if runtime.profile_service:
-            affect = runtime.profile_service.get_affect(intention.account_name).to_dict()
-        decision = runtime.policy_service.evaluate_proactive_intention(intention, settings, affect=affect)
+        decision = runtime.policy_service.evaluate_proactive_intention(intention, settings)
 
     if not decision.get('allowed'):
         row['status'] = 'skipped'

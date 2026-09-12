@@ -106,19 +106,32 @@ class DeliveryStyleService:
 
         return DeliveryPlan(chunks=chunks, reply_to_message_id=reply_to)
 
-    def _resolve_reply_target(self, parsed, event_data: dict, delivery, trigger_content: str) -> str | None:
+    def _resolve_reply_target(self, parsed, event_data: dict, delivery, trigger_content: str) -> str:
+        """'' = deliberately unquoted; non-empty = quote this message id.
+
+        Must never return None — the send loop treats None as "no plan" and
+        falls back to quoting anyway, which made this whole heuristic (and the
+        quote_reply_enabled toggle) dead: every reply always quote-replied.
+        """
         if delivery and not delivery.quote_reply_enabled:
-            return None
+            return ''
         message_id = str(event_data.get('message_id') or '')
         if message_id.startswith('task-followup-'):
-            return None
+            return ''
+        if str(event_data.get('proactive_kind') or '').strip():
+            return ''
+        # Wake replays always quote — an "up now, sorry!" landing hours later
+        # is meaningless unattached to the overnight ping.
+        if str(event_data.get('wake_replay') or '').lower() == 'true':
+            raw = str(event_data.get('reply_to_message_id') or '').strip()
+            return raw or message_id
         reply_text = '\n\n'.join(parsed.chunks or [])
         if not self.should_quote_reply(event_data, trigger_content, reply_text):
-            return None
+            return ''
         raw_reply_to = str(event_data.get('reply_to_message_id') or '').strip()
         if raw_reply_to:
             return raw_reply_to
-        return message_id or None
+        return message_id
 
     def should_quote_reply(self, event_data: dict, trigger_content: str, reply_text: str) -> bool:
         chance = self.compute_quote_reply_chance(event_data, trigger_content, reply_text)
@@ -133,17 +146,18 @@ class DeliveryStyleService:
             return 1.0
         if self._trigger_has_media(event_data):
             return 0.0
-        if self._looks_like_joke_or_comment(trigger_content, reply_text):
-            return 0.0
-
-        chance = QUOTE_BASE
         if str(event_data.get('is_dm', '')).lower() in {'true', '1'}:
             return random.uniform(QUOTE_DM_MIN, QUOTE_DM_MAX)
+        # Busy-channel context outranks the joke/short-reply check — most of
+        # her replies are short, and the old order made the busy boosts
+        # unreachable exactly where quoting matters most.
         if int(event_data.get('batch_size') or 1) > BUSY_BATCH_THRESHOLD:
             return QUOTE_BUSY_BATCH
         if len(event_data.get('recent_history') or []) > BUSY_HISTORY_THRESHOLD:
-            chance = max(chance, QUOTE_BUSY_HISTORY)
-        return min(1.0, max(0.0, chance))
+            return QUOTE_BUSY_HISTORY
+        if self._looks_like_joke_or_comment(trigger_content, reply_text):
+            return 0.0
+        return min(1.0, max(0.0, QUOTE_BASE))
 
     def _plan_auto_typo(self, text: str, delivery, trigger_content: str) -> Optional[tuple[float, str, str]]:
         if '?' in (trigger_content or ''):

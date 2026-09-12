@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 _vader_analyser = None
 _vader_lock = threading.Lock()
+_roberta_pipeline = None
+_roberta_lock = threading.Lock()
 
 _QUESTION_RE = re.compile(r'\?')
 
@@ -45,6 +47,15 @@ _TECH_CHANNEL_RE = re.compile(
 _TECH_PREFERRED = frozenset({'👀', '🧐', '💡', '🧠', '📚', '🤔', '💭', '❓', '🫡', '⁉️'})
 _SOFT_EMOJIS = frozenset({'💕', '💞', '💓', '💗', '💖', '💘', '💝', '🥰', '😍', '😘', '💌', '🫶'})
 
+_ROBERTA_MODEL = 'cardiffnlp/twitter-roberta-base-sentiment-latest'
+
+
+def normalize_sentiment_backend(backend: str | None) -> str:
+    normalized = (backend or 'vader').strip().lower().replace('-', '_')
+    if normalized in {'twitter_roberta', 'roberta', 'twitter_roberta_base'}:
+        return 'twitter_roberta'
+    return 'vader'
+
 
 def _get_vader():
     global _vader_analyser
@@ -66,23 +77,86 @@ def _get_vader():
     return _vader_analyser
 
 
-def sentiment_tier(content: str, *, context_text: str = '') -> str:
+def _get_roberta():
+    global _roberta_pipeline
+    if _roberta_pipeline is not None:
+        return _roberta_pipeline
+    with _roberta_lock:
+        if _roberta_pipeline is not None:
+            return _roberta_pipeline
+        try:
+            from transformers import pipeline
+            _roberta_pipeline = pipeline(
+                'sentiment-analysis',
+                model=_ROBERTA_MODEL,
+                top_k=None,
+                truncation=True,
+            )
+            logger.info('[DISCORD] Twitter RoBERTa sentiment pipeline loaded')
+        except ImportError:
+            logger.warning(
+                '[DISCORD] transformers/torch not installed — Twitter RoBERTa unavailable. '
+                'Run: pip install transformers torch'
+            )
+            _roberta_pipeline = False
+        except Exception as exc:
+            logger.warning('[DISCORD] Twitter RoBERTa load failed (%s) — using heuristics', exc)
+            _roberta_pipeline = False
+    return _roberta_pipeline
+
+
+def _compound_from_vader(text: str) -> float | None:
+    vader = _get_vader()
+    if not vader:
+        return None
+    return float(vader.polarity_scores(text[:512])['compound'])
+
+
+def _compound_from_roberta(text: str) -> float | None:
+    pipe = _get_roberta()
+    if not pipe:
+        return None
+    try:
+        results = pipe(text[:512])
+        scores_list = results[0] if results and isinstance(results[0], list) else results
+        scores = {
+            str(item.get('label', '')).lower(): float(item.get('score', 0.0))
+            for item in (scores_list or [])
+        }
+        return scores.get('positive', 0.0) - scores.get('negative', 0.0)
+    except Exception as exc:
+        logger.debug('[DISCORD] Twitter RoBERTa sentiment failed: %s', exc)
+        return None
+
+
+def _tier_from_compound(compound: float) -> str:
+    if compound >= 0.5:
+        return 'very_positive'
+    if compound >= 0.1:
+        return 'positive'
+    if compound <= -0.5:
+        return 'very_negative'
+    if compound <= -0.1:
+        return 'negative'
+    return ''
+
+
+def sentiment_tier(content: str, *, context_text: str = '', backend: str = 'vader') -> str:
     """Return sentiment bucket for emoji selection, or empty string."""
     scored = f'{context_text} {content}'.strip() if context_text else (content or '').strip()
     if not scored:
         return ''
 
-    vader = _get_vader()
-    if vader:
-        compound = vader.polarity_scores(scored[:512])['compound']
-        if compound >= 0.5:
-            return 'very_positive'
-        if compound >= 0.1:
-            return 'positive'
-        if compound <= -0.5:
-            return 'very_negative'
-        if compound <= -0.1:
-            return 'negative'
+    normalized_backend = normalize_sentiment_backend(backend)
+    compound = (
+        _compound_from_roberta(scored)
+        if normalized_backend == 'twitter_roberta'
+        else _compound_from_vader(scored)
+    )
+    if compound is not None:
+        tier = _tier_from_compound(compound)
+        if tier:
+            return tier
 
     lowered = (content or '').lower()
     if _QUESTION_RE.search(content or ''):
@@ -106,11 +180,12 @@ def pick_reaction_emoji(
     context_text: str = '',
     channel_name: str = '',
     blocked_rules: dict | None = None,
+    backend: str = 'vader',
 ) -> str:
     """Pick a Unicode reaction emoji for message content."""
     import random
 
-    tier = sentiment_tier(content, context_text=context_text)
+    tier = sentiment_tier(content, context_text=context_text, backend=backend)
     if not tier:
         return ''
     rules = blocked_rules if isinstance(blocked_rules, dict) else _DEFAULT_BLOCKED

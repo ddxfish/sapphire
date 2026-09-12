@@ -10,10 +10,12 @@ GIF_HINTS = ('gif', 'tenor', 'giphy')
 
 
 class MediaService:
-    def __init__(self, *, media_repository=None, llm_bridge=None, vision_bridge=None, trace_repository=None):
+    def __init__(self, *, media_repository=None, llm_bridge=None, vision_bridge=None, trace_repository=None,
+                 scheduler_bridge=None):
         self.media_repository = media_repository
         self.llm_bridge = llm_bridge
         self.trace_repository = trace_repository
+        self.scheduler_bridge = scheduler_bridge
         self.vision_bridge = vision_bridge or VisionBridge(
             provider_client=llm_bridge,
             trace_recorder=self._record_vision_trace,
@@ -49,6 +51,22 @@ class MediaService:
         if not image_understanding_enabled:
             return self._fallback_interpretation(artifact, source='metadata')
 
+        # Vision 'auto' = daemon chooses: thread the Reply LLM override down so
+        # captions ride the same provider chain as her replies.
+        reply_provider = ''
+        if settings is not None and hasattr(settings, 'cognitive'):
+            from plugins.discord.sapphire.llm_settings import cognitive_llm_from_settings
+            reply_provider, _ = cognitive_llm_from_settings(settings)
+        if reply_provider in ('', 'auto') and self.scheduler_bridge is not None:
+            # "Daemon chooses" means the DAEMON TASK's pinned provider — the
+            # model her reply will actually use — not a fallback-order scan.
+            # The plugin's cognitive.llm_primary is a different store from the
+            # daemon task's provider field; 'auto' here defers to the task.
+            daemon_provider, _ = self.scheduler_bridge.daemon_task_llm(
+                'discord_message', account=artifact.account_name)
+            if daemon_provider:
+                reply_provider = daemon_provider
+
         bridge = self.vision_bridge
         if bridge and hasattr(bridge, 'describe_media'):
             try:
@@ -58,6 +76,7 @@ class MediaService:
                     settings=media_settings,
                     filename=artifact.filename,
                     content_type=artifact.content_type,
+                    reply_llm_provider=reply_provider,
                 )
             except Exception as exc:
                 return self._fallback_interpretation(

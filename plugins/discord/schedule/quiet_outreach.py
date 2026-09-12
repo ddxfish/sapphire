@@ -16,7 +16,7 @@ def run(event):
         return 'Skipped (no settings)'
     accounts = runtime.transport.list_connected() if runtime.transport else []
     if not accounts and runtime.scheduler_bridge:
-        accounts = sorted(runtime.scheduler_bridge.active_daemon_accounts('quiet_outreach'))
+        accounts = sorted(runtime.scheduler_bridge.active_daemon_accounts('discord_message'))
     sent = 0
     now = now_local()
     for account_name in accounts:

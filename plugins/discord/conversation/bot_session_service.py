@@ -49,6 +49,10 @@ class BotSessionService:
             if respond_trigger and bot_settings is not None:
                 window = max(60, int(getattr(bot_settings, 'session_human_window_seconds', 300)))
                 session.human_window_until = now + window
+                # A human (re)opening the debate starts a fresh session: the
+                # safety cap is per-debate, not a lifetime channel budget.
+                session.exchanges = 0
+                session.peer_bot_id = ''
             return {'allowed': True, 'reason': 'human_message'}
 
         if bot_settings is None or not getattr(bot_settings, 'enabled', True):
@@ -72,11 +76,8 @@ class BotSessionService:
             observation,
             bot_names,
             name_match_enabled=name_match_enabled,
-            our_message_id=our_message_id,
         )
-
-        if mode == 'mentions_only' and not addresses_us:
-            return {'allowed': False, 'reason': 'bot_mentions_only'}
+        replies_to_us = _is_reply_to_us(observation, our_message_id)
 
         silence_seconds = max(30, int(getattr(bot_settings, 'session_silence_seconds', 150)))
         safety_max = max(1, int(getattr(bot_settings, 'session_safety_max_exchanges', 20)))
@@ -89,20 +90,33 @@ class BotSessionService:
         if session.exchanges >= safety_max:
             return {'allowed': False, 'reason': 'bot_session_safety_cap'}
 
+        # A direct address (@mention or name) is always enough.
         if addresses_us:
             return self._allow(session, author_id, now)
 
-        if human_window_open and engagement_fresh and session.peer_bot_id == author_id:
-            if _is_reply_to_us(observation, our_message_id):
-                return self._allow(session, author_id, now)
+        # Reply-chain volley: only inside a human-opened debate window that
+        # hasn't gone silent, and only with the debate's peer bot. (Reply-chain
+        # used to live inside addresses_us, which made the window and silence
+        # settings decorative — any reply to our last message was allowed
+        # forever.)
+        if replies_to_us and human_window_open and engagement_fresh \
+                and session.peer_bot_id in ('', author_id):
+            return self._allow(session, author_id, now)
+
+        if mode == 'mentions_only' and not replies_to_us:
+            return {'allowed': False, 'reason': 'bot_mentions_only'}
+        if replies_to_us and human_window_open:
+            return {'allowed': False, 'reason': 'bot_session_silent'}
+        if human_window_open:
             return {'allowed': False, 'reason': 'bot_side_comment'}
-
-        if engagement_fresh and not human_window_open and not addresses_us:
-            return {'allowed': False, 'reason': 'bot_session_silent'}
-
-        if human_window_open and not engagement_fresh and not addresses_us:
-            return {'allowed': False, 'reason': 'bot_session_silent'}
-
+        # Idle allowlisted / all-mode bots may get an organic chance roll
+        # upstream (bot_response_chance). Mentions-only never reaches here.
+        if mode in {'allowlist', 'all'}:
+            return {
+                'allowed': True,
+                'reason': 'bot_organic_candidate',
+                'organic_candidate': True,
+            }
         return {'allowed': False, 'reason': 'no_bot_session'}
 
     def _allow(self, session: ChannelBotSession, peer_bot_id: str, now: float) -> dict:
@@ -132,16 +146,14 @@ def _bot_addresses_us(
     bot_names: set[str],
     *,
     name_match_enabled: bool,
-    our_message_id: str,
 ) -> bool:
+    """Direct address only: @mention or name. Reply-chains are session-gated."""
     if bool(getattr(observation, 'mentioned', False)):
         return True
-    if name_match_enabled and message_matches_bot_name(
+    return bool(name_match_enabled and message_matches_bot_name(
         getattr(observation, 'clean_content', '') or '',
         bot_names,
-    ):
-        return True
-    return _is_reply_to_us(observation, our_message_id)
+    ))
 
 
 def _is_reply_to_us(observation, our_message_id: str) -> bool:

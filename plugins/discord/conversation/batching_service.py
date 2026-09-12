@@ -49,9 +49,20 @@ class BatchingService:
         batch.observations.append(observation)
         urgency = observation.mentioned or observation.clean_content.strip().endswith('?')
         batch.urgency = batch.urgency or urgency
-        delay = self.default_window_seconds * (0.5 if urgency else 1.0)
-        batch.flush_at = observation.created_at + delay
+        # Delay follows the BATCH's urgency (an early @mention keeps the short
+        # window even when later chatter isn't urgent), and flush_at is capped
+        # at a max batch age — the old unconditional overwrite let steady
+        # traffic push the deadline forever, silently starving @mentions in
+        # any active channel (scout critical, 2026-08-05).
+        delay = self.default_window_seconds * (0.5 if batch.urgency else 1.0)
+        batch.flush_at = min(
+            observation.created_at + delay,
+            batch.observations[0].created_at + self._max_batch_age(),
+        )
         return batch
+
+    def _max_batch_age(self) -> float:
+        return self.default_window_seconds * 2.5
 
     def record_typing(self, observation: TypingObservation) -> None:
         key = (observation.account_name, observation.channel_id)
@@ -59,7 +70,11 @@ class BatchingService:
         if not batch:
             return
         batch.typing_extended = True
-        batch.flush_at = max(batch.flush_at, observation.created_at + self.typing_extension_seconds)
+        first_at = batch.observations[0].created_at if batch.observations else observation.created_at
+        batch.flush_at = min(
+            max(batch.flush_at, observation.created_at + self.typing_extension_seconds),
+            first_at + self._max_batch_age(),
+        )
 
     def flush_ready(self, *, now: float) -> list[ChannelBatch]:
         ready = []

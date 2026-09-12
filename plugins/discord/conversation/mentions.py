@@ -46,7 +46,7 @@ def merge_user_into_mention_map(
 def build_mention_format_hint() -> str:
     return (
         'When @mentioning other users, write @DisplayName or @username only '
-        '(e.g. @Spike le Vain). Do not use <@DisplayName> or made-up IDs — '
+        '(e.g. @Example User). Do not use <@DisplayName> or made-up IDs — '
         'the plugin converts @DisplayName to real Discord pings.'
     )
 

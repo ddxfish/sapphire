@@ -120,7 +120,10 @@ def test_evaluate_wishes_waits_until_scheduled_time(tmp_path):
 
 
 def test_spread_assigns_stable_times_for_multiple_users(tmp_path):
+    # Individual-path test: 3 same-day users would bulk under the default
+    # threshold (2, >=), collapsing to one shared run_at — disable bulk.
     profiles, service, settings = _stack(tmp_path)
+    settings.profile.birthday_bulk_enabled = False
     for user_id in ('u1', 'u2', 'u3'):
         profiles.set_birthday('alpha', user_id, month=7, day=1, channel_id='c1')
 
@@ -160,6 +163,37 @@ def test_bulk_wish_when_channel_exceeds_threshold(tmp_path):
     assert intentions[0].reason == 'profile_birthday_bulk'
     assert intentions[0].metadata['bulk'] is True
     assert len(intentions[0].metadata['recipients']) == 4
+
+
+def test_bulk_wish_triggers_at_threshold_exactly(tmp_path):
+    # >= semantics: threshold 2 means two same-day birthdays already combine.
+    profiles, service, settings = _stack(tmp_path)
+    settings.profile.birthday_bulk_enabled = True
+    settings.profile.birthday_bulk_threshold = 2
+    now = datetime(2026, 7, 1, 12, 0, 0)
+    for user_id in ('u1', 'u2'):
+        profiles.set_birthday('alpha', user_id, month=7, day=1, channel_id='c1')
+        profiles.set_birthday_wish_run_at('alpha', user_id, now.timestamp() - 1)
+
+    intentions = service.evaluate_wishes('alpha', settings, now=now)
+
+    assert len(intentions) == 1
+    assert intentions[0].reason == 'profile_birthday_bulk'
+    assert len(intentions[0].metadata['recipients']) == 2
+
+
+def test_single_birthday_stays_individual(tmp_path):
+    profiles, service, settings = _stack(tmp_path)
+    settings.profile.birthday_bulk_enabled = True
+    settings.profile.birthday_bulk_threshold = 2
+    now = datetime(2026, 7, 1, 12, 0, 0)
+    profiles.set_birthday('alpha', 'u1', month=7, day=1, channel_id='c1')
+    profiles.set_birthday_wish_run_at('alpha', 'u1', now.timestamp() - 1)
+
+    intentions = service.evaluate_wishes('alpha', settings, now=now)
+
+    assert len(intentions) == 1
+    assert intentions[0].reason == 'profile_birthday'
 
 
 def test_bulk_disabled_keeps_individual_wishes(tmp_path):

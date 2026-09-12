@@ -1,7 +1,7 @@
 import asyncio
 
 from plugins.discord.api import settings as settings_api
-from plugins.discord.models.settings import SettingsOverlay
+from plugins.discord.models.settings import SettingsOverlay, overlay_from_flat
 
 
 class FakeChannelRepository:
@@ -18,8 +18,8 @@ class FakeChannelRepository:
     def save_settings_override(self, scope_type, scope_id, overlay):
         self.saved.append((scope_type, scope_id, overlay))
         store = self.load_settings_store()
-        if scope_type == 'global':
-            store.global_overlay = overlay
+        if scope_type == 'guild':
+            store.guild_overrides[scope_id] = overlay
         self._store = store
 
 
@@ -28,9 +28,7 @@ class FakeStorage:
         self.channel_repository = repo
 
 
-def test_save_settings_merges_voice_join_targets(monkeypatch):
-    repo = FakeChannelRepository()
-
+def _patch(monkeypatch, repo):
     class Ctx:
         def __enter__(self):
             return FakeStorage(repo)
@@ -41,25 +39,48 @@ def test_save_settings_merges_voice_join_targets(monkeypatch):
     monkeypatch.setattr(settings_api, 'open_storage', lambda: Ctx())
     monkeypatch.setattr(settings_api, 'get_runtime', lambda: None)
 
-    asyncio.run(settings_api.save_settings(body={
+
+def test_global_save_rejected(monkeypatch):
+    """Global settings live in core now — the plugin route only takes overlays."""
+    repo = FakeChannelRepository()
+    _patch(monkeypatch, repo)
+
+    result = asyncio.run(settings_api.save_settings(body={
         'scope_type': 'global',
-        'settings': {
-            'voice': {
-                'enabled': True,
-                'join_targets': ['alpha:vc1'],
-            },
-        },
+        'settings': {'media': {'gif_enabled': True}},
     }))
 
+    assert 'error' in result
+    assert repo.saved == []
+
+
+def test_guild_overlay_save_merges(monkeypatch):
+    repo = FakeChannelRepository()
+    _patch(monkeypatch, repo)
+
     asyncio.run(settings_api.save_settings(body={
-        'scope_type': 'global',
-        'settings': {
-            'media': {'gif_enabled': True},
-        },
+        'scope_type': 'guild',
+        'scope_id': 'g1',
+        'settings': {'channel': {'reply_mode': 'mentions_only'}},
+    }))
+    asyncio.run(settings_api.save_settings(body={
+        'scope_type': 'guild',
+        'scope_id': 'g1',
+        'settings': {'channel': {'batching_seconds': 4}},
     }))
 
-    store = repo.load_settings_store()
-    resolved = store.resolve()
-    assert resolved.voice.enabled is True
-    assert resolved.voice.join_targets == ['alpha:vc1']
-    assert resolved.media.gif_enabled is True
+    overlay = repo.load_settings_store().guild_overrides['g1']
+    assert overlay.channel['reply_mode'] == 'mentions_only'
+    assert overlay.channel['batching_seconds'] == 4
+
+
+def test_overlay_from_flat_maps_dotted_keys():
+    overlay = overlay_from_flat({
+        'channel.reply_mode': 'all',
+        'media.gif_enabled': True,
+        'not_a_dotted_key': 'ignored',
+        'unknown_section.field': 'dropped',
+    })
+    assert overlay.channel['reply_mode'] == 'all'
+    assert overlay.media['gif_enabled'] is True
+    assert isinstance(overlay, SettingsOverlay)

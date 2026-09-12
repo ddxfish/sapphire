@@ -4,6 +4,8 @@ Connect Sapphire to your Discord server as a **cognitive agent** — not just a 
 
 When the plugin is enabled, it starts its own background **daemon** automatically. You do not create a separate daemon entry for the runtime itself — only for message-triggered AI tasks in Schedule.
 
+Meticulously crafted by ddxfish and zeebie-the-zebra
+
 ## Requirements
 
 The plugin installs these dependencies automatically when enabled:
@@ -11,7 +13,8 @@ The plugin installs these dependencies automatically when enabled:
 - **py-cord** (with voice support) — Discord gateway and voice
 - **davey** + **PyNaCl** — encrypted voice receive (DAVE)
 - **dateparser** — local parsing for reminders and commitments
-- **vaderSentiment** — better autonomous reaction emoji picks (optional but recommended)
+- **vaderSentiment** — lightweight autonomous reaction emoji picks (default sentiment engine)
+- **transformers** + **torch** — optional; enables Twitter RoBERTa for more accurate reaction sentiment (Settings → Social)
 
 For **conversational voice**, you also need **TTS streaming enabled** in Sapphire Settings. Without it the bot can listen and transcribe but stays silent in conversational mode.
 
@@ -74,7 +77,7 @@ Open **Settings → Plugins → Discord** for the full settings UI. Settings are
 |-----|------------------|
 | **Cognitive** | Intention engine before replies; LLM provider for Discord text/voice; task follow-ups, commitments, reminders, birthday wishes; affect modulation |
 | **Conversation** | Reply mode (mentions only, etc.); name match without @; message batching; typing/read delays; bot-to-bot debate allowlist and session limits |
-| **Social** | Silent sentiment reactions; human delivery (auto typos, quote-replies, post-send edits) |
+| **Social** | Sentiment engine (VADER or Twitter RoBERTa); silent sentiment reactions; human delivery (auto typos, quote-replies, post-send edits) |
 | **Proactive** | Morning greetings, quiet outreach, sleep/goodnight schedule; greeting channel targets; forced-wake mention buffering; test buttons and diagnostics |
 | **Presence** | Discord status and activity while awake, quiet, or sleeping; activity cycling |
 | **Safety** | DM policy, per-channel reply cooldown, proactive cooldown, quiet hours |
@@ -88,6 +91,8 @@ Open **Settings → Plugins → Discord** for the full settings UI. Settings are
 2. **Cognitive mode** filters further (`conservative`, `integrated`, `expressive`) — it cannot override a blocked reply mode
 
 With **Mentions only**, the bot only replies when @mentioned or when **Respond to bot name** (soft mention) is enabled.
+
+With **Default**, addressed messages (mention / name / DM) always reply. Unaddressed channel messages may still get a reply via **Human organic reply chance** / **Bot organic reply chance** (0–100%). Bot organic rolls still require bot-to-bot gates (enabled + allowlist/mode); debate side-comments stay blocked.
 
 ## Daemon (Auto-Reply)
 
@@ -197,15 +202,20 @@ For diagnostics and troubleshooting, see [docs/discord_voice_conversation_operat
 
 ## Memory, Profiles & Cognitive Features
 
-The plugin maintains local SQLite storage for messages, traces, profiles, and voice transcripts.
+The plugin maintains local SQLite storage for messages, traces, profiles, and voice transcripts — self-contained in the Discord plugin database, not Sapphire core Mind memory.
 
-- **Profiles** — user facts and relationship/affect scores; optional birthday capture from natural language
+- **Profiles** — user facts and relationship scores; optional birthday capture from natural language
+- **Relationship milestones** — first chat, Nth conversation, and returning after a long gap (surfaced once in prompts)
+- **Shared server lore** — guild/channel facts (“deploy day is Thursday”) separate from per-user profiles
+- **Interest graphs** — topics people talk about, used to flavor quiet outreach
+- **Ambient distill (opt-in)** — buffer member chat and periodically LLM-extract durable facts into the plugin DB (default every 1 hour; configurable; model picker on Models tab)
+- **Profile UI** — browse/edit facts, pin important ones, soft-forget a single fact without wiping the user
 - **Birthday wishes** — scheduled individually per person with spread across the day; bulk mode for busy days
 - **Commitments** — detects future promises in channel messages and schedules follow-ups
 - **Reminders** — "remind me in 5 minutes" style requests queue world-model tasks
 - **Task follow-ups** — scheduler delivers due tasks via the message daemon (requires auto-reply task)
 
-Retention defaults: messages 90 days, traces 14 days, transcripts 30 days. Purge via operator admin API or retention settings.
+Operator Memory tab includes **Memory test pathways** (seed milestone/lore/interest, simulate a return, preview prompt context). Retention defaults: messages 90 days, traces 14 days, transcripts 30 days. Purge via operator admin API or retention settings.
 
 ## Example Chat Commands
 
@@ -229,6 +239,12 @@ Useful API endpoints (under `/api/plugin/discord/`):
 | `GET voice/sessions` | Active voice sessions with chat names |
 | `GET proactive/diagnostics` | Why scheduled proactive jobs may have skipped |
 | `POST proactive/test` | Manually test greeting/goodnight/outreach |
+| `POST memory/test` | Seed/simulate milestones, lore, interests; preview profile context |
+| `GET lore` / `POST lore` | List and mutate shared server lore |
+| `GET profiles/milestones` | Relationship milestones for a user |
+| `GET profiles/interests` | Interest graph for a user |
+| `POST profiles/facts/update` | Edit, pin, soft-forget, or restore a profile fact |
+| `GET profiles/facts/review` | Ambient distill review queue (unpinned auto-facts) |
 | `GET admin/summary` | Operator summary (health, affect, tasks, voice) |
 | `POST admin/purge` | Apply retention purge immediately |
 | `POST admin/forget-user` | GDPR-style user data removal |
@@ -253,6 +269,9 @@ Useful API endpoints (under `/api/plugin/discord/`):
 
 ## Related Documentation
 
+- [Settings reference (per WebUI tab)](docs/settings/README.md)
+- [Plugin flow / world model](docs/pluginflow.md)
+- [Human world-model roadmap](docs/human_world_model_roadmap.md)
 - [Voice operator guide](docs/discord_voice_conversation_operator.md)
 - [Voice roadmap](docs/discord_voice_conversation_roadmap.md)
 - Phase docs: [01 streaming TTS](docs/discord_voice_conversation_phase_01_streaming_tts.md), [02 core conversation](docs/discord_voice_conversation_phase_02_core_conversation.md), [03 integration](docs/discord_voice_conversation_phase_03_integration_cleanup.md)

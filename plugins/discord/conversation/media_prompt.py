@@ -70,4 +70,12 @@ def build_reply_content(user_text: str, media_context: list[dict]) -> str:
             '\n[The user also attached media; the vision description above is what '
             'it shows — treat that as having seen their GIF/image.]\n'
         )
+    if not content.strip():
+        # Text-less message with media processing OFF (fresh-install default):
+        # media_context is empty so none of the branches above fire. An empty
+        # content field makes core's event formatter fall back to the raw JSON
+        # payload — routing metadata (llm_primary et al) entering her prompt
+        # and history. Never emit empty. 2026-08-06 incident.
+        content = ('[The user sent a message with no text — an attachment, '
+                   'sticker, or embed that media processing did not capture.]')
     return content

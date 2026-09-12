@@ -6,6 +6,7 @@ from datetime import datetime
 
 from plugins.discord.lib.server_time import now_local
 from plugins.discord.models.intentions import GoodnightIntention, ReplyMessageIntention
+from plugins.discord.conversation.ignored_channels import is_channel_ignored
 from plugins.discord.proactive.targets import parse_target
 
 
@@ -105,9 +106,18 @@ class SleepService:
             return {'allow': False, 'reason': 'sleep_dormant'}
         if not mentioned:
             return {'allow': False, 'reason': 'sleep_mentions_only'}
+        # The sleep gate runs before the bot-session and DM gates — without
+        # these checks a non-allowlisted bot could force-wake her, and a DM
+        # would be buffered while safety.allow_direct_messages promises
+        # "ignored entirely" (scout, 2026-08-05).
+        if getattr(observation, 'author_is_bot', False):
+            return {'allow': False, 'reason': 'sleep_dormant'}
+        if getattr(observation, 'is_dm', False) and not bool(
+                getattr(getattr(settings, 'safety', None), 'allow_direct_messages', True)):
+            return {'allow': False, 'reason': 'sleep_dormant'}
         if self.is_forced_awake(account_name, channel_id, now_ts=now_ts):
             return {'allow': True, 'reason': 'forced_wake_active', 'hint': self.STILL_AWAKE_HINT}
-        self.buffer_mention(
+        row_id = self.buffer_mention(
             account_name,
             channel_id,
             message_id=observation.message_id,
@@ -117,6 +127,10 @@ class SleepService:
             settings=settings,
         )
         if self.check_forced_wake(account_name, channel_id, settings, now_ts=now_ts):
+            # She answers this message live — take it out of the buffer or
+            # the morning replay answers the same message a second time.
+            if row_id:
+                self.proactive_repository.mark_buffered_processed([row_id])
             return {'allow': True, 'reason': 'forced_wake_triggered', 'hint': self.JUST_WOKEN_HINT}
         return {'allow': False, 'reason': 'sleep_buffered_mention'}
 
@@ -143,6 +157,8 @@ class SleepService:
             if not parsed or parsed[0] != account_name:
                 continue
             channel_id = parsed[1]
+            if is_channel_ignored(account_name, channel_id, settings):
+                continue
             state = self.proactive_repository.get_sleep_state(account_name, channel_id)
             if state.get('goodnight_sent'):
                 continue
@@ -172,27 +188,39 @@ class SleepService:
         content: str,
         mentioned: bool,
         settings=None,
-    ) -> None:
+    ) -> int | None:
         if settings is not None:
             if not self.is_channel_dormant(account_name, channel_id, settings):
-                return
+                return None
         elif not self.is_asleep(account_name, channel_id):
-            return
-        self.proactive_repository.buffer_mention(
+            return None
+        row_id = self.proactive_repository.buffer_mention(
             account_name, channel_id, message_id=message_id, author_id=author_id, content=content, mentioned=mentioned
         )
         if mentioned:
             state = self.proactive_repository.get_sleep_state(account_name, channel_id)
             count = int(state.get('mention_count', 0)) + 1
             self.proactive_repository.set_sleep_state(account_name, channel_id, mention_count=count)
+        return row_id
 
     def list_buffered(self, account_name: str, channel_id: str) -> list[dict]:
         return self.proactive_repository.list_buffered(account_name, channel_id)
 
     def drain_wake_buffer(self, account_name: str, channel_id: str, *, max_replies: int = 3) -> list[ReplyMessageIntention]:
-        buffered = self.proactive_repository.list_buffered(account_name, channel_id, limit=max_replies)
+        """Turn mentions she slept through into pipeline replies for wake-up.
+
+        use_llm routes each through the persona pipeline (she answers the
+        actual message); prompt is only the static fallback if no daemon task
+        accepts the event. No task_id in metadata — that key is for world-model
+        follow-up tasks and would corrupt an unrelated table on status update.
+        """
+        pending = self.proactive_repository.list_buffered(account_name, channel_id, limit=200)
+        # Reply to the NEWEST max_replies; mark EVERYTHING processed. The old
+        # oldest-first-and-leave-the-rest drain built a monotonic backlog —
+        # she'd apologize for three-week-old messages every single morning.
+        buffered = pending[-max_replies:] if max_replies > 0 else []
         intentions = []
-        ids = []
+        ids = [row['id'] for row in pending if row.get('id') is not None]
         for row in buffered:
             intentions.append(ReplyMessageIntention(
                 intention_type='reply_message',
@@ -200,10 +228,26 @@ class SleepService:
                 channel_id=channel_id,
                 message_id=row['message_id'],
                 reason='wake_buffer_replay',
-                prompt=row['content'],
-                metadata={'buffered': True},
+                prompt='Just woke up and saw your message — sorry for the slow reply!',
+                metadata={
+                    'buffered': True,
+                    'use_llm': True,
+                    'event_payload': {
+                        'account': account_name,
+                        'channel_id': channel_id,
+                        'message_id': str(row['message_id'] or ''),
+                        'content': str(row['content'] or ''),
+                        'author_id': str(row['author_id'] or ''),
+                        'mentioned': 'true',
+                        'wake_replay': 'true',
+                        'reply_to_message_id': str(row['message_id'] or ''),
+                        'reply_instructions': (
+                            'This message arrived while you were asleep overnight and you just '
+                            'woke up. Reply to it now, briefly acknowledging the late response.'
+                        ),
+                    },
+                },
             ))
-            ids.append(row['id'])
         self.proactive_repository.mark_buffered_processed(ids)
         self.wake_channel(account_name, channel_id)
         return intentions

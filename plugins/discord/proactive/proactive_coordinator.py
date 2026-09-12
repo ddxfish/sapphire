@@ -35,9 +35,8 @@ class ProactiveCoordinator:
             intentions.extend(self.greeting_service.evaluate(account_name, settings, now=now))
             intentions.extend(self.outreach_service.evaluate(account_name, settings, now=now, now_ts=now.timestamp()))
             intentions.extend(self.sleep_service.evaluate_goodnight(account_name, settings, now=now))
-        affect = self.profile_service.get_affect(account_name).to_dict() if self.profile_service else {}
         for intention in intentions:
-            decision = self.policy_service.evaluate_proactive_intention(intention, settings, affect=affect)
+            decision = self.policy_service.evaluate_proactive_intention(intention, settings)
             if not decision.get('allowed'):
                 if self.trace_repository:
                     self.trace_repository.record_trace('proactive_skipped', decision.get('reason', 'blocked'), {'intention_type': intention.intention_type, 'channel_id': intention.channel_id})
@@ -62,9 +61,8 @@ class ProactiveCoordinator:
             intentions.extend(self.greeting_service.evaluate(account_name, settings, now=now))
             intentions.extend(self.outreach_service.evaluate(account_name, settings, now=now, now_ts=now.timestamp()))
             intentions.extend(self.sleep_service.evaluate_goodnight(account_name, settings, now=now))
-        affect = self.profile_service.get_affect(account_name).to_dict() if self.profile_service else {}
         for intention in intentions:
-            decision = self.policy_service.evaluate_proactive_intention(intention, settings, affect=affect)
+            decision = self.policy_service.evaluate_proactive_intention(intention, settings)
             if not decision.get('allowed'):
                 if self.trace_repository:
                     self.trace_repository.record_trace('proactive_skipped', decision.get('reason', 'blocked'), {'intention_type': intention.intention_type, 'channel_id': intention.channel_id})
@@ -120,17 +118,35 @@ class ProactiveCoordinator:
         if not self.presence_service:
             return None
         asleep, forced_wake = self._sleep_state_for_presence(account_name, settings, now)
-        if self.profile_service:
-            affect = self.profile_service.get_affect(account_name)
-        else:
-            from plugins.discord.models.profiles import AgentAffect
-            affect = AgentAffect()
-        choice = self.presence_service.select_presence(settings, affect, asleep=asleep, forced_wake=forced_wake, local_hour=now.hour)
+        situation = None
+        if (
+            getattr(settings.presence, 'situation_presence_enabled', False)
+            and self.cognitive_orchestrator
+            and getattr(self.cognitive_orchestrator, 'channel_situation_service', None)
+        ):
+            situation_service = self.cognitive_orchestrator.channel_situation_service
+            targets = list(getattr(settings.proactive, 'greeting_targets', None) or [])
+            for entry in targets:
+                # account:channel_id
+                parts = str(entry).split(':', 1)
+                if len(parts) == 2 and parts[0] == account_name and parts[1]:
+                    situation = situation_service.build(account_name, parts[1])
+                    break
+        choice = self.presence_service.select_presence(
+            settings,
+            asleep=asleep,
+            forced_wake=forced_wake,
+            local_hour=now.hour,
+            situation=situation,
+        )
         mode = choice.get('mode', 'awake')
         presence = settings.presence
         interval = float(presence.cycle_interval_seconds or 300)
         if not self.presence_service.should_update(account_name, mode=mode, interval_seconds=interval, force=force):
             return None
+        metadata = {'mode': mode}
+        if choice.get('situation_vibe'):
+            metadata['situation_vibe'] = choice['situation_vibe']
         return UpdatePresenceIntention(
             intention_type='update_presence',
             account_name=account_name,
@@ -139,5 +155,5 @@ class ProactiveCoordinator:
             reason='scheduler_presence',
             status=choice['status'],
             activity=choice['activity'],
-            metadata={'mode': mode},
+            metadata=metadata,
         )

@@ -41,9 +41,9 @@ def search_gif_url(
 
 def _search_klipy(query: str, api_key: str, *, limit: int, content_filter: str) -> str:
     try:
-        import requests
+        from core import net
 
-        resp = requests.get(
+        resp = net.get(
             _KLIPY_SEARCH,
             params={
                 'q': query[:120],
@@ -65,9 +65,9 @@ def _search_klipy(query: str, api_key: str, *, limit: int, content_filter: str) 
 
 def _search_giphy(query: str, api_key: str, *, limit: int, content_filter: str) -> str:
     try:
-        import requests
+        from core import net
 
-        resp = requests.get(
+        resp = net.get(
             _GIPHY_SEARCH,
             params={
                 'api_key': api_key,
@@ -93,9 +93,9 @@ def _search_giphy(query: str, api_key: str, *, limit: int, content_filter: str) 
 
 def _search_tenor(query: str, api_key: str, *, limit: int, content_filter: str) -> str:
     try:
-        import requests
+        from core import net
 
-        resp = requests.get(
+        resp = net.get(
             _TENOR_SEARCH,
             params={
                 'q': query[:120],
@@ -123,12 +123,15 @@ def _normalize_tenor_filter(value: str) -> str:
 
 
 def _map_giphy_rating(content_filter: str) -> str:
+    # Giphy ratings run g (safest) → r (most permissive). Map the shared
+    # filter scale the same direction as Klipy/Tenor: off = unfiltered,
+    # high = strictest. (Was inverted: off→'g', high→'pg-13'.)
     value = (content_filter or 'medium').strip().lower()
     return {
-        'off': 'g',
-        'low': 'g',
+        'off': 'r',
+        'low': 'pg-13',
         'medium': 'pg',
-        'high': 'pg-13',
+        'high': 'g',
     }.get(value, 'pg')
 
 

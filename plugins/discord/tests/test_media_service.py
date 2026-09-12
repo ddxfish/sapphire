@@ -5,7 +5,7 @@ from plugins.discord.storage.sqlite import SQLiteService
 
 
 class FakeVisionBridge:
-    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type=''):
+    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
         assert source_url == 'https://cdn/a.png'
         assert media_kind == 'image'
         assert filename == 'cat.png'
@@ -21,8 +21,29 @@ class FakeVisionBridge:
 
 
 class RaisingVisionBridge:
-    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type=''):
+    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
         raise RuntimeError('bridge exploded')
+
+
+class CapturingVisionBridge:
+    def __init__(self):
+        self.reply_llm_provider = None
+
+    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
+        self.reply_llm_provider = reply_llm_provider
+        return {'summary': 'ok', 'entities': [], 'tone': '', 'ocr_text': '',
+                'confidence': 0.9, 'source': 'vision'}
+
+
+class StubSchedulerBridge:
+    def __init__(self, provider='', model=''):
+        self.provider = provider
+        self.model = model
+        self.calls = []
+
+    def daemon_task_llm(self, event_name, account=None):
+        self.calls.append((event_name, account))
+        return self.provider, self.model
 
 
 def _service(tmp_path):
@@ -118,6 +139,61 @@ def test_interpret_artifact_uses_consistent_fallback_on_bridge_exception():
             'error_message': 'bridge exploded',
         },
     }
+
+
+def _artifact():
+    return MediaArtifact(
+        message_id='m1',
+        channel_id='c1',
+        account_name='alpha',
+        media_kind='image',
+        source_url='https://cdn/a.png',
+        filename='cat.png',
+        content_type='image/png',
+    )
+
+
+def _settings(llm_primary='auto'):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        media=SimpleNamespace(),
+        cognitive=SimpleNamespace(llm_primary=llm_primary, llm_model=''),
+    )
+
+
+def test_interpret_auto_threads_daemon_task_provider():
+    """'Daemon chooses' must resolve to the daemon TASK's pinned provider —
+    the model her reply actually uses — not a fallback-order scan. 2026-08-06:
+    server shipped an image to LM Studio while the daemon pinned Claude."""
+    bridge = CapturingVisionBridge()
+    sched = StubSchedulerBridge(provider='claude')
+    service = MediaService(media_repository=None, vision_bridge=bridge, scheduler_bridge=sched)
+
+    service.interpret_artifact(_artifact(), settings=_settings('auto'))
+
+    assert bridge.reply_llm_provider == 'claude'
+    assert sched.calls == [('discord_message', 'alpha')]
+
+
+def test_interpret_pinned_cognitive_beats_daemon_task():
+    bridge = CapturingVisionBridge()
+    sched = StubSchedulerBridge(provider='claude')
+    service = MediaService(media_repository=None, vision_bridge=bridge, scheduler_bridge=sched)
+
+    service.interpret_artifact(_artifact(), settings=_settings('openai'))
+
+    assert bridge.reply_llm_provider == 'openai'
+    assert sched.calls == []
+
+
+def test_interpret_auto_with_auto_daemon_stays_auto():
+    bridge = CapturingVisionBridge()
+    sched = StubSchedulerBridge(provider='')  # daemon task on auto / no task
+    service = MediaService(media_repository=None, vision_bridge=bridge, scheduler_bridge=sched)
+
+    service.interpret_artifact(_artifact(), settings=_settings('auto'))
+
+    assert bridge.reply_llm_provider == 'auto'
 
 
 def test_store_and_interpret_falls_back_when_vision_fails(tmp_path):

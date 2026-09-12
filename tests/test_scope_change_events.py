@@ -92,8 +92,7 @@ def test_delete_gcal_account_publishes_scope_changed(client, event_bus_capture, 
 @pytest.mark.parametrize("rel_path", [
     "plugins/google-calendar/routes/oauth.py",
     "plugins/telegram/routes/auth.py",
-    "plugins/discord/routes/accounts.py",
-    "user/plugins/discord/api/accounts.py",
+    "plugins/discord/api/accounts.py",
 ])
 def test_signed_plugin_account_routes_publish_scope_changed(rel_path):
     """These plugin routes add/remove account-backed scopes but aren't mounted

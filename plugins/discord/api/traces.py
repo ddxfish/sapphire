@@ -22,20 +22,19 @@ async def get_health(**kwargs):
 async def list_traces(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.trace_repository:
-        return {'traces': [], 'cognitive': {}}
+        return {'traces': [], 'trace_summary': {}, 'cognitive': {}, 'daemon_running': is_daemon_alive()}
     query = kwargs.get('query') or {}
     try:
         limit = int(query.get('limit', 50))
     except (TypeError, ValueError):
         limit = 50
+    trace_type = str(query.get('type') or query.get('trace_type') or '').strip() or None
     cognitive = {}
     if runtime.profile_service and runtime.transport:
         connected = runtime.transport.list_connected()
         if connected:
             account = connected[0]
             cognitive = {
-                'affect': runtime.profile_service.get_affect(account).to_dict(),
-                'activation': runtime.attention_service.top_entities(account, limit=5) if runtime.attention_service else [],
                 'tasks': runtime.world_model_service.list_tasks(account, status='pending', limit=5) if runtime.world_model_service else [],
                 'voice_sessions': [
                     session.to_dict()
@@ -43,7 +42,9 @@ async def list_traces(**kwargs):
                 ],
             }
     return {
-        'traces': runtime.trace_repository.list_traces(limit=limit),
+        'traces': runtime.trace_repository.list_traces(limit=limit, trace_type=trace_type),
         'trace_summary': runtime.trace_service.summary() if runtime.trace_service else {},
         'cognitive': cognitive,
+        'daemon_running': is_daemon_alive(),
+        'filter_type': trace_type or '',
     }

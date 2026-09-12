@@ -101,6 +101,34 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
+            'name': 'discord_join_voice',
+            'description': 'Join a Discord voice channel and hold a spoken conversation there. Pass the voice channel name or ID (not a text channel).',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'channel': {'type': 'string'},
+                },
+                'required': ['channel'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'discord_leave_voice',
+            'description': 'Leave a Discord voice channel. Omit channel to leave every voice channel you are in.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'channel': {'type': 'string'},
+                },
+                'required': [],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'discord_add_reaction',
             'description': 'Add a reaction in Discord.',
             'parameters': {
@@ -111,6 +139,30 @@ TOOLS = [
                     'message_id': {'type': 'string'},
                 },
                 'required': ['emoji'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'discord_memory',
+            'description': (
+                'Your per-user Discord memory (per bot account). '
+                'action=search: user= for one person\'s facts, query= to search all facts, neither = list known users. '
+                'action=add: store content= as a fact about user=. '
+                'action=delete: remove facts for user= whose text contains content=. '
+                'Users can be a name or id.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'action': {'type': 'string', 'enum': ['search', 'add', 'delete']},
+                    'user': {'type': 'string'},
+                    'content': {'type': 'string'},
+                    'query': {'type': 'string'},
+                    'account': {'type': 'string'},
+                },
+                'required': ['action'],
             },
         },
     },
@@ -416,6 +468,77 @@ def discord_send_gif(*, query: str, channel=None):
     return (f'GIF sent to channel {channel}.', True)
 
 
+def discord_join_voice(*, channel: str):
+    transport = _transport()
+    if not transport:
+        return ('Discord runtime is not available', False)
+    runtime = get_runtime()
+    if not runtime or not getattr(runtime, 'voice_service', None):
+        return ('Voice runtime is not available', False)
+    account_name = _default_account()
+    if not account_name:
+        return ('Could not determine which bot account to use for voice.', False)
+    try:
+        resolved = transport.resolve_voice_channel_sync(channel, account_name=account_name)
+    except Exception as exc:
+        return (f'Voice channel not found: {exc}', False)
+    from plugins.discord.models.intentions import JoinVoiceIntention
+
+    intention = JoinVoiceIntention(
+        intention_type='join_voice',
+        account_name=account_name,
+        channel_id=str(resolved.get('channel_id') or ''),
+        message_id='',
+        reason='tool_request',
+        guild_id=str(resolved.get('guild_id') or ''),
+    )
+    result = runtime.voice_service.join(intention)
+    status = result.get('status')
+    channel_name = resolved.get('channel_name') or channel
+    if status == 'joined':
+        return (f"Joined voice channel '{channel_name}'.", True)
+    if status == 'blocked':
+        return ('Voice is disabled — enable it under Settings > Discord > Voice.', False)
+    return (str(result.get('reason') or 'Voice join failed'), False)
+
+
+def discord_leave_voice(*, channel=None):
+    transport = _transport()
+    if not transport:
+        return ('Discord runtime is not available', False)
+    runtime = get_runtime()
+    if not runtime or not getattr(runtime, 'voice_service', None):
+        return ('Voice runtime is not available', False)
+    account_name = _default_account()
+    if not account_name:
+        return ('Could not determine which bot account to use for voice.', False)
+    if channel:
+        try:
+            resolved = transport.resolve_voice_channel_sync(channel, account_name=account_name)
+        except Exception as exc:
+            return (f'Voice channel not found: {exc}', False)
+        targets = [str(resolved.get('channel_id') or '')]
+    else:
+        voice_transport = getattr(runtime, 'voice_transport', None)
+        targets = [
+            str(row.get('channel_id') or '')
+            for row in (voice_transport.list_connections(account_name) if voice_transport else [])
+        ]
+    if not targets:
+        return ('Not connected to any voice channel.', True)
+    from plugins.discord.models.intentions import LeaveVoiceIntention
+
+    for channel_id in targets:
+        runtime.voice_service.leave(LeaveVoiceIntention(
+            intention_type='leave_voice',
+            account_name=account_name,
+            channel_id=channel_id,
+            message_id='',
+            reason='tool_request',
+        ))
+    return ('Left voice channel.' if len(targets) == 1 else f'Left {len(targets)} voice channels.', True)
+
+
 def discord_add_reaction(*, emoji: str, channel=None, message_id=None):
     transport = _transport()
     if not transport:
@@ -430,6 +553,110 @@ def discord_add_reaction(*, emoji: str, channel=None, message_id=None):
     if result.get('status') == 'error':
         return (result.get('error', 'Reaction failed'), False)
     return (f'Reacted {emoji} to message {message_id}.', True)
+
+
+def _memory_user_label(row: dict) -> str:
+    return (
+        str(row.get('display_name') or '').strip()
+        or str(row.get('username') or '').strip()
+        or str(row.get('birthday_display_name') or '').strip()
+        or str(row.get('birthday_username') or '').strip()
+        or str(row.get('user_id') or '')
+    )
+
+
+def discord_memory(*, action: str, user: str = '', content: str = '', query: str = '', account: str = ''):
+    runtime = get_runtime()
+    if not runtime or not runtime.profile_service or not runtime.profile_repository:
+        return ('Discord memory is not available', False)
+    settings = runtime.settings_store.resolve() if getattr(runtime, 'settings_store', None) else None
+    profile_settings = getattr(settings, 'profile', None) if settings else None
+    if profile_settings is not None and not getattr(profile_settings, 'enabled', True):
+        return ('Discord memory is turned off (Settings > Discord > Memory).', False)
+    # Requester binding: inside a Discord conversation the tool is locked to
+    # that event's bot account — a channel user cannot steer reads at another
+    # bot's memory via the account parameter. Outside Discord (operator chat)
+    # the parameter works as normal.
+    event = _event_data()
+    event_account = str(event.get('account') or '').strip()
+    event_author = str(event.get('author_id') or '').strip()
+    if event_account:
+        account_name = event_account
+    else:
+        account_name = str(account or '').strip() or _default_account()
+    if not account_name:
+        return ('Could not determine which bot account — pass account explicitly.', False)
+    repo = runtime.profile_repository
+    action = str(action or '').strip().lower()
+
+    if action == 'search':
+        if str(user or '').strip():
+            row = repo.find_user(account_name, user)
+            if not row:
+                return (f'No Discord user matching {user!r} in memory for {account_name}.', True)
+            facts = repo.list_facts(account_name, row['user_id'], limit=20)
+            label = _memory_user_label(row)
+            header = f"{label} (user_id {row['user_id']}, {int(row.get('message_count') or 0)} messages seen"
+            if int(row.get('birthday_month') or 0):
+                header += f", birthday {int(row['birthday_month']):02d}-{int(row['birthday_day']):02d}"
+            header += ')'
+            if not facts:
+                return (f'{header}: no stored facts yet.', True)
+            return ('\n'.join([header + ':'] + [f"- {f['content']}" for f in facts]), True)
+        if str(query or '').strip():
+            rows = repo.search_facts(account_name, query, limit=20)
+            if not rows:
+                return (f'No Discord memory matching {query!r} for {account_name}.', True)
+            return ('\n'.join(f'- {_memory_user_label(f)}: {f["content"]}' for f in rows), True)
+        profiles = repo.list_profiles(account_name, limit=30)
+        if not profiles:
+            return (f'No Discord users in memory for {account_name} yet.', True)
+        lines = [f'Users {account_name} knows ({len(profiles)}):']
+        lines += [
+            f'- {_memory_user_label(row)} ({int(row.get("message_count") or 0)} messages)'
+            for row in profiles
+        ]
+        return ('\n'.join(lines), True)
+
+    if action == 'add':
+        text = str(content or '').strip()
+        if not str(user or '').strip() or not text:
+            return ('add needs user and content.', False)
+        row = repo.find_user(account_name, user)
+        if not row:
+            return (f'No known Discord user matching {user!r} — facts attach to users already seen.', False)
+        fact_id = runtime.profile_service.remember_fact(
+            account_name, row['user_id'], text, source='tool',
+        )
+        return (f'Remembered about {_memory_user_label(row)}: {text} (fact {fact_id})', True)
+
+    if action == 'delete':
+        match = str(content or query or '').strip()
+        if not str(user or '').strip() or not match:
+            return ('delete needs user and content (text to match against the fact).', False)
+        if len(match) < 3:
+            return ('Give a longer phrase to match (3+ characters) so the delete stays precise.', False)
+        row = repo.find_user(account_name, user)
+        if not row:
+            return (f'No known Discord user matching {user!r}.', False)
+        # In a Discord conversation, people may only ask her to forget things
+        # about THEMSELVES — a channel user can't erase someone else's memory
+        # ("delete everything about Krem containing the letter e"). Operator
+        # chats (no event author) and the Settings Forget button are unbound.
+        if event_author and str(row['user_id']) != event_author:
+            return ("I only delete someone's facts at their own request — "
+                    'memory about others is managed in Settings > Discord > Memory.', False)
+        matching = [f for f in repo.list_facts(account_name, row['user_id'], limit=50)
+                    if match.lower() in str(f.get('content') or '').lower()]
+        if len(matching) > 10:
+            return (f'That phrase matches {len(matching)} facts — too broad for a delete. '
+                    'Use a more specific phrase, or Forget the user entirely in Settings.', False)
+        removed = repo.delete_facts(account_name, row['user_id'], match=match)
+        if not removed:
+            return (f'No facts matching {match!r} for {_memory_user_label(row)}.', True)
+        return (f'Deleted {removed} fact(s) about {_memory_user_label(row)}.', True)
+
+    return ('Unknown action — use search, add, or delete.', False)
 
 
 def execute(function_name, arguments, config=None):
@@ -477,10 +704,23 @@ def execute(function_name, arguments, config=None):
             query=str(arguments.get('query', '')),
             channel=_default_channel(arguments),
         )
+    if function_name == 'discord_join_voice':
+        # No reply-channel fallback: that would be a TEXT channel id.
+        return discord_join_voice(channel=str(arguments.get('channel', '')))
+    if function_name == 'discord_leave_voice':
+        return discord_leave_voice(channel=str(arguments.get('channel', '') or '') or None)
     if function_name == 'discord_add_reaction':
         return discord_add_reaction(
             emoji=str(arguments.get('emoji', '')),
             channel=_default_channel(arguments),
             message_id=arguments.get('message_id'),
+        )
+    if function_name == 'discord_memory':
+        return discord_memory(
+            action=str(arguments.get('action', '')),
+            user=str(arguments.get('user', '') or ''),
+            content=str(arguments.get('content', '') or ''),
+            query=str(arguments.get('query', '') or ''),
+            account=str(arguments.get('account', '') or ''),
         )
     return (f'Unknown function: {function_name}', False)

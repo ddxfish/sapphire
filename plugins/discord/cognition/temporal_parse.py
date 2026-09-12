@@ -261,36 +261,38 @@ def extract_reminder_run_at(text: str, now: datetime) -> tuple[datetime, str, st
     return when_dt.replace(microsecond=0), body[:300], str(label)
 
 
-def extract_commitment_run_at(text: str, now: datetime) -> tuple[datetime, str] | None:
-    """Return (run_at, commitment_body) for a future commitment, or None."""
+def extract_commitment_run_at(text: str, now: datetime) -> tuple[datetime, str, str] | None:
+    """Return (run_at, commitment_body, when_label) for a future commitment, or None."""
     lower = text.lower()
     if not _has_temporal_signal(lower) or not _has_future_intent(lower):
         return None
     parsed = _search_future_dates(text, now)
+    label = ''
     if not parsed:
         relative = _parse_relative_delta(text, now)
         if relative:
-            when_dt, _label = relative
+            when_dt, label = relative
         elif 'next week' in lower:
             when_dt = now + timedelta(days=7)
-            _label = 'next week'
+            label = 'next week'
         else:
             return None
     else:
-        when_dt, _label = parsed[0]
+        when_dt, label = parsed[0]
     if when_dt <= now:
         return None
     horizon = now + timedelta(days=_MAX_COMMITMENT_HORIZON_DAYS)
     if when_dt > horizon:
         return None
-    body = _extract_commitment_body(text) or _text_after_phrase(text, _label) or text.strip()
+    body = _extract_commitment_body(text) or _text_after_phrase(text, label) or text.strip()
     body = body.strip().rstrip('.!?')
     if len(body) < 8:
         return None
     run_at = when_dt.replace(minute=0, second=0, microsecond=0)
     if run_at <= now:
         run_at = when_dt + timedelta(hours=1)
-    return run_at, body[:300]
+    when_label = str(label or '').strip() or _when_label(when_dt, now)
+    return run_at, body[:300], when_label
 
 
 def _has_temporal_signal(lower: str) -> bool:

@@ -33,13 +33,12 @@ async def save_settings(**kwargs):
     scope_type = str(body.get('scope_type', 'global')).strip().lower()
     scope_id = str(body.get('scope_id', '')).strip() or 'global'
     incoming = SettingsOverlay.from_dict(body.get('settings') or {})
+    if scope_type == 'global':
+        # Global settings live in core now (PUT /api/webui/plugins/discord/settings).
+        return {'error': 'global settings moved to core plugin settings — use pluginsAPI.saveSettings'}
     with open_storage() as storage:
         store = storage.channel_repository.load_settings_store()
-        if scope_type == 'global':
-            merged = SettingsOverlay.from_dict(store.global_overlay.to_dict())
-            _merge_overlay(merged, incoming)
-            storage.channel_repository.save_settings_override(scope_type, scope_id, merged)
-        elif scope_type == 'guild':
+        if scope_type == 'guild':
             merged = SettingsOverlay.from_dict(store.guild_overrides.get(scope_id, SettingsOverlay()).to_dict())
             _merge_overlay(merged, incoming)
             storage.channel_repository.save_settings_override(scope_type, scope_id, merged)

@@ -30,6 +30,8 @@ def apply_pycord_voice_patches() -> None:
     _patch_opus_pcm_dave_double_decrypt()
     _patch_ssrc_rollover()
     _patch_packet_routers()
+    _patch_rekey_reader_resync()
+    _patch_aead_log_flood()
     _APPLIED = True
 
 
@@ -155,6 +157,86 @@ def _patch_opus_pcm_dave_double_decrypt() -> None:
     logger.info('Applied py-cord opus PCM double-decrypt skip patch (discord_cognitive)')
 
 
+class AeadFloodFilter(logging.Filter):
+    """Rate-limit py-cord's per-packet AEAD failure logs.
+
+    During bot TTS these fire at media rate WITH tracebacks — hundreds of
+    journal lines per second that bury every useful voice log. Pass one
+    through per window, count the rest, report the count on the next pass.
+    """
+
+    _discord_cognitive_aead_limit = True
+    WINDOW_SECONDS = 5.0
+    _MARKERS = ('Critical error at AEAD', 'CryptoError while decoding')
+
+    def __init__(self):
+        super().__init__()
+        self._allowed_at = 0.0
+        self._suppressed = 0
+
+    def filter(self, record):
+        message = str(record.msg)
+        if not any(marker in message for marker in self._MARKERS):
+            return True
+        import time as _time
+        now = _time.monotonic()
+        if now >= self._allowed_at:
+            self._allowed_at = now + self.WINDOW_SECONDS
+            if self._suppressed:
+                logger.warning(
+                    'AEAD decrypt failures: %s more suppressed in last %ss window',
+                    self._suppressed,
+                    self.WINDOW_SECONDS,
+                )
+                self._suppressed = 0
+            return True
+        self._suppressed += 1
+        return False
+
+
+def _patch_aead_log_flood() -> None:
+    target = logging.getLogger('discord.voice.receive.reader')
+    if any(getattr(f, '_discord_cognitive_aead_limit', False) for f in target.filters):
+        return
+    target.addFilter(AeadFloodFilter())
+    logger.info('Applied AEAD decrypt log flood limiter (discord_cognitive)')
+
+
+def _patch_rekey_reader_resync() -> None:
+    """Push mid-session transport re-keys into the active receive decryptor.
+
+    py-cord's load_secret_key stores the new key on the connection state but
+    never calls AudioReader.update_secret_key, so after any mid-session
+    session_description (voice resume, DAVE transition) the receive box keeps
+    the dead key: every packet fails outer AEAD ('Critical error at AEAD:
+    Decryption failed.' flood) and the bot goes permanently deaf while still
+    able to speak. Observed live 2026-08-01, seconds after first TTS reply.
+    """
+    try:
+        from discord.voice.gateway import VoiceWebSocket
+    except ImportError:
+        return
+    if getattr(VoiceWebSocket.load_secret_key, '_discord_cognitive_rekey', False):
+        return
+    original = VoiceWebSocket.load_secret_key
+
+    async def load_secret_key(self, data):
+        await original(self, data)
+        try:
+            client = getattr(self.state, 'client', None)
+            reader = getattr(client, '_reader', None) if client else None
+            key = getattr(self.state, 'secret_key', None)
+            if reader and key:
+                reader.update_secret_key(bytes(key))
+                logger.info('Receive decryptor re-keyed after new session description')
+        except Exception:
+            logger.exception('Receive decryptor re-key sync failed')
+
+    load_secret_key._discord_cognitive_rekey = True
+    VoiceWebSocket.load_secret_key = load_secret_key
+    logger.info('Applied py-cord receive re-key resync patch (discord_cognitive)')
+
+
 def _patch_packet_routers() -> None:
     try:
         from discord.voice.receive.router import PacketRouter, SinkEventRouter
@@ -166,7 +248,9 @@ def _patch_packet_routers() -> None:
             try:
                 self._do_run()
             except Exception as exc:
-                logger.debug('PacketRouter loop ended: %s', exc, exc_info=exc)
+                # WARNING, not debug: this path silently kills recording — the
+                # bot goes deaf with no journal trace at default log level.
+                logger.warning('PacketRouter loop died (recording stops): %s', exc, exc_info=exc)
                 self.reader.error = exc
             finally:
                 _safe_stop_recording(getattr(self.reader, 'client', None))
@@ -180,7 +264,7 @@ def _patch_packet_routers() -> None:
             try:
                 self._do_run()
             except Exception as exc:
-                logger.debug('SinkEventRouter loop ended: %s', exc, exc_info=exc)
+                logger.warning('SinkEventRouter loop died (recording stops): %s', exc, exc_info=exc)
                 self.reader.error = exc
                 _safe_stop_recording(getattr(self.reader, 'client', None))
 

@@ -26,8 +26,24 @@ def test_records_structured_trace_categories(tmp_path):
 
 def test_trace_detail_is_structured_without_prompt_dump(tmp_path):
     service = _service(tmp_path)
-    service.record_affect_modulation({'energy_delta': -0.01, 'sociability_delta': 0.02})
+    service.record_intention('reply_message', {'channel_id': 'c1', 'reason': 'mentioned'})
 
     trace = service.list_recent(limit=1)[0]
-    assert 'energy_delta' in trace['detail']
+    assert trace['detail']['channel_id'] == 'c1'
     assert 'prompt' not in trace['detail']
+
+
+def test_trace_filter_and_summary_counts(tmp_path):
+    service = _service(tmp_path)
+    service.record_intention('reply_message', {'channel_id': 'c1'})
+    service.record_policy_rejection('situation_heated', {'channel_id': 'c1'})
+    service.record_policy_rejection('cooldown', {'channel_id': 'c2'})
+
+    summary = service.summary(limit=50)
+    assert summary['total'] >= 3
+    assert summary['by_type']['policy_rejected'] == 2
+    assert summary['by_type']['intention_generated'] == 1
+
+    filtered = service.list_recent(limit=10, trace_type='policy_rejected')
+    assert len(filtered) == 2
+    assert all(t['trace_type'] == 'policy_rejected' for t in filtered)

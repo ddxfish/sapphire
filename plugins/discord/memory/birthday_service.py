@@ -87,7 +87,7 @@ class BirthdayService:
 
         window_start, window_end = self._spread_window(settings, now)
         bulk_enabled = bool(getattr(profile_settings, 'birthday_bulk_enabled', True))
-        bulk_threshold = max(1, int(getattr(profile_settings, 'birthday_bulk_threshold', 3) or 3))
+        bulk_threshold = max(1, int(getattr(profile_settings, 'birthday_bulk_threshold', 2) or 2))
 
         by_channel: dict[str, list[dict]] = {}
         for row in pending:
@@ -95,7 +95,9 @@ class BirthdayService:
 
         intentions: list[BirthdayWishIntention] = []
         for channel_id, rows in by_channel.items():
-            if bulk_enabled and len(rows) > bulk_threshold:
+            # >= so bulk triggers AT the threshold, matching the setting's help
+            # text (was '>': threshold 3 needed 4 birthdays — label/code drift).
+            if bulk_enabled and len(rows) >= bulk_threshold:
                 intention = self._bulk_intention_if_due(
                     account_name,
                     channel_id,

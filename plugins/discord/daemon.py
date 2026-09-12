@@ -9,10 +9,6 @@ import threading
 from collections.abc import MutableMapping
 from typing import Any, Awaitable, Iterator, Optional
 
-from plugins.discord.lib.core_compat import (
-    ensure_discord_llm_provider_override,
-    ensure_execution_context_images_support,
-)
 from plugins.discord.runtime.container import RuntimeContainer
 from plugins.discord.runtime import daemon_state
 
@@ -70,6 +66,10 @@ def _reply_handler(task, event_data: dict, response_text: str):
     if not runtime or not runtime.conversation_service:
         logger.warning('Discord reply handler called but runtime is unavailable')
         return None
+    trigger_config = (task or {}).get('trigger_config') or {}
+    if str(trigger_config.get('auto_reply', True)).lower() in {'false', '0'}:
+        logger.info('Discord task is listen-only (auto_reply off) — response not delivered')
+        return {'status': 'skipped', 'reason': 'auto_reply_disabled'}
     message_id = str((event_data or {}).get('message_id', ''))
     if runtime.event_bridge:
         runtime.event_bridge.clear_pending_payload(message_id)
@@ -108,8 +108,6 @@ def start(plugin_loader, settings):
             plugin_loader.register_reply_handler(handle.plugin_name, _reply_handler)
         except Exception:
             logger.debug('Reply handler registration unavailable', exc_info=True)
-        ensure_execution_context_images_support()
-        ensure_discord_llm_provider_override()
         logger.info('[discord_cognitive] Daemon started (health=%s)', get_health_state())
 
 
@@ -120,7 +118,10 @@ def stop():
             return
         if handle.loop and handle.loop.is_running() and handle.container:
             future = asyncio.run_coroutine_threadsafe(handle.container.stop(), handle.loop)
-            future.result(timeout=10)
+            try:
+                future.result(timeout=10)
+            except Exception:
+                logger.warning('[discord_cognitive] Container stop timed out/failed; forcing loop shutdown', exc_info=True)
             handle.loop.call_soon_threadsafe(handle.loop.stop)
         if handle.thread and handle.thread.is_alive():
             handle.thread.join(timeout=10)

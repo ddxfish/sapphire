@@ -25,9 +25,6 @@ class TraceService:
     def record_memory_injection(self, detail: dict) -> None:
         self.record('memory_injected', 'Memory context added to prompt', detail)
 
-    def record_affect_modulation(self, detail: dict) -> None:
-        self.record('affect_modulated', 'Affect state adjusted', detail)
-
     def record_proactive_action(self, action: str, detail: dict) -> None:
         self.record('proactive_action', f'Proactive action: {action}', {
             'action': action,

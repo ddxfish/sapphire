@@ -20,10 +20,8 @@ class LifecycleManager:
             container.build_bridges()
             from plugins.discord.voice.pycord_patches import apply_pycord_voice_patches
             from plugins.discord.voice.dave_voice_patches import apply_dave_voice_patches
-            from plugins.discord.lib.core_compat import ensure_discord_llm_provider_override
             apply_dave_voice_patches()
             apply_pycord_voice_patches()
-            ensure_discord_llm_provider_override()
             from plugins.discord.voice.voice_deps import voice_stack_info
 
             stack = voice_stack_info()
@@ -108,11 +106,27 @@ class LifecycleManager:
     async def _connect_stored_accounts(self, container) -> None:
         if not container.transport or not container.account_repository:
             return
+        # Only connect bots selected by an enabled daemon task (house semantic).
+        # The scheduler tick reconciles later if tasks change.
+        selected = set()
+        if container.scheduler_bridge:
+            selected = container.scheduler_bridge.active_daemon_accounts('discord_message')
+        if not selected:
+            logger.info('[discord_cognitive] No enabled daemon task selects a bot — not connecting any accounts')
+            return
+        import asyncio
+        first = True
         for account in container.account_repository.list_accounts():
             name = account.get('name', '')
             token = container.account_repository.get_token(name)
             if not name or not token:
                 continue
+            if name not in selected:
+                logger.info('[discord_cognitive] Skipping %s — no enabled daemon task selects it', name)
+                continue
+            if not first:
+                await asyncio.sleep(5)  # stagger multi-bot boots — Discord rate limits logins
+            first = False
             try:
                 await container.transport.connect_account(name, token)
             except Exception:

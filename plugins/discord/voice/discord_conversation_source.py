@@ -9,10 +9,35 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _FRAME_BYTES = 512 * 2
+
+# Turn cues (v2.9 soundscape, Discord surface) — same palette as the phone.
+_CUE_FILES = {
+    'think': 'think_pulse.wav',   # still working (1/s pulse until her audio starts)
+    'barge': 'respond_ding.wav',  # you cut in — floor's yours
+    'error': 'error_glitch.wav',  # turn failed
+}
+_cue_audio: dict[str, str] = {}
+_cue_lock = threading.Lock()
+
+
+def _cue_b64(name: str) -> str:
+    with _cue_lock:
+        if name in _cue_audio:
+            return _cue_audio[name]
+        encoded = ''
+        try:
+            import base64
+            path = Path(__file__).resolve().parents[1] / 'sounds' / _CUE_FILES[name]
+            encoded = base64.b64encode(path.read_bytes()).decode('ascii')
+        except Exception as exc:
+            logger.warning('Voice cue %r load failed: %s', name, exc)
+        _cue_audio[name] = encoded
+        return encoded
 
 
 class DiscordConversationSource:
@@ -41,6 +66,30 @@ class DiscordConversationSource:
         self._stop_flag = threading.Event()
         self._playing = False
         self._audio_bytes_fed = 0
+
+    def play_cue(self, name: str) -> None:
+        """Play a turn cue through the STREAMING session's mixer.
+
+        Never via play_voice_audio — that path calls voice_client.stop() and
+        tears down the streaming session (a think-tick killed the TTS stream
+        and wedged the voice client, live 2026-08-01). Feeding the persistent
+        QueuedPCMSource is the Discord equivalent of Twilio's direct wire
+        write: no player contention, no engine/turn state touched.
+        """
+        encoded = _cue_b64(name)
+        if not encoded or self.playback_service is None:
+            return
+        try:
+            result = self.playback_service.feed_chunk(
+                self.account_name,
+                self.channel_id,
+                {'audio_b64': encoded},
+            )
+            status = result.get('status') if isinstance(result, dict) else None
+            if status != 'fed':
+                logger.debug('Voice cue %r skipped (%s)', name, status)
+        except Exception as exc:
+            logger.debug('Voice cue %r playback failed: %s', name, exc)
 
     def push_pcm(self, data: bytes, *, is_speech: bool | None = None) -> None:
         if not data:

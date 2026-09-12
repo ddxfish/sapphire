@@ -153,8 +153,23 @@ def test_session_expires_after_silence(monkeypatch):
         bot_names={'Remmi'},
         name_match_enabled=True,
     )
-    assert decision['allowed'] is False
-    assert decision['reason'] in {'no_bot_session', 'bot_session_silent'}
+    assert decision['allowed'] is True
+    assert decision['reason'] == 'bot_organic_candidate'
+    assert decision.get('organic_candidate') is True
+
+
+def test_idle_allowlisted_bot_is_organic_candidate():
+    service = BotSessionService()
+    decision = service.evaluate(
+        _obs(content='random bot chatter', clean_content='random bot chatter', mentioned=False),
+        _settings(),
+        respond_trigger=False,
+        bot_names={'Remmi'},
+        name_match_enabled=True,
+    )
+    assert decision['allowed'] is True
+    assert decision['reason'] == 'bot_organic_candidate'
+    assert decision.get('organic_candidate') is True
 
 
 def test_safety_cap_blocks_long_chains():
@@ -178,3 +193,48 @@ def test_safety_cap_blocks_long_chains():
     )
     assert decision['allowed'] is False
     assert decision['reason'] == 'bot_session_safety_cap'
+
+
+def test_safety_cap_resets_when_human_reengages():
+    # The cap is per-debate, not a lifetime channel budget: a human
+    # re-addressing her zeroes the exchange counter.
+    service = BotSessionService()
+    settings = _settings(session_safety_max_exchanges=2)
+
+    def _bot_mention(mid):
+        return _obs(mentioned=True, message_id=mid, content='<@remmi> go')
+
+    assert service.evaluate(_bot_mention('m1'), settings, respond_trigger=False,
+                            bot_names={'Remmi'}, name_match_enabled=True)['allowed'] is True
+    assert service.evaluate(_bot_mention('m2'), settings, respond_trigger=False,
+                            bot_names={'Remmi'}, name_match_enabled=True)['allowed'] is True
+    capped = service.evaluate(_bot_mention('m3'), settings, respond_trigger=False,
+                              bot_names={'Remmi'}, name_match_enabled=True)
+    assert capped['allowed'] is False
+    assert capped['reason'] == 'bot_session_safety_cap'
+
+    human = _obs(author_id='human-1', author_is_bot=False, mentioned=True,
+                 message_id='h1', content='Remmi keep going')
+    service.evaluate(human, settings, respond_trigger=True,
+                     bot_names={'Remmi'}, name_match_enabled=True)
+    fresh = service.evaluate(_bot_mention('m4'), settings, respond_trigger=False,
+                             bot_names={'Remmi'}, name_match_enabled=True)
+    assert fresh['allowed'] is True
+
+
+def test_reply_chain_outside_window_is_organic_candidate():
+    # Reply-to-our-message alone no longer opens a debate session; it may
+    # still qualify for an organic chance roll when the bot is allowlisted.
+    service = BotSessionService()
+    service.record_sent_message('remmi', 'c1', 'ours-1')
+    decision = service.evaluate(
+        _obs(reply_to_message_id='ours-1', content='and another thing',
+             clean_content='and another thing'),
+        _settings(),
+        respond_trigger=False,
+        bot_names={'Remmi'},
+        name_match_enabled=True,
+    )
+    assert decision['allowed'] is True
+    assert decision.get('organic_candidate') is True
+    assert decision['reason'] == 'bot_organic_candidate'

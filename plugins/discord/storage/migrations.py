@@ -281,6 +281,76 @@ MIGRATIONS: list[tuple[int, str]] = [
     (8, """
     ALTER TABLE user_profiles ADD COLUMN birthday_wish_run_at REAL DEFAULT 0;
     """),
+    (9, """
+    ALTER TABLE user_profiles ADD COLUMN username TEXT DEFAULT '';
+    ALTER TABLE user_profiles ADD COLUMN display_name TEXT DEFAULT '';
+    """),
+    # Backfill names for profiles created before v9 from the users cache the
+    # event adapter already maintains — no Discord lookups needed. Ongoing
+    # freshness comes from record_interaction stamping names per message.
+    (10, """
+    UPDATE user_profiles SET
+        username = COALESCE(
+            (SELECT u.username FROM users u WHERE u.user_id = user_profiles.user_id), ''),
+        display_name = COALESCE(
+            (SELECT u.display_name FROM users u WHERE u.user_id = user_profiles.user_id), '')
+    WHERE username = '' OR username IS NULL;
+    """),
+    # Relationship milestones, shared server lore, interest graphs, and
+    # soft-forget/pin support on profile facts — all plugin-local SQLite.
+    (11, """
+    ALTER TABLE user_profiles ADD COLUMN first_seen_at REAL DEFAULT 0;
+    ALTER TABLE user_profiles ADD COLUMN last_interaction_at REAL DEFAULT 0;
+
+    ALTER TABLE profile_facts ADD COLUMN pinned INTEGER DEFAULT 0;
+    ALTER TABLE profile_facts ADD COLUMN forgotten INTEGER DEFAULT 0;
+    ALTER TABLE profile_facts ADD COLUMN updated_at REAL DEFAULT 0;
+
+    CREATE TABLE IF NOT EXISTS relationship_milestones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_name TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        milestone_type TEXT NOT NULL,
+        milestone_key TEXT NOT NULL,
+        detail TEXT DEFAULT '',
+        acknowledged INTEGER DEFAULT 0,
+        created_at REAL NOT NULL,
+        UNIQUE(account_name, user_id, milestone_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS server_lore (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_name TEXT NOT NULL,
+        guild_id TEXT NOT NULL DEFAULT '',
+        channel_id TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        source TEXT DEFAULT 'explicit',
+        confidence REAL DEFAULT 1.0,
+        pinned INTEGER DEFAULT 0,
+        forgotten INTEGER DEFAULT 0,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS interest_topics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_name TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        weight REAL DEFAULT 1.0,
+        mention_count INTEGER DEFAULT 1,
+        last_seen_at REAL NOT NULL,
+        created_at REAL NOT NULL,
+        UNIQUE(account_name, user_id, topic)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_server_lore_scope
+        ON server_lore(account_name, guild_id, channel_id);
+    CREATE INDEX IF NOT EXISTS idx_interest_topics_user
+        ON interest_topics(account_name, user_id, weight DESC);
+    CREATE INDEX IF NOT EXISTS idx_milestones_user
+        ON relationship_milestones(account_name, user_id, created_at DESC);
+    """),
 ]
 
 
@@ -290,7 +360,16 @@ def apply_migrations(conn) -> int:
     for version, sql in MIGRATIONS:
         if version <= current:
             continue
-        conn.executescript(sql)
+        try:
+            conn.executescript(sql)
+        except Exception as exc:
+            # Self-heal a half-applied ALTER script: executescript autocommits
+            # per statement, so a crash between two ALTERs leaves column 1
+            # present with the version un-bumped — the retry then dies on
+            # "duplicate column name" forever (daemon bricked at boot).
+            # Treat that specific error as already-applied and move on.
+            if 'duplicate column name' not in str(exc).lower():
+                raise
         conn.execute('UPDATE schema_version SET version = ?', (version,))
         applied = version
     conn.commit()

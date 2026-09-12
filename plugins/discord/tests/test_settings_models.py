@@ -38,7 +38,7 @@ def test_media_settings_exposes_vision_defaults():
     settings = MediaSettings()
 
     assert settings.image_understanding_enabled is False
-    assert settings.vision_provider == 'openai_compat'
+    assert settings.vision_provider == 'auto'
     assert settings.vision_base_url == ''
     assert settings.vision_model == ''
     assert settings.vision_api_key == ''

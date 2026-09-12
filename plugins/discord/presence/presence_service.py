@@ -40,7 +40,13 @@ class DiscordPresenceService:
         return 'awake'
 
     def select_presence(
-        self, settings, affect, *, asleep: bool, forced_wake: bool, local_hour: int
+        self,
+        settings,
+        *,
+        asleep: bool,
+        forced_wake: bool,
+        local_hour: int,
+        situation=None,
     ) -> dict:
         presence = settings.presence
         mode = self.resolve_mode(
@@ -50,9 +56,11 @@ class DiscordPresenceService:
             local_hour=local_hour,
         )
         if mode == 'sleep':
+            # load_sleep_statuses always falls back to built-ins, so the pool
+            # is never empty — the old presence.sleep_activity fallback was
+            # unreachable and its setting was cut 2026-08-05.
             sleep_pool = list(load_sleep_statuses())
-            fallback = presence.sleep_activity or 'custom: sleeping'
-            activity = random.choice(sleep_pool) if sleep_pool else fallback
+            activity = random.choice(sleep_pool) if sleep_pool else 'custom: sleeping'
             return {
                 'mode': mode,
                 'status': presence.quiet_status or 'idle',
@@ -64,19 +72,51 @@ class DiscordPresenceService:
                 'status': presence.quiet_status or 'idle',
                 'activity': presence.activity or '',
             }
+
+        situation_override = None
+        if (
+            getattr(presence, 'situation_presence_enabled', False)
+            and situation is not None
+        ):
+            vibe = getattr(situation, 'vibe', '') or ''
+            if vibe == 'heated':
+                situation_override = {
+                    'status': 'dnd',
+                    'activity': 'custom: reading the room',
+                    'situation_vibe': vibe,
+                }
+            elif vibe == 'lively':
+                situation_override = {
+                    'status': 'online',
+                    'activity': 'custom: hanging in chat',
+                    'situation_vibe': vibe,
+                }
+            elif vibe == 'quiet' and float(getattr(situation, 'silence_seconds', 0) or 0) >= 3600:
+                situation_override = {
+                    'status': presence.quiet_status or 'idle',
+                    'activity': 'custom: around if you need me',
+                    'situation_vibe': vibe,
+                }
+            elif vibe == 'playful':
+                situation_override = {
+                    'status': 'online',
+                    'activity': 'custom: vibing',
+                    'situation_vibe': vibe,
+                }
+
+        if situation_override:
+            return {
+                'mode': mode,
+                'status': situation_override['status'],
+                'activity': situation_override['activity'],
+                'situation_vibe': situation_override.get('situation_vibe'),
+            }
+
         if not presence.cycling_enabled:
-            status = presence.status or 'online'
-            activity = presence.activity or ''
-            if getattr(affect, 'energy', 0.7) < 0.3:
-                status = presence.quiet_status or 'idle'
-            if getattr(affect, 'sociability', 0.6) < 0.3 and not activity:
-                activity = 'Taking a break'
-            return {'mode': mode, 'status': status, 'activity': activity}
+            return {'mode': mode, 'status': presence.status or 'online', 'activity': presence.activity or ''}
         pool = activity_pool(presence)
         activity_text = random.choice(pool) if pool else (presence.activity or '')
         status = presence.status or 'online'
-        if getattr(affect, 'energy', 0.7) < 0.3:
-            status = presence.quiet_status or 'idle'
         return {
             'mode': mode,
             'status': status,

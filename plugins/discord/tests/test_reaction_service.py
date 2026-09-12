@@ -1,7 +1,11 @@
 import random
 
 from plugins.discord.conversation.reaction_service import ReactionService
-from plugins.discord.conversation.sentiment import pick_reaction_emoji, sentiment_tier
+from plugins.discord.conversation.sentiment import (
+    normalize_sentiment_backend,
+    pick_reaction_emoji,
+    sentiment_tier,
+)
 from plugins.discord.models.observations import TextMessageObservation
 from plugins.discord.models.settings import EffectiveSettings, ReactionSettings
 
@@ -33,6 +37,19 @@ def test_sentiment_tier_positive_without_vader(monkeypatch):
     monkeypatch.setattr('plugins.discord.conversation.sentiment._get_vader', lambda: False)
     assert sentiment_tier('this is amazing!') == 'positive'
     assert sentiment_tier('what do you think?') == 'curious'
+
+
+def test_sentiment_tier_uses_roberta_when_configured(monkeypatch):
+    monkeypatch.setattr('plugins.discord.conversation.sentiment._compound_from_roberta', lambda _text: 0.6)
+    monkeypatch.setattr('plugins.discord.conversation.sentiment._compound_from_vader', lambda _text: -0.6)
+    assert sentiment_tier('neutral looking text', backend='twitter_roberta') == 'very_positive'
+    assert sentiment_tier('neutral looking text', backend='vader') == 'very_negative'
+
+
+def test_normalize_sentiment_backend_aliases():
+    assert normalize_sentiment_backend('twitter-roberta') == 'twitter_roberta'
+    assert normalize_sentiment_backend('vader') == 'vader'
+    assert normalize_sentiment_backend(None) == 'vader'
 
 
 def test_pick_reaction_emoji_returns_unicode():

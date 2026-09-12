@@ -18,15 +18,12 @@ def connected_accounts(runtime) -> list[str]:
     if accounts:
         return sorted(accounts)
     if runtime.scheduler_bridge:
-        return sorted(runtime.scheduler_bridge.active_daemon_accounts('proactive'))
+        return sorted(runtime.scheduler_bridge.active_daemon_accounts('discord_message'))
     return []
 
 
 def execute_proactive(runtime, intention, settings) -> dict:
-    affect = {}
-    if runtime.profile_service:
-        affect = runtime.profile_service.get_affect(intention.account_name).to_dict()
-    decision = runtime.policy_service.evaluate_proactive_intention(intention, settings, affect=affect)
+    decision = runtime.policy_service.evaluate_proactive_intention(intention, settings)
     if not decision.get('allowed'):
         if runtime.trace_repository:
             runtime.trace_repository.record_trace('proactive_skipped', decision.get('reason', 'blocked'), {

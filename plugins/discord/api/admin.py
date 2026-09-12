@@ -1,11 +1,8 @@
-"""Admin routes for retention, privacy, and import."""
+"""Admin routes for retention and privacy."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from plugins.discord.daemon import get_runtime
-from plugins.discord.tools.import_from_leona import LeonaImportService
 
 
 async def purge_retention(**kwargs):
@@ -13,7 +10,11 @@ async def purge_retention(**kwargs):
     if not runtime or not runtime.retention_service or not runtime.settings_store:
         return {'error': 'Runtime not available'}
     settings = runtime.settings_store.resolve()
-    return runtime.retention_service.purge(settings)
+    # The purge scans/deletes on the shared connection — run it off the event
+    # loop so the whole web UI doesn't freeze for the duration.
+    import asyncio
+    return await asyncio.get_running_loop().run_in_executor(
+        None, runtime.retention_service.purge, settings)
 
 
 async def forget_user(**kwargs):
@@ -30,29 +31,9 @@ async def forget_user(**kwargs):
         user_id,
         memory_repository=runtime.memory_repository,
         profile_repository=runtime.profile_repository,
+        milestone_repository=getattr(runtime, 'milestone_repository', None),
+        interest_repository=getattr(runtime, 'interest_repository', None),
     )
-
-
-async def import_from_leona(**kwargs):
-    runtime = get_runtime()
-    if not runtime:
-        return {'error': 'Runtime not available'}
-    body = kwargs.get('body') or {}
-    leona_db_path = str(body.get('leona_db_path', '')).strip()
-    if not leona_db_path:
-        return {'error': 'leona_db_path required'}
-    if not Path(leona_db_path).exists():
-        return {'error': 'leona database not found'}
-    service = LeonaImportService(
-        leona_db_path=leona_db_path,
-        memory_repository=runtime.memory_repository,
-        profile_repository=runtime.profile_repository,
-        sqlite_service=runtime.sqlite_service,
-        settings_repository=runtime.channel_repository,
-    )
-    include = body.get('include') or ['pinned_memories', 'profile_facts', 'profile_summaries']
-    leona_settings = body.get('leona_settings')
-    return service.run(include=include, leona_settings=leona_settings)
 
 
 async def operator_summary(**kwargs):
@@ -67,7 +48,6 @@ async def operator_summary(**kwargs):
     summary = {
         'health': runtime.health.as_dict(),
         'trace_summary': runtime.trace_service.summary() if runtime.trace_service else {},
-        'affect': runtime.profile_service.get_affect(account).to_dict() if runtime.profile_service and account else {},
         'active_tasks': runtime.world_model_service.list_tasks(account, status='pending', limit=10) if runtime.world_model_service and account else [],
         'voice_sessions': [
             session.to_dict()

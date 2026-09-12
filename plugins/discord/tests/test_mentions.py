@@ -17,9 +17,9 @@ def test_apply_mention_map_replaces_bare_at_username():
 
 def test_apply_mention_map_fixes_angle_name_mention():
     mention_map = {}
-    merge_user_into_mention_map(mention_map, '123456789012345678', username='spike', display_name='Spike le Vain')
+    merge_user_into_mention_map(mention_map, '123456789012345678', username='spike', display_name='Vex Example')
     text = apply_mention_map(
-        'say hello to <@Spike le Vain>',
+        'say hello to <@Vex Example>',
         mention_map,
         account='remmi',
         guild_id='999',
