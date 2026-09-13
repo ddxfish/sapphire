@@ -116,3 +116,37 @@ def test_run_respects_min_messages(tmp_path):
     assert result['status'] == 'ok'
     assert result['facts_added'] == 0
     assert result['results'][0]['reason'] == 'below_min_messages'
+
+
+def test_parse_fact_list_survives_junk_replies():
+    # H9 (hunt 2026-09-12): the first-'['…last-']' scavenge + unconditional
+    # mark_processed ate buffers on think-block echoes and persisted junk.
+    # think block echoing a channel mention, then a legit empty answer
+    assert _parse_fact_list('<think>the snippet says [#general] hi</think>\n[]', max_facts=3) == []
+    # think-only / truncated → parse failure, NOT an empty answer
+    assert _parse_fact_list('<think>still thinking about [#general', max_facts=3) is None
+    assert _parse_fact_list("I can't help with that.", max_facts=3) is None
+    assert _parse_fact_list('', max_facts=3) is None
+    # placeholder echo of the format hint is not a fact
+    assert _parse_fact_list('["<fact>", "<fact>"]', max_facts=3) == []
+    # non-string items never persist as their str()
+    assert _parse_fact_list('[true, 42.5, ["a", "b"], "Plays bass"]', max_facts=5) == ['Plays bass']
+    # the LAST array wins over a bracketed preamble
+    assert _parse_fact_list('Notes: [#general] chatter. Facts: ["Plays bass"]', max_facts=3) == ['Plays bass']
+
+
+def test_parse_failure_leaves_buffers_pending(tmp_path):
+    # H9: a reply with no JSON array used to mark every buffer processed with a
+    # green "+0 facts" trace. Now the snippets stay pending for the next run.
+    _, buffers, profiles, service = _stack(tmp_path)
+    settings = _settings(enabled=True, ambient_distill_enabled=True, ambient_distill_min_messages=1)
+    buffers.add('alpha', 'u1', 'I have a dog named Mochi and walk him each morning')
+    buffers.add('alpha', 'u1', 'Night shifts most weekdays for work')
+    service._call_llm = lambda *a, **k: None  # noqa: E731 — refusal / think-only / truncated
+
+    result = service.run_for_account('alpha', settings, force=True, user_id='u1')
+
+    assert result['results'][0]['status'] == 'parse_failed'
+    assert result['facts_added'] == 0
+    assert buffers.pending_count('alpha', 'u1') == 2
+    assert profiles.list_facts('alpha', 'u1') == []

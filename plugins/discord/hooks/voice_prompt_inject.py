@@ -13,30 +13,15 @@ from plugins.discord.sapphire.voice_prompt import (
 logger = logging.getLogger(__name__)
 
 
-def _effective_chat_name() -> str | None:
-    try:
-        from core.chat.stream_brain import get_override
-        override = get_override()
-        if override and override.get('chat'):
-            return str(override['chat'])
-    except Exception:
-        pass
-    try:
-        from core.api_fastapi import get_system
-        system = get_system()
-        sm = getattr(getattr(system, 'llm_chat', None), 'session_manager', None)
-        if sm is not None:
-            getter = getattr(sm, '_effective_chat_name', None)
-            if callable(getter):
-                return getter()
-            return sm.get_active_chat_name()
-    except Exception:
-        pass
-    return None
-
-
 def prompt_inject(event) -> None:
-    chat_name = _effective_chat_name()
+    # The hook runner stamps event.chat_name before any handler runs
+    # (core/hooks.py). The old metadata→system walk re-derived it through a
+    # private session-manager method with two silent bails — the class closed
+    # house-wide on 2026-08-21 (hunt 2026-09-12, M11).
+    chat_name = getattr(event, 'chat_name', None)
+    if chat_name is None:
+        logger.warning('[DISCORD] voice prompt hook: event carries no chat_name — skipping')
+        return
     if not is_voice_conversation_chat(chat_name):
         return
     if any(VOICE_CONTEXT_MARKER in str(part) for part in (event.context_parts or [])):

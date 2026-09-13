@@ -11,7 +11,7 @@ def _sanitize_account_name(raw: str) -> str:
     return ''.join(c for c in str(raw or '').strip().lower() if c.isalnum() or c in '-_')
 
 
-async def list_accounts(**kwargs):
+def list_accounts(**kwargs):
     with open_storage() as storage:
         accounts = storage.account_repository.list_accounts()
         connected = set()
@@ -25,7 +25,7 @@ async def list_accounts(**kwargs):
         return {'accounts': accounts}
 
 
-async def add_account(**kwargs):
+def add_account(**kwargs):
     body = kwargs.get('body') or {}
     name = _sanitize_account_name(body.get('account_name', ''))
     token = str(body.get('token', '')).strip()
@@ -41,7 +41,7 @@ async def add_account(**kwargs):
             'note': 'Bot connects when an enabled daemon task selects it'}
 
 
-async def delete_account(**kwargs):
+def delete_account(**kwargs):
     name = _sanitize_account_name(kwargs.get('name', ''))
     if not name:
         return {'error': 'Account name required'}

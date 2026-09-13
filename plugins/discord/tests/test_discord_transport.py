@@ -180,3 +180,74 @@ def test_transport_connect_disconnect_and_health(tmp_path):
         assert transport.account_health("alpha")["state"] == "disconnected"
 
     asyncio.run(run_test())
+
+
+def test_real_client_disables_mass_mentions(monkeypatch):
+    # H2 (hunt 2026-09-12): nothing she posts may ping @everyone/@here or a role.
+    import sys
+    import types
+
+    calls = {}
+    fake = types.ModuleType('discord')
+
+    class Intents:
+        @staticmethod
+        def default():
+            return types.SimpleNamespace()
+
+    class AllowedMentions:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class Bot:
+        def __init__(self, **kw):
+            calls.update(kw)
+
+    fake.Intents, fake.AllowedMentions, fake.Bot = Intents, AllowedMentions, Bot
+    monkeypatch.setitem(sys.modules, 'discord', fake)
+
+    loop = asyncio.new_event_loop()
+    try:
+        DiscordTransport(loop=loop, client_factory=None)._make_client()
+    finally:
+        loop.close()
+    mentions = calls['allowed_mentions'].kw
+    assert mentions['everyone'] is False
+    assert mentions['roles'] is False
+    assert mentions['users'] is True
+
+
+def test_execution_read_messages_returns_oldest_first():
+    # C4 (hunt 2026-09-12): read_messages was a stub returning [].
+    import datetime as dt
+    import types
+    from plugins.discord.transport.discord_execution import DiscordExecution
+
+    def _msg(mid, who, text, minute):
+        return types.SimpleNamespace(
+            id=mid,
+            author=types.SimpleNamespace(id=7, display_name=who, name=who.lower()),
+            clean_content=text,
+            content=text,
+            created_at=dt.datetime(2026, 9, 13, 13, minute),
+            attachments=[],
+        )
+
+    class FakeChannel:
+        id = 123
+
+        async def history(self, limit=20):
+            for m in (_msg(3, 'Alice', 'third', 3), _msg(2, 'Bob', 'second', 2), _msg(1, 'Alice', 'first', 1))[:limit]:
+                yield m
+
+    channel = FakeChannel()
+    client = types.SimpleNamespace(get_channel=lambda cid: channel if cid == 123 else None)
+    execution = DiscordExecution(transport=None)
+    execution._state_for_account = lambda name: ('alpha', {'client': client})
+
+    rows = asyncio.run(execution.read_messages('123', count=3, account_name='alpha'))
+
+    assert [r['message_id'] for r in rows] == ['1', '2', '3']
+    assert rows[0]['author'] == 'Alice'
+    assert rows[1]['content'] == 'second'
+    assert rows[0]['created_at'] == '2026-09-13T13:01'

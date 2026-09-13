@@ -152,3 +152,53 @@ def test_finalize_clears_preroll_so_next_utterance_does_not_replay():
     sink._preroll[user_id].extend(b'\xaa\xbb' * 200)
     sink._reset_capture_history(user_id)
     assert not sink._preroll[user_id]
+
+
+@pytest.mark.skipif(
+    __import__('importlib').util.find_spec('discord.sinks') is None,
+    reason='py-cord not installed',
+)
+def test_finalize_rearms_when_voice_is_recent():
+    # H19 (hunt 2026-09-12): the early return left no timer, so a weak-signal
+    # mic grew the buffer forever. Now it re-arms.
+    import time
+    from plugins.discord.transport.discord_voice_sink import UtteranceVoiceSink
+
+    class FakeHandle:
+        def cancel(self):
+            pass
+
+    class FakeLoop:
+        def __init__(self):
+            self.calls = []
+
+        def call_later(self, delay, cb):
+            self.calls.append(delay)
+            return FakeHandle()
+
+    loop = FakeLoop()
+    sink = UtteranceVoiceSink(on_utterance=lambda *a: None, loop=loop)
+    sink._buffers[7] = bytearray(b'\x01\x00' * 4800)
+    sink._last_voice[7] = time.monotonic()
+
+    sink._finalize_user(7)
+
+    assert 7 in sink._buffers
+    assert loop.calls == [sink.silence_seconds]
+
+
+@pytest.mark.skipif(
+    __import__('importlib').util.find_spec('discord.sinks') is None,
+    reason='py-cord not installed',
+)
+def test_utterance_cap_forces_finalize():
+    import time
+    from plugins.discord.transport.discord_voice_sink import UtteranceVoiceSink, _MAX_UTTERANCE_BYTES
+
+    sink = UtteranceVoiceSink(on_utterance=lambda *a: None, loop=None)
+    sink._buffers[7] = bytearray(_MAX_UTTERANCE_BYTES)
+    sink._last_voice[7] = time.monotonic()
+
+    sink._enforce_utterance_cap(7)
+
+    assert 7 not in sink._buffers

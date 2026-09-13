@@ -1,46 +1,30 @@
 import sys
-import tempfile
 from pathlib import Path
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-SAPPHIRE_CANDIDATE = Path(__file__).resolve().parents[3]
+# The dir that holds plugins/discord — the Sapphire root in the system band,
+# user/ in the user band. Then the Sapphire root itself (has core/) for core.*
+# imports. `.absolute()` on purpose: `.resolve()` follows a symlinked plugin
+# out of the tree. The old standalone-checkout branch (a temp-dir symlink shim
+# plus a hardcoded developer home path) shipped in signed code — removed
+# 2026-09-13 (hunt M14); the plugin lives in-tree now.
+PLUGINS_PARENT = Path(__file__).absolute().parents[3]
 
 
 def _ensure_plugins_import_path() -> None:
-    # Installed under Sapphire: <root>/plugins/discord/tests → parents[3] is Sapphire root.
-    if (SAPPHIRE_CANDIDATE / 'plugins' / 'discord').exists():
-        root = str(SAPPHIRE_CANDIDATE)
-        if root not in sys.path:
-            sys.path.insert(0, root)
-        return
+    if not (PLUGINS_PARENT / 'plugins' / 'discord').is_dir():
+        raise RuntimeError(f'discord plugin tests expected plugins/discord under {PLUGINS_PARENT}')
+    for path in (PLUGINS_PARENT, _sapphire_root(PLUGINS_PARENT)):
+        if path is not None and str(path) not in sys.path:
+            sys.path.insert(0, str(path))
 
-    # Standalone WIP checkout: expose this repo as plugins.discord via a temp shim.
-    shim = Path(tempfile.gettempdir()) / 'discord-zeebie-pytest-shim'
-    plugins_dir = shim / 'plugins'
-    plugins_dir.mkdir(parents=True, exist_ok=True)
-    (plugins_dir / '__init__.py').touch(exist_ok=True)
-    link = plugins_dir / 'discord'
-    if link.is_symlink() or link.exists():
-        if not link.is_symlink() or link.resolve() != PLUGIN_ROOT.resolve():
-            link.unlink()
-            link.symlink_to(PLUGIN_ROOT, target_is_directory=True)
-    else:
-        link.symlink_to(PLUGIN_ROOT, target_is_directory=True)
-    shim_str = str(shim)
-    if shim_str not in sys.path:
-        sys.path.insert(0, shim_str)
 
-    # Optional local Sapphire tree for imports like core.stt.*
-    for candidate in (
-        Path.home() / 'Documents' / 'sapphire',
-        PLUGIN_ROOT.parents[1] / 'sapphire',
-        Path('/home/zeebie/Documents/sapphire'),
-    ):
-        if (candidate / 'core').is_dir():
-            cand = str(candidate)
-            if cand not in sys.path:
-                sys.path.append(cand)
-            break
+def _sapphire_root(start: Path) -> Path | None:
+    root = start
+    while not (root / 'core').is_dir():
+        if root.parent == root:
+            return None
+        root = root.parent
+    return root
 
 
 _ensure_plugins_import_path()

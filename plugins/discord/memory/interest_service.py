@@ -30,6 +30,14 @@ TOPIC_LEXICON: dict[str, tuple[str, ...]] = {
 }
 
 _HASHTAG_RE = re.compile(r'#([a-zA-Z][\w-]{1,30})')
+# Word-bounded alias patterns. `alias in raw` matched SUBSTRINGS — 'ai' in
+# said/again, 'art' in party, 'cat' in location, 'pet' in competition, 'band'
+# in husband, 'book' in facebook — and fed every message into the interest
+# graph (hunt 2026-09-12, H8).
+_ALIAS_PATTERNS: dict[str, re.Pattern] = {
+    topic: re.compile(r'\b(?:' + '|'.join(re.escape(alias) for alias in aliases) + r')\b')
+    for topic, aliases in TOPIC_LEXICON.items()
+}
 
 
 def extract_topics(text: str, *, max_topics: int = 5) -> list[str]:
@@ -47,15 +55,16 @@ def extract_topics(text: str, *, max_topics: int = 5) -> list[str]:
         seen.add(topic)
         found.append(topic)
 
+    # A hashtag counts only when it names a lexicon topic: on Discord a bare
+    # #word in clean_content is almost always a channel mention (#general).
     for tag in _HASHTAG_RE.findall(raw):
         canonical = _canonical_from_token(tag)
-        _add(canonical or tag.replace('-', ' ')[:40])
+        if canonical:
+            _add(canonical)
 
-    for topic, aliases in TOPIC_LEXICON.items():
-        for alias in aliases:
-            if alias in raw:
-                _add(topic)
-                break
+    for topic, pattern in _ALIAS_PATTERNS.items():
+        if pattern.search(raw):
+            _add(topic)
         if len(found) >= max_topics:
             break
 

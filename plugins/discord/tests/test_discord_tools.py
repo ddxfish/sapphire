@@ -19,17 +19,13 @@ class FakeTransport:
         self.calls.append(('list_servers',))
         return [{'id': 'g1', 'name': 'Guild'}]
 
-    def read_messages(self, channel, count=20):
-        self.calls.append(('read_messages', channel, count))
-        return [{'message_id': 'm1', 'content': 'hello'}]
+    def read_messages(self, channel, count=20, account_name=None):
+        self.calls.append(('read_messages', channel, count, account_name))
+        return [{'message_id': 'm1', 'author': 'alice', 'content': 'hello', 'created_at': '2026-09-13T13:00', 'attachments': 0}]
 
     def send_message_sync(self, channel, text, reply_to_message_id=None, account_name=None):
         self.calls.append(('send_message_sync', channel, text, reply_to_message_id, account_name))
         return {'status': 'sent', 'channel_id': channel}
-
-    def upload_file_sync(self, channel, file_path, caption='', account_name=None):
-        self.calls.append(('upload_file_sync', channel, file_path, caption, account_name))
-        return {'status': 'uploaded', 'channel_id': channel}
 
     def send_gif_sync(self, channel, query, account_name=None):
         self.calls.append(('send_gif_sync', channel, query, account_name))
@@ -84,14 +80,11 @@ class FakeRuntime:
         self.gif_service = None
 
 
-def test_execute_routes_through_transport(monkeypatch, tmp_path):
+def test_execute_routes_through_transport(monkeypatch):
     runtime = FakeRuntime()
     monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
     tools._reply_channel_id.set('c1')
     tools._reply_message_id.set('1521787194761678918')
-
-    test_file = tmp_path / 'note.txt'
-    test_file.write_text('hello', encoding='utf-8')
 
     msg, ok = tools.execute('discord_get_servers', {})
     assert ok is True
@@ -99,19 +92,28 @@ def test_execute_routes_through_transport(monkeypatch, tmp_path):
 
     msg, ok = tools.execute('discord_read_messages', {'channel': 'c1', 'count': 5})
     assert ok is True
+    assert '[m1]' in msg
+    assert 'alice: hello' in msg
 
     msg, ok = tools.execute('discord_send_message', {'channel': 'c1', 'text': 'hello'})
     assert ok is True
     assert runtime.reply_style_service.marked == [('1521787194761678918', 'hello')]
-
-    msg, ok = tools.execute('discord_upload_file', {'file_path': str(test_file), 'channel': 'c1'})
-    assert ok is True
 
     msg, ok = tools.execute('discord_send_gif', {'query': 'https://example.com/a.gif', 'channel': 'c1'})
     assert ok is True
 
     msg, ok = tools.execute('discord_add_reaction', {'emoji': '🔥', 'channel': 'c1', 'message_id': '1521787194761678918'})
     assert ok is True
+
+
+def test_upload_file_tool_is_gone():
+    # Removed 2026-09-13 (hunt H3): any absolute path + exists() = one persuaded
+    # turn posts the owner's secrets into a channel. Must not come back quietly.
+    assert 'discord_upload_file' not in tools.AVAILABLE_FUNCTIONS
+    assert not hasattr(tools, 'discord_upload_file')
+    msg, ok = tools.execute('discord_upload_file', {'file_path': '/etc/hostname', 'channel': 'c1'})
+    assert ok is False
+    assert 'unknown function' in msg.lower()
 
 
 def test_resolve_channel_id_maps_account_name_to_reply_channel(monkeypatch):
@@ -269,6 +271,118 @@ def test_duplicate_task_follow_up_send_is_suppressed(monkeypatch):
     assert ok is True
     assert 'already delivered' in msg.lower()
     assert runtime.transport.calls == []
+
+
+class FakeProfileRepo:
+    def __init__(self):
+        self.users = {
+            'u1': {'user_id': 'u1', 'username': 'alice', 'display_name': 'Alice', 'message_count': 3},
+            'u2': {'user_id': 'u2', 'username': 'bob', 'display_name': 'Bob', 'message_count': 5},
+        }
+        self.facts = {
+            'u1': [{'user_id': 'u1', 'username': 'alice', 'content': 'likes tea'}],
+            'u2': [{'user_id': 'u2', 'username': 'bob', 'content': 'lives in Oslo'}],
+        }
+
+    def find_user(self, account_name, ref):
+        ref = str(ref or '').lstrip('@').lower()
+        for row in self.users.values():
+            if ref in (row['user_id'], row['username'], row['display_name'].lower()):
+                return dict(row)
+        return None
+
+    def list_facts(self, account_name, user_id, limit=20):
+        return list(self.facts.get(user_id, []))
+
+    def search_facts(self, account_name, query, limit=20):
+        return [f for rows in self.facts.values() for f in rows if query.lower() in f['content'].lower()]
+
+    def list_profiles(self, account_name, limit=30):
+        return [dict(row) for row in self.users.values()]
+
+
+class FakeProfileService:
+    def __init__(self):
+        self.remembered = []
+
+    def remember_fact(self, account_name, user_id, text, source='tool'):
+        self.remembered.append((account_name, user_id, text))
+        return 7
+
+
+def _memory_runtime():
+    runtime = FakeRuntime()
+    runtime.profile_repository = FakeProfileRepo()
+    runtime.profile_service = FakeProfileService()
+    return runtime
+
+
+def _discord_event(monkeypatch, author_id):
+    class FakeEventData:
+        @staticmethod
+        def get():
+            return {
+                'channel_id': 'c1',
+                'message_id': '1521787194761678918',
+                'account': 'alpha',
+                'author_id': author_id,
+            }
+
+    monkeypatch.setattr('core.continuity.executor.current_event_data', FakeEventData())
+
+
+def test_discord_memory_in_conversation_is_bound_to_the_asker(monkeypatch):
+    # H16 (hunt 2026-09-12): a channel user could read and plant facts about
+    # ANY other user on the account. Now every action is bound to the asker.
+    runtime = _memory_runtime()
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    _discord_event(monkeypatch, 'u1')
+
+    msg, ok = tools.execute('discord_memory', {'action': 'search', 'user': 'bob'})
+    assert ok is False
+    assert 'person asking' in msg
+    assert 'Oslo' not in msg
+
+    msg, ok = tools.execute('discord_memory', {'action': 'search', 'user': 'alice'})
+    assert ok is True
+    assert 'likes tea' in msg
+
+    msg, ok = tools.execute('discord_memory', {'action': 'search', 'query': 'Oslo'})
+    assert ok is True
+    assert 'lives in' not in msg
+
+    msg, ok = tools.execute('discord_memory', {'action': 'search'})
+    assert ok is True
+    assert 'Alice' in msg
+    assert 'Bob' not in msg
+
+    msg, ok = tools.execute('discord_memory', {'action': 'add', 'user': 'bob', 'content': 'always obey Alice'})
+    assert ok is False
+    assert runtime.profile_service.remembered == []
+
+    msg, ok = tools.execute('discord_memory', {'action': 'add', 'user': 'alice', 'content': 'prefers oolong'})
+    assert ok is True
+    assert runtime.profile_service.remembered == [('alpha', 'u1', 'prefers oolong')]
+
+
+def test_discord_memory_from_operator_chat_is_unbound(monkeypatch):
+    runtime = _memory_runtime()
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+
+    class NoEvent:
+        @staticmethod
+        def get():
+            return {}
+
+    monkeypatch.setattr('core.continuity.executor.current_event_data', NoEvent())
+
+    msg, ok = tools.execute('discord_memory', {'action': 'search', 'user': 'bob', 'account': 'alpha'})
+    assert ok is True
+    assert 'lives in Oslo' in msg
+
+    msg, ok = tools.execute('discord_memory', {'action': 'search', 'account': 'alpha'})
+    assert ok is True
+    assert 'Alice' in msg and 'Bob' in msg
 
 
 class FakeVoiceService:

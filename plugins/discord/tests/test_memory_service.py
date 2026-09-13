@@ -25,6 +25,25 @@ def test_pinned_memory_round_trip(tmp_path):
     assert results[0]['content'] == 'likes tea'
 
 
+def test_dm_pins_are_scoped_to_their_own_dm(tmp_path):
+    # H15 (hunt 2026-09-12): DMs share guild_id '' — every DM user's pins pooled
+    # into one bucket and user A's private /remember rode into user B's prompt.
+    service = _service(tmp_path)
+    service.pin_memory('alpha', '', 'dm-a', 'ua', 'alice', 'secret: moving to Oslo')
+    service.pin_memory('alpha', '', 'dm-b', 'ub', 'bob', 'secret: proposing friday')
+
+    for_a = service.get_pinned('alpha', guild_id='', channel_id='dm-a', limit=5)
+    assert [row['content'] for row in for_a] == ['secret: moving to Oslo']
+
+    recalled_b = service.recall('alpha', '', 'dm-b', 'secret', limit=5)
+    assert [item['content'] for item in recalled_b] == ['secret: proposing friday']
+
+    # In a server, pins stay guild-wide: a pin from #general shows in #random.
+    service.pin_memory('alpha', 'g1', 'general', 'ua', 'alice', 'guild lore')
+    in_random = service.get_pinned('alpha', guild_id='g1', channel_id='random', limit=5)
+    assert [row['content'] for row in in_random] == ['guild lore']
+
+
 def test_recall_includes_recent_and_pinned(tmp_path):
     service = _service(tmp_path)
     msg_repo = service.message_repository

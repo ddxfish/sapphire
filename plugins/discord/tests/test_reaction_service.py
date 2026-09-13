@@ -68,17 +68,23 @@ def test_evaluate_silent_respects_chance(monkeypatch):
     assert intention.reason == 'silent_sentiment'
 
 
-def test_evaluate_silent_read_only_requires_organic_message():
+def test_evaluate_silent_read_only_mention_may_react(monkeypatch):
+    # A mention in a reply-disabled channel arrives read_only WITH respond_trigger
+    # set — read-only mode's flagship case (see the comment in evaluate_silent).
+    # The old test asserted None and passed only when the unseeded chance roll
+    # went high (~20% flake, found by the 2026-09-13 fix wave).
     service = ReactionService()
     settings = EffectiveSettings(reaction=ReactionSettings(enabled=True, silent_enabled=True, read_only_enabled=True))
     obs = make_obs(mentioned=True)
-    intention = service.evaluate_silent(
-        obs,
-        settings=settings,
-        world_state={'respond_trigger': True},
-        read_only=True,
-    )
-    assert intention is None
+
+    monkeypatch.setattr(random, 'random', lambda: 0.0)
+    intention = service.evaluate_silent(obs, settings=settings, world_state={'respond_trigger': True}, read_only=True)
+    assert intention is not None
+    assert intention.reason == 'read_only_react'
+
+    monkeypatch.setattr(random, 'random', lambda: 1.0)
+    service = ReactionService()
+    assert service.evaluate_silent(obs, settings=settings, world_state={'respond_trigger': True}, read_only=True) is None
 
 
 def test_execute_silent_records_dedupe(monkeypatch):

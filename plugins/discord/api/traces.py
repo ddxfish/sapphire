@@ -5,7 +5,7 @@ from __future__ import annotations
 from plugins.discord.daemon import get_health_state, get_runtime, is_daemon_alive
 
 
-async def get_health(**kwargs):
+def get_health(**kwargs):
     runtime = get_runtime()
     if not runtime:
         return {
@@ -19,7 +19,7 @@ async def get_health(**kwargs):
     return payload
 
 
-async def list_traces(**kwargs):
+def list_traces(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.trace_repository:
         return {'traces': [], 'trace_summary': {}, 'cognitive': {}, 'daemon_running': is_daemon_alive()}

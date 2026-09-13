@@ -38,7 +38,6 @@ In **OAuth2 → URL Generator**:
 - **Permissions (minimum for text):** `View Channels`, `Read Message History`, `Send Messages`
 - **Additional permissions** if you use those features:
   - `Add Reactions` — silent/autonomous reactions
-  - `Attach Files` — file uploads via tools
   - `Connect`, `Speak`, `Use Voice Activity` — voice features
 
 Open the generated URL and add the bot to your server.
@@ -104,7 +103,6 @@ The daemon listens for Discord messages in the background and can trigger Sapphi
 |-------|-------------|
 | **Bot Account** | Which bot to listen on (required) |
 | **Auto-reply in channel** | ON: AI response posts to Discord. OFF: listen-only (observations/memory still run) |
-| **Reply cooldown (seconds)** | Minimum time between replies in the same channel (0 = no limit) |
 
 ### Filters
 
@@ -160,9 +158,8 @@ Add Discord tools to your active toolset. If you omit `channel`, tools use the c
 | Tool | What it does |
 |------|--------------|
 | `discord_get_servers` | List servers the bot is in |
-| `discord_read_messages` | Read recent messages from a channel (1–50, default 20) |
+| `discord_read_messages` | Read the last N messages in a channel (1–50, default 20) as `[message_id] author: text`, oldest first |
 | `discord_send_message` | Send a message (max 2000 chars); supports quote-replies via `reply_to_message_id` |
-| `discord_upload_file` | Upload a file with optional caption |
 | `discord_send_gif` | Send a GIF by search query or URL (requires GIF API key in Media settings) |
 | `discord_add_reaction` | Add an emoji reaction to a message |
 

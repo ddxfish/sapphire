@@ -118,7 +118,10 @@ const DCG_STYLES = `
 function esc(str) {
   const d = document.createElement('div');
   d.textContent = str ?? '';
-  return d.innerHTML;
+  // textContent→innerHTML encodes & < > only. This helper also feeds attribute
+  // values (data-content="…"), where an unescaped quote breaks out of the
+  // attribute and runs an inline handler with the owner's session (hunt H1).
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function api(path, options = {}) {

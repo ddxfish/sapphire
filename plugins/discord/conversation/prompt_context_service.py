@@ -56,7 +56,9 @@ class PromptContextService:
                 last.clean_content[:80] or 'conversation',
                 limit=5,
             )
-            pinned = self.memory_service.get_pinned(last.account_name, guild_id=last.guild_id, limit=5)
+            pinned = self.memory_service.get_pinned(
+                last.account_name, guild_id=last.guild_id, channel_id=last.channel_id, limit=5,
+            )
             context['memory'] = {
                 'recalled': recalled,
                 'pinned': pinned,

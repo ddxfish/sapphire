@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
 from typing import Any, Callable
 
 from plugins.discord.transport.discord_execution import DiscordExecution
@@ -96,7 +95,15 @@ class DiscordTransport:
         import discord
         # discord.Bot (py-cord) = Client + application command support; needed
         # for /voice slash commands. Auto-syncs commands on connect.
-        return discord.Bot(intents=self._build_intents())
+        # allowed_mentions: nothing she posts — LLM reply, reminder fallback,
+        # tool send — can ping @everyone/@here or a role, whatever the text
+        # says (hunt 2026-09-12, H2). Users and reply targets still ping.
+        return discord.Bot(
+            intents=self._build_intents(),
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False, users=True, replied_user=True,
+            ),
+        )
 
     async def connect_account(self, name: str, token: str) -> dict:
         current = self._accounts.get(name)
@@ -135,10 +142,21 @@ class DiscordTransport:
 
             @client.event
             async def on_message(message):
-                if self._event_adapter:
-                    observation = self._event_adapter.adapt_message_event(name, state.get('bot_id') or None, message)
-                    if observation and self._message_pipeline:
-                        self._message_pipeline.handle_message(observation)
+                if not self._event_adapter:
+                    return
+                observation = self._event_adapter.adapt_message_event(
+                    name, state.get('bot_id') or None, message, interpret_media=False,
+                )
+                if not observation:
+                    return
+                if observation.attachments:
+                    # Fetch + vision call off the daemon loop (hunt C2): only
+                    # THIS message waits; other accounts, voice, and the flush
+                    # loop keep running. py-cord runs each event as its own
+                    # task, so awaiting here blocks nothing else.
+                    await asyncio.to_thread(self._event_adapter.interpret_media, observation)
+                if self._message_pipeline:
+                    self._message_pipeline.handle_message(observation)
 
             @client.event
             async def on_typing(channel, user, when):
@@ -437,8 +455,8 @@ class DiscordTransport:
             logger.error('Voice disconnect failed for %s:%s: %s', account_name, channel_id, exc, exc_info=True)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
-    def read_messages(self, channel, count=20):
-        return []
+    def read_messages(self, channel, count=20, account_name=None):
+        return self._run_on_loop(self._execution.read_messages(channel, count=count, account_name=account_name))
 
     def _run_on_loop(self, coro, *, timeout: float = 30):
         try:
@@ -742,18 +760,6 @@ class DiscordTransport:
         except Exception as exc:
             logger.debug('Discord typing hold failed for channel %s: %s', channel, exc)
             return {'status': 'error', 'error': str(exc)}
-
-    def upload_file_sync(self, channel, file_path, caption='', account_name=None):
-        if not Path(file_path).exists():
-            raise FileNotFoundError(file_path)
-        async def _upload():
-            import discord
-            _, ch = await self._execution._resolve_channel(account_name, channel)
-            file = discord.File(str(file_path))
-            content = caption or None
-            message = await ch.send(content=content, file=file)
-            return {'status': 'uploaded', 'message_id': str(message.id)}
-        return self._run_on_loop(_upload())
 
     def resolve_channel_id_sync(self, channel_ref, account_name=None):
         return self._run_on_loop(self._execution.resolve_channel_id(account_name, channel_ref), timeout=30)

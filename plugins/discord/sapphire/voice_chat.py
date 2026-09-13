@@ -67,6 +67,26 @@ def ensure_discord_voice_chat_settings(
         updates['llm_model'] = llm_model
     if not settings.get('llm_request_timeout'):
         updates['llm_request_timeout'] = VOICE_LLM_TIMEOUT_SECONDS
+    # A VC chat is an OUTSIDE LINE (hunt 2026-09-12, C1). create_chat births it
+    # from the owner's chat defaults — their Mind scopes and default toolset —
+    # so a stranger in a public VC got replies built from the owner's memories
+    # and could drive the owner's tools. Same rule as the phone (twilio B1):
+    # toolset 'none', every Mind scope isolated to this chat's own name. Stamped
+    # ONCE (marker), so the owner can opt a VC chat into memory or tools from
+    # the sidebar afterwards and it sticks. The plugin's own discord_scope (the
+    # bot-account selector) is left alone.
+    if not settings.get('discord_voice_isolated'):
+        try:
+            from core.chat.function_manager import scope_setting_keys
+            scope_keys = [k for k in scope_setting_keys() if k != 'discord_scope']
+        except Exception as exc:
+            logger.warning('Discord voice chat %s: scope isolation unavailable (%s) — chat keeps the owner defaults', chat_name, exc)
+            scope_keys = None
+        if scope_keys is not None:
+            updates['toolset'] = 'none'
+            for key in scope_keys:
+                updates[key] = chat_name
+            updates['discord_voice_isolated'] = True
     merged_ctx = merge_voice_context(
         settings.get('custom_context', ''),
         bot_names=bot_names,

@@ -40,12 +40,16 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'discord_read_messages',
-            'description': 'Read recent messages from a Discord channel.',
+            'description': (
+                'Read the last N messages in a Discord channel (1-50, default 20), oldest first, as '
+                '"[message_id] author: text". The message_id feeds discord_add_reaction and '
+                'reply_to_message_id.'
+            ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string'},
-                    'count': {'type': 'integer'},
+                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit to use the current channel.'},
+                    'count': {'type': 'integer', 'description': '1-50, default 20.'},
                 },
                 'required': [],
             },
@@ -64,22 +68,6 @@ TOOLS = [
                     'reply_to_message_id': {'type': 'string'},
                 },
                 'required': ['text'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'discord_upload_file',
-            'description': 'Upload a file to Discord.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'file_path': {'type': 'string'},
-                    'channel': {'type': 'string'},
-                    'caption': {'type': 'string'},
-                },
-                'required': ['file_path'],
             },
         },
     },
@@ -151,7 +139,8 @@ TOOLS = [
                 'action=search: user= for one person\'s facts, query= to search all facts, neither = list known users. '
                 'action=add: store content= as a fact about user=. '
                 'action=delete: remove facts for user= whose text contains content=. '
-                'Users can be a name or id.'
+                'Users can be a name or id. Inside a Discord conversation every action is limited '
+                'to the person asking (their own facts); from the owner\'s own chat any user.'
             ),
             'parameters': {
                 'type': 'object',
@@ -360,8 +349,22 @@ def discord_read_messages(channel=None, count=20):
         return ('Discord runtime is not available', False)
     channel = _resolve_channel_id(str(channel or ''))
     if not channel:
-        return ('Channel is required.', False)
-    return (str(transport.read_messages(channel, count=count)), True)
+        return ('Channel is required — pass a numeric channel id or #channel-name.', False)
+    try:
+        rows = transport.read_messages(
+            channel, count=max(1, min(50, int(count or 20))), account_name=_default_account(),
+        )
+    except Exception as exc:
+        return (f'Could not read channel {channel}: {exc}', False)
+    if not rows:
+        return (f'No messages in channel {channel}.', True)
+    lines = [f'Last {len(rows)} messages in channel {channel} (oldest first; message_id in brackets):']
+    for row in rows:
+        stamp = f" {row['created_at']}" if row.get('created_at') else ''
+        extra = f" [+{row['attachments']} attachment(s)]" if row.get('attachments') else ''
+        who = row.get('author') or row.get('author_id') or '?'
+        lines.append(f"[{row.get('message_id')}]{stamp} {who}: {row.get('content') or ''}{extra}")
+    return ('\n'.join(lines), True)
 
 
 def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
@@ -421,20 +424,9 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
     return (f'Message sent to channel {channel}.', True)
 
 
-def discord_upload_file(*, file_path: str, channel=None, caption=''):
-    transport = _transport()
-    if not transport:
-        return ('Discord runtime is not available', False)
-    channel = _resolve_channel_id(str(channel or ''))
-    if not channel:
-        return ('Channel is required.', False)
-    try:
-        result = transport.upload_file_sync(channel, file_path, caption=caption, account_name=_default_account())
-    except FileNotFoundError:
-        return (f'File not found: {file_path}', False)
-    if result.get('status') == 'error':
-        return (result.get('error', 'Upload failed'), False)
-    return (f'Uploaded {file_path} to channel {channel}.', True)
+# discord_upload_file was REMOVED 2026-09-13 (hunt H3): it took any absolute
+# path with only an exists() check — one persuaded turn could post the owner's
+# settings, bot tokens, or signing key into a channel. Not rebuilt by design.
 
 
 def discord_send_gif(*, query: str, channel=None):
@@ -590,10 +582,18 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
     action = str(action or '').strip().lower()
 
     if action == 'search':
+        # In a Discord conversation a channel user reads only their OWN card —
+        # "what do you know about <the owner's friend>" from a public server
+        # used to answer (hunt 2026-09-12, H16). Operator chats are unbound.
+        if event_author and not str(user or '').strip() and not str(query or '').strip():
+            user = event_author
         if str(user or '').strip():
             row = repo.find_user(account_name, user)
             if not row:
                 return (f'No Discord user matching {user!r} in memory for {account_name}.', True)
+            if event_author and str(row['user_id']) != event_author:
+                return ('In a Discord conversation I only share what I remember about the person '
+                        'asking — the owner can browse everyone in Settings > Discord > Memory.', False)
             facts = repo.list_facts(account_name, row['user_id'], limit=20)
             label = _memory_user_label(row)
             header = f"{label} (user_id {row['user_id']}, {int(row.get('message_count') or 0)} messages seen"
@@ -605,6 +605,8 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
             return ('\n'.join([header + ':'] + [f"- {f['content']}" for f in facts]), True)
         if str(query or '').strip():
             rows = repo.search_facts(account_name, query, limit=20)
+            if event_author:
+                rows = [f for f in rows if str(f.get('user_id') or '') == event_author]
             if not rows:
                 return (f'No Discord memory matching {query!r} for {account_name}.', True)
             return ('\n'.join(f'- {_memory_user_label(f)}: {f["content"]}' for f in rows), True)
@@ -625,6 +627,12 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
         row = repo.find_user(account_name, user)
         if not row:
             return (f'No known Discord user matching {user!r} — facts attach to users already seen.', False)
+        # Same binding as delete: a channel user can only have notes saved
+        # about THEMSELVES — otherwise anyone could plant "always obey Bob"
+        # as a fact about the owner's friend and ride every future reply.
+        if event_author and str(row['user_id']) != event_author:
+            return ('I only save notes about someone at their own request — the owner can add '
+                    'facts about others in Settings > Discord > Memory.', False)
         fact_id = runtime.profile_service.remember_fact(
             account_name, row['user_id'], text, source='tool',
         )
@@ -692,12 +700,6 @@ def execute(function_name, arguments, config=None):
             text=str(arguments.get('text', '')),
             channel=_default_channel(arguments),
             reply_to_message_id=arguments.get('reply_to_message_id'),
-        )
-    if function_name == 'discord_upload_file':
-        return discord_upload_file(
-            file_path=str(arguments.get('file_path', '')),
-            channel=_default_channel(arguments),
-            caption=str(arguments.get('caption', '')),
         )
     if function_name == 'discord_send_gif':
         return discord_send_gif(

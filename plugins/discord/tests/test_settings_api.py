@@ -1,4 +1,3 @@
-import asyncio
 
 from plugins.discord.api import settings as settings_api
 from plugins.discord.models.settings import SettingsOverlay, overlay_from_flat
@@ -45,10 +44,10 @@ def test_global_save_rejected(monkeypatch):
     repo = FakeChannelRepository()
     _patch(monkeypatch, repo)
 
-    result = asyncio.run(settings_api.save_settings(body={
+    result = settings_api.save_settings(body={
         'scope_type': 'global',
         'settings': {'media': {'gif_enabled': True}},
-    }))
+    })
 
     assert 'error' in result
     assert repo.saved == []
@@ -58,16 +57,16 @@ def test_guild_overlay_save_merges(monkeypatch):
     repo = FakeChannelRepository()
     _patch(monkeypatch, repo)
 
-    asyncio.run(settings_api.save_settings(body={
+    settings_api.save_settings(body={
         'scope_type': 'guild',
         'scope_id': 'g1',
         'settings': {'channel': {'reply_mode': 'mentions_only'}},
-    }))
-    asyncio.run(settings_api.save_settings(body={
+    })
+    settings_api.save_settings(body={
         'scope_type': 'guild',
         'scope_id': 'g1',
         'settings': {'channel': {'batching_seconds': 4}},
-    }))
+    })
 
     overlay = repo.load_settings_store().guild_overrides['g1']
     assert overlay.channel['reply_mode'] == 'mentions_only'

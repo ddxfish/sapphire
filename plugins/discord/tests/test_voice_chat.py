@@ -78,6 +78,61 @@ def test_ensure_discord_voice_chat_settings_fixes_qwen_voice():
     assert 'Remmi' in payload['custom_context']
 
 
+def _fake_scope_keys(monkeypatch, keys):
+    import sys
+    import types
+
+    fm_mod = types.ModuleType('core.chat.function_manager')
+    fm_mod.scope_setting_keys = lambda: list(keys)
+    for pkg in ('core', 'core.chat'):
+        if pkg not in sys.modules:
+            monkeypatch.setitem(sys.modules, pkg, types.ModuleType(pkg.split('.')[-1]))
+    monkeypatch.setitem(sys.modules, 'core.chat.function_manager', fm_mod)
+
+
+def test_ensure_discord_voice_chat_settings_isolates_the_outside_line(monkeypatch):
+    # C1 (hunt 2026-09-12): a fresh VC chat inherited the owner's Mind scopes and
+    # default toolset. Now: toolset 'none', every Mind scope = the chat's own
+    # name, the bot-account selector untouched, and a marker so it runs once.
+    _fake_scope_keys(monkeypatch, ['memory_scope', 'knowledge_scope', 'goals_scope', 'discord_scope'])
+    system = MagicMock()
+    sm = MagicMock()
+    sm.read_chat_settings.return_value = {}
+    sm.set_named_chat_settings.return_value = True
+    system.llm_chat.session_manager = sm
+    system.tts.voice_name = 'af_heart'
+    ensure_discord_voice_chat_settings(system, 'discord_111_222')
+    payload = sm.set_named_chat_settings.call_args[0][1]
+    assert payload['toolset'] == 'none'
+    assert payload['memory_scope'] == 'discord_111_222'
+    assert payload['knowledge_scope'] == 'discord_111_222'
+    assert payload['goals_scope'] == 'discord_111_222'
+    assert 'discord_scope' not in payload
+    assert payload['discord_voice_isolated'] is True
+
+
+def test_ensure_discord_voice_chat_settings_respects_owner_opt_in(monkeypatch):
+    # Once stamped, the owner may hand a VC chat memory or tools from the
+    # sidebar; the next join must not claw it back.
+    _fake_scope_keys(monkeypatch, ['memory_scope', 'discord_scope'])
+    system = MagicMock()
+    sm = MagicMock()
+    sm.read_chat_settings.return_value = {
+        'discord_voice_isolated': True,
+        'toolset': 'limited_web',
+        'memory_scope': 'default',
+        'tts_voice': 'af_heart',
+        'llm_request_timeout': 20.0,
+    }
+    sm.set_named_chat_settings.return_value = True
+    system.llm_chat.session_manager = sm
+    system.tts.voice_name = 'af_heart'
+    ensure_discord_voice_chat_settings(system, 'discord_111_222')
+    payload = sm.set_named_chat_settings.call_args[0][1] if sm.set_named_chat_settings.called else {}
+    assert 'toolset' not in payload
+    assert 'memory_scope' not in payload
+
+
 def test_ensure_voice_chat_skips_create_when_exists():
     system = MagicMock()
     sm = MagicMock()

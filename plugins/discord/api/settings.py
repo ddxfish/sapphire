@@ -8,7 +8,7 @@ from plugins.discord.models.settings import SettingsOverlay, SettingsStore, _mer
 from plugins.discord.sapphire.voice_prompt import default_conversation_prompt_template
 
 
-async def get_settings(**kwargs):
+def get_settings(**kwargs):
     query = kwargs.get('query') or {}
     guild_id = str(query.get('guild_id', '')).strip() or None
     channel_id = str(query.get('channel_id', '')).strip() or None
@@ -28,7 +28,7 @@ async def get_settings(**kwargs):
         }
 
 
-async def save_settings(**kwargs):
+def save_settings(**kwargs):
     body = kwargs.get('body') or {}
     scope_type = str(body.get('scope_type', 'global')).strip().lower()
     scope_id = str(body.get('scope_id', '')).strip() or 'global'

@@ -90,7 +90,7 @@ Override via plugin settings key `database_path` if needed.
 | Pinned memories | `pinned_memories` | Until forget-user |
 | World-model tasks | `tasks` | Until completed/purged |
 | Proactive sleep state | `proactive_state` | Per channel |
-| Bot tokens | `accounts` (encrypted at rest via Sapphire storage) | Until account deleted |
+| Bot tokens | `accounts` (plaintext in the plugin's SQLite under `user/plugin_state/discord/` — protect that directory like `settings.json`) | Until account deleted |
 | Import audit | `import_audit` | Permanent (idempotency keys) |
 
 Settings overlays (global, guild, channel, DM) are stored in the channel repository and loaded at runtime start.

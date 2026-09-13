@@ -1,3 +1,11 @@
+# 2.13.0 - Discord v2
+## September 13, 2026
+- Total Discord plugin rebuild by Zeebie
+- Can see and put images in chat
+- Voice chat ability in Discord
+- Human-like reactions: delayed writes, multi-part messages, emoji
+- Slash command support
+- Memory system for past users that the AI sees
 # 2.12.9 - Images
 - AI can web search images and diplay or see them itself
 - AI can add images to its knowledge layer

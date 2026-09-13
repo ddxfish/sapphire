@@ -47,6 +47,10 @@ class BatchingService:
             )
             self._batches[key] = batch
         batch.observations.append(observation)
+        # Arrival order is no longer creation order: a message whose image
+        # is being described lands after later text (transport C2). Keep
+        # the batch in creation order so `last` is the newest message.
+        batch.observations.sort(key=lambda item: item.created_at)
         urgency = observation.mentioned or observation.clean_content.strip().endswith('?')
         batch.urgency = batch.urgency or urgency
         # Delay follows the BATCH's urgency (an early @mention keeps the short

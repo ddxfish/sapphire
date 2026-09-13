@@ -351,6 +351,21 @@ MIGRATIONS: list[tuple[int, str]] = [
     CREATE INDEX IF NOT EXISTS idx_milestones_user
         ON relationship_milestones(account_name, user_id, created_at DESC);
     """),
+    # 12 — indexes for the hot paths (hunt 2026-09-12, H5/C3). Every reply did
+    # 4-6 full scans of `messages` on the daemon loop, the Traces tab sorted the
+    # whole `traces` table twice per 15 s, and purge / forget / pending-buffer /
+    # due-task / media-follow-up scans were unindexed. All IF NOT EXISTS, no
+    # ALTERs — idempotent under the runner's self-heal.
+    (12, """
+    CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channel_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+    CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_traces_type_created ON traces(trace_type, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_profile_buffers_pending ON profile_buffers(account_name, processed, user_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(account_name, status, run_at);
+    CREATE INDEX IF NOT EXISTS idx_media_artifacts_message ON media_artifacts(message_id);
+    CREATE INDEX IF NOT EXISTS idx_media_artifacts_channel_created ON media_artifacts(channel_id, created_at);
+    """),
 ]
 
 

@@ -238,3 +238,14 @@ def test_mark_wished_marks_all_bulk_recipients(tmp_path):
     for user_id in ('u1', 'u2', 'u3', 'u4'):
         profile = profiles.get_or_create_profile('alpha', user_id)
         assert profile['last_birthday_wish_year'] == 2026
+
+
+def test_third_party_birthday_is_not_captured(tmp_path):
+    # H10 (hunt 2026-09-12): the speaker's mother's birthday was stored as the speaker's.
+    profiles, service, settings = _stack(tmp_path)
+
+    hints = service.try_capture_from_observation(_obs("my mom's birthday is tomorrow"), settings)
+
+    assert hints == []
+    profile = profiles.get_or_create_profile('alpha', 'u99')
+    assert int(profile.get('birthday_month') or 0) == 0

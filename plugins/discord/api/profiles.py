@@ -16,7 +16,7 @@ def _account_from_request(runtime, query=None, body=None) -> str:
     return account_name
 
 
-async def list_profiles(**kwargs):
+def list_profiles(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:
         return {'profiles': []}
@@ -28,7 +28,7 @@ async def list_profiles(**kwargs):
     return {'profiles': profiles}
 
 
-async def list_profile_facts(**kwargs):
+def list_profile_facts(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:
         return {'facts': []}
@@ -45,7 +45,7 @@ async def list_profile_facts(**kwargs):
     }
 
 
-async def list_distill_review(**kwargs):
+def list_distill_review(**kwargs):
     """Pending ambient_distill facts for operator pin / soft-forget."""
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:
@@ -66,7 +66,7 @@ async def list_distill_review(**kwargs):
     return {'facts': facts, 'account': account_name, 'source': source, 'pending_only': pending_only}
 
 
-async def update_profile_fact(**kwargs):
+def update_profile_fact(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:
         return {'error': 'Runtime not available'}
@@ -95,7 +95,7 @@ async def update_profile_fact(**kwargs):
     return {'fact': fact}
 
 
-async def add_profile_fact(**kwargs):
+def add_profile_fact(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:
         return {'error': 'Runtime not available'}
@@ -111,7 +111,7 @@ async def add_profile_fact(**kwargs):
     return {'fact_id': fact_id}
 
 
-async def list_milestones(**kwargs):
+def list_milestones(**kwargs):
     runtime = get_runtime()
     if not runtime or not getattr(runtime, 'milestone_service', None):
         return {'milestones': []}
@@ -125,7 +125,7 @@ async def list_milestones(**kwargs):
     }
 
 
-async def list_interests(**kwargs):
+def list_interests(**kwargs):
     runtime = get_runtime()
     if not runtime or not getattr(runtime, 'interest_service', None):
         return {'interests': []}
@@ -139,7 +139,7 @@ async def list_interests(**kwargs):
     }
 
 
-async def list_lore(**kwargs):
+def list_lore(**kwargs):
     runtime = get_runtime()
     if not runtime or not getattr(runtime, 'lore_service', None):
         return {'lore': []}
@@ -159,7 +159,7 @@ async def list_lore(**kwargs):
     }
 
 
-async def mutate_lore(**kwargs):
+def mutate_lore(**kwargs):
     runtime = get_runtime()
     if not runtime or not getattr(runtime, 'lore_service', None):
         return {'error': 'Runtime not available'}
@@ -207,7 +207,7 @@ async def mutate_lore(**kwargs):
     return {'lore': row}
 
 
-async def memory_test(**kwargs):
+def memory_test(**kwargs):
     """Operator test helpers for milestones, lore, and interest graphs."""
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:

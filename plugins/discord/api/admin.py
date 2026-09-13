@@ -5,19 +5,17 @@ from __future__ import annotations
 from plugins.discord.daemon import get_runtime
 
 
-async def purge_retention(**kwargs):
+def purge_retention(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.retention_service or not runtime.settings_store:
         return {'error': 'Runtime not available'}
     settings = runtime.settings_store.resolve()
-    # The purge scans/deletes on the shared connection — run it off the event
-    # loop so the whole web UI doesn't freeze for the duration.
-    import asyncio
-    return await asyncio.get_running_loop().run_in_executor(
-        None, runtime.retention_service.purge, settings)
+    # Sync handler → core threadpools it (see api/__init__.py); the purge's
+    # scans/deletes on the shared connection never touch the web loop.
+    return runtime.retention_service.purge(settings)
 
 
-async def forget_user(**kwargs):
+def forget_user(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.retention_service:
         return {'error': 'Runtime not available'}
@@ -36,7 +34,7 @@ async def forget_user(**kwargs):
     )
 
 
-async def operator_summary(**kwargs):
+def operator_summary(**kwargs):
     runtime = get_runtime()
     if not runtime:
         return {'error': 'Runtime not available'}

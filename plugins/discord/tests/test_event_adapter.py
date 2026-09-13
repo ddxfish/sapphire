@@ -315,3 +315,33 @@ def test_adapt_message_skips_media_pipeline_when_media_disabled(tmp_path):
     assert _trace_details(trace_repo, 'media_detected') == []
     assert _trace_details(trace_repo, 'media_fallback_used') == []
     assert _trace_details(trace_repo, 'media_interpretation_failed') == []
+
+
+def test_adapt_message_can_defer_media_interpretation(tmp_path):
+    # C2 (hunt 2026-09-12): the transport adapts on the daemon loop with
+    # interpret_media=False and runs interpret_media() on a worker thread, so
+    # the attachment fetch + vision call never block the loop.
+    world = _world(tmp_path)
+    media_service = MediaService(
+        media_repository=MediaRepository(world.channel_repository.sqlite_service),
+        vision_bridge=FakeVisionBridge(),
+    )
+    adapter = DiscordEventAdapter(
+        message_repository=FakeMessageRepo(),
+        trace_repository=FakeTraceRepo(),
+        world_model_service=world,
+        media_service=media_service,
+        settings_store=FakeSettingsStore(),
+    )
+
+    obs = adapter.adapt_message_event('alpha', 99, _message_with_image(), interpret_media=False)
+
+    assert isinstance(obs, TextMessageObservation)
+    assert obs.attachments
+    assert media_service.media_repository.get_by_message('111') == []
+
+    adapter.interpret_media(obs)
+
+    stored = media_service.media_repository.get_by_message('111')
+    assert len(stored) == 1
+    assert stored[0]['interpretation']['summary'] == 'a cat picture'

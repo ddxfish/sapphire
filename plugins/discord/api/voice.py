@@ -6,7 +6,7 @@ from plugins.discord.daemon import get_runtime
 from plugins.discord.sapphire.voice_chat import voice_chat_name
 
 
-async def list_voice_sessions(**kwargs):
+def list_voice_sessions(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.voice_session_service:
         return {'sessions': []}
@@ -31,7 +31,7 @@ async def list_voice_sessions(**kwargs):
     return {'sessions': sessions, 'connections': connections}
 
 
-async def voice_diagnostics(**kwargs):
+def voice_diagnostics(**kwargs):
     runtime = get_runtime()
     if not runtime:
         return {'status': 'daemon_offline'}
@@ -51,7 +51,7 @@ async def voice_diagnostics(**kwargs):
     return payload
 
 
-async def auto_join_status(**kwargs):
+def auto_join_status(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.voice_auto_join_service:
         return {'enabled': False, 'reason': 'daemon_offline', 'targets': []}

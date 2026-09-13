@@ -41,7 +41,14 @@ class DiscordEventAdapter:
         self.cognition_debug_service = cognition_debug_service
         self.llm_debug_service = llm_debug_service
 
-    def adapt_message_event(self, account_name: str, self_user_id: int | str | None, message) -> TextMessageObservation | None:
+    def adapt_message_event(
+        self,
+        account_name: str,
+        self_user_id: int | str | None,
+        message,
+        *,
+        interpret_media: bool = True,
+    ) -> TextMessageObservation | None:
         author_id = str(getattr(message.author, 'id', ''))
         if self_user_id is not None and author_id == str(self_user_id):
             return None
@@ -112,57 +119,8 @@ class DiscordEventAdapter:
             self.distill_service.buffer_observation(observation, settings)
         if self.proactive_repository:
             self.proactive_repository.record_channel_activity(observation.account_name, observation.channel_id, observation.created_at)
-        if self.media_service and observation.attachments:
-            media_settings = None
-            media_enabled = True
-            image_understanding_enabled = True
-            if self.settings_store:
-                media_settings = self.settings_store.resolve(
-                    guild_id=observation.guild_id,
-                    channel_id=observation.channel_id,
-                    dm_id=observation.channel_id if observation.is_dm else None,
-                )
-                media_config = getattr(media_settings, 'media', None)
-                media_enabled = bool(getattr(media_config, 'enabled', True))
-                image_understanding_enabled = bool(getattr(media_config, 'image_understanding_enabled', True))
-            if media_enabled:
-                for artifact in self.media_service.detect_artifacts(
-                    observation.message_id,
-                    observation.channel_id,
-                    observation.account_name,
-                    observation.attachments,
-                ):
-                    if self.trace_repository:
-                        self.trace_repository.record_trace('media_detected', 'Detected media attachment', {
-                            'message_id': observation.message_id,
-                            'channel_id': observation.channel_id,
-                            'media_kind': artifact.media_kind,
-                            'filename': artifact.filename,
-                        })
-                    stored = self.media_service.store_and_interpret(
-                        artifact,
-                        settings=media_settings,
-                        image_understanding_enabled=image_understanding_enabled,
-                    )
-                    interpretation = stored.interpretation or {}
-                    source = interpretation.get('source', '')
-                    fallback = interpretation.get('fallback') or {}
-                    if self.trace_repository and source in {'fallback', 'metadata'}:
-                        self.trace_repository.record_trace('media_fallback_used', 'Used fallback media interpretation', {
-                            'message_id': observation.message_id,
-                            'channel_id': observation.channel_id,
-                            'media_kind': stored.media_kind,
-                            'source': source,
-                            'reason': fallback.get('reason') or ('image_understanding_disabled' if not image_understanding_enabled else 'metadata_only'),
-                        })
-                    if self.trace_repository and fallback.get('error_type'):
-                        self.trace_repository.record_trace('media_interpretation_failed', 'Media interpretation failed', {
-                            'message_id': observation.message_id,
-                            'channel_id': observation.channel_id,
-                            'media_kind': stored.media_kind,
-                            'error_type': fallback.get('error_type'),
-                            'error_message': fallback.get('error_message', ''),
-                        })
+        if interpret_media:
+            self.interpret_media(observation)
         if self.settings_store:
             settings = self.settings_store.resolve(
                 guild_id=observation.guild_id,
@@ -223,6 +181,68 @@ class DiscordEventAdapter:
         except Exception:
             pass
         return observation
+
+    def interpret_media(self, observation: TextMessageObservation) -> None:
+        """Detect, describe, and store the message's attachments.
+
+        Blocking: fetches the attachment (up to 3 tries with sleeps) and
+        calls the vision model. It used to run inline in on_message on the
+        daemon loop — every account, voice feed, and the flush loop froze
+        for the duration (hunt 2026-09-12, C2). The transport now calls it
+        on a worker thread after adapt_message_event(interpret_media=False);
+        the inline default keeps single-threaded callers (tests) unchanged.
+        """
+        if self.media_service and observation.attachments:
+            media_settings = None
+            media_enabled = True
+            image_understanding_enabled = True
+            if self.settings_store:
+                media_settings = self.settings_store.resolve(
+                    guild_id=observation.guild_id,
+                    channel_id=observation.channel_id,
+                    dm_id=observation.channel_id if observation.is_dm else None,
+                )
+                media_config = getattr(media_settings, 'media', None)
+                media_enabled = bool(getattr(media_config, 'enabled', True))
+                image_understanding_enabled = bool(getattr(media_config, 'image_understanding_enabled', True))
+            if media_enabled:
+                for artifact in self.media_service.detect_artifacts(
+                    observation.message_id,
+                    observation.channel_id,
+                    observation.account_name,
+                    observation.attachments,
+                ):
+                    if self.trace_repository:
+                        self.trace_repository.record_trace('media_detected', 'Detected media attachment', {
+                            'message_id': observation.message_id,
+                            'channel_id': observation.channel_id,
+                            'media_kind': artifact.media_kind,
+                            'filename': artifact.filename,
+                        })
+                    stored = self.media_service.store_and_interpret(
+                        artifact,
+                        settings=media_settings,
+                        image_understanding_enabled=image_understanding_enabled,
+                    )
+                    interpretation = stored.interpretation or {}
+                    source = interpretation.get('source', '')
+                    fallback = interpretation.get('fallback') or {}
+                    if self.trace_repository and source in {'fallback', 'metadata'}:
+                        self.trace_repository.record_trace('media_fallback_used', 'Used fallback media interpretation', {
+                            'message_id': observation.message_id,
+                            'channel_id': observation.channel_id,
+                            'media_kind': stored.media_kind,
+                            'source': source,
+                            'reason': fallback.get('reason') or ('image_understanding_disabled' if not image_understanding_enabled else 'metadata_only'),
+                        })
+                    if self.trace_repository and fallback.get('error_type'):
+                        self.trace_repository.record_trace('media_interpretation_failed', 'Media interpretation failed', {
+                            'message_id': observation.message_id,
+                            'channel_id': observation.channel_id,
+                            'media_kind': stored.media_kind,
+                            'error_type': fallback.get('error_type'),
+                            'error_message': fallback.get('error_message', ''),
+                        })
 
     def _record_sleep_dormant_cognition(self, observation, settings) -> None:
         """Keep Cognition preview honest when sleep drops chat before conversation."""

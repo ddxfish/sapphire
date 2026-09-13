@@ -100,13 +100,6 @@
               "label": "Auto-reply in channel",
               "default": true,
               "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
-            },
-            {
-              "key": "cooldown",
-              "type": "number",
-              "label": "Reply cooldown (seconds)",
-              "default": 0,
-              "help": "Minimum seconds between replies in the same channel. 0 = no limit."
             }
           ]
         }

@@ -364,3 +364,32 @@ def test_human_task_follow_up_text_natural():
     assert 'Thursday' in text
     assert 'hotfix' in text
     assert 'INTERNAL' not in text
+
+
+def test_human_task_follow_up_text_scrubs_links_and_pings():
+    # H2 (hunt 2026-09-12): the direct fallback posted a user's reminder text
+    # verbatim as the bot — "@everyone claim free nitro at evil.example".
+    from plugins.discord.proactive.proactive_executor import ProactiveExecutor
+    from plugins.discord.models.intentions import ReplyMessageIntention
+
+    executor = ProactiveExecutor()
+    intention = ReplyMessageIntention(
+        intention_type='reply_message',
+        account_name='alpha',
+        channel_id='c1',
+        message_id='task-followup-1',
+        reason='task:1',
+        prompt='',
+        metadata={'task_type': 'reminder_follow_up'},
+    )
+    text = executor._human_task_follow_up_text(intention, {
+        'author_id': 'u99',
+        'reminder': '@everyone claim free nitro at https://evil.example/x <@&123> @here',
+        'when_label': 'in 2 minutes',
+    })
+    assert 'Reminder' in text
+    assert '<@u99>' in text
+    assert 'https://' not in text
+    assert '@everyone' not in text
+    assert '@here' not in text
+    assert '<@&123>' not in text

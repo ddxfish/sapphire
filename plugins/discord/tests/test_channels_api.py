@@ -1,4 +1,3 @@
-import asyncio
 
 from plugins.discord.api import channels as channels_api
 
@@ -41,7 +40,7 @@ def test_list_proactive_targets_api(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: runtime)
     monkeypatch.setattr(channels_api, 'run_coroutine', lambda coro: _FakeFuture(targets))
 
-    result = asyncio.run(channels_api.list_proactive_targets())
+    result = channels_api.list_proactive_targets()
 
     assert result['connected'] is True
     assert result['targets'][0]['value'] == 'alpha:200'
@@ -67,7 +66,7 @@ def test_list_proactive_targets_voice_query(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: runtime)
     monkeypatch.setattr(channels_api, 'run_coroutine', lambda coro: _FakeFuture(targets))
 
-    result = asyncio.run(channels_api.list_proactive_targets(query={'channel_type': 'voice'}))
+    result = channels_api.list_proactive_targets(query={'channel_type': 'voice'})
 
     assert result['connected'] is True
     assert result['channel_type'] == 'voice'
@@ -77,7 +76,7 @@ def test_list_proactive_targets_voice_query(monkeypatch):
 def test_list_proactive_targets_api_offline(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: None)
 
-    result = asyncio.run(channels_api.list_proactive_targets())
+    result = channels_api.list_proactive_targets()
 
     assert result['connected'] is False
     assert result['targets'] == []
@@ -103,7 +102,7 @@ def test_list_voice_targets_api(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: runtime)
     monkeypatch.setattr(channels_api, 'run_coroutine', lambda coro: _FakeFuture(targets))
 
-    result = asyncio.run(channels_api.list_voice_targets())
+    result = channels_api.list_voice_targets()
 
     assert result['connected'] is True
     assert result['targets'][0]['value'] == 'alpha:300'
@@ -113,7 +112,7 @@ def test_list_voice_targets_api(monkeypatch):
 def test_list_voice_targets_api_offline(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: None)
 
-    result = asyncio.run(channels_api.list_voice_targets())
+    result = channels_api.list_voice_targets()
 
     assert result['connected'] is False
     assert result['targets'] == []
@@ -137,7 +136,7 @@ def test_list_bot_allowlist_api(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: runtime)
     monkeypatch.setattr(channels_api, 'run_coroutine', lambda coro: _FakeFuture(bots))
 
-    result = asyncio.run(channels_api.list_bot_allowlist_candidates())
+    result = channels_api.list_bot_allowlist_candidates()
 
     assert result['connected'] is True
     assert result['bots'][0]['value'] == '500'

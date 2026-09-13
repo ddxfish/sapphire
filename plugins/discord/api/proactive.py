@@ -6,7 +6,7 @@ from plugins.discord.daemon import get_runtime, is_daemon_alive
 from plugins.discord.proactive.test_paths import collect_proactive_diagnostics, run_proactive_test
 
 
-async def proactive_diagnostics(**kwargs):
+def proactive_diagnostics(**kwargs):
     runtime = get_runtime()
     if not runtime:
         return {
@@ -18,7 +18,7 @@ async def proactive_diagnostics(**kwargs):
     return payload
 
 
-async def test_proactive(**kwargs):
+def test_proactive(**kwargs):
     runtime = get_runtime()
     if not runtime:
         return {'error': 'runtime_unavailable', 'daemon_running': is_daemon_alive()}

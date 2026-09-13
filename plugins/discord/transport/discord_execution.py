@@ -235,6 +235,37 @@ class DiscordExecution:
             reference = None
         return sent
 
+    async def read_messages(
+        self,
+        channel_id: str | int,
+        *,
+        count: int = 20,
+        account_name: str | None = None,
+    ) -> list[dict]:
+        """The last `count` messages in a channel, OLDEST first.
+
+        This was a stub returning [] — the tool reported success on an empty
+        channel and she had no way to learn a message id (hunt 2026-09-12, C4).
+        """
+        name, channel = await self._resolve_channel(account_name, channel_id)
+        count = max(1, min(50, int(count or 20)))
+        rows: list[dict] = []
+        async for message in channel.history(limit=count):
+            author = getattr(message, 'author', None)
+            created = getattr(message, 'created_at', None)
+            rows.append({
+                'message_id': str(message.id),
+                'author_id': str(getattr(author, 'id', '') or ''),
+                'author': str(getattr(author, 'display_name', '') or getattr(author, 'name', '') or ''),
+                'content': str(getattr(message, 'clean_content', '') or getattr(message, 'content', '') or ''),
+                'created_at': created.isoformat(timespec='minutes') if created else '',
+                'attachments': len(getattr(message, 'attachments', []) or []),
+                'channel_id': str(channel.id),
+                'account': name,
+            })
+        rows.reverse()
+        return rows
+
     async def edit_message(
         self,
         channel_id: str | int,

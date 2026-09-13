@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from plugins.discord.models.intentions import (
     BirthdayWishIntention,
     GoodnightIntention,
@@ -26,6 +28,14 @@ def _proactive_kind(intention) -> str:
         if isinstance(intention, cls):
             return kind
     return ''
+
+
+_VERBATIM_SCRUB_RE = re.compile(r'https?://\S+|<[@#][!&]?\d+>|@everyone|@here', re.IGNORECASE)
+
+
+def _scrub_verbatim(text) -> str:
+    """User text the bot will post word-for-word: no links, no mention tokens."""
+    return _VERBATIM_SCRUB_RE.sub('[removed]', str(text or '')).strip()
 
 
 class ProactiveExecutor:
@@ -299,9 +309,12 @@ class ProactiveExecutor:
         """Build a human-shaped fallback — never dump internal reply_instructions."""
         author_id = str(payload.get('author_id') or payload.get('user_id') or '')
         mention = f'<@{author_id}>' if author_id else str(payload.get('mention') or '').strip()
-        reminder = str(payload.get('reminder') or '').strip()
+        # reminder/commitment are a Discord user's own words, posted AS the bot
+        # with no LLM in the loop: strip links and mention tokens so a stranger
+        # can't make her advertise or ping (hunt 2026-09-12, H2).
+        reminder = _scrub_verbatim(payload.get('reminder'))
         when_label = str(payload.get('when_label') or '').strip()
-        commitment = str(payload.get('commitment') or '').strip()
+        commitment = _scrub_verbatim(payload.get('commitment'))
         task_type = str((intention.metadata or {}).get('task_type') or '')
         if reminder:
             prefix = f'{mention} ' if mention else ''

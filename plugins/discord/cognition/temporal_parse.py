@@ -97,6 +97,24 @@ _THIRD_PARTY_BIRTHDAY_RE = re.compile(
     r"\b(?:your|his|her|their|its|sapphire'?s?)\s+birthday\b",
     re.IGNORECASE,
 )
+# "my mom's birthday", "my best friend's birthday", "my sons birthday": the
+# speaker means someone ELSE. The capture regex saw "my … birthday" and stored
+# it as the speaker's own (hunt 2026-09-12, H10).
+_MY_SOMEONES_BIRTHDAY_RE = re.compile(
+    r"\bmy\s+(?:\w+\s+){0,2}\w+(?:'s|s')\s+birthday\b"
+    r"|\bmy\s+(?:\w+\s+){0,2}(?:mom|mum|dad|mother|father|parents?|brother|sister|son|daughter"
+    r"|wife|husband|partner|girlfriend|boyfriend|friend|bestie|boss|cousin|aunt|uncle|grandma"
+    r"|grandpa|grandmother|grandfather|nephew|niece|kids?|dogs?|cats?)s?\s+birthday\b",
+    re.IGNORECASE,
+)
+# A birthday needs an explicit day: a number or an ordinal word. dateparser
+# fills a missing day with today's ("my birthday is in May" → May-<today>).
+_EXPLICIT_DAY_RE = re.compile(
+    r"\d|\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth"
+    r"|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth"
+    r"|thirtieth)\b",
+    re.IGNORECASE,
+)
 _COMMITMENT_BODY_RE = re.compile(
     r"(?:i(?:'ll| will)|we(?:'ll| will)|i(?:'m| am)\s+going\s+to|going\s+to|gonna|planning\s+to|plan\s+to|about\s+to)\s+(?P<body>.{8,200})",
     re.IGNORECASE,
@@ -177,6 +195,8 @@ def passes_birthday_capture_gate(text: str) -> bool:
     if not _BIRTHDAY_CAPTURE_RE.search(text):
         return False
     lower = text.lower()
+    if _MY_SOMEONES_BIRTHDAY_RE.search(lower):
+        return False
     if _THIRD_PARTY_BIRTHDAY_RE.search(lower) and not re.search(
         r"\bmy\b.*\bbirthday\b|\bbirthday\b.*\b(?:my|mine)\b",
         lower,
@@ -225,7 +245,9 @@ def extract_birthday_run_at(text: str, now: datetime) -> tuple[datetime, str] | 
 
 def _resolve_birthday_date(text: str, now: datetime) -> datetime | None:
     parsed = _search_future_dates(text, now)
-    if parsed:
+    # Only trust dateparser when the text names a day; "in May" / "next week"
+    # fall through to the relative-day and weekday rules, else None (H10).
+    if parsed and _EXPLICIT_DAY_RE.search(text):
         when_dt, _label = parsed[0]
         return when_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     quick = _quick_relative_day(text, now)

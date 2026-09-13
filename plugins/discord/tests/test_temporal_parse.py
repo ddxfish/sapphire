@@ -134,3 +134,21 @@ def test_birthday_does_not_create_commitment():
     text = 'my birthday is tomorrow'
     assert extract_birthday_run_at(text, _now()) is not None
     assert extract_commitment_run_at(text, _now()) is None
+
+
+def test_someone_elses_birthday_is_not_the_speakers():
+    # H10 (hunt 2026-09-12): "my mom's birthday is tomorrow" wrote the SPEAKER's birthday.
+    assert passes_birthday_capture_gate("my mom's birthday is tomorrow") is False
+    assert passes_birthday_capture_gate("my best friend's birthday is on Friday") is False
+    assert passes_birthday_capture_gate('my sons birthday is may 12') is False
+    assert passes_birthday_capture_gate('my birthday is tomorrow') is True
+    assert passes_birthday_capture_gate('my 30th birthday is May 12') is True
+
+
+def test_birthday_needs_an_explicit_day():
+    # dateparser filled a missing day with today's: "in May" became May-<today>.
+    assert extract_birthday_date('my birthday is in May', _now()) is None
+    assert extract_birthday_date('my birthday is next week', _now()) is None
+    result = extract_birthday_date('my birthday is May 12', _now())
+    assert result is not None
+    assert result[:2] == (5, 12)

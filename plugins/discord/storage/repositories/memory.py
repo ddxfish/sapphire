@@ -51,16 +51,23 @@ class MemoryRepository:
         rows = self.sqlite_service.connection().execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    def search_pinned(self, account_name: str, guild_id: str, needle: str, limit: int = 10) -> list[dict]:
-        pattern = f'%{needle}%'
-        rows = self.sqlite_service.connection().execute(
-            '''
-            SELECT * FROM pinned_memories
-            WHERE account_name = ? AND guild_id = ? AND content LIKE ?
-            ORDER BY created_at DESC LIMIT ?
-            ''',
-            (account_name, guild_id, pattern, max(1, int(limit))),
-        ).fetchall()
+    def search_pinned(
+        self,
+        account_name: str,
+        guild_id: str,
+        needle: str,
+        limit: int = 10,
+        *,
+        channel_id: str | None = None,
+    ) -> list[dict]:
+        query = 'SELECT * FROM pinned_memories WHERE account_name = ? AND guild_id = ? AND content LIKE ?'
+        params: list = [account_name, guild_id, f'%{needle}%']
+        if channel_id is not None:
+            query += ' AND channel_id = ?'
+            params.append(channel_id)
+        query += ' ORDER BY created_at DESC LIMIT ?'
+        params.append(max(1, int(limit)))
+        rows = self.sqlite_service.connection().execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
     def forget_user(self, account_name: str, user_id: str) -> None:

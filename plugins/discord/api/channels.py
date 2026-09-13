@@ -10,7 +10,7 @@ def _channel_type(kwargs) -> str:
     return str(query.get('channel_type', 'text') or 'text').strip().lower()
 
 
-async def _list_targets(**kwargs):
+def _list_targets(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.transport:
         return {'targets': [], 'connected': False, 'error': 'Daemon offline'}
@@ -31,19 +31,19 @@ async def _list_targets(**kwargs):
     return {'targets': targets, 'connected': bool(targets), 'channel_type': channel_type}
 
 
-async def list_proactive_targets(**kwargs):
-    return await _list_targets(**kwargs)
+def list_proactive_targets(**kwargs):
+    return _list_targets(**kwargs)
 
 
-async def list_voice_targets(**kwargs):
+def list_voice_targets(**kwargs):
     kwargs = dict(kwargs)
     query = dict(kwargs.get('query') or {})
     query.setdefault('channel_type', 'voice')
     kwargs['query'] = query
-    return await _list_targets(**kwargs)
+    return _list_targets(**kwargs)
 
 
-async def list_bot_allowlist_candidates(**kwargs):
+def list_bot_allowlist_candidates(**kwargs):
     runtime = get_runtime()
     if not runtime or not runtime.transport:
         return {'bots': [], 'connected': False, 'error': 'Daemon offline'}

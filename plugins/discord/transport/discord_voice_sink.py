@@ -36,6 +36,14 @@ except ImportError:
     DiscordSink = object
 
 
+# Hard cap on one utterance buffer. A weak-signal mic (fan, hiss between the
+# two thresholds) kept extending a buffer with no finalize timer left to drain
+# it — ~690 MB/hour (hunt 2026-09-12, H19). 60 s is longer than any turn she
+# should answer as one utterance.
+MAX_UTTERANCE_SECONDS = 60.0
+_MAX_UTTERANCE_BYTES = int(MAX_UTTERANCE_SECONDS * DISCORD_SAMPLE_RATE * DISCORD_SAMPLE_WIDTH * DISCORD_CHANNELS)
+
+
 def _min_pcm_bytes(min_duration_seconds: float) -> int:
     return int(DISCORD_SAMPLE_RATE * DISCORD_SAMPLE_WIDTH * DISCORD_CHANNELS * min_duration_seconds)
 
@@ -231,6 +239,7 @@ if DiscordSink is not object:
                 self._in_speech[user_id] = True
                 buffer.extend(pcm)
                 self._last_voice[user_id] = time.monotonic()
+                self._enforce_utterance_cap(user_id)
                 if self.on_pcm_frame:
                     try:
                         frame_is_speech = bool(is_speech or (continuing and weak_speech))
@@ -259,6 +268,7 @@ if DiscordSink is not object:
                 return
 
             self._buffers[user_id].extend(pcm)
+            self._enforce_utterance_cap(user_id)
             if self.on_pcm_frame:
                 try:
                     frame_is_speech = bool(is_speech or weak_speech)
@@ -284,9 +294,22 @@ if DiscordSink is not object:
                 lambda uid=user_id: self._finalize_user(uid),
             )
 
+        def _enforce_utterance_cap(self, user_id: int) -> None:
+            """Force-finalize a buffer that reached the cap (called on the router thread)."""
+            if len(self._buffers.get(user_id, b'')) < _MAX_UTTERANCE_BYTES:
+                return
+            self._last_voice[user_id] = 0.0
+            if self.loop is not None:
+                self.loop.call_soon_threadsafe(self._finalize_user, user_id)
+            else:
+                self._finalize_user(user_id)
+
         def _finalize_user(self, user_id: int) -> None:
             last = self._last_voice.get(user_id, 0.0)
             if time.monotonic() - last < self.silence_seconds * 0.85:
+                # Voice is still recent: re-arm instead of returning with no
+                # timer left — the buffer kept growing with nothing to drain it.
+                self._schedule_finalize(user_id)
                 return
             pcm = bytes(self._buffers.pop(user_id, b''))
             self._pending.pop(user_id, None)
