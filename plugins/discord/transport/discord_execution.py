@@ -91,7 +91,6 @@ class DiscordExecution:
     def __init__(self, transport):
         self.transport = transport
         self._voice_listeners = {}
-        self._playback_paths = {}
         self._streaming_playback = {}
 
     def _state_for_account(self, account_name: str | None) -> tuple[str, dict]:
@@ -477,11 +476,32 @@ class DiscordExecution:
         *,
         audio_format: str = 'wav',
     ) -> dict:
-        import discord
-        from plugins.discord.transport.discord_audio import write_playback_file
+        """Play one whole TTS blob (batch lane: speak tools, the legacy voice
+        conversation service, the streaming-TTS fallback).
+
+        Decoded IN-PROCESS to 48 kHz stereo PCM and fed through the same
+        QueuedPCMSource the conversational lane streams into. This was the
+        plugin's only ffmpeg site (H17, hunt 2026-09-12): blob → temp file →
+        FFmpegPCMAudio subprocess, plus a per-key temp path the Windows unlink
+        could leak. No subprocess, no file, one playback path.
+        """
+        from plugins.discord.transport.discord_streaming_playback import (
+            StreamingVoicePlayback,
+            build_pcm_audio_source,
+        )
+        from plugins.discord.transport.discord_tts_chunks import decode_tts_audio
         name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
         if not audio_bytes:
             return {'status': 'empty', 'account_name': name, 'channel_id': str(channel_id)}
+        label = str(audio_format or 'audio').lstrip('.')
+        pcm = await asyncio.to_thread(decode_tts_audio, audio_bytes, label=label)
+        if not pcm:
+            return {
+                'status': 'error',
+                'error': f'could not decode {label} audio for playback',
+                'account_name': name,
+                'channel_id': str(channel_id),
+            }
         from plugins.discord.voice.dave_session import wait_for_dave_ready
         dave_state = await wait_for_dave_ready(voice_client)
         if dave_state.get('is_dave') and not dave_state.get('dave_ready'):
@@ -492,35 +512,26 @@ class DiscordExecution:
                 'channel_id': str(channel_id),
                 'dave': dave_state,
             }
-        key = (name, str(channel_id))
         if voice_client.is_playing():
             _stop_playback_only(voice_client)
         await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
-        old_path = self._playback_paths.pop(key, None)
-        if old_path:
-            try:
-                import os
-                os.unlink(old_path)
-            except OSError:
-                pass
-        suffix = f'.{audio_format}' if audio_format and not audio_format.startswith('.') else '.wav'
-        path = write_playback_file(audio_bytes, suffix=suffix)
-        self._playback_paths[key] = path
+        playback = StreamingVoicePlayback()
+        playback.start()
+        playback.feed(pcm)
+        playback.finish()
 
         def _after_playback(error):
             if error:
                 logger.warning('Voice playback error for %s:%s: %s', name, channel_id, error)
-            stored = self._playback_paths.pop(key, None)
-            if stored:
-                try:
-                    import os
-                    os.unlink(stored)
-                except OSError:
-                    pass
 
-        source = discord.FFmpegPCMAudio(path)
-        voice_client.play(source, after=_after_playback)
-        return {'status': 'playing', 'account_name': name, 'channel_id': str(channel_id), 'bytes': len(audio_bytes)}
+        voice_client.play(build_pcm_audio_source(playback), after=_after_playback)
+        return {
+            'status': 'playing',
+            'account_name': name,
+            'channel_id': str(channel_id),
+            'bytes': len(audio_bytes),
+            'pcm_bytes': len(pcm),
+        }
 
     async def stop_voice_playback(self, account_name: str | None, channel_id: str | int) -> dict:
         name, voice_client = await self._voice_client_for_channel(account_name, channel_id)

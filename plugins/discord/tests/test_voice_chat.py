@@ -141,3 +141,95 @@ def test_ensure_voice_chat_skips_create_when_exists():
     system.llm_chat.session_manager = sm
     assert ensure_voice_chat(system, '111', '222') == name
     system.llm_chat.create_chat.assert_not_called()
+
+
+# ── M8: VC chats are ephemeral unless the operator keeps them ──────────────
+
+def _system_with(settings: dict):
+    system = MagicMock()
+    sm = MagicMock()
+    sm.read_chat_settings.return_value = dict(settings)
+    sm.set_named_chat_settings.return_value = True
+    system.llm_chat.session_manager = sm
+    system.tts.voice_name = 'af_heart'
+    return system, sm
+
+
+def test_voice_chat_is_marked_ephemeral_by_default(monkeypatch):
+    from plugins.discord.sapphire.voice_chat import VOICE_CHAT_TTL_MINUTES
+
+    _fake_scope_keys(monkeypatch, ['memory_scope'])
+    system, sm = _system_with({})
+    ensure_discord_voice_chat_settings(system, 'discord_111_222')
+    payload = sm.set_named_chat_settings.call_args[0][1]
+    assert payload['ephemeral_source'] == 'discord'
+    assert payload['ephemeral_ttl_min'] == VOICE_CHAT_TTL_MINUTES
+    assert payload['ephemeral_last_call'] > 0
+
+
+def test_keep_history_unmarks_a_previously_ephemeral_chat(monkeypatch):
+    _fake_scope_keys(monkeypatch, ['memory_scope'])
+    system, sm = _system_with({
+        'discord_voice_isolated': True,
+        'tts_voice': 'af_heart',
+        'llm_request_timeout': 20.0,
+        'ephemeral_source': 'discord',
+        'ephemeral_last_call': 1.0,
+        'ephemeral_ttl_min': 30.0,
+    })
+    ensure_discord_voice_chat_settings(system, 'discord_111_222', keep_history=True)
+    payload = sm.set_named_chat_settings.call_args[0][1]
+    assert payload['ephemeral_source'] == ''
+    assert 'ephemeral_last_call' not in payload
+
+
+def test_keep_history_never_touches_an_unmarked_chat(monkeypatch):
+    _fake_scope_keys(monkeypatch, ['memory_scope'])
+    system, sm = _system_with({
+        'discord_voice_isolated': True,
+        'tts_voice': 'af_heart',
+        'llm_request_timeout': 20.0,
+        'custom_context': '',
+    })
+    ensure_discord_voice_chat_settings(system, 'discord_111_222', keep_history=True)
+    payload = sm.set_named_chat_settings.call_args[0][1] if sm.set_named_chat_settings.called else {}
+    assert 'ephemeral_source' not in payload
+
+
+def test_touch_voice_chat_restamps_only_marked_chats():
+    from plugins.discord.sapphire.voice_chat import touch_voice_chat
+
+    system, sm = _system_with({'ephemeral_source': 'discord', 'ephemeral_last_call': 1.0})
+    touch_voice_chat(system, 'discord_111_222')
+    name, patch = sm.set_named_chat_settings.call_args[0]
+    assert name == 'discord_111_222'
+    assert set(patch) == {'ephemeral_last_call'} and patch['ephemeral_last_call'] > 1.0
+
+    system, sm = _system_with({'ephemeral_source': 'twilio', 'ephemeral_last_call': 1.0})
+    touch_voice_chat(system, '_phone_x')
+    sm.set_named_chat_settings.assert_not_called()
+
+
+def test_reap_voice_chats_uses_core_reaper_with_discord_source_and_live_exclusion():
+    from plugins.discord.sapphire.voice_chat import reap_voice_chats
+
+    system, sm = _system_with({})
+    sm.reap_ephemeral_chats.return_value = ['discord_1_2']
+    deleted = reap_voice_chats(system, live={'discord_9_9'})
+    assert deleted == ['discord_1_2']
+    kwargs = sm.reap_ephemeral_chats.call_args.kwargs
+    assert kwargs['source'] == 'discord'
+    assert kwargs['exclude'] == {'discord_9_9'}
+
+
+def test_ensure_voice_chat_passes_keep_history_through():
+    system = MagicMock()
+    sm = MagicMock()
+    sm.read_chat_settings.return_value = {'discord_voice_isolated': True, 'tts_voice': 'af_heart',
+                                         'llm_request_timeout': 20.0, 'ephemeral_source': 'discord'}
+    sm.set_named_chat_settings.return_value = True
+    system.llm_chat.session_manager = sm
+    system.tts.voice_name = 'af_heart'
+    ensure_voice_chat(system, '111', '222', keep_history=True)
+    payload = sm.set_named_chat_settings.call_args[0][1]
+    assert payload['ephemeral_source'] == ''

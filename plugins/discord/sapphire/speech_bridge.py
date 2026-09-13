@@ -73,7 +73,7 @@ class SapphireSpeechBridge:
             text = str(whisper.transcribe_file(audio_path) or '').strip()
             rejected, reason = reject_discord_transcript(text)
             if rejected:
-                logger.info('Discord voice STT rejected (%s): %r', reason, text[:120])
+                logger.debug('Discord voice STT rejected (%s): %r', reason, text[:120])
                 return '', 0.0
             return text, (0.75 if text else 0.0)
 
@@ -141,7 +141,7 @@ class SapphireSpeechBridge:
                 segment_list=segment_list,
             )
             if rejected and text:
-                logger.info('Discord voice STT rejected (%s): %r', reason, text[:200])
+                logger.debug('Discord voice STT rejected (%s): %r', reason, text[:200])
                 text = ''
         finally:
             if prepared_path and os.path.exists(prepared_path):
@@ -152,12 +152,13 @@ class SapphireSpeechBridge:
 
         if text:
             logger.info(
-                'Discord voice transcribed (%.2fs rms=%.4f peak=%.4f): %r',
+                'Discord voice transcribed (%.2fs rms=%.4f peak=%.4f, %d chars)',
                 duration,
                 rms,
                 peak,
-                text[:200],
+                len(text),
             )
+            logger.debug('Discord voice transcript: %r', text[:200])
         else:
             clip_hint = ' (clipped — likely DAVE decrypt noise)' if peak >= 0.98 else ''
             logger.info(
@@ -199,7 +200,7 @@ class SapphireSpeechBridge:
             segment_list = list(segments)
             text, _kept = segments_to_transcript(segment_list)
             if segment_list and not text:
-                logger.info(
+                logger.debug(
                     'Discord voice whisper dropped all segments: %s',
                     [
                         (

@@ -33,7 +33,7 @@ What she does in a channel
 - **Type:** `boolean`
 - **Default:** OFF
 
-Archive what she hears as text
+Archive what she hears as text. Off means off: conversational voice still hears you, it just keeps no transcript rows. The Transcribe-only and Summarize-only modes archive regardless — archiving is the mode.
 
 ### Speaking
 
@@ -50,6 +50,14 @@ Let her talk back out loud
 - **Default:** ON
 
 Tick while she thinks, ding on barge-in
+
+### Keep voice chat history
+
+- **Setting key:** `voice.keep_chat_history`
+- **Type:** `boolean`
+- **Default:** OFF
+
+Off = a voice channel's chat is deleted 30 min after her last session there. Each voice channel gets its own chat (`discord_<guild>_<channel>`); with this off it is marked ephemeral like a phone call and reaped once idle. A chat with a live conversation is never reaped. Set it per server (guild override) to keep the home server's history and let strangers' fade.
 
 ### Emergency stop
 

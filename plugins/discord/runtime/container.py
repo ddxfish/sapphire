@@ -114,6 +114,7 @@ class RuntimeContainer:
         self.llm_bridge = None
         self.scheduler_bridge = None
         self._connect_backoff = {}
+        self._last_voice_reap = 0.0
         self.settings_bridge = None
         self.speech_bridge = None
         self.event_adapter = None
@@ -337,6 +338,7 @@ class RuntimeContainer:
             speech_bridge=self.speech_bridge,
             world_model_service=self.world_model_service,
             trace_repository=self.trace_repository,
+            settings_store=self.settings_store,
         )
         self.voice_execution_service = VoiceExecutionService(
             speech_bridge=self.speech_bridge,
@@ -417,6 +419,31 @@ class RuntimeContainer:
                     await self.voice_auto_join_service.tick_async(account_name)
                 except Exception:
                     logger.exception("Voice auto-join tick failed for %s", account_name)
+        await self._reap_voice_chats()
+
+    async def _reap_voice_chats(self) -> None:
+        """Delete VC chats idle past their TTL (M8). Once a minute, off the loop
+        (core's reaper takes the history lock); chats with a live conversation
+        session are excluded."""
+        import time
+        now = time.monotonic()
+        if now - self._last_voice_reap < 60.0:
+            return
+        self._last_voice_reap = now
+        runner = getattr(self, 'discord_conversation_runner', None)
+        live = set(runner.active_chat_names()) if runner else set()
+        try:
+            from core.api_fastapi import get_system
+            system = get_system()
+        except Exception:
+            return
+        if system is None:
+            return
+        from plugins.discord.sapphire.voice_chat import reap_voice_chats
+        try:
+            await asyncio.to_thread(reap_voice_chats, system, live=live)
+        except Exception:
+            logger.exception('Voice chat reap failed')
 
     async def retry_account_connect(self, name: str) -> None:
         """User-triggered retry (e.g. after fixing portal intents): forget backoff, reconcile now."""

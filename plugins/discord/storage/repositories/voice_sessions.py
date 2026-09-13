@@ -91,6 +91,23 @@ class VoiceSessionRepository:
     def close_session(self, session_id: str) -> VoiceSession | None:
         return self.update_session(session_id, state='closed', ended_at=time.time(), health='disconnected')
 
+    def close_stale_sessions(self, account_name: str | None = None) -> int:
+        """Close every 'active' row (optionally one account's). Boot and shutdown
+        call this: a crash/kill never reaches close_session, and the leftovers
+        listed as live sessions forever (hunt 2026-09-12). Returns the count."""
+        conn = self.sqlite_service.connection()
+        params: list = [time.time()]
+        where = "state = 'active'"
+        if account_name:
+            where += ' AND account_name = ?'
+            params.append(account_name)
+        cursor = conn.execute(
+            f"UPDATE voice_sessions SET state = 'closed', ended_at = ?, health = 'disconnected' WHERE {where}",
+            params,
+        )
+        conn.commit()
+        return int(cursor.rowcount or 0)
+
     def add_transcript(
         self,
         session_id: str,

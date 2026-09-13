@@ -134,6 +134,7 @@ class VoiceSettings:
     conversation_prompt_template: str = ''
     max_conversation_sessions: int = 2
     turn_cues_enabled: bool = True
+    keep_chat_history: bool = False  # off = VC chats reap VOICE_CHAT_TTL_MINUTES after the last session
     llm_provider: str = ''  # stamped onto the voice chat as llm_primary ('' = leave alone)
     llm_model: str = ''
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from plugins.discord.sapphire.voice_prompt import merge_voice_context
 
@@ -14,6 +15,11 @@ DEFAULT_DISCORD_TTS_VOICE = 'af_heart'
 # Provider read deadline for voice turns; the driver's silent-regen retry
 # (set_llm_timeout in the runner) pairs with it — same pattern as the phone.
 VOICE_LLM_TIMEOUT_SECONDS = 20.0
+# M8 (hunt 2026-09-12): a VC chat is a stranger's transcript living in the
+# sidebar forever. Unless "Keep voice chat history" is on (Voice tab), the chat
+# is marked for core's ephemeral reaper — same contract as the phone (source +
+# last_call + ttl) — and dies this many minutes after her last session there.
+VOICE_CHAT_TTL_MINUTES = 30.0
 
 
 def is_kokoro_streaming_voice(voice: str) -> bool:
@@ -40,6 +46,7 @@ def ensure_discord_voice_chat_settings(
     conversation_prompt_template: str = '',
     llm_provider: str = '',
     llm_model: str = '',
+    keep_history: bool = False,
 ) -> None:
     """Ensure discord VC chats use Kokoro TTS voice + voice-mode prompt context."""
     llm = getattr(system, 'llm_chat', None)
@@ -87,6 +94,18 @@ def ensure_discord_voice_chat_settings(
             for key in scope_keys:
                 updates[key] = chat_name
             updates['discord_voice_isolated'] = True
+    # Ephemeral marker (see VOICE_CHAT_TTL_MINUTES). Re-stamped on every session
+    # start (here) and end (touch_voice_chat) so the TTL always means "after her
+    # last conversation there". Flipping the toggle on un-marks the chat at the
+    # next join; nothing already reaped comes back. Per-guild/channel overlays
+    # make this a per-server choice (keep the home server's, reap strangers').
+    if keep_history:
+        if settings.get('ephemeral_source') == CHAT_PREFIX:
+            updates['ephemeral_source'] = ''
+    else:
+        updates['ephemeral_source'] = CHAT_PREFIX
+        updates['ephemeral_ttl_min'] = VOICE_CHAT_TTL_MINUTES
+        updates['ephemeral_last_call'] = time.time()
     merged_ctx = merge_voice_context(
         settings.get('custom_context', ''),
         bot_names=bot_names,
@@ -101,6 +120,41 @@ def ensure_discord_voice_chat_settings(
         return
     if setter(chat_name, updates):
         logger.info('Discord voice chat %s settings updated: %s', chat_name, sorted(updates))
+
+
+def touch_voice_chat(system, chat_name: str) -> None:
+    """Session ended: restart the ephemeral clock. No-op on kept chats."""
+    llm = getattr(system, 'llm_chat', None)
+    sm = getattr(llm, 'session_manager', None) if llm else None
+    setter = getattr(sm, 'set_named_chat_settings', None)
+    if sm is None or not callable(setter) or not chat_name:
+        return
+    try:
+        settings = sm.read_chat_settings(chat_name) or {}
+    except Exception:
+        return
+    if settings.get('ephemeral_source') != CHAT_PREFIX:
+        return
+    try:
+        setter(chat_name, {'ephemeral_last_call': time.time()})
+    except Exception as exc:
+        logger.debug('Discord voice chat %s touch skipped: %s', chat_name, exc)
+
+
+def reap_voice_chats(system, *, live=None) -> list:
+    """Delete VC chats idle past their TTL via core's guarded reaper (only
+    chats carrying our marker; never the active chat; never one in `live` —
+    a conversation longer than the TTL must not lose its chat mid-sentence)."""
+    llm = getattr(system, 'llm_chat', None)
+    sm = getattr(llm, 'session_manager', None) if llm else None
+    reap = getattr(sm, 'reap_ephemeral_chats', None)
+    if not callable(reap):
+        return []
+    try:
+        return list(reap(time.time(), source=CHAT_PREFIX, exclude=set(live or ())) or [])
+    except Exception as exc:
+        logger.debug('Discord voice chat reap skipped: %s', exc)
+        return []
 
 
 def sanitize_chat_name(chat_name: str) -> str:
@@ -190,6 +244,7 @@ def ensure_voice_chat(
     conversation_prompt_template: str = '',
     llm_provider: str = '',
     llm_model: str = '',
+    keep_history: bool = False,
 ) -> str:
     """Create the per-VC chat in llm_chat if missing. Returns stored chat_name."""
     chat_name = resolve_voice_chat_name(system, guild_id, channel_id)
@@ -207,6 +262,7 @@ def ensure_voice_chat(
                     conversation_prompt_template=conversation_prompt_template,
                     llm_provider=llm_provider,
                     llm_model=llm_model,
+                    keep_history=keep_history,
                 )
                 return chat_name
         except Exception:
@@ -224,5 +280,6 @@ def ensure_voice_chat(
         conversation_prompt_template=conversation_prompt_template,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        keep_history=keep_history,
     )
     return chat_name

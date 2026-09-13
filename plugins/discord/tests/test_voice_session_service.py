@@ -35,3 +35,28 @@ def test_update_participants(tmp_path):
     updated = service.update_participants(session.session_id, ['u1', 'u2'])
 
     assert updated.participants == ['u1', 'u2']
+
+
+def test_close_stale_sessions_closes_every_active_row(tmp_path):
+    # Crash/kill leftovers listed as live forever; boot + shutdown sweep them.
+    service, repo = _service(tmp_path)
+    a = service.start_session('alpha', 'g1', 'vc1')
+    b = service.start_session('beta', 'g1', 'vc2')
+    closed_already = service.start_session('alpha', 'g1', 'vc3')
+    service.close_session(closed_already.session_id)
+
+    assert repo.close_stale_sessions() == 2
+    assert repo.get_session(a.session_id).state == 'closed'
+    assert repo.get_session(a.session_id).ended_at > 0
+    assert repo.get_session(b.session_id).health == 'disconnected'
+    assert service.list_active('alpha') == []
+    assert repo.close_stale_sessions() == 0
+
+
+def test_close_stale_sessions_can_scope_to_one_account(tmp_path):
+    service, repo = _service(tmp_path)
+    service.start_session('alpha', 'g1', 'vc1')
+    b = service.start_session('beta', 'g1', 'vc2')
+
+    assert repo.close_stale_sessions('alpha') == 1
+    assert repo.get_session(b.session_id).state == 'active'

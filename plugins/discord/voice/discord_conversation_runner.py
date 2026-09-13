@@ -13,7 +13,7 @@ import threading
 import wave
 from typing import Callable
 
-from plugins.discord.sapphire.voice_chat import ensure_voice_chat
+from plugins.discord.sapphire.voice_chat import ensure_voice_chat, touch_voice_chat
 from plugins.discord.voice.discord_conversation_source import DiscordConversationSource
 from plugins.discord.voice.voice_addressing import is_stop_command, mentions_bot, resolve_bot_names, should_address_bot
 
@@ -48,6 +48,11 @@ class DiscordConversationRunner:
     def is_active(self, session_id: str) -> bool:
         with self._lock:
             return session_id in self._sessions
+
+    def active_chat_names(self) -> list[str]:
+        """Chats with a live conversation session — the reaper skips these."""
+        with self._lock:
+            return [str(rec.get('chat_name') or '') for rec in self._sessions.values() if rec.get('chat_name')]
 
     def frame_feed_for(self, session_id: str):
         with self._lock:
@@ -127,6 +132,7 @@ class DiscordConversationRunner:
             else '',
             llm_provider=str(getattr(settings.voice, 'llm_provider', '') or '') if settings else '',
             llm_model=str(getattr(settings.voice, 'llm_model', '') or '') if settings else '',
+            keep_history=bool(getattr(settings.voice, 'keep_chat_history', False)) if settings else False,
         )
         driver, gate, source, frame_feed = self._build_stack(
             system,
@@ -186,6 +192,11 @@ class DiscordConversationRunner:
             rec['driver'].reset()
         except Exception as exc:
             logger.warning('Discord conversation driver reset failed: %s', exc)
+        try:
+            # Session over: the ephemeral TTL counts from now (M8).
+            touch_voice_chat(_get_system(), rec.get('chat_name') or '')
+        except Exception as exc:
+            logger.debug('Voice chat touch failed: %s', exc)
         if self.voice_session_service:
             self.voice_session_service.set_health(session_id, 'connected')
         return {'status': 'stopped'}
@@ -242,14 +253,15 @@ class DiscordConversationRunner:
                 or self.is_turn_active(session_id)
             ):
                 self.interrupt_active_turn(session_id)
-                logger.info('[DISCORD] stop command — halted without new turn: %r', raw[:120])
+                logger.debug('[DISCORD] stop command — halted without new turn: %r', raw[:120])
                 return {'status': 'stopped'}
         if addressing_mode == 'bot_name' and not should_address_bot(raw, bot_names, addressing_mode=addressing_mode):
-            logger.info('[DISCORD] utterance bridge skipped undirected speech: %r', raw[:120])
+            logger.debug('[DISCORD] utterance bridge skipped undirected speech: %r', raw[:120])
             return {'status': 'filtered'}
         driver = rec['driver']
         driver._discord_pending_text = raw
-        logger.info('[DISCORD] utterance bridge submitting turn: %r', raw[:200])
+        logger.info('[DISCORD] utterance bridge submitting turn (%d chars)', len(raw))
+        logger.debug('[DISCORD] utterance bridge turn text: %r', raw[:200])
         self._signal_thinking(rec)
         driver._spawn(driver._run_turn, b'\x00\x00' * 16000)
         return {'status': 'submitted'}
@@ -386,9 +398,10 @@ class DiscordConversationRunner:
                         pass
             if not text:
                 return None
-            logger.info('[DISCORD] conversation turn transcribed: %r', text[:200])
+            logger.info('[DISCORD] conversation turn transcribed (%d chars)', len(text))
+            logger.debug('[DISCORD] conversation turn text: %r', text[:200])
             if addressing_mode == 'bot_name' and not should_address_bot(text, bot_names, addressing_mode=addressing_mode):
-                logger.info('[DISCORD] addressing filter skipped undirected speech: %r', text[:120])
+                logger.debug('[DISCORD] addressing filter skipped undirected speech: %r', text[:120])
                 return ''
             return text
 

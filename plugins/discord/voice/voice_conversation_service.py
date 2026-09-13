@@ -68,7 +68,7 @@ class VoiceConversationService:
         user_text = str(perception_result.get('text') or '').strip()
         if not user_text:
             return {'status': 'skipped', 'reason': 'empty'}
-        logger.info('Voice conversation heard: %r', user_text[:200])
+        logger.debug('Voice conversation heard: %r', user_text[:200])
         prompt = self._build_prompt(session, user_text)
         debug_id = ''
         llm_primary = ''
@@ -109,11 +109,8 @@ class VoiceConversationService:
             text=reply,
         )
         result = self.voice_execution_service.execute(intention)
-        logger.info(
-            'Voice conversation reply status=%s preview=%r',
-            result.get('status'),
-            reply[:120],
-        )
+        logger.info('Voice conversation reply status=%s (%d chars)', result.get('status'), len(reply))
+        logger.debug('Voice conversation reply preview: %r', reply[:120])
         if result.get('status') != 'spoken':
             return {
                 'status': 'skipped',

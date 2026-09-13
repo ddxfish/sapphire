@@ -385,7 +385,7 @@ class VoiceListenerService:
         session = self._sessions.get((account_name, channel_id))
         if not session:
             return
-        logger.info(
+        logger.debug(
             'Voice utterance from %s in %s:%s (%s bytes)',
             speaker_name,
             account_name,
@@ -408,7 +408,7 @@ class VoiceListenerService:
         )
         status = result.get('status', '')
         if status == 'transcribed':
-            logger.info(
+            logger.debug(
                 'Voice transcript %s:%s from %s: %r',
                 account_name,
                 channel_id,
@@ -416,7 +416,7 @@ class VoiceListenerService:
                 str(result.get('text') or '')[:200],
             )
         elif status not in ('missing_session',):
-            logger.info(
+            logger.debug(
                 'Voice perception %s for %s:%s from %s',
                 status,
                 account_name,
@@ -430,7 +430,7 @@ class VoiceListenerService:
                 if turn.get('status') == 'submitted':
                     return
                 if turn.get('status') not in ('filtered', 'skipped', 'runner_unavailable'):
-                    logger.info('Discord conversation utterance bridge: %s', turn)
+                    logger.debug('Discord conversation utterance bridge: %s', turn)
             return
         if self.voice_conversation_service:
             core_active = bool(

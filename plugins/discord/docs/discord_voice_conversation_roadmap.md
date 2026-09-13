@@ -53,7 +53,7 @@ flowchart TB
 
 **Unchanged:** py-cord connection, DAVE patches, auto-join, transcribe/listen/summarize modes (utterance sink).
 
-**Replaced (conversational mode only):** `VoiceConversationService` batch `chat_completion` → TTS file → FFmpeg.
+**Replaced (conversational mode only):** `VoiceConversationService` batch `chat_completion` → TTS file → FFmpeg. (The batch lane itself dropped the file + ffmpeg on 2026-09-13: blobs decode in-process via soundfile into the PCM queue.)
 
 ---
 
@@ -106,7 +106,7 @@ def voice_chat_name(guild_id: str, channel_id: str) -> str:
 
 | Setting | Phase | Default | Purpose |
 |---------|-------|---------|---------|
-| `voice.streaming_playback_enabled` | 1 | `true` | Use queue playback vs batch FFmpeg file |
+| `voice.streaming_playback_enabled` | 1 | `true` | Queue playback (since 2026-09-13 whole blobs decode in-process into the same queue — no ffmpeg anywhere) |
 | `voice.addressing_mode` | 2 | `bot_name` | `always` \| `bot_name` |
 | `voice.addressing_aliases` | 2 | `[]` | Extra names beyond bot display name |
 | `voice.conversation_core_enabled` | 2 | `true` | Use `start_external` in conversational mode |

@@ -1292,6 +1292,14 @@
         "tab": "Voice"
       },
       {
+        "key": "voice.keep_chat_history",
+        "type": "boolean",
+        "label": "Keep voice chat history",
+        "help": "Off = a voice channel's chat is deleted 30 min after her last session there",
+        "default": false,
+        "tab": "Voice"
+      },
+      {
         "key": "voice.llm_provider",
         "type": "string",
         "label": "Voice LLM provider",

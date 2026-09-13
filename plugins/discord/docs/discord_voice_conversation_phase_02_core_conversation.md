@@ -17,7 +17,7 @@
 Conversational mode today:
 
 ```
-UtteranceVoiceSink (2.5s silence) → Whisper → provider.chat_completion() → batch TTS → FFmpeg
+UtteranceVoiceSink (2.5s silence) → Whisper → provider.chat_completion() → batch TTS → in-process PCM queue (ffmpeg retired 2026-09-13)
 ```
 
 Missing:

@@ -4889,7 +4889,7 @@ class ChatSessionManager:
                     except Exception:
                         continue
                     if s.get('ephemeral_source') != source:
-                        continue                      # HARD guard — only twilio-marked chats
+                        continue                      # HARD guard — only chats marked by this source
                     last = float(s.get('ephemeral_last_call', 0) or 0)
                     if not last:
                         continue                      # never called yet — don't reap
@@ -4916,7 +4916,7 @@ class ChatSessionManager:
             logger.error(f"reap_ephemeral_chats failed: {e}")
             return []
         if to_delete:
-            logger.info(f"[TWILIO-REAP] deleted {len(to_delete)} expired ephemeral chat(s): {to_delete}")
+            logger.info(f"[{source.upper()}-REAP] deleted {len(to_delete)} expired ephemeral chat(s): {to_delete}")
             # chat_deleted fires on EVERY delete path (core/hooks.py contract)
             # — this reaper bypassed it, stranding plugin state kept OUTSIDE
             # the chat DB; deterministic ephemeral names then hand the previous

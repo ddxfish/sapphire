@@ -331,14 +331,3 @@ def prepare_discord_wav_for_stt(audio_path: str, *, lead_in_fraction: float = 0.
     os.close(fd)
     sf.write(path, audio, sample_rate)
     return path
-
-
-def write_playback_file(audio_bytes: bytes, *, suffix: str = '.audio') -> str:
-    """Write TTS bytes to a temp file for FFmpegPCMAudio playback."""
-    if not audio_bytes:
-        raise ValueError('audio_bytes is empty')
-    fd, path = tempfile.mkstemp(suffix=suffix)
-    os.close(fd)
-    with open(path, 'wb') as handle:
-        handle.write(audio_bytes)
-    return path

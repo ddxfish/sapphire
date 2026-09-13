@@ -14,7 +14,7 @@
 
 ## Problem
 
-Today `play_voice_audio()` writes the full TTS blob to a temp file and plays via `FFmpegPCMAudio`:
+Originally `play_voice_audio()` wrote the full TTS blob to a temp file and played it via `FFmpegPCMAudio` (retired 2026-09-13 — the blob now decodes in-process with soundfile and feeds the PCM queue; no ffmpeg, no temp file):
 
 ```
 LLM done → synthesize entire reply → write temp WAV → FFmpeg → play
