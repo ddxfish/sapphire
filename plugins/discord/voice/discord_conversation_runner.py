@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import wave
 from typing import Callable
 
@@ -176,6 +177,10 @@ class DiscordConversationRunner:
                     getattr(settings.voice, 'addressing_mode', 'bot_name') if settings else 'bot_name'
                 ),
                 'transcribe_fn': transcribe_fn,
+                'guild_id': str(session.guild_id or ''),
+                'channel_id': str(session.channel_id or ''),
+                'last_addressee': '',
+                'last_reply_end': 0.0,
             }
         return {'status': 'prepared', 'source': source, 'chat_name': chat_name}
 
@@ -236,7 +241,52 @@ class DiscordConversationRunner:
             pass
         return False
 
-    def submit_turn_text(self, session_id: str, text: str) -> dict:
+    def _note_reply_end(self, session_id: str) -> None:
+        with self._lock:
+            rec = self._sessions.get(session_id)
+            if rec:
+                rec['last_reply_end'] = time.monotonic()
+
+    def _voice_settings(self, rec):
+        """Live per-channel voice settings (a tuned window applies without rejoining)."""
+        if not self.settings_store:
+            return None
+        try:
+            return self.settings_store.resolve(guild_id=rec.get('guild_id'), channel_id=rec.get('channel_id')).voice
+        except Exception:
+            return None
+
+    def _address_reason(self, session_id: str, rec: dict, raw: str, *, bot_names, addressing_mode,
+                        speaker_id: str, humans, voice) -> str:
+        """Why this utterance counts as addressed to her ('' = it doesn't).
+
+        Mic test 2026-09-13 (Krem): saying her name in a VC trips his local
+        wakeword, and "Name required each time" made every follow-up silent.
+        The natural rule is per PERSON, not per channel — a human in a group
+        answers when named, or when the person they just answered keeps
+        talking to them. One human alone with her: everything is for her.
+        Unknown occupancy fails closed (name required).
+        """
+        if addressing_mode == 'always':
+            return 'always'
+        if should_address_bot(raw, bot_names, addressing_mode=addressing_mode):
+            return 'named'
+        solo = bool(getattr(voice, 'solo_no_name', True)) if voice is not None else True
+        if solo and humans == 1:
+            return 'solo'
+        if speaker_id and rec.get('last_addressee') == speaker_id:
+            if self.is_turn_active(session_id):
+                return 'follow_up'          # interjecting on her reply to you
+            try:
+                follow = float(getattr(voice, 'follow_up_seconds', 20.0) if voice is not None else 20.0)
+            except (TypeError, ValueError):
+                follow = 20.0
+            end = float(rec.get('last_reply_end') or 0.0)
+            if follow > 0 and end and (time.monotonic() - end) <= follow:
+                return 'follow_up'
+        return ''
+
+    def submit_turn_text(self, session_id: str, text: str, *, speaker_id: str = '', humans=None) -> dict:
         raw = str(text or '').strip()
         if not raw:
             return {'status': 'empty'}
@@ -244,8 +294,11 @@ class DiscordConversationRunner:
             rec = self._sessions.get(session_id)
         if not rec:
             return {'status': 'not_active'}
-        addressing_mode = str(rec.get('addressing_mode') or 'bot_name')
+        voice = self._voice_settings(rec)
+        live_mode = getattr(voice, 'addressing_mode', None) if voice is not None else None
+        addressing_mode = str(live_mode if isinstance(live_mode, str) and live_mode else rec.get('addressing_mode') or 'bot_name')
         bot_names = list(rec.get('bot_names') or [])
+        speaker_id = str(speaker_id or '')
         if is_stop_command(raw):
             if (
                 addressing_mode == 'always'
@@ -253,18 +306,33 @@ class DiscordConversationRunner:
                 or self.is_turn_active(session_id)
             ):
                 self.interrupt_active_turn(session_id)
-                logger.debug('[DISCORD] stop command — halted without new turn: %r', raw[:120])
+                logger.info('[DISCORD] stop command — halted without new turn (%d chars)', len(raw))
+                logger.debug('[DISCORD] stop command text: %r', raw[:120])
                 return {'status': 'stopped'}
-        if addressing_mode == 'bot_name' and not should_address_bot(raw, bot_names, addressing_mode=addressing_mode):
-            logger.debug('[DISCORD] utterance bridge skipped undirected speech: %r', raw[:120])
+        reason = self._address_reason(
+            session_id, rec, raw,
+            bot_names=bot_names, addressing_mode=addressing_mode,
+            speaker_id=speaker_id, humans=humans, voice=voice,
+        )
+        if not reason:
+            logger.info(
+                '[DISCORD] utterance bridge skipped undirected speech (%d chars, mode=%s, %d bot names, humans=%s)',
+                len(raw), addressing_mode, len(bot_names), humans,
+            )
+            logger.debug('[DISCORD] undirected speech text: %r', raw[:120])
             return {'status': 'filtered'}
+        # Only an ADDRESSED utterance replaces her turn. In a group, two people
+        # talking to each other while she answers a third must not cut her off.
+        self.interrupt_active_turn(session_id)
+        with self._lock:
+            rec['last_addressee'] = speaker_id
         driver = rec['driver']
         driver._discord_pending_text = raw
-        logger.info('[DISCORD] utterance bridge submitting turn (%d chars)', len(raw))
+        logger.info('[DISCORD] utterance bridge submitting turn (%d chars, %s, humans=%s)', len(raw), reason, humans)
         logger.debug('[DISCORD] utterance bridge turn text: %r', raw[:200])
         self._signal_thinking(rec)
         driver._spawn(driver._run_turn, b'\x00\x00' * 16000)
-        return {'status': 'submitted'}
+        return {'status': 'submitted', 'reason': reason}
 
     def submit_turn_pcm(self, session_id: str, pcm: bytes) -> dict:
         if not pcm:
@@ -321,6 +389,15 @@ class DiscordConversationRunner:
         logger.info('[DISCORD] interrupted active conversation turn session=%s', session_id)
         return True
 
+    @staticmethod
+    def _barge_hold_ms(settings) -> int:
+        """Discord's own hold window (voice.barge_hold_ms), clamped to sane bounds."""
+        try:
+            value = int(getattr(settings.voice, 'barge_hold_ms', 250)) if settings is not None else 250
+        except (TypeError, ValueError, AttributeError):
+            value = 250
+        return max(30, min(2000, value))
+
     def _build_stack(self, system, *, session, chat_name: str, bot_names: list[str], settings):
         import config
         from core.conversation.driver import ConversationDriver
@@ -335,7 +412,7 @@ class DiscordConversationRunner:
             start_word_fuzzy=float(getattr(config, 'CONVERSATION_START_WORD_FUZZY', 0.7)),
             endpoint_silence_ms=int(getattr(config, 'CONVERSATION_ENDPOINT_SILENCE_MS', 700)),
             min_speech_ms=int(getattr(config, 'CONVERSATION_MIN_SPEECH_MS', 200)),
-            barge_hold_ms=int(getattr(config, 'CONVERSATION_BARGE_HOLD_MS', 90)),
+            barge_hold_ms=self._barge_hold_ms(settings),
         )
         driver._transcribe_fn = self._build_transcribe_fn(
             system,
@@ -352,6 +429,7 @@ class DiscordConversationRunner:
             channel_id=str(session.channel_id),
             speech_bridge=self.speech_bridge,
             voice_transport=self.voice_transport,
+            on_reply_end=lambda: self._note_reply_end(session.session_id),
         )
         driver.set_sink(source)
         frame_feed = DiscordFrameFeed(source.push_pcm)
@@ -375,7 +453,8 @@ class DiscordConversationRunner:
 
         def transcribe(pcm: bytes) -> str | None:
             pending = getattr(driver, '_discord_pending_text', None)
-            if pending is not None:
+            from_bridge = pending is not None
+            if from_bridge:
                 driver._discord_pending_text = None
                 text = str(pending).strip()
             else:
@@ -400,8 +479,14 @@ class DiscordConversationRunner:
                 return None
             logger.info('[DISCORD] conversation turn transcribed (%d chars)', len(text))
             logger.debug('[DISCORD] conversation turn text: %r', text[:200])
+            if from_bridge:
+                # submit_turn_text already ruled this utterance addressed (named,
+                # solo, follow-up). Re-running the bare name check here silently
+                # killed every solo/follow-up turn after "typing…" (mic test 1b).
+                return text
             if addressing_mode == 'bot_name' and not should_address_bot(text, bot_names, addressing_mode=addressing_mode):
-                logger.debug('[DISCORD] addressing filter skipped undirected speech: %r', text[:120])
+                logger.info('[DISCORD] addressing filter skipped undirected speech (%d chars)', len(text))
+                logger.debug('[DISCORD] undirected speech text: %r', text[:120])
                 return ''
             return text
 

@@ -67,7 +67,7 @@ Off = a voice channel's chat is deleted 30 min after her last session there. Eac
 
 Kill switch — overrides all voice settings
 
-### Addressing mode
+### Addressing: mode
 
 - **Setting key:** `voice.addressing_mode`
 - **Type:** `string`
@@ -80,13 +80,39 @@ When she treats speech as meant for her
 - `bot_name` — Name required each time
 - `always` — Always respond
 
-### Name aliases
+### Addressing: name aliases
 
 - **Setting key:** `voice.addressing_aliases`
 - **Type:** `list`
 - **Default:** *(empty)*
 
 Extra names that count as hers (sapph, saphire...)
+
+### Addressing: alone = no name needed
+
+- **Setting key:** `voice.solo_no_name`
+- **Type:** `boolean`
+- **Default:** ON
+
+One person in the channel with her: everything said is for her. Occupancy is read live from the channel at each utterance. Turn it off for a streamer who talks to chat with her sitting in.
+
+### Addressing: follow-up window (seconds)
+
+- **Setting key:** `voice.follow_up_seconds`
+- **Type:** `number`
+- **Default:** `20`
+
+After she answers someone, that person can keep talking without her name for this long, counted from the end of her reply (or from the moment she was cut off). Everyone else still needs her name — so in a channel of ten, only the one person she just spoke to holds the window, and only briefly. `0` turns it off.
+
+### Barge-in: hold (ms)
+
+- **Setting key:** `voice.barge_hold_ms`
+- **Type:** `number`
+- **Default:** `250`
+
+How long you must keep talking over her before she stops. Speech is judged by core's Silero VAD (not raw level); this is the continuous window it must hold. A click or thump can't; a word can. Discord only — the phone and browser keep core's default.
+
+Both addressing settings apply only in `bot_name` mode. In a group, only an addressed utterance interrupts her; two people talking to each other while she answers a third do not cut her off. Set these per server (guild override) when a public server needs stricter rules than your own.
 
 ## Auto-Join Voice Channels
 

@@ -170,18 +170,22 @@ def test_handle_utterance_runs_perception():
     assert transport.playback_stops
 
 
-def test_pcm_barge_in_defers_interrupt_off_router_thread(monkeypatch):
+def test_on_pcm_frame_feeds_the_engine_and_never_interrupts_on_its_own():
+    # Barge-in the core way (mic test 2026-09-13): frames ride into the engine
+    # with no speech hint; core's VAD + arming + hold window decide. The plugin
+    # path that cancelled her on one RMS-classified frame is gone.
     from plugins.discord.models.settings import SettingsOverlay
 
-    submitted = []
+    pushed = []
     interrupt_calls = []
+    turn_active = {'value': True}
 
     class FakeRunner:
         def is_active(self, session_id):
             return session_id == 'sess-conv'
 
         def is_turn_active(self, session_id):
-            return session_id == 'sess-conv'
+            return session_id == 'sess-conv' and turn_active['value']
 
         def interrupt_active_turn(self, session_id):
             interrupt_calls.append(session_id)
@@ -189,13 +193,10 @@ def test_pcm_barge_in_defers_interrupt_off_router_thread(monkeypatch):
 
         def frame_feed_for(self, session_id):
             class Feed:
-                def push_stereo_pcm(self, pcm, is_speech=None):
-                    del pcm, is_speech
+                def push_stereo_pcm(self, pcm, **kwargs):
+                    pushed.append((pcm, kwargs))
 
             return Feed()
-
-    def fake_submit(fn, *args, **kwargs):
-        submitted.append((fn, args, kwargs))
 
     store = SettingsStore()
     store.global_overlay = SettingsOverlay.from_dict(
@@ -208,11 +209,10 @@ def test_pcm_barge_in_defers_interrupt_off_router_thread(monkeypatch):
             }
         }
     )
-    runner = FakeRunner()
     service = VoiceListenerService(
         voice_transport=FakeTransport(),
         voice_perception_service=FakePerception(),
-        conversation_runner=runner,
+        conversation_runner=FakeRunner(),
         settings_store=store,
     )
     session = VoiceSession(
@@ -222,13 +222,50 @@ def test_pcm_barge_in_defers_interrupt_off_router_thread(monkeypatch):
         channel_id='vc1',
         mode=VoiceMode.CONVERSATIONAL,
     )
-    monkeypatch.setattr(
-        'plugins.discord.voice.voice_listener_service.VOICE_WORKER_POOL.submit',
-        fake_submit,
-    )
-    kwargs = service._frame_feed_listen_kwargs(session)
-    on_pcm_frame = kwargs['on_pcm_frame']
+    on_pcm_frame = service._frame_feed_listen_kwargs(session)['on_pcm_frame']
+
+    on_pcm_frame(42, b'\x00\x01' * 200, 5000.0, True)   # "speech" by RMS
+    on_pcm_frame(42, b'\x00\x00' * 200, 0.0, False)     # silence — the engine needs it too
+    assert interrupt_calls == []
+    assert [kw for _pcm, kw in pushed] == [{}, {}]      # no speech hint: VAD decides
+
+    turn_active['value'] = False
     on_pcm_frame(42, b'\x00\x01' * 200, 5000.0, True)
-    assert not interrupt_calls
-    assert len(submitted) == 1
-    assert submitted[0][1][0] == b'\x00\x01' * 200
+    assert len(pushed) == 2                              # nothing fed outside a live turn
+
+
+def test_submit_conversation_turn_passes_speaker_and_live_occupancy():
+    from plugins.discord.models.settings import SettingsOverlay
+
+    calls = []
+
+    class FakeRunner:
+        def is_active(self, session_id):
+            return True
+
+        def submit_turn_text(self, session_id, text, **kwargs):
+            calls.append((session_id, text, kwargs))
+            return {'status': 'submitted'}
+
+    class FakeDiscordTransport:
+        def get_voice_channel_state_sync(self, account_name, channel_id):
+            return {'status': 'ok', 'human_count': 1, 'bot_connected': True}
+
+    transport = FakeTransport()
+    transport.discord_transport = FakeDiscordTransport()
+    store = SettingsStore()
+    store.global_overlay = SettingsOverlay.from_dict(
+        {'voice': {'enabled': True, 'mode': VoiceMode.CONVERSATIONAL.value, 'speaking_enabled': True}}
+    )
+    service = VoiceListenerService(
+        voice_transport=transport,
+        voice_perception_service=FakePerception(),
+        conversation_runner=FakeRunner(),
+        settings_store=store,
+    )
+    session = VoiceSession(session_id='s1', account_name='alpha', guild_id='g1', channel_id='vc1',
+                           mode=VoiceMode.CONVERSATIONAL)
+    result = service._submit_conversation_turn(session, 'story please', speaker_name='Krem', speaker_id='42')
+    assert result['status'] == 'submitted'
+    assert calls[0][2] == {'speaker_id': '42', 'humans': 1}
+    assert calls[0][1].startswith('Krem:')

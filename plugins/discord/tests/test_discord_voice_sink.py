@@ -202,3 +202,25 @@ def test_utterance_cap_forces_finalize():
     sink._enforce_utterance_cap(7)
 
     assert 7 not in sink._buffers
+
+
+@pytest.mark.skipif(
+    __import__('importlib').util.find_spec('discord.sinks') is None,
+    reason='py-cord not installed',
+)
+def test_on_pcm_frame_sees_every_accepted_frame_including_silence():
+    # The engine's barge hold resets on gaps — it must see the silences.
+    from plugins.discord.transport.discord_voice_sink import UtteranceVoiceSink
+
+    frames = []
+    sink = UtteranceVoiceSink(
+        on_utterance=lambda *a: None,
+        loop=None,
+        on_pcm_frame=lambda uid, pcm, rms, is_speech: frames.append((uid, rms, is_speech)),
+    )
+    user = FakeUser(7, 'Krem')
+    sink.write(b'\x00\x00' * 400, user)
+    sink.write(struct.pack('<400h', *([4000] * 400)), user)
+    sink.write(b'\x00\x00' * 400, user)
+    assert [f[2] for f in frames] == [False, True, False]
+    assert all(f[0] == 7 for f in frames)

@@ -1373,7 +1373,7 @@
       {
         "key": "voice.addressing_mode",
         "type": "string",
-        "label": "Addressing mode",
+        "label": "Addressing: mode",
         "help": "When she treats speech as meant for her",
         "default": "bot_name",
         "tab": "Voice",
@@ -1391,9 +1391,33 @@
       {
         "key": "voice.addressing_aliases",
         "type": "list",
-        "label": "Name aliases",
+        "label": "Addressing: name aliases",
         "help": "Extra names that count as hers (sapph, saphire...)",
         "default": [],
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.solo_no_name",
+        "type": "boolean",
+        "label": "Addressing: alone = no name needed",
+        "help": "One person in the channel with her: everything said is for her",
+        "default": true,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.follow_up_seconds",
+        "type": "number",
+        "label": "Addressing: follow-up window (seconds)",
+        "help": "After she answers someone, that person can keep talking without her name for this long. Others still need it. 0 = off",
+        "default": 20,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.barge_hold_ms",
+        "type": "number",
+        "label": "Barge-in: hold (ms)",
+        "help": "How long you must keep talking over her before she stops. A click or thump can't hold this long; a word can",
+        "default": 250,
         "tab": "Voice"
       },
       {

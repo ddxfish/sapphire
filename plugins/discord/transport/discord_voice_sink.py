@@ -224,6 +224,14 @@ if DiscordSink is not object:
                     self._debug_last_log = now
                     self._debug_frames = 0
                     self._debug_max_rms = 0.0
+            if self.on_pcm_frame:
+                # Every accepted frame, silence included: the conversation
+                # engine's barge-in needs the gaps (its hold timer resets on
+                # them) and decides speech with core's VAD, not this RMS hint.
+                try:
+                    self.on_pcm_frame(user_id, pcm, rms, rms >= self.speech_rms_threshold)
+                except Exception:
+                    logger.debug('on_pcm_frame callback failed', exc_info=True)
             continuing = self._in_speech.get(user_id)
             threshold = self.speech_rms_threshold * (
                 SPEECH_CONTINUE_RATIO if continuing else 1.0
@@ -240,46 +248,14 @@ if DiscordSink is not object:
                 buffer.extend(pcm)
                 self._last_voice[user_id] = time.monotonic()
                 self._enforce_utterance_cap(user_id)
-                if self.on_pcm_frame:
-                    try:
-                        frame_is_speech = bool(is_speech or (continuing and weak_speech))
-                        self.on_pcm_frame(user_id, pcm, rms, frame_is_speech)
-                    except TypeError:
-                        try:
-                            self.on_pcm_frame(user_id, pcm, rms)
-                        except Exception:
-                            logger.debug('on_pcm_frame callback failed', exc_info=True)
-                    except Exception:
-                        logger.debug('on_pcm_frame callback failed', exc_info=True)
                 self._schedule_finalize(user_id)
                 return
 
             if not continuing:
-                if self.on_pcm_frame and weak_speech:
-                    try:
-                        self.on_pcm_frame(user_id, pcm, rms, bool(weak_speech))
-                    except TypeError:
-                        try:
-                            self.on_pcm_frame(user_id, pcm, rms)
-                        except Exception:
-                            logger.debug('on_pcm_frame callback failed', exc_info=True)
-                    except Exception:
-                        logger.debug('on_pcm_frame callback failed', exc_info=True)
                 return
 
             self._buffers[user_id].extend(pcm)
             self._enforce_utterance_cap(user_id)
-            if self.on_pcm_frame:
-                try:
-                    frame_is_speech = bool(is_speech or weak_speech)
-                    self.on_pcm_frame(user_id, pcm, rms, frame_is_speech)
-                except TypeError:
-                    try:
-                        self.on_pcm_frame(user_id, pcm, rms)
-                    except Exception:
-                        logger.debug('on_pcm_frame callback failed', exc_info=True)
-                except Exception:
-                    logger.debug('on_pcm_frame callback failed', exc_info=True)
             if weak_speech:
                 self._last_voice[user_id] = time.monotonic() - self.silence_seconds * 0.15
 

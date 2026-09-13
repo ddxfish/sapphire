@@ -174,3 +174,37 @@ def test_voice_text_never_logs_at_info():
     files = list((PLUGIN / 'voice').glob('*.py')) + [PLUGIN / 'sapphire' / 'speech_bridge.py']
     offenders = [str(path) for path in files if _TEXT_AT_INFO.search(path.read_text(encoding='utf-8'))]
     assert offenders == []
+
+
+def test_wait_streaming_playback_gives_up_when_nobody_pulls_frames(monkeypatch):
+    from plugins.discord.transport.discord_streaming_playback import StreamingVoicePlayback
+
+    voice_client = FakeVoiceClient()                  # is_playing() is always False
+    execution = _execution(monkeypatch, voice_client)
+    playback = StreamingVoicePlayback()
+    playback.start()
+    playback.feed(b'\x01' * 100)
+    playback.finish()
+    execution._streaming_playback[('alpha', '123')] = playback
+
+    result = asyncio.run(execution.wait_streaming_playback('alpha', '123', timeout=30.0))
+
+    assert result['status'] == 'not_playing'
+
+
+def test_wait_streaming_playback_reports_drained_when_the_player_pulls(monkeypatch):
+    from plugins.discord.transport.discord_streaming_playback import StreamingVoicePlayback
+
+    voice_client = FakeVoiceClient()
+    execution = _execution(monkeypatch, voice_client)
+    playback = StreamingVoicePlayback()
+    playback.start()
+    playback.feed(b'\x01' * 100)
+    playback.finish()
+    while playback.read_frame():                     # a player pulling the queue
+        pass
+    execution._streaming_playback[('alpha', '123')] = playback
+
+    result = asyncio.run(execution.wait_streaming_playback('alpha', '123', timeout=5.0))
+
+    assert result['status'] == 'drained'

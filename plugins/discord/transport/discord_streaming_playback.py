@@ -53,10 +53,24 @@ class StreamingVoicePlayback:
                 frame = bytes(self._pending[:DISCORD_FRAME_BYTES])
                 del self._pending[:DISCORD_FRAME_BYTES]
                 return frame
+            if self._finished and self._pending:
+                # Decoded TTS is never a multiple of one 20 ms frame. This
+                # partial tail used to sit here forever: not a full frame, not
+                # empty → silence every read, wait() never saw "drained", the
+                # turn never ended, and the engine stayed armed in RESPONDING
+                # until something (an AC click) tripped a barge-in — every
+                # post-reply "barge" in the 2026-09-13 mic tests. Pad and emit.
+                frame = bytes(self._pending).ljust(DISCORD_FRAME_BYTES, b'\x00')
+                self._pending.clear()
+                return frame
             if self._finished and not self._pending:
                 self._playing = False
                 return b''
         return _SILENCE_FRAME
+
+    def is_drained(self) -> bool:
+        with self._lock:
+            return self._stopped or (self._finished and not self._pending)
 
     # ── Driver sink contract (Phase 2) ───────────────────────────────────────
     def start(self) -> None:

@@ -671,17 +671,36 @@ class DiscordExecution:
     ) -> dict:
         import asyncio
 
-        name, _voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
         key = self._streaming_key(name, str(channel_id))
         playback = self._streaming_playback.get(key)
         if playback is None:
             return {'status': 'not_streaming', 'account_name': name, 'channel_id': str(channel_id)}
 
-        def _wait():
-            playback.wait(timeout=timeout)
+        def _wait() -> str:
+            # Frames drain only while py-cord's player pulls them. If the player
+            # is gone (never started, stopped underneath us) the queue can never
+            # empty — waiting the full timeout would hold the turn open for 3 min.
+            import time
+            deadline = time.monotonic() + max(0.0, float(timeout))
+            idle_polls = 0
+            while not playback.is_drained():
+                if time.monotonic() >= deadline:
+                    return 'timeout'
+                try:
+                    playing = bool(voice_client.is_playing())
+                except Exception:
+                    playing = True
+                idle_polls = 0 if playing else idle_polls + 1
+                if idle_polls >= 3:
+                    return 'not_playing'
+                playback.wait(timeout=0.25)
+            return 'drained'
 
-        await asyncio.to_thread(_wait)
-        return {'status': 'drained', 'account_name': name, 'channel_id': str(channel_id)}
+        status = await asyncio.to_thread(_wait)
+        if status != 'drained':
+            logger.warning('Streaming playback wait ended early for %s:%s: %s', name, channel_id, status)
+        return {'status': status, 'account_name': name, 'channel_id': str(channel_id)}
 
     async def disconnect_voice(self, account_name: str | None, channel_id: str | int | None = None) -> dict:
         name, state = self._state_for_account(account_name)

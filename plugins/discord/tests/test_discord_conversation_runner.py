@@ -180,3 +180,113 @@ def test_runner_stop_command_halts_without_new_turn():
             assert result['status'] == 'stopped'
             interrupt.assert_called_once_with('sess-1')
             driver._spawn.assert_not_called()
+
+
+# ── Addressing (mic test 2026-09-13): per-person follow-up + solo rule ────────
+
+def _started_runner(store=None):
+    playback = MagicMock()
+    playback.start.return_value = {'status': 'streaming'}
+    runner = DiscordConversationRunner(playback_service=playback, settings_store=store)
+    get_system = patch('plugins.discord.voice.discord_conversation_runner._get_system')
+    build_stack = patch.object(runner, '_build_stack')
+    gs = get_system.start()
+    bs = build_stack.start()
+    gs.return_value = MagicMock()
+    driver = MagicMock()
+    driver._spawn = MagicMock()
+    driver._active_sink = None
+    driver.engine.state = 'idle'
+    source = MagicMock()
+    source._playing = False
+    bs.return_value = (driver, MagicMock(), source, MagicMock())
+    assert runner.start(_session())['status'] == 'active'
+    runner._sessions['sess-1']['bot_names'] = ['Remmi']
+    get_system.stop()
+    build_stack.stop()
+    return runner, driver
+
+
+def test_group_without_name_is_filtered_and_never_interrupts():
+    runner, driver = _started_runner()
+    driver._active_sink = object()          # she is mid-reply to someone else
+    with patch.object(runner, 'interrupt_active_turn', return_value=True) as interrupt:
+        result = runner.submit_turn_text('sess-1', 'Krem: tell me a two paragraph story', speaker_id='42', humans=3)
+    assert result['status'] == 'filtered'
+    interrupt.assert_not_called()
+    driver._spawn.assert_not_called()
+
+
+def test_alone_with_her_needs_no_name():
+    runner, driver = _started_runner()
+    result = runner.submit_turn_text('sess-1', 'Krem: tell me a two paragraph story', speaker_id='42', humans=1)
+    assert result == {'status': 'submitted', 'reason': 'solo'}
+    assert runner._sessions['sess-1']['last_addressee'] == '42'
+    driver._spawn.assert_called_once()
+
+
+def test_unknown_occupancy_fails_closed_to_the_name_rule():
+    runner, _driver = _started_runner()
+    assert runner.submit_turn_text('sess-1', 'Krem: story please', speaker_id='42', humans=None)['status'] == 'filtered'
+    assert runner.submit_turn_text('sess-1', 'Krem: Remmi, story please', speaker_id='42', humans=None)['reason'] == 'named'
+
+
+def test_follow_up_window_belongs_to_the_person_she_answered():
+    import time as _time
+
+    runner, driver = _started_runner()
+    assert runner.submit_turn_text('sess-1', 'Krem: hey Remmi', speaker_id='42', humans=3)['reason'] == 'named'
+    runner._note_reply_end('sess-1')                       # her reply just ended
+    # Krem keeps talking, no name: follow-up. A bystander: still filtered.
+    assert runner.submit_turn_text('sess-1', 'Krem: and a story?', speaker_id='42', humans=3)['reason'] == 'follow_up'
+    assert runner.submit_turn_text('sess-1', 'Bob: what did she say', speaker_id='7', humans=3)['status'] == 'filtered'
+    # Window expired: name required again.
+    runner._sessions['sess-1']['last_reply_end'] = _time.monotonic() - 25.0
+    assert runner.submit_turn_text('sess-1', 'Krem: one more?', speaker_id='42', humans=3)['status'] == 'filtered'
+
+
+def test_interjecting_on_her_reply_to_you_counts_as_follow_up():
+    runner, driver = _started_runner()
+    assert runner.submit_turn_text('sess-1', 'Krem: hey Remmi', speaker_id='42', humans=3)['reason'] == 'named'
+    driver._active_sink = object()                          # still answering Krem
+    with patch.object(runner, 'interrupt_active_turn', return_value=True) as interrupt:
+        result = runner.submit_turn_text('sess-1', 'Krem: wait, shorter', speaker_id='42', humans=3)
+    assert result['reason'] == 'follow_up'
+    interrupt.assert_called_once_with('sess-1')
+
+
+def test_follow_up_window_zero_turns_it_off():
+    from plugins.discord.models.settings import SettingsStore
+
+    store = SettingsStore.from_dict({'global': {'voice': {'follow_up_seconds': 0, 'solo_no_name': False}}})
+    runner, _driver = _started_runner(store=store)
+    assert runner.submit_turn_text('sess-1', 'Krem: hey Remmi', speaker_id='42', humans=1)['reason'] == 'named'
+    runner._note_reply_end('sess-1')
+    assert runner.submit_turn_text('sess-1', 'Krem: and?', speaker_id='42', humans=1)['status'] == 'filtered'
+
+
+def test_transcribe_hook_trusts_the_runner_decision_but_still_gates_raw_pcm():
+    # Mic test 1b: the driver's transcribe hook re-ran the bare name check on
+    # text the runner had already admitted (solo) → "typing…" then silence.
+    from types import SimpleNamespace
+
+    runner = DiscordConversationRunner(playback_service=MagicMock(), settings_store=None)
+    driver = SimpleNamespace(_discord_pending_text='Krem: tell me a story')
+    whisper = MagicMock()
+    whisper.transcribe_file.return_value = 'a raw pcm turn with no name'
+    system = SimpleNamespace(whisper_client=whisper)
+    transcribe = runner._build_transcribe_fn(system, driver=driver, settings=None, bot_names=['Remmi'])
+
+    assert transcribe(b'') == 'Krem: tell me a story'      # admitted upstream: passes
+    assert driver._discord_pending_text is None
+    assert transcribe(b'\x00\x00' * 160) == ''             # raw pcm path: name rule still applies
+
+
+def test_barge_hold_comes_from_discord_voice_settings_with_clamp():
+    from types import SimpleNamespace
+
+    hold = DiscordConversationRunner._barge_hold_ms
+    assert hold(None) == 250
+    assert hold(SimpleNamespace(voice=SimpleNamespace(barge_hold_ms=400))) == 400
+    assert hold(SimpleNamespace(voice=SimpleNamespace(barge_hold_ms=5))) == 30
+    assert hold(SimpleNamespace(voice=SimpleNamespace(barge_hold_ms='nope'))) == 250

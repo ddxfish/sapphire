@@ -51,7 +51,9 @@ class DiscordConversationSource:
         channel_id: str,
         speech_bridge=None,
         voice_transport=None,
+        on_reply_end=None,
     ):
+        self.on_reply_end = on_reply_end
         self.driver = driver
         self.gate = gate
         self.playback_service = playback_service
@@ -210,6 +212,7 @@ class DiscordConversationSource:
         except Exception as exc:
             logger.debug('Discord conversation playback interrupt failed: %s', exc)
         self._playing = False
+        self._fire_reply_end()
 
     def finish(self) -> None:
         if not self._stop_flag.is_set():
@@ -220,9 +223,22 @@ class DiscordConversationSource:
 
     def wait(self, timeout: float = 180.0) -> None:
         self.playback_service.wait(self.account_name, self.channel_id, timeout=timeout)
-        if self._audio_bytes_fed <= 0:
+        # The fallback exists for "streaming TTS produced nothing". A turn cut
+        # by a barge-in also fed nothing — and its partial row ("Honestly, K")
+        # is not something to read aloud (mic test 2026-09-13).
+        if self._audio_bytes_fed <= 0 and not self._stop_flag.is_set():
             self._batch_fallback_speak()
         self._playing = False
+        self._fire_reply_end()
+
+    def _fire_reply_end(self) -> None:
+        """Her reply just ended or was cut: the follow-up window starts now."""
+        if self.on_reply_end is None:
+            return
+        try:
+            self.on_reply_end()
+        except Exception as exc:
+            logger.debug('reply-end callback failed: %s', exc)
 
     def _batch_fallback_speak(self) -> None:
         text = self._latest_assistant_text()

@@ -100,40 +100,24 @@ class VoiceListenerService:
             return {}
         session_id = session.session_id
 
-        def _pcm_barge_in(pcm_stereo: bytes, speech: bool) -> None:
+        def on_pcm_frame(user_id, pcm_stereo, rms, is_speech=None):
+            """Barge-in the core way (mic test 2026-09-13: one 20 ms frame of
+            room noise cancelled her mid-thought and the fallback spoke the
+            fragment). While a turn is live every accepted frame rides into the
+            conversation engine with NO speech hint: core's Silero gate decides
+            speech, the engine's arming (her audio actually flowing) and hold
+            window decide the barge, and the driver's own barge callback cancels
+            the LLM and cuts audio. The plugin used to interrupt on its own here
+            — one RMS-classified frame, thinking phase included. push_stereo_pcm
+            is a resample + queue put: safe on py-cord's router thread."""
+            del user_id, rms, is_speech
             runner = self.conversation_runner
-            if not runner or not runner.is_active(session_id):
-                return
-            if runner.interrupt_active_turn(session_id):
-                logger.info('[DISCORD] PCM barge-in interrupted session=%s', session_id)
-            with runner._lock:
-                rec = runner._sessions.get(session_id)
-            if not rec:
+            if not runner or not runner.is_turn_active(session_id):
                 return
             try:
-                from core.conversation.engine import RESPONDING
-                if getattr(rec['driver'].engine, 'state', None) == RESPONDING:
-                    frame_feed.push_stereo_pcm(pcm_stereo, is_speech=speech)
+                frame_feed.push_stereo_pcm(pcm_stereo)
             except Exception:
-                pass
-
-        def on_pcm_frame(user_id, pcm_stereo, rms, is_speech=None):
-            del user_id, rms
-            runner = self.conversation_runner
-            if not runner or not runner.is_active(session_id):
-                return
-            if not is_speech:
-                return
-            if not runner.is_turn_active(session_id):
-                return
-            now = time.monotonic()
-            last = float(getattr(session, '_last_pcm_barge_mono', 0.0) or 0.0)
-            if now - last < 0.15:
-                return
-            session._last_pcm_barge_mono = now
-            # sink.write runs on py-cord's PacketRouter thread while holding the
-            # router lock; sync transport interrupt would deadlock the asyncio loop.
-            VOICE_WORKER_POOL.submit(_pcm_barge_in, bytes(pcm_stereo), bool(is_speech))
+                logger.debug('Voice frame feed push failed', exc_info=True)
 
         return {'on_pcm_frame': on_pcm_frame}
 
@@ -186,14 +170,35 @@ class VoiceListenerService:
         session._conv_runner_was_active = True
         return True
 
-    def _submit_conversation_turn(self, session, text: str, *, speaker_name: str = '') -> dict:
+    def _submit_conversation_turn(self, session, text: str, *, speaker_name: str = '', speaker_id: str = '') -> dict:
         if not text or not self.conversation_runner:
             return {'status': 'skipped'}
         if not self._ensure_conversation_runner_for_utterance(session):
             return {'status': 'runner_unavailable'}
-        self.conversation_runner.interrupt_active_turn(session.session_id)
+        # The runner interrupts her only once the utterance counts as addressed
+        # (mic test 2026-09-13) — an unconditional interrupt here let any
+        # bystander's chatter cut her off in a group.
         labeled = format_voice_turn_text(text, speaker_name=speaker_name)
-        return self.conversation_runner.submit_turn_text(session.session_id, labeled)
+        return self.conversation_runner.submit_turn_text(
+            session.session_id,
+            labeled,
+            speaker_id=str(speaker_id or ''),
+            humans=self._human_count(session),
+        )
+
+    def _human_count(self, session):
+        """Live humans in the channel (None = unknown → the name rule applies).
+        Runs on a worker thread; the transport hop is an in-memory member walk."""
+        transport = getattr(self.voice_transport, 'discord_transport', None)
+        getter = getattr(transport, 'get_voice_channel_state_sync', None)
+        if not callable(getter):
+            return None
+        try:
+            state = getter(session.account_name, str(session.channel_id)) or {}
+        except Exception:
+            return None
+        humans = state.get('human_count') if isinstance(state, dict) else None
+        return int(humans) if isinstance(humans, (int, float)) else None
 
     def _ensure_core_runner(self, session) -> None:
         if not self._use_core_conversation(session) or not self.conversation_runner:
@@ -426,11 +431,11 @@ class VoiceListenerService:
         if self._use_core_conversation(session):
             text = str(result.get('text') or '').strip()
             if status == 'transcribed' and text:
-                turn = self._submit_conversation_turn(session, text, speaker_name=speaker_name)
+                turn = self._submit_conversation_turn(session, text, speaker_name=speaker_name, speaker_id=str(user_id))
                 if turn.get('status') == 'submitted':
                     return
                 if turn.get('status') not in ('filtered', 'skipped', 'runner_unavailable'):
-                    logger.debug('Discord conversation utterance bridge: %s', turn)
+                    logger.info('Discord conversation utterance bridge: %s', turn)
             return
         if self.voice_conversation_service:
             core_active = bool(

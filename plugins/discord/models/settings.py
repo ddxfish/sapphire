@@ -131,6 +131,14 @@ class VoiceSettings:
     conversation_core_enabled: bool = True
     addressing_mode: str = 'bot_name'  # always | bot_name
     addressing_aliases: list = field(default_factory=list)
+    # Addressing (mic test 2026-09-13): in bot_name mode, one human alone with
+    # her needs no name; the person she just answered may keep talking nameless
+    # for follow_up_seconds after her reply ends. Everyone else says her name.
+    solo_no_name: bool = True
+    follow_up_seconds: float = 20.0
+    # Continuous VAD-speech needed over her before she stops (Discord only —
+    # its audio arrives through the client's own gate, clicks and all).
+    barge_hold_ms: int = 250
     conversation_prompt_template: str = ''
     max_conversation_sessions: int = 2
     turn_cues_enabled: bool = True

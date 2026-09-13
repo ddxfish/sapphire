@@ -76,3 +76,29 @@ def test_streaming_playback_wait_drains_after_finish():
 
     _drain()
     playback.wait(timeout=1.0)
+
+
+def test_partial_tail_is_padded_out_and_the_queue_drains():
+    # Root of every post-reply "barge-in" in the 2026-09-13 mic tests: a tail
+    # shorter than one frame never drained, so the turn never ended.
+    playback = StreamingVoicePlayback()
+    playback.start()
+    playback.feed(b'\x01\x02' * 500)            # 1000 bytes: less than one frame
+    playback.finish()
+    assert playback.is_drained() is False
+    frame = playback.read_frame()
+    assert len(frame) == DISCORD_FRAME_BYTES
+    assert frame.startswith(b'\x01\x02' * 500)
+    assert frame.endswith(b'\x00' * (DISCORD_FRAME_BYTES - 1000))
+    assert playback.read_frame() == b''
+    assert playback.is_drained() is True
+    playback.wait(timeout=1.0)                    # returns at once now
+
+
+def test_is_drained_tracks_stop_and_finish():
+    playback = StreamingVoicePlayback()
+    playback.start()
+    playback.feed(b'\xff' * DISCORD_FRAME_BYTES)
+    assert playback.is_drained() is False
+    playback.stop()
+    assert playback.is_drained() is True
