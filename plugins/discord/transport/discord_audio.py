@@ -39,18 +39,6 @@ def _read_wav_pcm(wav_bytes: bytes) -> tuple[bytes, int, int]:
     return frames, sample_rate, channels
 
 
-def wav_bytes_to_whisper_pcm_mono(wav_bytes: bytes) -> bytes:
-    """Decode WAV bytes to 16 kHz mono int16 PCM for conversation turns."""
-    if not wav_bytes:
-        return b''
-    pcm, sample_rate, channels = _read_wav_pcm(wav_bytes)
-    if channels == 2:
-        pcm = _stereo_to_mono_int16(pcm)
-    if sample_rate != WHISPER_SAMPLE_RATE:
-        pcm = _resample_int16(pcm, sample_rate, WHISPER_SAMPLE_RATE)
-    return pcm
-
-
 def concat_wav_bytes(left: bytes, right: bytes) -> bytes:
     """Concatenate two mono/stereo WAV blobs with matching format."""
     if not left:

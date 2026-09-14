@@ -27,7 +27,7 @@ class LifecycleManager:
 
             stack = voice_stack_info()
             logger.info(
-                '[discord_cognitive] Voice stack: pycord=%s davey=%s dave_mode=%s '
+                '[DISCORD] Voice stack: pycord=%s davey=%s dave_mode=%s '
                 'router_patches=%s opus_pcm_patch=%s',
                 stack.get('pycord_version') or 'missing',
                 stack.get('davey'),
@@ -35,11 +35,16 @@ class LifecycleManager:
                 stack.get('router_patches'),
                 stack.get('opus_pcm_patch'),
             )
+            if stack.get('patches_missing'):
+                logger.warning(
+                    '[DISCORD] voice patches NOT applied (py-cord moved/renamed something?): %s',
+                    {name: stack['patches'].get(name) for name in stack['patches_missing']},
+                )
             if not stack.get('voice_sinks') or not stack.get('davey'):
-                logger.warning('[discord_cognitive] Voice receive unavailable — %s', stack)
+                logger.warning('[DISCORD] Voice receive unavailable — %s', stack)
             elif not stack.get('opus_pcm_patch'):
                 logger.warning(
-                    '[discord_cognitive] Voice receive is available but PCM double-decrypt '
+                    '[DISCORD] Voice receive is available but PCM double-decrypt '
                     'skip patch did not apply — DAVE transcription may be corrupted'
                 )
             container.health.mark('starting', 'Building transport')
@@ -79,7 +84,7 @@ class LifecycleManager:
         runner = getattr(container, 'discord_conversation_runner', None)
         if runner is not None:
             try:
-                runner.stop_all()
+                await runner.stop_all_async()
             except Exception:
                 logger.exception('Discord conversation runner shutdown failed')
         if getattr(container, 'voice_transport', None) is not None:
@@ -92,6 +97,11 @@ class LifecycleManager:
                 except Exception:
                     logger.exception('Voice disconnect failed for %s', item)
         self._close_stale_voice_sessions(container, 'shutdown')
+        try:
+            from plugins.discord.voice import voice_workers
+            voice_workers.shutdown()
+        except Exception:
+            logger.exception('Voice worker pool shutdown failed')
         container.health.mark('stopping', 'Closing transport')
         if container.transport is not None:
             try:
@@ -130,7 +140,7 @@ class LifecycleManager:
         if container.scheduler_bridge:
             selected = container.scheduler_bridge.active_daemon_accounts('discord_message')
         if not selected:
-            logger.info('[discord_cognitive] No enabled daemon task selects a bot — not connecting any accounts')
+            logger.info('[DISCORD] No enabled daemon task selects a bot — not connecting any accounts')
             return
         import asyncio
         first = True
@@ -140,7 +150,7 @@ class LifecycleManager:
             if not name or not token:
                 continue
             if name not in selected:
-                logger.info('[discord_cognitive] Skipping %s — no enabled daemon task selects it', name)
+                logger.info('[DISCORD] Skipping %s — no enabled daemon task selects it', name)
                 continue
             if not first:
                 await asyncio.sleep(5)  # stagger multi-bot boots — Discord rate limits logins

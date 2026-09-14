@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections import defaultdict
 
@@ -26,7 +27,7 @@ from plugins.discord.transport.discord_audio import (
     pcm_stereo_to_whisper_wav_bytes,
 )
 from plugins.discord.voice.dave_voice_patches import is_ssrc_decrypt_ready, note_ssrc_packet
-from plugins.discord.voice.voice_workers import VOICE_WORKER_POOL
+from plugins.discord.voice import voice_workers
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,11 @@ if DiscordSink is not object:
             self._debug_max_rms = 0.0
             self._debug_frames = 0
             self._active_ssrc = {}
+            # write() runs on py-cord's PacketRouter thread; _finalize_user on
+            # the daemon loop; cleanup() wherever the listener stops. One lock
+            # over every per-user buffer/timer map (H13, hunt 2026-09-12).
+            self._state_lock = threading.RLock()
+            self.finished = False
 
         def is_opus(self) -> bool:
             """Receive decoded PCM frames from py-cord's voice reader."""
@@ -189,6 +195,10 @@ if DiscordSink is not object:
         def write(self, data, user):
             self._refresh_dave_passthrough()
             pcm, speaker, ssrc = _extract_pcm_and_user(data, user)
+            with self._state_lock:
+                self._write_locked(pcm, speaker, ssrc)
+
+        def _write_locked(self, pcm, speaker, ssrc):
             user_id = int(getattr(speaker, 'id', 0) or 0)
             if speaker and user_id:
                 self._user_names[user_id] = (
@@ -259,16 +269,29 @@ if DiscordSink is not object:
             if weak_speech:
                 self._last_voice[user_id] = time.monotonic() - self.silence_seconds * 0.15
 
-        def _schedule_finalize(self, user_id: int) -> None:
+        def _schedule_finalize(self, user_id: int, delay: float | None = None) -> None:
+            """(Re)arm the silence timer. Callable from ANY thread: asyncio's
+            call_later/handle.cancel are loop-thread-only, and this used to be
+            called straight from the router thread (H13)."""
             if self.loop is None:
                 return
-            pending = self._pending.get(user_id)
-            if pending is not None and hasattr(pending, 'cancel'):
-                pending.cancel()
-            self._pending[user_id] = self.loop.call_later(
-                self.silence_seconds,
-                lambda uid=user_id: self._finalize_user(uid),
-            )
+            seconds = self.silence_seconds if delay is None else float(delay)
+            try:
+                self.loop.call_soon_threadsafe(self._arm_finalize, user_id, seconds)
+            except RuntimeError:
+                pass  # loop closed — the listener is being torn down
+
+        def _arm_finalize(self, user_id: int, seconds: float) -> None:
+            with self._state_lock:
+                if self.finished:
+                    return
+                pending = self._pending.get(user_id)
+                if pending is not None and hasattr(pending, 'cancel'):
+                    pending.cancel()
+                self._pending[user_id] = self.loop.call_later(
+                    seconds,
+                    lambda uid=user_id: self._finalize_user(uid),
+                )
 
         def _enforce_utterance_cap(self, user_id: int) -> None:
             """Force-finalize a buffer that reached the cap (called on the router thread)."""
@@ -281,6 +304,10 @@ if DiscordSink is not object:
                 self._finalize_user(user_id)
 
         def _finalize_user(self, user_id: int) -> None:
+            with self._state_lock:
+                self._finalize_locked(user_id)
+
+        def _finalize_locked(self, user_id: int) -> None:
             last = self._last_voice.get(user_id, 0.0)
             if time.monotonic() - last < self.silence_seconds * 0.85:
                 # Voice is still recent: re-arm instead of returning with no
@@ -309,11 +336,7 @@ if DiscordSink is not object:
                 self._buffers[user_id] = bytearray(pcm)
                 self._in_speech[user_id] = True
                 self._finalize_deferred[user_id] = True
-                if self.loop is not None:
-                    self.loop.call_later(
-                        1.0,
-                        lambda uid=user_id: self._finalize_user(uid),
-                    )
+                self._schedule_finalize(user_id, delay=1.0)
                 logger.debug(
                     'Voice clip short for %s (%.2fs) — deferring finalize',
                     speaker_name,
@@ -322,7 +345,7 @@ if DiscordSink is not object:
                 return
             self._in_speech[user_id] = False
             self._finalize_deferred.pop(user_id, None)
-            VOICE_WORKER_POOL.submit(
+            voice_workers.submit(
                 self._emit_finalized_utterance,
                 user_id,
                 speaker_name,
@@ -386,17 +409,18 @@ if DiscordSink is not object:
                 self._reset_capture_history(user_id)
 
         def cleanup(self):
-            self.finished = True
-            for pending in self._pending.values():
-                if hasattr(pending, 'cancel'):
-                    pending.cancel()
-            self._pending.clear()
-            self._buffers.clear()
-            self._carry.clear()
-            self._preroll.clear()
-            self._in_speech.clear()
-            self._finalize_deferred.clear()
-            self._active_ssrc.clear()
+            with self._state_lock:
+                self.finished = True
+                for pending in self._pending.values():
+                    if hasattr(pending, 'cancel'):
+                        pending.cancel()
+                self._pending.clear()
+                self._buffers.clear()
+                self._carry.clear()
+                self._preroll.clear()
+                self._in_speech.clear()
+                self._finalize_deferred.clear()
+                self._active_ssrc.clear()
 
 else:
 

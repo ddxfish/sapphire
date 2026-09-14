@@ -2,7 +2,7 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 from plugins.discord.models.settings import SettingsStore
-from plugins.discord.proactive.test_paths import collect_proactive_diagnostics, run_proactive_test
+from plugins.discord.proactive.diagnostics import collect_proactive_diagnostics, run_proactive_test
 
 
 def _settings(**kwargs):

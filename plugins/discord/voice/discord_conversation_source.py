@@ -20,9 +20,17 @@ _CUE_FILES = {
     'think': 'think_pulse.wav',   # still working (1/s pulse until her audio starts)
     'barge': 'respond_ding.wav',  # you cut in — floor's yours
     'error': 'error_glitch.wav',  # turn failed
+    'hangup': 'hangup_bye.wav', # goodbye chime before she leaves
 }
 _cue_audio: dict[str, str] = {}
 _cue_lock = threading.Lock()
+
+
+def cue_wav_bytes(name: str) -> bytes:
+    """Raw WAV of a cue (the batch play lane takes bytes) — b'' if missing."""
+    import base64
+    encoded = _cue_b64(name)
+    return base64.b64decode(encoded) if encoded else b''
 
 
 def _cue_b64(name: str) -> str:
@@ -180,12 +188,6 @@ class DiscordConversationSource:
                 except Exception as exc:
                     logger.error('[DISCORD] frame processing failed: %s', exc)
 
-    def _ev_payload(self) -> dict:
-        return {
-            'surface': 'discord',
-            'chat': getattr(self.driver, '_chat_name', None),
-        }
-
     def feed_chunk(self, chunk: dict) -> None:
         if self._stop_flag.is_set() or not chunk:
             return
@@ -241,7 +243,10 @@ class DiscordConversationSource:
             logger.debug('reply-end callback failed: %s', exc)
 
     def _batch_fallback_speak(self) -> None:
-        text = self._latest_assistant_text()
+        from plugins.discord.sapphire.voice_prompt import HANGUP_MARKER_RE
+        # The streaming TTS cleaner mutes the sentinel; this lane synthesizes
+        # the raw row, so strip it here or she says "hang up" out loud.
+        text = HANGUP_MARKER_RE.sub('', self._latest_assistant_text() or '').strip()
         if not text or not self.speech_bridge or not self.voice_transport:
             if text:
                 logger.warning(

@@ -34,13 +34,12 @@ def test_is_daemon_alive_reflects_shared_state():
     daemon_state.handle = None
 
 
-def test_legacy_get_client_and_clients_view():
+def test_get_client_list_connected_and_loop():
     from plugins.discord import daemon as daemon_mod
 
     daemon_state.handle = None
     assert daemon_mod.get_client('bot') is None
-    assert list(daemon_mod._clients) == []
-    assert getattr(daemon_mod, '_loop') is None
+    assert daemon_mod.get_loop() is None
 
     class FakeClient:
         guilds = []
@@ -80,11 +79,6 @@ def test_legacy_get_client_and_clients_view():
 
     assert daemon_mod.get_client('bot') is handle.container.transport._accounts['bot']['client']
     assert daemon_mod.list_connected() == ['bot']
-    assert list(daemon_mod._clients.keys()) == ['bot']
-    assert daemon_mod._clients['bot'] is daemon_mod.get_client('bot')
-    assert getattr(daemon_mod, '_loop') is handle.loop
-
-    daemon_mod._clients.pop('bot', None)
-    assert daemon_mod.get_client('bot') is None
+    assert daemon_mod.get_loop() is handle.loop
 
     daemon_state.handle = None

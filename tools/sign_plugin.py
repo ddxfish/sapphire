@@ -44,8 +44,8 @@ def build_file_manifest(plugin_dir: Path) -> dict:
             continue
         if f.suffix not in SIGNABLE_EXTENSIONS:
             continue
-        if "__pycache__" in f.parts:
-            continue
+        if "__pycache__" in f.parts or ".claude" in f.parts:
+            continue   # .claude/: Claude Code's per-dir scratch (gitignored), never shipped
         rel = f.relative_to(plugin_dir).as_posix()
         manifest[rel] = hash_file(f)
     return manifest

@@ -58,6 +58,7 @@ class BirthdayService:
             f'Birthday: {month:02d}-{day:02d} ({when_label})',
             source='birthday_capture',
             confidence=1.0,
+            origin='dm' if getattr(observation, 'is_dm', False) else str(getattr(observation, 'guild_id', '') or ''),
         )
         if self.trace_repository:
             self.trace_repository.record_trace('birthday_captured', 'Stored birthday on profile', {

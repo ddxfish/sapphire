@@ -49,6 +49,31 @@ class TaskRepository:
         conn.commit()
         return int(cursor.lastrowid)
 
+    def has_pending(
+        self,
+        account_name: str,
+        task_type: str,
+        *,
+        target_id: str = '',
+        payload_contains: str = '',
+        since: float = 0.0,
+    ) -> bool:
+        """A pending task of this type for this target (and payload text) created
+        after `since` — the dedupe behind social check-ins (H7)."""
+        query = "SELECT 1 FROM tasks WHERE account_name = ? AND task_type = ? AND status = 'pending'"
+        params: list = [account_name, task_type]
+        if target_id:
+            query += ' AND target_id = ?'
+            params.append(str(target_id))
+        if payload_contains:
+            query += ' AND payload_json LIKE ?'
+            params.append(f'%{payload_contains}%')
+        if since:
+            query += ' AND created_at >= ?'
+            params.append(float(since))
+        row = self.sqlite_service.connection().execute(query + ' LIMIT 1', params).fetchone()
+        return row is not None
+
     def list_tasks(
         self,
         account_name: str,

@@ -157,13 +157,22 @@ Add Discord tools to your active toolset. If you omit `channel`, tools use the c
 
 | Tool | What it does |
 |------|--------------|
+| `discord_list_channels` | List channels as `#name (id) — server`, text / voice / all, optional server filter — the way to learn a channel id or name |
 | `discord_get_servers` | List servers the bot is in |
 | `discord_read_messages` | Read the last N messages in a channel (1–50, default 20) as `[message_id] author: text`, oldest first |
 | `discord_send_message` | Send a message (max 2000 chars); supports quote-replies via `reply_to_message_id` |
+| `discord_send_image` | Post an image from her image system: `img:<id>` handle, `doc:<N>` library image, or a URL (never a disk path) |
 | `discord_send_gif` | Send a GIF by search query or URL (requires GIF API key in Media settings) |
 | `discord_add_reaction` | Add an emoji reaction to a message |
+| `discord_join_voice` | Join a voice channel and hold a spoken conversation there |
+| `discord_leave_voice` | Leave a voice channel (she can also leave on her own with `<<HANG UP>>`) |
+| `discord_memory` | Search, add or delete what she remembers about a person (bound to the asker inside a conversation) |
 
-Channel arguments accept a numeric channel ID or `#channel-name`.
+Channel arguments accept a numeric channel ID or `#channel-name`. Send-style tools return the
+Discord message id. Inside a server conversation her tools reach only that server (Safety ›
+"Tools stay in the server"); from the operator's own chats every channel is reachable. Image
+attachments she is shown ride into her reply as images (when the reply model has vision) and get
+an `img:` handle, so `memory_save_image` can file them in her library.
 
 ## Voice
 
@@ -193,7 +202,7 @@ Prerequisites:
 - `bot_name` (default) — replies when someone says the bot's display name or an alias
 - `always` — replies to every completed speech turn
 
-Each voice channel gets a dedicated Sapphire chat: `discord:{guild_id}:{channel_id}`. Voice turns persist there, not in the guild text channel chat.
+Each voice channel gets a dedicated Sapphire chat, `discord_{guild_id}_{channel_id}`, locked to its own memory scopes with no tools. Voice turns persist there, not in the guild text channel chat — and unless **Keep voice chat history** is on, the chat is deleted 30 minutes after her last session there.
 
 For diagnostics and troubleshooting, see [docs/discord_voice_conversation_operator.md](docs/discord_voice_conversation_operator.md).
 

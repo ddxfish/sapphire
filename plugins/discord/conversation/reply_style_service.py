@@ -61,7 +61,23 @@ class ReplyStyleService:
             if not part:
                 continue
             chunks.extend(self._split_discord_length(part))
-        return chunks
+        return self._rebalance_fences(chunks)
+
+    @staticmethod
+    def _rebalance_fences(chunks: list[str]) -> list[str]:
+        """A ``` block cut by a chunk boundary rendered as raw backticks in
+        one message and swallowed the next. Close it at the cut, reopen after."""
+        out: list[str] = []
+        carry = False
+        for chunk in chunks:
+            text = ('```\n' + chunk) if carry else chunk
+            if text.count('```') % 2 == 1:
+                text = text + '\n```'
+                carry = True
+            else:
+                carry = False
+            out.append(text)
+        return out
 
     def _split_discord_length(self, text: str) -> list[str]:
         if not text:

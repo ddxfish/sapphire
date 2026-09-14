@@ -245,3 +245,44 @@ def test_stream_exception_fires_error_cue(pub):
         d.push_frame(*frame(100, False))
     assert "error" in cues
     assert d.engine.state == IDLE
+
+
+# ── H14 (Discord hunt 2026-09-12): a replaced turn's cleanup is a no-op ────────
+
+def test_abandon_turn_retires_the_live_turn():
+    d, system, fs, sink = _driver()
+    d._active_sink = sink
+    d.engine.state = RESPONDING
+    gen = d._turn_gen
+    d.abandon_turn()
+    assert d._turn_gen == gen + 1
+    assert d._active_sink is None
+    assert d.engine.state == IDLE
+
+
+def test_stale_turn_cleanup_leaves_a_newer_turn_alone():
+    # Turn A is draining when the surface abandons it and turn B claims the
+    # sink. A's `finally` must not clear B's sink or flip B's engine to IDLE.
+    d, system, fs, sink = _driver()
+    new_sink = MagicMock()
+
+    def _wait(timeout=180):
+        d.abandon_turn()                      # surface: A is being replaced
+        d._turn_gen += 1                      # B claims
+        d._active_sink = new_sink
+        d.engine.state = RESPONDING
+
+    sink.wait = _wait
+    d.push_frame(*frame(150, True))
+    for _ in range(3):
+        d.push_frame(*frame(100, False))      # endpoint → A runs synchronously
+    assert d._active_sink is new_sink
+    assert d.engine.state == RESPONDING
+
+
+def test_unclaimed_early_return_still_ends_the_turn():
+    d, system, fs, sink = _driver(transcript='')   # no usable speech → returns before claiming
+    d.push_frame(*frame(150, True))
+    for _ in range(3):
+        d.push_frame(*frame(100, False))
+    assert d.engine.state == IDLE

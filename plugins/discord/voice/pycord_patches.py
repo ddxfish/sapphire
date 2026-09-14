@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from plugins.discord.voice.patch_registry import apply_patch
+
 logger = logging.getLogger(__name__)
 
-global _APPLIED
 _APPLIED = False
 
 
@@ -25,22 +26,19 @@ def apply_pycord_voice_patches() -> None:
     global _APPLIED
     if _APPLIED:
         return
-    _patch_opus_decoder()
-    _patch_jitter_flush_decoder_reset()
-    _patch_opus_pcm_dave_double_decrypt()
-    _patch_ssrc_rollover()
-    _patch_packet_routers()
-    _patch_rekey_reader_resync()
-    _patch_aead_log_flood()
+    # Each patch reports through the registry (H11); none can raise out of here.
+    apply_patch('opus_decoder_resilience', _patch_opus_decoder)
+    apply_patch('opus_pcm_dave_double_decrypt', _patch_opus_pcm_dave_double_decrypt)
+    apply_patch('ssrc_rollover_decoder_cleanup', _patch_ssrc_rollover)
+    apply_patch('packet_router_stop_guard', _patch_packet_routers)
+    apply_patch('rekey_reader_resync', _patch_rekey_reader_resync)
+    apply_patch('aead_log_flood_limiter', _patch_aead_log_flood)
     _APPLIED = True
 
 
 def _patch_opus_decoder() -> None:
     """Keep packet timeline aligned when Opus decode fails mid-stream."""
-    try:
-        from discord.opus import Decoder, OpusError, PacketDecoder
-    except ImportError:
-        return
+    from discord.opus import Decoder, OpusError, PacketDecoder
     if getattr(PacketDecoder.pop_data, '_discord_cognitive_patched', False):
         return
     original = PacketDecoder.pop_data
@@ -87,17 +85,9 @@ def _decode_opus_payload(decoder, data, *, fec: bool = False):
         return fresh, fresh.decode(OPUS_SILENCE, fec=False)
 
 
-def _patch_jitter_flush_decoder_reset() -> None:
-    """Keep stock jitter flush — custom queue/FEC changes scrambled packet order."""
-    return
-
-
 def _patch_ssrc_rollover() -> None:
     """Destroy stale per-SSRC decoders when Discord assigns a user a new SSRC."""
-    try:
-        from discord.voice.client import VoiceClient
-    except ImportError:
-        return
+    from discord.voice.client import VoiceClient
     if getattr(VoiceClient._add_ssrc, '_discord_cognitive_rollover', False):
         return
     original = VoiceClient._add_ssrc
@@ -112,6 +102,11 @@ def _patch_ssrc_rollover() -> None:
                 ssrc,
             )
             self._reader.packet_router.destroy_decoder(old_ssrc)
+            try:
+                from plugins.discord.voice.dave_voice_patches import forget_ssrc
+                forget_ssrc(old_ssrc)
+            except Exception:
+                pass
         original(self, user_id, ssrc)
 
     _add_ssrc._discord_cognitive_rollover = True
@@ -126,10 +121,7 @@ def _patch_opus_pcm_dave_double_decrypt() -> None:
     set_passthrough_mode() is active, py-cord's PacketDecoder._decode_packet
     runs dave.decrypt() on that PCM again, which corrupts every frame.
     """
-    try:
-        from discord.opus import PacketDecoder
-    except ImportError:
-        return
+    from discord.opus import PacketDecoder
     if getattr(PacketDecoder._decode_packet, '_discord_cognitive_skip_pcm_dave', False):
         return
 
@@ -212,10 +204,7 @@ def _patch_rekey_reader_resync() -> None:
     Decryption failed.' flood) and the bot goes permanently deaf while still
     able to speak. Observed live 2026-08-01, seconds after first TTS reply.
     """
-    try:
-        from discord.voice.gateway import VoiceWebSocket
-    except ImportError:
-        return
+    from discord.voice.gateway import VoiceWebSocket
     if getattr(VoiceWebSocket.load_secret_key, '_discord_cognitive_rekey', False):
         return
     original = VoiceWebSocket.load_secret_key
@@ -238,10 +227,7 @@ def _patch_rekey_reader_resync() -> None:
 
 
 def _patch_packet_routers() -> None:
-    try:
-        from discord.voice.receive.router import PacketRouter, SinkEventRouter
-    except ImportError:
-        return
+    from discord.voice.receive.router import PacketRouter, SinkEventRouter
     if not getattr(PacketRouter.run, '_discord_cognitive_patched', False):
 
         def packet_run_replacement(self):

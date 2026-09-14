@@ -33,14 +33,20 @@ def test_does_not_treat_ciphertext_as_opus_without_fafa_trailer():
 
 
 def test_encrypted_dave_frame_must_not_skip_dave_decrypt():
-    """Encrypted DAVE frames also end in 0xFAFA — never treat as passthrough pre-decrypt."""
-    from plugins.discord.voice.dave_voice_patches import looks_like_passthrough_payload, recover_passthrough_opus, opus_decodable
+    """Encrypted DAVE frames also end in 0xFAFA — the trailer heuristic alone
+    says "passthrough" for ciphertext, so the production recovery gate must
+    reject it. (The old assertion leaned on `opus_decodable` being False, which
+    only held while py-cord was shadowed under pytest — real libopus happily
+    decodes ciphertext into noise.)"""
+    from plugins.discord.voice.dave_voice_patches import (
+        _recover_silence_passthrough,
+        looks_like_passthrough_payload,
+    )
 
     packet = SimpleNamespace(padding=False, extended=True, _outer_decrypted=None)
     encrypted = b'\x44\xa8\xdd\xd8' + b'\xab' * 40 + bytes([12]) + b'\xfa\xfa'
-    assert looks_like_passthrough_payload(encrypted) is True
-    stripped = recover_passthrough_opus(packet, encrypted)
-    assert not opus_decodable(stripped) or stripped == b'\xf8\xff\xfe'
+    assert looks_like_passthrough_payload(encrypted) is True      # the heuristic is fooled…
+    assert _recover_silence_passthrough(packet, encrypted) is None  # …the real gate is not
 
 
 def test_dave_input_uses_extension_offset_not_hardcoded_eight():
@@ -77,3 +83,22 @@ def test_looks_like_opus_payload():
 
     assert looks_like_opus_payload(b'\xf8\xff\xfe') is True
     assert looks_like_opus_payload(b'\x32' * 20) is False
+
+
+def test_forget_ssrc_evicts_both_maps():
+    from plugins.discord.voice import dave_voice_patches as dvp
+
+    dvp.note_ssrc_packet(777)
+    dvp.mark_ssrc_decrypt_ready(777)
+    assert dvp.is_ssrc_decrypt_ready(777)
+    dvp.forget_ssrcs([777, 'bogus', None])
+    assert 777 not in dvp._SSRC_DECRYPT_READY
+    assert 777 not in dvp._SSRC_FIRST_SEEN
+    assert not dvp.is_ssrc_decrypt_ready(777)
+
+
+def test_rollover_patch_and_disconnect_evict_ssrc_state():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert 'forget_ssrc(old_ssrc)' in (root / 'voice' / 'pycord_patches.py').read_text(encoding='utf-8')
+    assert 'forget_ssrcs(' in (root / 'transport' / 'discord_execution.py').read_text(encoding='utf-8')

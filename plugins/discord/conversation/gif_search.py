@@ -55,11 +55,11 @@ def _search_klipy(query: str, api_key: str, *, limit: int, content_filter: str) 
             timeout=12,
         )
         if resp.status_code != 200:
-            logger.warning('[discord_cognitive] Klipy HTTP %s for q=%r', resp.status_code, query)
+            logger.warning('[DISCORD] Klipy HTTP %s for q=%r', resp.status_code, query)
             return ''
         return _pick_tenor_style_url(resp.json().get('results') or [])
     except Exception as exc:
-        logger.warning('[discord_cognitive] Klipy search failed: %s', exc)
+        logger.warning('[DISCORD] Klipy search failed: %s', exc)
         return ''
 
 
@@ -78,7 +78,7 @@ def _search_giphy(query: str, api_key: str, *, limit: int, content_filter: str) 
             timeout=12,
         )
         if resp.status_code != 200:
-            logger.warning('[discord_cognitive] Giphy HTTP %s for q=%r', resp.status_code, query)
+            logger.warning('[DISCORD] Giphy HTTP %s for q=%r', resp.status_code, query)
             return ''
         items = resp.json().get('data') or []
         random.shuffle(items)
@@ -87,7 +87,7 @@ def _search_giphy(query: str, api_key: str, *, limit: int, content_filter: str) 
             if url:
                 return url
     except Exception as exc:
-        logger.warning('[discord_cognitive] Giphy search failed: %s', exc)
+        logger.warning('[DISCORD] Giphy search failed: %s', exc)
     return ''
 
 
@@ -107,11 +107,11 @@ def _search_tenor(query: str, api_key: str, *, limit: int, content_filter: str) 
             timeout=12,
         )
         if resp.status_code != 200:
-            logger.warning('[discord_cognitive] Tenor HTTP %s for q=%r', resp.status_code, query)
+            logger.warning('[DISCORD] Tenor HTTP %s for q=%r', resp.status_code, query)
             return ''
         return _pick_tenor_style_url(resp.json().get('results') or [])
     except Exception as exc:
-        logger.warning('[discord_cognitive] Tenor search failed: %s', exc)
+        logger.warning('[DISCORD] Tenor search failed: %s', exc)
     return ''
 
 

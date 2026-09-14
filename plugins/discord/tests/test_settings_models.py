@@ -5,11 +5,11 @@ def test_settings_defaults_and_merge_behavior():
     store = SettingsStore()
     merged = store.resolve()
     assert merged.presence.status == "online"
-    assert merged.safety.allow_direct_messages is True
+    assert merged.safety.allow_direct_messages is False   # DMs opt-in since 2026-09-13
 
     store.global_overlay = SettingsOverlay.from_dict({
         "presence": {"status": "idle", "activity": "thinking"},
-        "safety": {"allow_direct_messages": False},
+        "safety": {"allow_direct_messages": True},
     })
     store.guild_overrides["guild-1"] = SettingsOverlay.from_dict({
         "presence": {"activity": "guild activity"}
@@ -21,7 +21,7 @@ def test_settings_defaults_and_merge_behavior():
     resolved = store.resolve(guild_id="guild-1", channel_id="channel-1")
     assert resolved.presence.status == "dnd"
     assert resolved.presence.activity == "guild activity"
-    assert resolved.safety.allow_direct_messages is False
+    assert resolved.safety.allow_direct_messages is True
 
 
 def test_overlay_round_trip():

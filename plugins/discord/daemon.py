@@ -6,59 +6,12 @@ import asyncio
 import logging
 import sys
 import threading
-from collections.abc import MutableMapping
-from typing import Any, Awaitable, Iterator, Optional
+from typing import Awaitable, Optional
 
 from plugins.discord.runtime.container import RuntimeContainer
 from plugins.discord.runtime import daemon_state
 
 logger = logging.getLogger(__name__)
-
-
-class _ClientsView(MutableMapping):
-    """Legacy-compatible view of account → py-cord client.
-
-    Older callers (Mission Control health digest, routes) import
-    ``get_client`` / ``_clients`` from this module. The cognitive runtime
-    keeps clients on ``transport._accounts``; this view mirrors that map.
-    """
-
-    def _snapshot(self) -> dict[str, Any]:
-        runtime = get_runtime()
-        if not runtime or not runtime.transport:
-            return {}
-        return runtime.transport.client_map()
-
-    def __getitem__(self, key: str) -> Any:
-        client = self._snapshot().get(key)
-        if client is None:
-            raise KeyError(key)
-        return client
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        runtime = get_runtime()
-        if not runtime or not runtime.transport:
-            raise RuntimeError('Discord runtime is not available')
-        state = runtime.transport._accounts.setdefault(key, {'name': key, 'client': None})
-        state['client'] = value
-
-    def __delitem__(self, key: str) -> None:
-        runtime = get_runtime()
-        if not runtime or not runtime.transport:
-            raise KeyError(key)
-        state = runtime.transport._accounts.get(key)
-        if not state or state.get('client') is None:
-            raise KeyError(key)
-        state['client'] = None
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._snapshot())
-
-    def __len__(self) -> int:
-        return len(self._snapshot())
-
-    def __repr__(self) -> str:
-        return f'_ClientsView({self._snapshot()!r})'
 
 
 def _reply_handler(task, event_data: dict, response_text: str):
@@ -67,12 +20,14 @@ def _reply_handler(task, event_data: dict, response_text: str):
         logger.warning('Discord reply handler called but runtime is unavailable')
         return None
     trigger_config = (task or {}).get('trigger_config') or {}
+    message_id = str((event_data or {}).get('message_id', ''))
+    if runtime.event_bridge:
+        # Clear FIRST: a listen-only task's reply is not delivered, but its
+        # payload must not sit in the pending map either (M9).
+        runtime.event_bridge.clear_pending_payload(message_id)
     if str(trigger_config.get('auto_reply', True)).lower() in {'false', '0'}:
         logger.info('Discord task is listen-only (auto_reply off) — response not delivered')
         return {'status': 'skipped', 'reason': 'auto_reply_disabled'}
-    message_id = str((event_data or {}).get('message_id', ''))
-    if runtime.event_bridge:
-        runtime.event_bridge.clear_pending_payload(message_id)
     result = runtime.conversation_service.handle_llm_response(task, event_data or {}, response_text)
     if result and result.get('status') == 'sent':
         logger.info('Discord reply delivered for message %s (%s chunks)', message_id, result.get('chunks', 0))
@@ -108,7 +63,7 @@ def start(plugin_loader, settings):
             plugin_loader.register_reply_handler(handle.plugin_name, _reply_handler)
         except Exception:
             logger.debug('Reply handler registration unavailable', exc_info=True)
-        logger.info('[discord_cognitive] Daemon started (health=%s)', get_health_state())
+        logger.info('[DISCORD] Daemon started (health=%s)', get_health_state())
 
 
 def stop():
@@ -121,7 +76,7 @@ def stop():
             try:
                 future.result(timeout=10)
             except Exception:
-                logger.warning('[discord_cognitive] Container stop timed out/failed; forcing loop shutdown', exc_info=True)
+                logger.warning('[DISCORD] Container stop timed out/failed; forcing loop shutdown', exc_info=True)
             handle.loop.call_soon_threadsafe(handle.loop.stop)
         if handle.thread and handle.thread.is_alive():
             handle.thread.join(timeout=10)
@@ -173,22 +128,11 @@ def get_client(account_name: str):
     return runtime.transport.get_client(str(account_name or '').strip())
 
 
-# Module-level aliases kept for ``from plugins.discord.daemon import _clients, _loop``.
-_clients = _ClientsView()
-
-
 def run_coroutine(coro: Awaitable):
     loop = get_loop()
     if not loop or not loop.is_running():
         raise RuntimeError('Discord cognitive runtime loop is not running')
     return asyncio.run_coroutine_threadsafe(coro, loop)
-
-
-def __getattr__(name: str):
-    # Legacy modules import ``_loop`` as a module attribute.
-    if name == '_loop':
-        return get_loop()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _run_loop(handle: daemon_state.RuntimeHandle):

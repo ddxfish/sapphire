@@ -366,26 +366,52 @@ MIGRATIONS: list[tuple[int, str]] = [
     CREATE INDEX IF NOT EXISTS idx_media_artifacts_message ON media_artifacts(message_id);
     CREATE INDEX IF NOT EXISTS idx_media_artifacts_channel_created ON media_artifacts(channel_id, created_at);
     """),
+    (13, """
+    ALTER TABLE profile_facts ADD COLUMN origin TEXT DEFAULT '';
+    ALTER TABLE profile_buffers ADD COLUMN origin TEXT DEFAULT '';
+    ALTER TABLE interest_topics ADD COLUMN origin TEXT DEFAULT '';
+    """),
 ]
 
 
+def _statements(sql: str) -> list[str]:
+    return [s.strip() for s in sql.split(';') if s.strip()]
+
+
 def apply_migrations(conn) -> int:
+    """Run every pending script ONE STATEMENT AT A TIME inside one explicit
+    transaction per version (H4, hunt 2026-09-12).
+
+    The old runner used executescript(), which autocommits per statement: a
+    crash between two ALTERs left column 1 present with the version un-bumped,
+    and the retry died on "duplicate column name" forever (daemon bricked at
+    boot). Now a duplicate column is skipped PER STATEMENT (that statement is
+    already in place), any other error rolls the whole version back and
+    re-raises, and the version is stamped only after every statement ran.
+    """
     current = conn.execute('SELECT version FROM schema_version').fetchone()[0]
     applied = current
     for version, sql in MIGRATIONS:
         if version <= current:
             continue
+        if getattr(conn, 'in_transaction', False):
+            # Python's sqlite3 opens an implicit transaction on any DML; a
+            # caller that wrote (schema_version bootstrap) and forgot to commit
+            # would make our explicit BEGIN fail. Close it first.
+            conn.commit()
+        conn.execute('BEGIN')
         try:
-            conn.executescript(sql)
-        except Exception as exc:
-            # Self-heal a half-applied ALTER script: executescript autocommits
-            # per statement, so a crash between two ALTERs leaves column 1
-            # present with the version un-bumped — the retry then dies on
-            # "duplicate column name" forever (daemon bricked at boot).
-            # Treat that specific error as already-applied and move on.
-            if 'duplicate column name' not in str(exc).lower():
-                raise
-        conn.execute('UPDATE schema_version SET version = ?', (version,))
+            for statement in _statements(sql):
+                try:
+                    conn.execute(statement)
+                except Exception as exc:
+                    if 'duplicate column name' in str(exc).lower():
+                        continue  # a half-applied earlier attempt already added it
+                    raise
+            conn.execute('UPDATE schema_version SET version = ?', (version,))
+            conn.execute('COMMIT')
+        except Exception:
+            conn.execute('ROLLBACK')
+            raise
         applied = version
-    conn.commit()
     return applied

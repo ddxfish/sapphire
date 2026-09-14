@@ -556,7 +556,10 @@ class ContinuityExecutor:
                 # tool_images-table entries, just sourced from an event. 2026-06-13.
                 if session_manager.save_tool_image(img_id, img_bytes, media_type,
                                                    chat_name=target_chat):
-                    markers.append(f"<<IMG::tool:{img_id}>>")
+                    # Marker = the UI's; the receipt line is the model's handle
+                    # (core.images contract) so a plugin-delivered image can be
+                    # filed with memory_save_image(source='img:...'). 2026-09-13.
+                    markers.append(f"<<IMG::tool:{img_id}>>\n(image img:{img_id})")
                 else:
                     # DB write failed — don't append a marker pointing at a blob
                     # that isn't there (would 404 on render). LLM still saw the

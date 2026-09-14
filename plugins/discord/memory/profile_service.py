@@ -21,9 +21,12 @@ class ProfileService:
         self.interest_service = interest_service
         self.lore_service = lore_service
 
-    def remember_fact(self, account_name: str, user_id: str, content: str, *, source: str = 'explicit', confidence: float = 1.0) -> int:
+    def remember_fact(self, account_name: str, user_id: str, content: str, *, source: str = 'explicit',
+                      confidence: float = 1.0, origin: str = '') -> int:
         self.profile_repository.get_or_create_profile(account_name, user_id)
-        return self.profile_repository.add_fact(account_name, user_id, content, source=source, confidence=confidence)
+        return self.profile_repository.add_fact(
+            account_name, user_id, content, source=source, confidence=confidence, origin=origin,
+        )
 
     def list_facts(
         self,
@@ -78,6 +81,7 @@ class ProfileService:
         positive: bool = True,
         message_text: str = '',
         now: float | None = None,
+        origin: str = '',
     ) -> dict:
         profile = self.profile_repository.get_or_create_profile(account_name, user_id)
         now_ts = float(now if now is not None else time.time())
@@ -110,7 +114,7 @@ class ProfileService:
                 now=now_ts,
             )
         if self.interest_service and message_text:
-            self.interest_service.observe_message(account_name, user_id, message_text)
+            self.interest_service.observe_message(account_name, user_id, message_text, origin=origin)
         return updated
 
     def build_context(
@@ -120,9 +124,13 @@ class ProfileService:
         *,
         guild_id: str = '',
         channel_id: str = '',
+        is_dm: bool = False,
     ) -> dict:
+        """In a server, facts and interests learned in DMs stay out of the
+        prompt (H16b); in a DM she may draw on everything."""
         profile = self.profile_repository.get_or_create_profile(account_name, user_id)
-        facts = self.profile_repository.list_facts(account_name, user_id, limit=12)
+        for_guild = None if is_dm else (str(guild_id or '') or None)
+        facts = self.profile_repository.list_facts(account_name, user_id, limit=12, for_guild=for_guild)
         context = {
             'summary': profile.get('summary') or '',
             'facts': facts,
@@ -143,7 +151,9 @@ class ProfileService:
         if self.milestone_service:
             context['milestones'] = self.milestone_service.pending_for_prompt(account_name, user_id)
         if self.interest_service:
-            context['interests'] = self.interest_service.top_topics(account_name, user_id, limit=6)
+            context['interests'] = self.interest_service.top_topics(
+                account_name, user_id, limit=6, exclude_dm=not is_dm,
+            )
         if self.lore_service and guild_id:
             context['lore'] = self.lore_service.build_context(
                 account_name, guild_id=guild_id, channel_id=channel_id, limit=6,

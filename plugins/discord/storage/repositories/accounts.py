@@ -54,7 +54,25 @@ class AccountRepository:
         )
         conn.commit()
 
-    def delete_account(self, name: str) -> None:
+    # Every table scoped by bot account (M3, hunt 2026-09-12). Deleting the
+    # account row alone left all of these as orphans.
+    _CASCADE_TABLES = (
+        'activation_scores', 'agent_affect', 'interest_topics', 'media_artifacts', 'pinned_memories',
+        'presence_state', 'proactive_cooldowns', 'profile_buffers', 'profile_facts',
+        'relationship_milestones', 'server_lore', 'sleep_buffer', 'sleep_state', 'tasks',
+        'user_profiles', 'voice_sessions', 'voice_summaries', 'voice_transcripts',
+    )
+
+    def delete_account(self, name: str) -> dict:
         conn = self.sqlite_service.connection()
-        conn.execute('DELETE FROM accounts WHERE name = ?', (name,))
-        conn.commit()
+        removed: dict = {}
+        with conn:
+            for table in self._CASCADE_TABLES:
+                try:
+                    cursor = conn.execute(f'DELETE FROM {table} WHERE account_name = ?', (name,))
+                except Exception:  # a table missing from an older schema must not block the delete
+                    continue
+                if cursor.rowcount:
+                    removed[table] = int(cursor.rowcount)
+            conn.execute('DELETE FROM accounts WHERE name = ?', (name,))
+        return removed

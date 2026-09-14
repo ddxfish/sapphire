@@ -67,11 +67,9 @@ Default SQLite path:
 user/plugin_state/discord/discord.sqlite3
 ```
 
-Legacy installs may use:
-
-```
-user/plugin_state/discord_cognitive/discord.sqlite3
-```
+Legacy installs kept the file at `user/plugin_state/discord_cognitive/discord.sqlite3`; since
+2026-09-13 that file is moved into the path above on first boot (sidecars included), and the
+plugin never silently starts an empty database beside it.
 
 Override via plugin settings key `database_path` if needed.
 
@@ -145,7 +143,7 @@ The settings UI **Operator debug** panel shows a subset of this data inline.
 
 ### Logs
 
-Search Sapphire daemon logs for the prefix `[discord_cognitive]`.
+Search Sapphire daemon logs for the prefix `[DISCORD]` (one prefix since 2026-09-13; the older `[discord_cognitive]` is gone).
 
 Useful log lines:
 
@@ -250,6 +248,8 @@ Two schedulers cooperate:
 | `morning_greeting` | `0 * * * *` | Hourly check; fires when server-local hour matches `proactive.greeting_utc_hour` |
 | `quiet_outreach` | `*/15 * * * *` | Conversation starters when channels go stale |
 | `sleep_goodnight` | `*/15 * * * *` | Goodnight + sleep state at `proactive.sleep_utc_hour` (minutes 0/15/30/45) |
+| `retention_purge` | `30 4 * * *` | Daily chunked purge of plugin data past the Retention day limits (off until `retention.enabled`) |
+| `ambient_distill` | `*/15 * * * *` | Opt-in ambient chat distill into profile facts (honours `profile.ambient_distill_interval_hours`) |
 
 These require the plugin daemon to be running and at least one connected bot account.
 
@@ -303,11 +303,14 @@ Configure under **Retention** tab or settings overlay key `retention`:
 
 | Setting | Default | Effect |
 |---------|---------|--------|
-| `enabled` | `true` | Master switch for purge |
-| `message_days` | 90 | Delete old `messages` rows |
-| `trace_days` | 14 | Delete old `traces` rows |
-| `transcript_days` | 30 | Delete old `voice_transcripts` rows |
-| `profile_buffer_days` | 7 | Delete processed `profile_buffers` rows |
+| `enabled` | `false` | Master switch for purge (off = nothing is ever purged) |
+| `message_days` | 90 | Delete old `messages` rows, their `media_artifacts`, and processed `sleep_buffer` rows |
+| `trace_days` | 14 | Delete old `traces` rows and finished `tasks` (completed / cancelled / failed / expired) |
+| `transcript_days` | 30 | Delete old `voice_transcripts`, `voice_summaries`, and closed `voice_sessions` |
+| `profile_buffer_days` | 7 | Delete unprocessed `profile_buffers` rows (processed ones are deleted the moment they are distilled) |
+
+Deletes run in chunks of 5,000 rows with a short yield between chunks, so a first purge over a
+long-lived database does not stall replies; the WAL is checkpointed afterwards.
 
 ### Purge
 
@@ -315,7 +318,7 @@ Configure under **Retention** tab or settings overlay key `retention`:
 POST /admin/purge
 ```
 
-Runs retention cleanup immediately. Returns `{ status, results: { messages, traces, voice_transcripts, profile_buffers } }`.
+Runs retention cleanup immediately. Returns `{ status, results: { messages, media_artifacts, sleep_buffer, traces, tasks, voice_transcripts, voice_summaries, voice_sessions, profile_buffers } }` (row counts per table).
 
 Skipped when `retention.enabled` is false.
 
@@ -331,13 +334,19 @@ Content-Type: application/json
 }
 ```
 
-Removes:
+One door (`ForgetService`, since 2026-09-13) removes, in one transaction:
 
-- Profile data for that user on the account
-- Pinned memories
-- Messages authored by that user ID
+- Profile, facts, ambient buffers, interest topics, and milestones for that user on the account
+- Pinned memories they authored
+- Voice transcripts where they were the speaker
+- Sleep-buffer rows they authored
+- Messages authored by that user ID, and those messages' media artifacts (message rows are per
+  channel and shared by every bot on the install, so they go regardless of `account_name`)
+- Pending follow-up tasks that name them (social check-ins, reminders)
 
-The `/forget-me` slash command invokes the same profile and memory paths for the calling user.
+The response carries a count per table.
+
+The Settings › Discord › Memory "forget user" action invokes the same profile and memory paths (there is no `/forget-me` slash command — it was never registered).
 
 ## Import from leona_discord
 
@@ -390,16 +399,16 @@ Sleep schedule gates reply delivery and suppresses silent reactions during overn
 
 ## Slash Commands
 
-Registered Discord slash commands (when configured on the bot):
+Registered Discord slash commands:
 
 | Command | Behaviour |
 |---------|-----------|
-| `/ask` | Queue a question through the conversation pipeline |
-| `/summarize` | Queue a channel summary request |
-| `/remember <text>` | Pin a fact to caller's profile + pinned memory |
-| `/forget-me` | Remove caller's profile and pinned memories |
+| `/voice join [channel]` | Bring her into a voice channel (defaults to yours) |
+| `/voice leave` | Disconnect her from voice in this server |
 
-Commands require the conversation service and appropriate storage to be available.
+(`/ask`, `/summarize`, `/remember`, `/forget-me` were documented but never registered — the
+handler behind them was removed 2026-09-13. Text conversation needs no command: mention her or
+talk in a channel she replies in; she leaves voice on her own with `<<HANG UP>>`.)
 
 ## Recovery Procedures
 

@@ -47,6 +47,9 @@ class WorldModelService:
     def create_task(self, account_name: str, task_type: str, **kwargs) -> int:
         return self.task_repository.create_task(account_name, task_type, **kwargs)
 
+    def has_pending_task(self, account_name: str, task_type: str, **kwargs) -> bool:
+        return self.task_repository.has_pending(account_name, task_type, **kwargs)
+
     def record_scheduled_task(
         self,
         *,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextvars import ContextVar
 
 from plugins.discord.daemon import get_runtime, run_coroutine
@@ -27,17 +28,46 @@ def _valid_reply_message_id(message_id) -> str | None:
     return None
 
 
+# Every Discord tool talks to Discord's API: is_local='endpoint' (refused in
+# private chats), network=True (UI badge). Channel params take an id or a
+# #name; discord_list_channels is the way to learn either (D11, AIX report
+# 2026-09-13: she ran get_servers and had no way to find a channel id).
 TOOLS = [
     {
         'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
+        'function': {
+            'name': 'discord_list_channels',
+            'description': (
+                'List channels the bot can see, one per line as "#name (id) — server". '
+                'Use this to find a channel name or id before posting or reading; a channel '
+                'from the list can be passed to any other Discord tool as its id or #name.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'server': {'type': 'string', 'description': 'Server name or id to filter by (substring match). Omit = every server.'},
+                    'kind': {'type': 'string', 'enum': ['text', 'voice', 'all'], 'description': 'text (default), voice, or all.'},
+                },
+                'required': [],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
         'function': {
             'name': 'discord_get_servers',
-            'description': 'List Discord servers.',
+            'description': 'List the servers the bot is in as "name (id)". For channels use discord_list_channels.',
             'parameters': {'type': 'object', 'properties': {}, 'required': []},
         },
     },
     {
         'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
         'function': {
             'name': 'discord_read_messages',
             'description': (
@@ -48,7 +78,7 @@ TOOLS = [
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit to use the current channel.'},
+                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
                     'count': {'type': 'integer', 'description': '1-50, default 20.'},
                 },
                 'required': [],
@@ -57,15 +87,20 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
         'function': {
             'name': 'discord_send_message',
-            'description': 'Send a Discord message.',
+            'description': (
+                'Send a Discord message (long text is split at 1900 chars). Returns the message id. '
+                'Inside a conversation, omit channel to reply where you were spoken to.'
+            ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string'},
-                    'text': {'type': 'string'},
-                    'reply_to_message_id': {'type': 'string'},
+                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
+                    'text': {'type': 'string', 'description': 'The message. Plain text or Discord markdown.'},
+                    'reply_to_message_id': {'type': 'string', 'description': 'Quote-reply to this message id (from discord_read_messages).'},
                 },
                 'required': ['text'],
             },
@@ -73,42 +108,21 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
         'function': {
-            'name': 'discord_send_gif',
-            'description': 'Send a GIF to Discord by search query or URL. Omit channel to reply in the current channel; use channel_id (numeric) or #channel-name — not the bot account name.',
+            'name': 'discord_send_image',
+            'description': (
+                'Post an image to a Discord channel. source = img:<id> (the "(image img:...)" handle a tool '
+                'gave you), doc:<N> (a library image from your memory), or a URL; omit it to send the newest '
+                'image of this chat. You see the image too and can describe it.'
+            ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string'},
-                    'channel': {'type': 'string'},
-                },
-                'required': ['query'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'discord_join_voice',
-            'description': 'Join a Discord voice channel and hold a spoken conversation there. Pass the voice channel name or ID (not a text channel).',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'channel': {'type': 'string'},
-                },
-                'required': ['channel'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'discord_leave_voice',
-            'description': 'Leave a Discord voice channel. Omit channel to leave every voice channel you are in.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'channel': {'type': 'string'},
+                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
+                    'source': {'type': 'string', 'description': 'img:<id>, doc:<N>, or https://... (default: newest image of this chat).'},
+                    'caption': {'type': 'string', 'description': 'Text posted with the image.'},
                 },
                 'required': [],
             },
@@ -116,15 +130,66 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
         'function': {
-            'name': 'discord_add_reaction',
-            'description': 'Add a reaction in Discord.',
+            'name': 'discord_send_gif',
+            'description': 'Send a GIF by search query or by URL. Returns the message id. Needs a GIF API key in Media settings for searches.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'emoji': {'type': 'string'},
-                    'channel': {'type': 'string'},
-                    'message_id': {'type': 'string'},
+                    'query': {'type': 'string', 'description': 'A search query ("happy dance") or a direct GIF URL.'},
+                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
+                },
+                'required': ['query'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
+        'function': {
+            'name': 'discord_join_voice',
+            'description': 'Join a Discord voice channel and hold a spoken conversation there. Pass the VOICE channel name or id (see discord_list_channels kind=voice).',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'channel': {'type': 'string', 'description': 'Voice channel name or numeric id.'},
+                },
+                'required': ['channel'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
+        'function': {
+            'name': 'discord_leave_voice',
+            'description': 'Leave a Discord voice channel. Omit channel to leave every voice channel you are in.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'channel': {'type': 'string', 'description': 'Voice channel name or numeric id. Omit = all.'},
+                },
+                'required': [],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
+        'function': {
+            'name': 'discord_add_reaction',
+            'description': 'Add an emoji reaction to a message. Inside a conversation, omit message_id to react to the message you are replying to.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'emoji': {'type': 'string', 'description': 'A unicode emoji, e.g. 🔥.'},
+                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
+                    'message_id': {'type': 'string', 'description': 'Numeric message id (from discord_read_messages). Omit = the message being replied to.'},
                 },
                 'required': ['emoji'],
             },
@@ -132,6 +197,8 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'is_local': True,
+        'network': False,
         'function': {
             'name': 'discord_memory',
             'description': (
@@ -145,11 +212,11 @@ TOOLS = [
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'action': {'type': 'string', 'enum': ['search', 'add', 'delete']},
-                    'user': {'type': 'string'},
-                    'content': {'type': 'string'},
-                    'query': {'type': 'string'},
-                    'account': {'type': 'string'},
+                    'action': {'type': 'string', 'enum': ['search', 'add', 'delete'], 'description': 'What to do.'},
+                    'user': {'type': 'string', 'description': 'A Discord display name, username, or numeric id.'},
+                    'content': {'type': 'string', 'description': 'The fact to add, or text to match for delete.'},
+                    'query': {'type': 'string', 'description': 'Search text across all facts (search only).'},
+                    'account': {'type': 'string', 'description': 'Bot account name when more than one bot is connected.'},
                 },
                 'required': ['action'],
             },
@@ -215,6 +282,50 @@ def _resolve_channel_id(channel_arg: str) -> str:
         except Exception as exc:
             logger.debug('Channel name resolution failed for %r: %s', channel_arg, exc)
     return channel_arg
+
+
+def _tools_stay_in_server() -> bool:
+    runtime = get_runtime()
+    store = getattr(runtime, 'settings_store', None) if runtime else None
+    if store is None:
+        return True
+    try:
+        return bool(getattr(store.resolve().safety, 'tools_stay_in_server', True))
+    except Exception:
+        return True
+
+
+def _reach_error(channel: str, account_name: str | None) -> str | None:
+    """H3 (hunt 2026-09-12): inside a server event her tools may only act in
+    THAT server — a message in one server must not make her post into another
+    or into someone's DMs. Operator chats (no event) reach everything. Fail
+    closed: an unresolvable target inside an event is refused."""
+    event = _event_data()
+    if not event or not str(event.get('channel_id') or ''):
+        return None                                   # operator chat — full reach
+    if not _tools_stay_in_server():
+        return None
+    target = str(channel or '').strip()
+    event_channel = str(event.get('channel_id') or '')
+    if target == event_channel:
+        return None
+    if str(event.get('is_dm', '')).lower() in {'1', 'true'}:
+        return "From inside a DM I only act in this DM. Post there from the owner's chat instead."
+    transport = _transport()
+    reach_fn = getattr(transport, 'channel_reach_sync', None)
+    if not callable(reach_fn):
+        return 'I cannot verify which server that channel is in from here, so I will not post there.'
+    try:
+        reach = reach_fn(target, account_name=account_name) or {}
+    except Exception as exc:
+        return f'I cannot resolve channel {target} from here ({exc}), so I will not post there.'
+    if reach.get('is_dm'):
+        return 'From inside a server I never post into DMs.'
+    event_guild = str(event.get('guild_id') or '')
+    if event_guild and str(reach.get('guild_id') or '') != event_guild:
+        return ("That channel is in a different server than this conversation. From inside a server "
+                "I only act in this server — ask the owner to post there from their own chat.")
+    return None
 
 
 def _scope_account() -> str | None:
@@ -343,6 +454,80 @@ def discord_get_servers():
     return ('\n'.join(f"{item['name']} ({item['id']})" for item in servers), True)
 
 
+def discord_list_channels(*, server: str = '', kind: str = 'text'):
+    transport = _transport()
+    if not transport:
+        return ('Discord runtime is not available', False)
+    kind = str(kind or 'text').strip().lower()
+    kinds = ['text', 'voice'] if kind == 'all' else [kind if kind in ('text', 'voice') else 'text']
+    rows: list[dict] = []
+    for k in kinds:
+        try:
+            for row in transport.list_channels_sync(k) or []:
+                rows.append({**row, 'kind': k})
+        except Exception as exc:
+            return (f'Could not list {k} channels: {exc}', False)
+    needle = str(server or '').strip().lower()
+    if needle:
+        rows = [r for r in rows if needle in str(r.get('guild_name') or '').lower() or needle == str(r.get('guild_id') or '')]
+    # Inside a server event, the roster is that server's (H3 reach).
+    event = _event_data()
+    event_guild = str(event.get('guild_id') or '') if event else ''
+    if event_guild and _tools_stay_in_server():
+        rows = [r for r in rows if str(r.get('guild_id') or '') == event_guild]
+    if not rows:
+        return ('No channels found' + (f' matching {server!r}' if needle else '') + ' (bot may still be connecting).', True)
+    lines = []
+    for r in rows:
+        tag = ' [voice]' if r.get('kind') == 'voice' else ''
+        lines.append(f"#{r.get('channel_name')} ({r.get('channel_id')}) — {r.get('guild_name')} ({r.get('guild_id')}){tag}")
+    return ('\n'.join(lines), True)
+
+
+def discord_send_image(*, channel=None, source: str = '', caption: str = ''):
+    """Post an image from core.images (img:/doc:/URL) — the Telegram plugin's
+    lane, verbatim. Nothing here reads a filesystem path (H3: the old upload
+    tool took any absolute path)."""
+    transport = _transport()
+    if not transport:
+        return ('Discord runtime is not available', False)
+    channel = _resolve_channel_id(str(channel or ''))
+    if not channel:
+        return ('Channel is required.', False)
+    account_name = _default_account()
+    reach = _reach_error(channel, account_name)
+    if reach:
+        return (reach, False)
+    from core import images as ci
+
+    source = str(source or '').strip()
+    if source and not (source.startswith(('img:', 'doc:', 'http://', 'https://'))):
+        return ('source must be img:<id>, doc:<N>, or a URL — I do not post files from disk.', False)
+    if not source:
+        last = ci.last_image_id()
+        if not last:
+            return ('No image to send — give source= (img:<id>, doc:<N>, or a URL) or make one first.', False)
+        source = f'img:{last}'
+    try:
+        resolved = ci.resolve(source)
+    except ci.ImageError as exc:
+        return (str(exc), False)
+    media_type = str(resolved.media_type or '')
+    if media_type in ('image/jpeg', 'image/png', 'image/gif', 'image/webp'):
+        data = resolved.data
+    else:
+        data = ci.for_chat(resolved.data)
+        media_type = 'image/jpeg'
+    ext = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp'}.get(media_type, 'jpg')
+    stem = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(resolved.label or 'image').split('\n', 1)[0])[:40].strip('_') or 'image'
+    result = transport.send_file_sync(channel, data, f'{stem}.{ext}', caption=str(caption or ''), account_name=account_name)
+    if result.get('status') == 'error':
+        return (result.get('error', 'Image send failed'), False)
+    receipt = f" (message_id {result['message_id']})" if result.get('message_id') else ''
+    text = f'Image {resolved.label.splitlines()[0] if resolved.label else source} sent to channel {channel}{receipt}.'
+    return (ci.result(text, [ci.for_chat(data)]), True)
+
+
 def discord_read_messages(channel=None, count=20):
     transport = _transport()
     if not transport:
@@ -350,6 +535,9 @@ def discord_read_messages(channel=None, count=20):
     channel = _resolve_channel_id(str(channel or ''))
     if not channel:
         return ('Channel is required — pass a numeric channel id or #channel-name.', False)
+    reach = _reach_error(channel, _default_account())
+    if reach:
+        return (reach, False)
     try:
         rows = transport.read_messages(
             channel, count=max(1, min(50, int(count or 20))), account_name=_default_account(),
@@ -379,6 +567,9 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
         return ('Channel is required.', False)
     runtime = get_runtime()
     account_name = _default_account()
+    reach = _reach_error(channel, account_name)
+    if reach:
+        return (reach, False)
     reply_style = runtime.reply_style_service if runtime else None
     settings = (
         runtime.settings_store.resolve(
@@ -394,6 +585,7 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
     if not chunks and not (parsed and (parsed.gif_query or parsed.reaction)):
         return ('Message text is empty.', False)
     sent_parts = []
+    sent_ids: list[str] = []
     reply_to = _valid_reply_message_id(reply_to_message_id or _reply_message_id.get())
     for index, chunk in enumerate(chunks):
         if str(chunk or '').strip():
@@ -406,6 +598,9 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
             if result.get('status') == 'error':
                 return (result.get('error', 'Send failed'), False)
             sent_parts.append(chunk)
+            for row in (result.get('messages') or []):
+                if isinstance(row, dict) and row.get('message_id'):
+                    sent_ids.append(str(row['message_id']))
     if parsed and not sent_parts and not parsed.gif_query and not parsed.reaction:
         return ('Message text is empty.', False)
     _mark_tool_sent('\n\n'.join(sent_parts))
@@ -421,7 +616,8 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
             settings=settings,
             trigger_message_id=_correlation_message_id(),
         )
-    return (f'Message sent to channel {channel}.', True)
+    receipt = f' (message_id {", ".join(sent_ids)})' if sent_ids else ''
+    return (f'Message sent to channel {channel}{receipt}.', True)
 
 
 # discord_upload_file was REMOVED 2026-09-13 (hunt H3): it took any absolute
@@ -438,6 +634,9 @@ def discord_send_gif(*, query: str, channel=None):
         return ('Channel is required.', False)
     runtime = get_runtime()
     account_name = _default_account()
+    reach = _reach_error(channel, account_name)
+    if reach:
+        return (reach, False)
     settings = (
         runtime.settings_store.resolve()
         if runtime and getattr(runtime, 'settings_store', None)
@@ -457,7 +656,8 @@ def discord_send_gif(*, query: str, channel=None):
     if result.get('status') == 'error':
         return (result.get('error', 'GIF send failed'), False)
     _mark_gif_sent()
-    return (f'GIF sent to channel {channel}.', True)
+    receipt = f" (message_id {result['message_id']})" if result.get('message_id') else ''
+    return (f'GIF sent to channel {channel}{receipt}.', True)
 
 
 def discord_join_voice(*, channel: str):
@@ -541,6 +741,9 @@ def discord_add_reaction(*, emoji: str, channel=None, message_id=None):
     if not channel or not message_id:
         return ('Channel and message_id are required.', False)
     account_name = _default_account()
+    reach = _reach_error(channel, account_name)
+    if reach:
+        return (reach, False)
     result = transport.add_reaction_sync(channel, message_id, emoji, account_name=account_name)
     if result.get('status') == 'error':
         return (result.get('error', 'Reaction failed'), False)
@@ -633,8 +836,10 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
         if event_author and str(row['user_id']) != event_author:
             return ('I only save notes about someone at their own request — the owner can add '
                     'facts about others in Settings > Discord > Memory.', False)
+        _ev = _event_data()
+        origin = ('dm' if str(_ev.get('is_dm', '')).lower() in {'1', 'true'} else str(_ev.get('guild_id') or '')) if _ev else ''
         fact_id = runtime.profile_service.remember_fact(
-            account_name, row['user_id'], text, source='tool',
+            account_name, row['user_id'], text, source='tool', origin=origin,
         )
         return (f'Remembered about {_memory_user_label(row)}: {text} (fact {fact_id})', True)
 
@@ -690,6 +895,17 @@ def execute(function_name, arguments, config=None):
         pass
     if function_name == 'discord_get_servers':
         return discord_get_servers()
+    if function_name == 'discord_list_channels':
+        return discord_list_channels(
+            server=str(arguments.get('server', '') or ''),
+            kind=str(arguments.get('kind', 'text') or 'text'),
+        )
+    if function_name == 'discord_send_image':
+        return discord_send_image(
+            channel=_default_channel(arguments),
+            source=str(arguments.get('source', '') or ''),
+            caption=str(arguments.get('caption', '') or ''),
+        )
     if function_name == 'discord_read_messages':
         return discord_read_messages(
             channel=_default_channel(arguments),

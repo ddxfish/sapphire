@@ -70,8 +70,26 @@ def distill_llm_from_settings(settings) -> tuple[str, str]:
     return (provider or cognitive_primary), (model or cognitive_model)
 
 
-def resolve_discord_llm_provider(system, provider_key: str, model_name: str = ''):
-    """Return (provider_key, provider, gen_params) for plugin-configured LLM calls."""
+def side_lanes_local_only() -> bool:
+    """cognitive.side_lanes_local_only, read live from core's plugin settings
+    (M6). Unreadable → True: the safe direction for other people's chatter."""
+    try:
+        from core.plugin_loader import plugin_loader
+        if not plugin_loader.get_plugin_info('discord'):
+            return True
+        value = (plugin_loader.get_plugin_settings('discord') or {}).get('cognitive.side_lanes_local_only', True)
+    except Exception:
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ('0', 'false', 'no', 'off')
+
+
+def resolve_discord_llm_provider(system, provider_key: str, model_name: str = '', *, local_only: bool | None = None):
+    """Return (provider_key, provider, gen_params) for plugin-configured LLM calls.
+
+    local_only (default: the cognitive.side_lanes_local_only setting) narrows
+    the 'auto' scan to providers marked local — explicit picks are untouched."""
     llm = getattr(system, 'llm_chat', None)
     if llm is None:
         return None, None, None
@@ -91,11 +109,15 @@ def resolve_discord_llm_provider(system, provider_key: str, model_name: str = ''
         from core.chat.llm_providers import get_first_available_provider
         providers_config = _providers_config()
         fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
+        if local_only is None:
+            local_only = side_lanes_local_only()
         result = get_first_available_provider(
             providers_config, fallback_order,
-            getattr(config, 'LLM_REQUEST_TIMEOUT', 60.0))
+            getattr(config, 'LLM_REQUEST_TIMEOUT', 60.0),
+            force_privacy=bool(local_only))
         if not result:
-            logger.warning('Discord LLM auto mode: no providers available')
+            logger.warning('Discord LLM auto mode: no %sproviders available',
+                           'local ' if local_only else '')
             return None, None, None
         selected_key, provider = result
         gen_params = get_generation_params(selected_key, provider.model, providers_config)

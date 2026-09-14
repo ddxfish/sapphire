@@ -157,7 +157,7 @@ def test_runner_interrupt_active_turn_cancels_responding():
 
             driver.system.cancel_generation.assert_called_once_with(chat_name='discord_111_222')
             source.interrupt_playback.assert_called_once()
-            driver.engine.turn_finished.assert_called_once()
+            driver.abandon_turn.assert_called_once()      # core seam (H14), not a raw poke
 
 
 def test_runner_stop_command_halts_without_new_turn():
@@ -290,3 +290,12 @@ def test_barge_hold_comes_from_discord_voice_settings_with_clamp():
     assert hold(SimpleNamespace(voice=SimpleNamespace(barge_hold_ms=400))) == 400
     assert hold(SimpleNamespace(voice=SimpleNamespace(barge_hold_ms=5))) == 30
     assert hold(SimpleNamespace(voice=SimpleNamespace(barge_hold_ms='nope'))) == 250
+
+
+def test_stop_async_runs_stop_off_the_loop():
+    import asyncio
+
+    runner, driver = _started_runner()
+    result = asyncio.run(runner.stop_async('sess-1'))
+    assert result['status'] == 'stopped'
+    assert not runner.is_active('sess-1')

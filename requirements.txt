@@ -72,8 +72,10 @@ croniter>=1.3.0
 # Bitcoin wallet
 bit>=0.8.0
 
-# Discord bot
-discord.py>=2.3.0
+# Discord: core never imports discord. The Discord plugin needs py-cord (a
+# different package that owns the same `discord` import name — installing
+# discord.py here CONFLICTED with it); see plugins/discord/voice/voice_deps.py
+# INSTALL_HINT for the pinned build. 2026-09-13.
 
 # Telegram client
 telethon>=1.34.0

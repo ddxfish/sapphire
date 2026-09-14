@@ -1,6 +1,6 @@
 # Retention
 
-Optional daily purge of old plugin-stored messages, traces, and voice transcripts.
+Optional daily purge of old plugin-stored messages (with their media artifacts and processed sleep-buffer rows), traces and finished tasks, voice transcripts / summaries / closed sessions, and unprocessed ambient-distill buffers. Deletes run in chunks so a first purge over a long-lived database does not stall replies.
 
 ## Settings
 
@@ -34,10 +34,10 @@ Purge deletes decision traces (the Traces view) older than this many days (defau
 - **Type:** `number`
 - **Default:** `30`
 
-Purge deletes voice-channel transcripts older than this many days (default 30). 0 = keep forever.
+Purge deletes voice-channel transcripts, session summaries, and closed session rows older than this many days (default 30). 0 = keep forever.
 
 ### Related hidden key
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `retention.profile_buffer_days` | `7` | When purge is enabled, delete processed ambient-distill buffer rows older than this many days (`0` = keep forever) |
+| `retention.profile_buffer_days` | `7` | When purge is enabled, delete ambient-distill buffer rows that were never distilled and are older than this many days (`0` = keep forever). Distilled rows are deleted the moment their facts are drawn. |

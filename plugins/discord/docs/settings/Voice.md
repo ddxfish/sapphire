@@ -114,6 +114,10 @@ How long you must keep talking over her before she stops. Speech is judged by co
 
 Both addressing settings apply only in `bot_name` mode. In a group, only an addressed utterance interrupts her; two people talking to each other while she answers a third do not cut her off. Set these per server (guild override) when a public server needs stricter rules than your own.
 
+## Leaving on her own
+
+She is never forced to stay. In any voice conversation she can end it by saying her goodbye and writing `<<HANG UP>>` at the end of that reply — the same sentinel as the phone. The tag is never spoken; once her final words have played (and the goodbye chime, if turn cues are on) she leaves the channel through the same door as `/voice leave`. The instruction is always in her voice prompt, even under a custom template, and it works with no tools at all.
+
 ## Auto-Join Voice Channels
 
 Custom picker stored as `voice.join_targets` (`account:channelId` voice channels).

@@ -59,16 +59,20 @@ class ProfileRepository:
             (account_name, user_id),
         ).fetchone())
 
-    def add_fact(self, account_name: str, user_id: str, content: str, *, source: str = 'explicit', confidence: float = 1.0) -> int:
+    def add_fact(self, account_name: str, user_id: str, content: str, *, source: str = 'explicit',
+                 confidence: float = 1.0, origin: str = '') -> int:
+        """origin = the guild id the fact was learned in, 'dm' for a direct
+        message, '' for operator/legacy rows (visible everywhere). Facts learned
+        in DMs never reach a server prompt (H16b, hunt 2026-09-12)."""
         now = time.time()
         conn = self.sqlite_service.connection()
         cursor = conn.execute(
             '''
             INSERT INTO profile_facts
-            (account_name, user_id, content, confidence, source, created_at, pinned, forgotten, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
+            (account_name, user_id, content, confidence, source, created_at, pinned, forgotten, updated_at, origin)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
             ''',
-            (account_name, user_id, content, confidence, source, now, now),
+            (account_name, user_id, content, confidence, source, now, now, str(origin or '')),
         )
         conn.commit()
         return int(cursor.lastrowid)
@@ -87,15 +91,20 @@ class ProfileRepository:
         limit: int = 20,
         *,
         include_forgotten: bool = False,
+        for_guild: str | None = None,
     ) -> list[dict]:
+        """for_guild: the server this list is FOR — facts learned in DMs are
+        left out. None = a DM or the operator UI: everything."""
         query = '''
-            SELECT id, content, confidence, source, created_at, pinned, forgotten, updated_at
+            SELECT id, content, confidence, source, created_at, pinned, forgotten, updated_at, origin
             FROM profile_facts
             WHERE account_name = ? AND user_id = ?
         '''
         params: list = [account_name, user_id]
         if not include_forgotten:
             query += ' AND forgotten = 0'
+        if for_guild:
+            query += " AND origin != 'dm'"
         # Pinned first, then freshest.
         query += ' ORDER BY pinned DESC, created_at DESC LIMIT ?'
         params.append(max(1, int(limit)))

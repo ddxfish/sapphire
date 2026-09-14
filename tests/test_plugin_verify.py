@@ -482,3 +482,27 @@ class TestPathTraversal:
         assert not passed
         assert meta["tier"] == "failed"
         assert "path traversal" in msg
+
+
+# ── .claude/ scratch dirs are neither signed nor a reason to block (D9, 2026-09-13) ──
+
+def test_claude_scratch_dir_is_ignored_by_signer_and_verifier(tmp_path, monkeypatch):
+    private, pub = _generate_keypair()
+    plugin = tmp_path / 'plug'
+    plugin.mkdir()
+    (plugin / 'plugin.json').write_text('{"name": "plug", "version": "1.0.0"}', encoding='utf-8')
+    (plugin / 'main.py').write_text('x = 1\n', encoding='utf-8')
+    sig = _sign_plugin_dir(plugin, private)
+    assert not any(rel.startswith('.claude/') for rel in sig['files'])
+    # A scout leaves notes AFTER signing — must not read as an injected file.
+    notes = plugin / '.claude' / 'agent-memory' / 'scout'
+    notes.mkdir(parents=True)
+    (notes / 'notes.md').write_text('# scratch\n', encoding='utf-8')
+    ok, reason = _verify_file_integrity(plugin, sig)
+    assert ok, reason
+    # tools/sign_plugin.py builds its manifest the same way
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('sign_plugin', PROJECT_ROOT / 'tools' / 'sign_plugin.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert not any(rel.startswith('.claude/') for rel in mod.build_file_manifest(plugin))

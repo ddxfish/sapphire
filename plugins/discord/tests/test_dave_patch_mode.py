@@ -4,28 +4,15 @@ import sys
 from plugins.discord.voice import dave_voice_patches as patches
 
 
-def test_upstream_detection_matches_fixed_reader(monkeypatch):
-    def decrypt_rtp(self, packet):
-        pass
-
-    fake_reader = types.SimpleNamespace(PacketDecryptor=types.SimpleNamespace(decrypt_rtp=decrypt_rtp))
-    monkeypatch.setitem(sys.modules, 'discord.voice.receive.reader', fake_reader)
-
-    def fake_getsource(_obj):
-        return (
-            'def decrypt_rtp(self, packet):\n'
-            ' dave.decrypt(uid, davey.MediaType.audio, dave_input)\n'
-            ' if "UnencryptedWhenPassthroughDisabled" in str(exc):\n'
-            '  pass\n'
-        )
-
-    monkeypatch.setattr(patches.inspect, 'getsource', fake_getsource)
+def test_upstream_detection_is_version_based(monkeypatch):
+    # M23 (hunt 2026-09-12): the gate reads py-cord's version, not the source
+    # text of a private method (a reformat upstream flipped the old check).
+    fake = types.SimpleNamespace(__version__='2.8.0rc2.dev22+g6e71bfffb')
+    monkeypatch.setitem(sys.modules, 'discord', fake)
     assert patches._upstream_dave_decrypt_fixed() is True
-
-
-def test_upstream_detection_false_for_legacy_reader(monkeypatch):
-    monkeypatch.setattr(patches.inspect, 'getsource', lambda _obj: 'def decrypt_rtp(self, packet): pass')
+    fake.__version__ = '2.6.1'
     assert patches._upstream_dave_decrypt_fixed() is False
+    assert not hasattr(patches, 'inspect')
 
 
 def test_requested_dave_mode_defaults_to_auto(monkeypatch):

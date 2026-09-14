@@ -173,6 +173,7 @@ def test_mention_bypasses_zero_chance():
 
 def test_dm_bypasses_zero_chance():
     store = SettingsStore()
+    store.global_overlay.safety.update({'allow_direct_messages': True})   # DMs are opt-in since 2026-09-13
     store.global_overlay.channel.update({
         'reply_mode': 'default',
         'human_response_chance': 0,

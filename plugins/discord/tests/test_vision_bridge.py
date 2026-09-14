@@ -418,8 +418,20 @@ def test_auto_scan_handles_property_supports_images(monkeypatch):
     from plugins.discord.vision.vision_bridge import VisionBridge
     made = {'blind': _BlindProvider(), 'sighted': _PropertyVisionProvider()}
     _patch_provider_world(monkeypatch, made, ['blind', 'sighted'])
+    monkeypatch.setattr(VisionBridge, '_local_only', staticmethod(lambda: False))   # M6 gate tested separately
     resolved = VisionBridge()._resolve_house_provider({'llm_provider': 'auto'})
     assert resolved is made['sighted']
+
+
+def test_auto_scan_skips_cloud_providers_when_side_lanes_are_local_only(monkeypatch):
+    from plugins.discord.vision.vision_bridge import VisionBridge
+    made = {'sighted': _PropertyVisionProvider()}
+    _patch_provider_world(monkeypatch, made, ['sighted'])
+    monkeypatch.setattr(VisionBridge, '_local_only', staticmethod(lambda: True))
+    monkeypatch.setattr(VisionBridge, '_provider_is_local', staticmethod(lambda key, conf: False))
+    assert VisionBridge()._resolve_house_provider({'llm_provider': 'auto'}) is None
+    monkeypatch.setattr(VisionBridge, '_provider_is_local', staticmethod(lambda key, conf: True))
+    assert VisionBridge()._resolve_house_provider({'llm_provider': 'auto'}) is made['sighted']
 
 
 def test_pinned_reply_provider_without_vision_degrades(monkeypatch):

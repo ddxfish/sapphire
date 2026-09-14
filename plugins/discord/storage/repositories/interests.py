@@ -17,7 +17,11 @@ class InterestRepository:
         *,
         weight_delta: float = 1.0,
         seen_at: float | None = None,
+        origin: str = '',
     ) -> dict:
+        """origin: guild id or 'dm'. A topic first heard in a DM and later in a
+        server becomes public (origin upgrades); never the other way round."""
+        origin = str(origin or '')
         topic = str(topic or '').strip().lower()
         if not topic:
             raise ValueError('topic required')
@@ -34,19 +38,20 @@ class InterestRepository:
             conn.execute(
                 '''
                 UPDATE interest_topics
-                SET weight = weight + ?, mention_count = mention_count + 1, last_seen_at = ?
+                SET weight = weight + ?, mention_count = mention_count + 1, last_seen_at = ?,
+                    origin = CASE WHEN origin = 'dm' AND ? NOT IN ('', 'dm') THEN ? ELSE origin END
                 WHERE account_name = ? AND user_id = ? AND topic = ?
                 ''',
-                (float(weight_delta), now, account_name, user_id, topic),
+                (float(weight_delta), now, origin, origin, account_name, user_id, topic),
             )
         else:
             conn.execute(
                 '''
                 INSERT INTO interest_topics
-                (account_name, user_id, topic, weight, mention_count, last_seen_at, created_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
+                (account_name, user_id, topic, weight, mention_count, last_seen_at, created_at, origin)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?)
                 ''',
-                (account_name, user_id, topic, float(weight_delta), now, now),
+                (account_name, user_id, topic, float(weight_delta), now, now, origin),
             )
         conn.commit()
         return dict(conn.execute(
@@ -63,11 +68,12 @@ class InterestRepository:
         user_id: str,
         *,
         limit: int = 10,
+        exclude_dm: bool = False,
     ) -> list[dict]:
         rows = self.sqlite_service.connection().execute(
-            '''
+            f'''
             SELECT * FROM interest_topics
-            WHERE account_name = ? AND user_id = ?
+            WHERE account_name = ? AND user_id = ?{" AND origin != 'dm'" if exclude_dm else ''}
             ORDER BY weight DESC, last_seen_at DESC
             LIMIT ?
             ''',
@@ -87,12 +93,14 @@ class InterestRepository:
         if not ids:
             return []
         placeholders = ','.join('?' for _ in ids)
+        # Channel outreach is always a server: what someone shared in a DM
+        # is not a conversation starter in public.
         rows = self.sqlite_service.connection().execute(
             f'''
             SELECT topic, SUM(weight) AS weight, SUM(mention_count) AS mention_count,
                    MAX(last_seen_at) AS last_seen_at
             FROM interest_topics
-            WHERE account_name = ? AND user_id IN ({placeholders})
+            WHERE account_name = ? AND user_id IN ({placeholders}) AND origin != 'dm'
             GROUP BY topic
             ORDER BY weight DESC, last_seen_at DESC
             LIMIT ?

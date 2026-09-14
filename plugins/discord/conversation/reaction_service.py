@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import OrderedDict
 
 from plugins.discord.conversation.sentiment import pick_reaction_emoji
 from plugins.discord.models.intentions import AddReactionIntention
@@ -17,12 +18,16 @@ REACTION_DELAY_MAX = 5.0
 READ_ONLY_REACT_CHANCE = 0.05
 
 
+REACTED_MESSAGES_CAP = 2000
+
+
 class ReactionService:
     def __init__(self, *, message_repository=None, trace_repository=None):
         self.message_repository = message_repository
         self.trace_repository = trace_repository
         self._last_reaction_at: dict[tuple[str, str, str], float] = {}
-        self._reacted_messages: set[tuple[str, str, str]] = set()
+        # Bounded (M10): grew one key per reaction for the process life.
+        self._reacted_messages: OrderedDict[tuple[str, str, str], bool] = OrderedDict()
 
     def maybe_react(self, parsed_reply) -> str:
         """Pass through explicit LLM [react:] tags."""
@@ -172,7 +177,9 @@ class ReactionService:
 
     def _record_silent_reaction(self, intention: AddReactionIntention, *, result: dict, delay: float) -> dict:
         key = (intention.account_name, intention.channel_id, intention.message_id)
-        self._reacted_messages.add(key)
+        self._reacted_messages[key] = True
+        while len(self._reacted_messages) > REACTED_MESSAGES_CAP:
+            self._reacted_messages.popitem(last=False)
         self._last_reaction_at[(intention.account_name, intention.channel_id, 'channel')] = time.time()
         if self.trace_repository:
             self.trace_repository.record_trace('silent_reaction', 'Added sentiment reaction', {

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+
+import logging
+
 from plugins.discord.api.storage_access import open_storage
 from plugins.discord.daemon import get_runtime, run_coroutine
 from plugins.discord.lib.token_check import check_bot_token
+
+logger = logging.getLogger(__name__)
 
 
 def _sanitize_account_name(raw: str) -> str:
@@ -47,12 +52,16 @@ def delete_account(**kwargs):
         return {'error': 'Account name required'}
     runtime = get_runtime()
     if runtime and runtime.transport:
-        run_coroutine(runtime.transport.disconnect_account(name)).result(timeout=5)
+        try:
+            run_coroutine(runtime.transport.disconnect_account(name)).result(timeout=5)
+        except Exception as exc:
+            # A wedged gateway must not make the account undeletable (M3).
+            logger.warning('Discord account %s: disconnect before delete failed (%s) — deleting anyway', name, exc)
     with open_storage() as storage:
-        storage.account_repository.delete_account(name)
+        removed = storage.account_repository.delete_account(name)
     from core.event_bus import publish, Events
     publish(Events.SCOPE_CHANGED, {"kind": "discord", "action": "deleted", "name": name})
-    return {'status': 'deleted', 'account_name': name}
+    return {'status': 'deleted', 'account_name': name, 'removed': removed or {}}
 
 
 async def test_account(**kwargs):

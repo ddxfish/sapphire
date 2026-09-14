@@ -1,4 +1,6 @@
-"""Manual proactive pathway tests and schedule diagnostics."""
+"""Proactive pathway dry-runs and schedule diagnostics (operator tooling behind api/proactive).
+
+Named test_paths.py until 2026-09-13 — pytest collected it as a 0-test module every run."""
 
 from __future__ import annotations
 

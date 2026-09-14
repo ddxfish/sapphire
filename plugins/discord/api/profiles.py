@@ -207,15 +207,28 @@ def mutate_lore(**kwargs):
     return {'lore': row}
 
 
+SCRATCH_USER_PREFIX = 'test:'
+
+
+def _scratch_user(user_id: str) -> str:
+    """The test route never touches a real member's counters (M35): whatever id
+    the operator types is mapped onto a scratch profile named after it."""
+    user_id = str(user_id or '').strip()
+    if not user_id or user_id.startswith(SCRATCH_USER_PREFIX):
+        return user_id
+    return SCRATCH_USER_PREFIX + user_id
+
+
 def memory_test(**kwargs):
-    """Operator test helpers for milestones, lore, and interest graphs."""
+    """Operator test helpers for milestones, lore, and interest graphs.
+    Every write lands on a `test:`-prefixed scratch user (see _scratch_user)."""
     runtime = get_runtime()
     if not runtime or not runtime.profile_service:
         return {'error': 'Runtime not available'}
     body = kwargs.get('body') or {}
     kind = str(body.get('kind') or '').strip().lower()
     account_name = _account_from_request(runtime, body=body)
-    user_id = str(body.get('user_id') or body.get('user') or '').strip()
+    user_id = _scratch_user(body.get('user_id') or body.get('user') or '')
     if not account_name:
         return {'error': 'account required'}
 

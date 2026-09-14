@@ -57,6 +57,7 @@ class DistillService:
             observation.author_id,
             f'{prefix}{text}',
             created_at=getattr(observation, 'created_at', None),
+            origin='dm' if getattr(observation, 'is_dm', False) else str(getattr(observation, 'guild_id', '') or ''),
         )
         # Ensure a profile row exists so Memory UI can show them.
         self.profile_repository.get_or_create_profile(observation.account_name, observation.author_id)
@@ -185,6 +186,11 @@ class DistillService:
 
         added_ids = []
         skipped_dupes = 0
+        # A fact distilled ONLY from DMs stays a DM fact; one snippet from a
+        # server makes it public (the server already heard it).
+        origins = [str(r.get('origin') or '') for r in rows]
+        public = [o for o in origins if o and o != 'dm']
+        fact_origin = public[0] if public else ('dm' if origins and all(o == 'dm' for o in origins) else '')
         for fact in extracted[:max_facts]:
             text = str(fact or '').strip()
             if not text or len(text) < 4:
@@ -193,7 +199,7 @@ class DistillService:
                 skipped_dupes += 1
                 continue
             fact_id = self.profile_repository.add_fact(
-                account_name, user_id, text, source='ambient_distill', confidence=0.7,
+                account_name, user_id, text, source='ambient_distill', confidence=0.7, origin=fact_origin,
             )
             added_ids.append(fact_id)
             existing_texts.add(text.lower())

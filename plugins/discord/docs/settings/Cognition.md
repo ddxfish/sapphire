@@ -51,3 +51,19 @@ OFF (default): legacy organic % roll, then optional silent react on miss. ON: sc
 ## Debugging
 
 Open the **Debug** tab → **Cognition preview**. It shows live flags, last per-channel situations, intention winners, and gate multipliers (also `GET debug/cognition`). Reload the Discord plugin/daemon after pulling this build so the panel and API are registered.
+
+### LLM debug ring
+
+- **Setting key:** `cognitive.llm_debug_enabled`
+- **Type:** `boolean`
+- **Default:** OFF
+
+Keeps the last 10 prompts and replies in memory for the Debug panel — full prompts, other people's messages included. Off = nothing retained. The panel's Clear button (`POST debug/clear`) empties it.
+
+### Side lanes: local providers only
+
+- **Setting key:** `cognitive.side_lanes_local_only`
+- **Type:** `boolean`
+- **Default:** ON
+
+Greetings, goodnights, ambient distill and image captions on `auto` pick only providers marked local in Settings › LLM, so server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick (Reply LLM, greeting model, vision model) always wins.

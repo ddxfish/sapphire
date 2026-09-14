@@ -12,6 +12,9 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
+CAPTION_MAX_CHARS = 600         # M12: caption prose cap before it enters her prompt
+FETCH_MAX_BYTES = 10 * 1024 * 1024   # M13: attachment fetch cap
+
 _FETCH_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
@@ -178,12 +181,15 @@ class VisionBridge:
             # settings docstring: 'auto' = first registered provider that
             # supports images — not first provider that constructs.
             order = list(getattr(config, 'LLM_FALLBACK_ORDER', None) or providers_config.keys())
+            local_only = self._local_only()
             for candidate_key in order:
                 conf = providers_config.get(candidate_key)
                 if not isinstance(conf, dict) or not conf.get('enabled', False):
                     continue
                 if not conf.get('use_as_fallback', True):
                     continue
+                if local_only and not self._provider_is_local(candidate_key, conf):
+                    continue   # M6: strangers' images never ride to a cloud model by accident
                 try:
                     candidate = get_provider_by_key(candidate_key, providers_config, timeout)
                 except Exception:
@@ -196,6 +202,23 @@ class VisionBridge:
             logger.info('Vision skipped: no vision-capable LLM provider available')
             return None
         return candidate
+
+    @staticmethod
+    def _local_only() -> bool:
+        try:
+            from plugins.discord.sapphire.llm_settings import side_lanes_local_only
+            return side_lanes_local_only()
+        except Exception:
+            return True
+
+    @staticmethod
+    def _provider_is_local(key: str, conf: dict) -> bool:
+        try:
+            from core.chat.llm_providers import get_provider_metadata
+            fallback = bool(get_provider_metadata(key).get('is_local', False))
+        except Exception:
+            fallback = False
+        return bool(conf.get('is_local', fallback))
 
     @staticmethod
     def _provider_sees(provider) -> bool:
@@ -378,14 +401,27 @@ class VisionBridge:
         last_err = None
         for attempt in range(3):
             try:
+                # M13: stream with a hard cap (an attachment is a stranger's
+                # bytes) and never follow redirects — Discord's CDN doesn't
+                # redirect, and a redirect is how a link reaches a LAN host.
                 response = net.get(
                     source_url,
                     headers=_FETCH_HEADERS,
                     timeout=30,
-                    allow_redirects=True,
+                    stream=True,
+                    allow_redirects=False,
                 )
-                if response.status_code == 200 and response.content:
-                    media_type, is_video = self._sniff_media_type(response.content, source_url)
+                if response.status_code == 200:
+                    buf = bytearray()
+                    for chunk in response.iter_content(65536):
+                        buf += chunk
+                        if len(buf) > FETCH_MAX_BYTES:
+                            raise ValueError(f'attachment over {FETCH_MAX_BYTES // (1024 * 1024)}MB — not fetched for vision')
+                    content = bytes(buf)
+                    if not content:
+                        last_err = 'empty body'
+                        continue
+                    media_type, is_video = self._sniff_media_type(content, source_url)
                     if is_video:
                         raise ValueError('video attachments are not supported for vision')
                     if not media_type:
@@ -395,7 +431,7 @@ class VisionBridge:
                             .strip()
                             .lower()
                         )
-                    return response.content, media_type
+                    return content, media_type
                 last_err = f'HTTP {response.status_code}'
             except ValueError:
                 raise
@@ -481,15 +517,19 @@ class VisionBridge:
             self.debug_logger.info(log_message, *args)
 
     def _normalize(self, raw: dict | None, *, source: str) -> dict:
+        # M12: a rambling or <think>-wrapped caption rode straight into the
+        # reply prompt. Think tags stripped, prose capped.
+        from plugins.discord.conversation.think_tags import strip_think_tags
+
         raw = raw or {}
         summary = raw.get('summary')
         if summary is None:
             summary = raw.get('description')
         return {
-            'summary': str(summary or '').strip(),
-            'entities': list(raw.get('entities') or []),
-            'tone': str(raw.get('tone') or '').strip(),
-            'ocr_text': str(raw.get('ocr_text') or '').strip(),
+            'summary': strip_think_tags(str(summary or '')).strip()[:CAPTION_MAX_CHARS],
+            'entities': [str(e) for e in list(raw.get('entities') or [])[:12]],
+            'tone': str(raw.get('tone') or '').strip()[:80],
+            'ocr_text': strip_think_tags(str(raw.get('ocr_text') or '')).strip()[:CAPTION_MAX_CHARS],
             'confidence': float(raw.get('confidence', 0.5) or 0.5),
             'source': source,
         }

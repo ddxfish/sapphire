@@ -75,6 +75,7 @@ class PromptContextService:
                 last.author_id,
                 guild_id=last.guild_id,
                 channel_id=last.channel_id,
+                is_dm=bool(getattr(last, 'is_dm', False)),
             )
             context['profile'] = profile_context
             # Soft-ack milestones once they've been offered to the prompt so

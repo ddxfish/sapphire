@@ -18,7 +18,7 @@ ON (default): she builds per-user memory from Discord — facts, birthdays, and 
 - **Type:** `boolean`
 - **Default:** OFF
 
-OFF (default): only explicit facts (/remember, tools, UI) and lightweight interests. ON: buffer member chat and periodically distill durable personal facts with an LLM into the plugin DB (never core Mind).
+OFF (default): only explicit facts (the memory tool, the Settings UI) and lightweight interests. ON: buffer member chat and periodically distill durable personal facts with an LLM into the plugin DB (never core Mind).
 
 ### Ambient distill interval (hours)
 

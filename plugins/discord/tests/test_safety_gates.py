@@ -68,8 +68,18 @@ def _run_dm(service):
     return service.process_batch(batching.flush_ready(now=10.0)[0])
 
 
-def test_dm_replies_by_default():
+def test_dm_gate_blocks_by_default():
+    # M19 (hunt 2026-09-12): anyone sharing a server can DM the bot — an
+    # outside line until the operator opens it.
     service = _service(SettingsStore())
+    assert _run_dm(service) is False
+    assert service.event_bridge.payloads == []
+
+
+def test_dm_replies_when_enabled():
+    store = SettingsStore()
+    store.global_overlay.safety.update({'allow_direct_messages': True})
+    service = _service(store)
     assert _run_dm(service) is True
     assert len(service.event_bridge.payloads) == 1
 

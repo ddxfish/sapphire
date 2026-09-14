@@ -34,12 +34,37 @@ class LlmDebugService:
         self._lock = threading.Lock()
         self.plugin_loader = plugin_loader
 
+    @property
+    def enabled(self) -> bool:
+        """Opt-in (F11): the ring holds full prompts. Read live from the plugin
+        setting so the Cognition-tab toggle applies without a restart. No real
+        loader (unit tests, standalone) = on."""
+        getter = getattr(self.plugin_loader, 'get_plugin_settings', None)
+        if not callable(getter):
+            return True
+        try:
+            value = (getter('discord') or {}).get('cognitive.llm_debug_enabled', False)
+        except Exception:
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    def clear(self) -> int:
+        with self._lock:
+            count = len(self._entries)
+            self._entries.clear()
+            self._index.clear()
+        return count
+
     def list_entries(self, *, limit: int | None = None) -> list[dict]:
         cap = self._limit if limit is None else max(1, min(self._limit, int(limit)))
         with self._lock:
             return [dict(item) for item in list(self._entries)[-cap:]][::-1]
 
     def _append_entry(self, entry: dict) -> None:
+        if not self.enabled:
+            return
         entry_id = str(entry.get('id') or '')
         existing = self._index.get(entry_id)
         if existing:

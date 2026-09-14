@@ -4,6 +4,21 @@ from __future__ import annotations
 
 VOICE_CONTEXT_MARKER = '[discord-voice-mode]'
 
+# She can always leave a voice channel (Krem, 2026-09-13: "Sapph can't be
+# forced to stay in a chat"). Same sentinel as the phone so it is ONE idiom:
+# she writes it at the end of her goodbye, the TTS cleaner never speaks it
+# (angle-bracket tags are stripped before chunking), hooks/hangup_sentinel.py
+# arms the runner, and the runner leaves after her final words drain.
+import re as _re
+
+HANGUP_MARKER_RE = _re.compile(r"<<\s*HANG[\s_-]*UP\s*>>", _re.IGNORECASE)
+HANGUP_INSTRUCTION = (
+    'To leave the voice channel: say your goodbye and put <<HANG UP>> at the end of that same '
+    'reply. Writing the tag IS the action — you leave right after your final words play (the tag '
+    "itself is never heard). Don't write it unless you mean to leave now; even quoting it "
+    'triggers it. You may leave whenever you want to.'
+)
+
 DEFAULT_VOICE_CONVERSATION_PROMPT_TEMPLATE = """[Discord voice conversation]
 You are speaking in a live Discord voice channel. The user hears you through text-to-speech.
 - Keep every reply to ONE or TWO short spoken sentences unless they clearly ask for detail.
@@ -49,7 +64,9 @@ def build_voice_conversation_context(
 ) -> str:
     """Instructions for live VC: brevity, TTS, and STT name fuzziness."""
     rendered = render_voice_conversation_prompt_template(prompt_template, bot_names=bot_names)
-    return f'{VOICE_CONTEXT_MARKER}\n{rendered}'
+    # Always appended — even under an operator's custom template. An outside
+    # line must never leave her unable to hang up.
+    return f'{VOICE_CONTEXT_MARKER}\n{rendered}\n- {HANGUP_INSTRUCTION}'
 
 
 def strip_voice_context(existing: str) -> str:

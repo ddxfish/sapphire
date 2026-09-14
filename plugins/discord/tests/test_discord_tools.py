@@ -35,6 +35,23 @@ class FakeTransport:
         self.calls.append(('add_reaction_sync', channel, message_id, emoji, account_name))
         return {'status': 'reacted', 'emoji': emoji}
 
+    def send_file_sync(self, channel, data, filename, caption='', account_name=None):
+        self.calls.append(('send_file_sync', channel, len(data), filename, caption, account_name))
+        return {'status': 'sent', 'message_id': '900', 'channel_id': channel}
+
+    def list_channels_sync(self, kind='text'):
+        rows = [
+            {'account': 'alpha', 'guild_id': 'g1', 'guild_name': 'Guild', 'channel_id': 'c1', 'channel_name': 'general'},
+            {'account': 'alpha', 'guild_id': 'g2', 'guild_name': 'Other', 'channel_id': 'c9', 'channel_name': 'lobby'},
+        ]
+        if kind == 'voice':
+            rows = [{'account': 'alpha', 'guild_id': 'g1', 'guild_name': 'Guild', 'channel_id': 'v1', 'channel_name': 'Voice Lounge'}]
+        return rows
+
+    def channel_reach_sync(self, channel, account_name=None):
+        return {'c1': {'guild_id': 'g1', 'is_dm': False}, 'c9': {'guild_id': 'g2', 'is_dm': False},
+                'dm1': {'guild_id': '', 'is_dm': True}}.get(str(channel), {'guild_id': '', 'is_dm': False})
+
 
 class FakeReplyStyle:
     def __init__(self):
@@ -305,7 +322,7 @@ class FakeProfileService:
     def __init__(self):
         self.remembered = []
 
-    def remember_fact(self, account_name, user_id, text, source='tool'):
+    def remember_fact(self, account_name, user_id, text, source='tool', **kwargs):
         self.remembered.append((account_name, user_id, text))
         return 7
 
@@ -490,3 +507,84 @@ def test_discord_leave_voice_not_connected(monkeypatch):
     assert ok is True
     assert 'not connected' in msg.lower()
     assert runtime.voice_service.leaves == []
+
+
+# ── Wave F: tools revision (D11) ─────────────────────────────────────────
+
+def test_every_tool_is_flagged_and_every_parameter_described():
+    for tool in tools.TOOLS:
+        name = tool['function']['name']
+        assert tool.get('is_local') in (True, False, 'endpoint'), name
+        assert 'network' in tool, name
+        for pname, spec in tool['function']['parameters']['properties'].items():
+            assert spec.get('description'), f'{name}.{pname} has no description'
+
+
+def test_list_channels_names_and_ids(monkeypatch):
+    runtime = FakeRuntime()
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    msg, ok = tools.execute('discord_list_channels', {})
+    assert ok and '#general (c1) — Guild (g1)' in msg and '#lobby (c9)' in msg
+    msg, ok = tools.execute('discord_list_channels', {'server': 'other'})
+    assert ok and '#lobby' in msg and '#general' not in msg
+    msg, ok = tools.execute('discord_list_channels', {'kind': 'all'})
+    assert ok and '#Voice Lounge (v1)' in msg and '[voice]' in msg
+
+
+def test_send_receipts_carry_message_ids(monkeypatch):
+    runtime = FakeRuntime()
+    runtime.transport.send_message_sync = lambda channel, text, reply_to_message_id=None, account_name=None: {
+        'status': 'sent', 'channel_id': channel, 'messages': [{'message_id': '777', 'channel_id': channel}]}
+    runtime.transport.send_gif_sync = lambda channel, query, account_name=None: {'status': 'sent', 'message_id': '778'}
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_channel_id.set('c1')
+    msg, ok = tools.execute('discord_send_message', {'channel': 'c1', 'text': 'hi'})
+    assert ok and 'message_id 777' in msg
+    msg, ok = tools.execute('discord_send_gif', {'query': 'https://x/a.gif', 'channel': 'c1'})
+    assert ok and 'message_id 778' in msg
+
+
+def test_send_image_posts_resolved_bytes_never_a_path(monkeypatch, tmp_path):
+    pytest = __import__('pytest')
+    Image = pytest.importorskip('PIL.Image')
+    from core import images as ci
+
+    runtime = FakeRuntime()
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_channel_id.set('c1')
+    png = tmp_path / 'diagram.png'
+    Image.new('RGB', (8, 8), 'red').save(png)
+    monkeypatch.setattr(ci, 'resolve', lambda source, **kw: ci._file(png) if source == 'doc:7' else (_ for _ in ()).throw(ci.ImageError('no')))
+    result, ok = tools.execute('discord_send_image', {'source': 'doc:7', 'channel': 'c1', 'caption': 'how she works'})
+    assert ok is True
+    assert isinstance(result, dict) and result['images'] and 'message_id 900' in result['text']
+    call = next(c for c in runtime.transport.calls if c[0] == 'send_file_sync')
+    assert call[1] == 'c1' and call[2] > 0 and call[3].endswith('.png') and call[4] == 'how she works'
+    # a filesystem path is refused before anything is resolved
+    msg, ok = tools.execute('discord_send_image', {'source': '/etc/hostname', 'channel': 'c1'})
+    assert ok is False and 'disk' in msg
+
+
+def test_tools_stay_in_the_server_inside_an_event(monkeypatch):
+    from core.continuity.executor import current_event_data
+
+    runtime = FakeRuntime()
+    runtime.settings_store = None
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    token = current_event_data.set({'channel_id': 'c1', 'guild_id': 'g1', 'message_id': '1521787194761678918', 'account': 'alpha'})
+    try:
+        msg, ok = tools.execute('discord_send_message', {'channel': 'c1', 'text': 'here'})
+        assert ok is True                                  # same channel
+        msg, ok = tools.execute('discord_send_message', {'channel': 'c9', 'text': 'elsewhere'})
+        assert ok is False and 'different server' in msg   # another server
+        msg, ok = tools.execute('discord_send_message', {'channel': 'dm1', 'text': 'psst'})
+        assert ok is False and 'DMs' in msg                # a DM target
+        msg, ok = tools.execute('discord_read_messages', {'channel': 'c9'})
+        assert ok is False
+        msg, ok = tools.execute('discord_list_channels', {})
+        assert ok and '#general' in msg and '#lobby' not in msg   # roster narrowed to this server
+    finally:
+        current_event_data.reset(token)
+    # operator chat (no event): full reach
+    msg, ok = tools.execute('discord_send_message', {'channel': 'c9', 'text': 'from home'})
+    assert ok is True

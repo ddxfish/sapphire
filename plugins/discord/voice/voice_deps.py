@@ -85,4 +85,13 @@ def voice_stack_info() -> dict:
         )
     except ImportError:
         info['opus_pcm_patch'] = False
+    # Per-patch outcome (H11): 'applied' or why not — the diagnostics route shows it.
+    try:
+        from plugins.discord.voice.patch_registry import PATCH_STATUS, missing_patches
+
+        info['patches'] = dict(PATCH_STATUS)
+        info['patches_missing'] = missing_patches()
+    except ImportError:
+        info['patches'] = {}
+        info['patches_missing'] = []
     return info

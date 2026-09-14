@@ -6,6 +6,7 @@ mirroring ConversationManager.start_external without modifying core.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -43,6 +44,8 @@ class DiscordConversationRunner:
         self.voice_session_service = voice_session_service
         self.speech_bridge = speech_bridge
         self.voice_transport = voice_transport
+        # Wired by the container: leave_fn(account_name, channel_id) → voice_service.leave.
+        self.leave_fn = None
         self._sessions: dict[str, dict] = {}
         self._lock = threading.Lock()
 
@@ -179,8 +182,11 @@ class DiscordConversationRunner:
                 'transcribe_fn': transcribe_fn,
                 'guild_id': str(session.guild_id or ''),
                 'channel_id': str(session.channel_id or ''),
+                'account_name': str(session.account_name or ''),
                 'last_addressee': '',
                 'last_reply_end': 0.0,
+                'leave_after_drain': False,
+                'cues_enabled': bool(getattr(settings.voice, 'turn_cues_enabled', True)) if settings else True,
             }
         return {'status': 'prepared', 'source': source, 'chat_name': chat_name}
 
@@ -212,15 +218,18 @@ class DiscordConversationRunner:
         for session_id in ids:
             self.stop(session_id)
 
+    async def stop_async(self, session_id: str) -> dict:
+        """stop() off the daemon loop: it joins the source thread and calls the
+        sync transport (which refuses to run ON the loop) — M21."""
+        return await asyncio.to_thread(self.stop, session_id)
+
+    async def stop_all_async(self) -> None:
+        await asyncio.to_thread(self.stop_all)
+
     def ensure_started(self, session) -> dict:
         if self.is_active(session.session_id):
             return {'status': 'already_active'}
         return self.start(session)
-
-    async def ensure_started_async(self, session) -> dict:
-        if self.is_active(session.session_id):
-            return {'status': 'already_active'}
-        return await self.start_async(session)
 
     def is_turn_active(self, session_id: str) -> bool:
         with self._lock:
@@ -242,10 +251,50 @@ class DiscordConversationRunner:
         return False
 
     def _note_reply_end(self, session_id: str) -> None:
+        leave = False
         with self._lock:
             rec = self._sessions.get(session_id)
             if rec:
                 rec['last_reply_end'] = time.monotonic()
+                leave = bool(rec.get('leave_after_drain'))
+                rec['leave_after_drain'] = False
+        if leave:
+            # Off the turn thread: leave() tears this very session down.
+            threading.Thread(target=self._leave_after_drain, args=(session_id,), daemon=True,
+                             name='discord-voice-hangup').start()
+
+    def arm_leave(self, chat_name: str) -> bool:
+        """<<HANG UP>> seen in this chat's reply: leave once her words drain."""
+        with self._lock:
+            for rec in self._sessions.values():
+                if rec.get('chat_name') == chat_name:
+                    rec['leave_after_drain'] = True
+                    return True
+        return False
+
+    def _leave_after_drain(self, session_id: str) -> None:
+        with self._lock:
+            rec = dict(self._sessions.get(session_id) or {})
+        account = rec.get('account_name') or ''
+        channel = rec.get('channel_id') or ''
+        if not account or not channel or not callable(self.leave_fn):
+            logger.warning('[DISCORD] hang-up armed for %s but nothing to leave with', session_id)
+            return
+        if rec.get('cues_enabled') and self.voice_transport is not None:
+            # The goodbye chime plays IN FULL before she goes (same as the phone).
+            try:
+                from plugins.discord.voice.discord_conversation_source import cue_wav_bytes
+                wav = cue_wav_bytes('hangup')
+                if wav:
+                    self.voice_transport.play_audio_sync(account, channel, wav, audio_format='wav')
+                    time.sleep(max(0.2, len(wav) / (48000 * 4)) + 0.4)
+            except Exception as exc:
+                logger.debug('Goodbye chime skipped: %s', exc)
+        logger.info('[DISCORD] goodbye drained — leaving voice channel %s (sentinel)', channel)
+        try:
+            self.leave_fn(account, channel)
+        except Exception:
+            logger.exception('[DISCORD] sentinel leave failed for %s:%s', account, channel)
 
     def _voice_settings(self, rec):
         """Live per-channel voice settings (a tuned window applies without rejoining)."""
@@ -334,19 +383,6 @@ class DiscordConversationRunner:
         driver._spawn(driver._run_turn, b'\x00\x00' * 16000)
         return {'status': 'submitted', 'reason': reason}
 
-    def submit_turn_pcm(self, session_id: str, pcm: bytes) -> dict:
-        if not pcm:
-            return {'status': 'empty'}
-        with self._lock:
-            rec = self._sessions.get(session_id)
-        if not rec:
-            return {'status': 'not_active'}
-        driver = rec['driver']
-        logger.info('[DISCORD] utterance bridge submitting pcm turn (%s bytes)', len(pcm))
-        self._signal_thinking(rec)
-        driver._spawn(driver._run_turn, pcm)
-        return {'status': 'submitted'}
-
     def _signal_thinking(self, rec) -> None:
         """Typing indicator in the voice channel's text chat while the turn runs.
 
@@ -382,10 +418,12 @@ class DiscordConversationRunner:
         except Exception as exc:
             logger.debug('Discord conversation playback interrupt failed: %s', exc)
         try:
-            driver.engine.turn_finished()
+            # Core seam (H14): bumps the driver's turn generation so the
+            # interrupted turn's own cleanup becomes a no-op instead of
+            # clearing the NEXT turn's sink / flipping its engine to IDLE.
+            driver.abandon_turn()
         except Exception as exc:
-            logger.debug('Discord conversation turn_finished failed: %s', exc)
-        driver._active_sink = None
+            logger.debug('Discord conversation abandon_turn failed: %s', exc)
         logger.info('[DISCORD] interrupted active conversation turn session=%s', session_id)
         return True
 

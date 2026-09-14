@@ -83,15 +83,15 @@ class InterestService:
     def __init__(self, *, interest_repository):
         self.interest_repository = interest_repository
 
-    def observe_message(self, account_name: str, user_id: str, text: str) -> list[dict]:
+    def observe_message(self, account_name: str, user_id: str, text: str, *, origin: str = '') -> list[dict]:
         topics = extract_topics(text)
         return [
-            self.interest_repository.bump(account_name, user_id, topic)
+            self.interest_repository.bump(account_name, user_id, topic, origin=origin)
             for topic in topics
         ]
 
-    def top_topics(self, account_name: str, user_id: str, *, limit: int = 8) -> list[dict]:
-        return self.interest_repository.list_for_user(account_name, user_id, limit=limit)
+    def top_topics(self, account_name: str, user_id: str, *, limit: int = 8, exclude_dm: bool = False) -> list[dict]:
+        return self.interest_repository.list_for_user(account_name, user_id, limit=limit, exclude_dm=exclude_dm)
 
     def channel_topics(
         self,

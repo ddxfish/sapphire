@@ -50,6 +50,10 @@ class MediaService:
         media_settings = settings.media if settings and hasattr(settings, 'media') else settings
         if not image_understanding_enabled:
             return self._fallback_interpretation(artifact, source='metadata')
+        if artifact.media_kind not in ('image', 'gif'):
+            # M13: a video / archive / unknown attachment is never fetched for
+            # vision — the model gets the filename, nothing more.
+            return self._fallback_interpretation(artifact, source='metadata', reason='not_an_image')
 
         # Vision 'auto' = daemon chooses: thread the Reply LLM override down so
         # captions ride the same provider chain as her replies.

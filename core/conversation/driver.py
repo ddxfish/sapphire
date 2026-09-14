@@ -75,6 +75,7 @@ class ConversationDriver:
         self._sink_factory = sink_factory          # injectable; default = PumpkinChunker
         self._sink = None
         self._active_sink = None                   # set during a turn so barge-in can reach it
+        self._turn_gen = 0                         # bumped per claimed turn / abandon_turn (H14)
         self._start_word = start_word or ""        # STT start-word gate (off when empty)
         self._start_word_fuzzy = float(start_word_fuzzy)
         self._privacy_gate_logged = False          # one loud log per session, not per turn
@@ -180,6 +181,12 @@ class ConversationDriver:
                 while not pulse_stop.wait(1.0):
                     self._cue("think")
             threading.Thread(target=_pulse, daemon=True, name="conv-think-pulse").start()
+        # Turn ownership (H14, Discord hunt 2026-09-12): a surface that replaces
+        # a live turn (new addressed utterance, stop command) calls abandon_turn(),
+        # which bumps the generation. The replaced turn's `finally` below then
+        # sees a mismatch and leaves the NEW turn's sink and engine state alone.
+        entry_gen = self._turn_gen
+        my_gen = None
         try:
             text = self._transcribe_fn(pcm)
             if not (text and text.strip()):
@@ -211,6 +218,8 @@ class ConversationDriver:
             logger.info("[CONV] turn: transcribed user utterance -> streaming")
 
             sink = self._ensure_sink()
+            self._turn_gen += 1
+            my_gen = self._turn_gen
             sink.start()
             self._active_sink = sink
             # `foreign`: this turn runs in an explicit non-active chat (a phone
@@ -275,8 +284,20 @@ class ConversationDriver:
             self._cue("error")
         finally:
             pulse_stop.set()
-            self._active_sink = None
-            self.engine.turn_finished()            # no-op if a barge-in already moved us on
+            owner = my_gen if my_gen is not None else entry_gen
+            if self._turn_gen == owner:
+                self._active_sink = None
+                self.engine.turn_finished()        # no-op if a barge-in already moved us on
+            else:
+                logger.debug("[CONV] stale turn cleanup skipped — a newer turn owns the sink")
+
+    def abandon_turn(self):
+        """A surface is replacing the live turn: retire it now. Clears the sink
+        hand-off, returns the engine to IDLE, and bumps the generation so the
+        old turn thread's own cleanup cannot touch what comes next."""
+        self._turn_gen += 1
+        self._active_sink = None
+        self.engine.turn_finished()
 
     # ── external speech (call greetings) ────────────────────────────────────
     def speak_direct(self, audio_bytes, on_begin=None):

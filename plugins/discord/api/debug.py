@@ -23,6 +23,14 @@ async def list_llm_debug(**kwargs):
     }
 
 
+def clear_llm_debug(**kwargs):
+    runtime = get_runtime()
+    service = getattr(runtime, 'llm_debug_service', None) if runtime else None
+    if service is None:
+        return {'status': 'unavailable', 'cleared': 0}
+    return {'status': 'cleared', 'cleared': service.clear()}
+
+
 async def get_cognition_debug(**kwargs):
     runtime = get_runtime()
     if not runtime or not getattr(runtime, 'cognition_debug_service', None):

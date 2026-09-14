@@ -172,6 +172,9 @@ def test_finalize_rearms_when_voice_is_recent():
         def __init__(self):
             self.calls = []
 
+        def call_soon_threadsafe(self, fn, *args):   # H13: every arm hops to the loop
+            fn(*args)
+
         def call_later(self, delay, cb):
             self.calls.append(delay)
             return FakeHandle()
@@ -224,3 +227,47 @@ def test_on_pcm_frame_sees_every_accepted_frame_including_silence():
     sink.write(b'\x00\x00' * 400, user)
     assert [f[2] for f in frames] == [False, True, False]
     assert all(f[0] == 7 for f in frames)
+
+
+class _RecordingLoop:
+    """Enough of an event loop to prove timers are armed the thread-safe way."""
+
+    def __init__(self):
+        self.threadsafe = []
+        self.later = []
+
+    def call_soon_threadsafe(self, fn, *args):
+        self.threadsafe.append(fn.__name__)
+        fn(*args)                                   # run inline like the loop would
+
+    def call_later(self, delay, cb):
+        self.later.append(delay)
+
+        class _Handle:
+            cancelled = False
+
+            def cancel(self_inner):
+                self_inner.cancelled = True
+
+        return _Handle()
+
+
+@pytest.mark.skipif(
+    __import__('importlib').util.find_spec('discord.sinks') is None,
+    reason='py-cord not installed',
+)
+def test_silence_timer_is_armed_via_call_soon_threadsafe():
+    # H13: write() runs on py-cord's router thread; call_later there is not
+    # thread-safe. Every arm hops to the loop first.
+    from plugins.discord.transport.discord_voice_sink import UtteranceVoiceSink
+
+    loop = _RecordingLoop()
+    sink = UtteranceVoiceSink(on_utterance=lambda *a: None, loop=loop, silence_seconds=0.9)
+    user = FakeUser(5, 'Krem')
+    sink.write(struct.pack('<400h', *([4000] * 400)), user)
+    assert loop.threadsafe == ['_arm_finalize']
+    assert loop.later == [0.9]
+    sink.write(struct.pack('<400h', *([4000] * 400)), user)
+    assert loop.later == [0.9, 0.9]                  # re-armed, previous handle cancelled
+    sink.cleanup()
+    assert sink._pending == {}

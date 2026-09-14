@@ -1,17 +1,23 @@
-"""DAVE voice-receive fixes for py-cord builds before the upstream decrypt patch."""
+"""DAVE voice-receive enhancements on top of py-cord's upstream decrypt.
+
+The legacy full decrypt branch (for builds before the upstream fix) was dead
+by the pinned py-cord commit and is gone (2026-09-13); a build older than the
+pin gets a loud warning and the enhance patch, never a silent second decryptor.
+"""
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
+import re
 import struct
 import time
+
+from plugins.discord.voice.patch_registry import apply_patch
 
 logger = logging.getLogger(__name__)
 
 OPUS_SILENCE = b'\xf8\xff\xfe'
-_OPUS_SILENCE = OPUS_SILENCE
 global _DAVE_PATCHED
 global _PATCH_MODE
 _DAVE_PATCHED = False
@@ -35,6 +41,21 @@ def mark_ssrc_decrypt_ready(ssrc: int) -> None:
     _SSRC_DECRYPT_READY.add(int(ssrc))
 
 
+def forget_ssrc(ssrc) -> None:
+    """Evict one SSRC (rollover / leave) — these maps grew for the process life."""
+    try:
+        key = int(ssrc)
+    except (TypeError, ValueError):
+        return
+    _SSRC_DECRYPT_READY.discard(key)
+    _SSRC_FIRST_SEEN.pop(key, None)
+
+
+def forget_ssrcs(ssrcs) -> None:
+    for ssrc in list(ssrcs or ()):
+        forget_ssrc(ssrc)
+
+
 def is_ssrc_decrypt_ready(ssrc: int) -> bool:
     """True after a successful DAVE decrypt, or after a short wait timeout."""
     key = int(ssrc)
@@ -55,14 +76,35 @@ def requested_dave_mode() -> str:
     return 'auto'
 
 
-def _upstream_dave_decrypt_fixed() -> bool:
-    """True when installed py-cord already ships the 6e71bff+ DAVE receive fix."""
+# The py-cord build that ships the upstream DAVE receive fix (voice_deps.INSTALL_HINT).
+PINNED_PYCORD_COMMIT = '6e71bff'
+_FIX_RELEASED_IN = (2, 8, 0)
+
+
+def _pycord_version() -> str:
     try:
-        from discord.voice.receive.reader import PacketDecryptor
-        source = inspect.getsource(PacketDecryptor.decrypt_rtp)
-    except (ImportError, OSError, TypeError):
-        return False
-    return 'UnencryptedWhenPassthroughDisabled' in source and 'dave.decrypt' in source
+        import discord
+        return str(getattr(discord, '__version__', '') or '')
+    except ImportError:
+        return ''
+
+
+def _version_at_least(version: str, floor: tuple) -> bool:
+    match = re.match(r'(\d+)\.(\d+)\.(\d+)', version or '')
+    return bool(match) and tuple(int(x) for x in match.groups()) >= floor
+
+
+def _upstream_dave_decrypt_fixed(version: str | None = None) -> bool:
+    """True when the installed py-cord carries the upstream DAVE receive fix.
+
+    Gated on the VERSION (M23), not inspect.getsource of a private method — a
+    reformat of upstream's source used to flip this to False on a build that
+    did not need the legacy decryptor at all.
+    """
+    version = _pycord_version() if version is None else version
+    if PINNED_PYCORD_COMMIT in version:
+        return True
+    return _version_at_least(version, _FIX_RELEASED_IN)
 
 
 def _strip_dave_supplemental_block(data: bytes) -> bytes | None:
@@ -121,7 +163,7 @@ def recover_passthrough_opus(packet, *payloads: bytes) -> bytes:
         opus = _strip_dave_supplemental_block(trimmed)
         if opus and len(opus) >= 1:
             return opus
-    return _OPUS_SILENCE
+    return OPUS_SILENCE
 
 
 def looks_like_passthrough_payload(data: bytes, *, padding_flag: bool = False) -> bool:
@@ -144,7 +186,7 @@ def opus_decodable(data: bytes) -> bool:
 def opus_packet_parses(data: bytes) -> bool:
     if not data:
         return False
-    if data == _OPUS_SILENCE:
+    if data == OPUS_SILENCE:
         return True
     try:
         from discord.opus import Decoder
@@ -173,7 +215,7 @@ def is_valid_opus_packet(data: bytes) -> bool:
     """True when data is Opus silence or parses as a real Opus packet."""
     if not data:
         return False
-    if data == _OPUS_SILENCE:
+    if data == OPUS_SILENCE:
         return True
     if not looks_like_opus_payload(data):
         return False
@@ -189,10 +231,7 @@ def is_valid_opus_packet(data: bytes) -> bool:
 
 def apply_ssrc_user_map_patch() -> None:
     """Use VoiceClient._ssrc_to_id for DAVE decrypt (py-cord 7b2cbea fix)."""
-    try:
-        from discord.voice.state import VoiceConnectionState
-    except ImportError:
-        return
+    from discord.voice.state import VoiceConnectionState
     if getattr(VoiceConnectionState, '_discord_cognitive_ssrc_patch', False):
         return
 
@@ -224,25 +263,15 @@ def _extension_payload_offset(packet, outer: bytes) -> int:
     return max(0, min(offset, len(outer)))
 
 
-def _raw_payload_from_packet(packet) -> bytes | None:
-    """Reconstruct RTP payload slice passed to ``dave.decrypt`` (extension-aware)."""
-    return _dave_input_from_packet(packet)
-
-
 def _opus_pcm_peak(pcm: bytes) -> int:
     if not pcm:
         return 0
-    samples = struct.unpack(f'<{len(pcm) // 2}h', pcm)
-    return max((abs(sample) for sample in samples), default=0)
-
-
-def _dave_frame_generation(dave_input: bytes) -> int:
     try:
-        from discord.voice.receive.reader import PacketDecryptor
-
-        return int(PacketDecryptor._parse_dave_generation(dave_input))
-    except Exception:
-        return -1
+        import numpy as np
+        return int(np.abs(np.frombuffer(pcm[:len(pcm) // 2 * 2], dtype='<i2')).max()) if len(pcm) >= 2 else 0
+    except ImportError:
+        samples = struct.unpack(f'<{len(pcm) // 2}h', pcm)
+        return max((abs(sample) for sample in samples), default=0)
 
 
 def _strip_passthrough_like_upstream(packet, raw_payload: bytes) -> bytes | None:
@@ -261,21 +290,32 @@ def _strip_passthrough_like_upstream(packet, raw_payload: bytes) -> bytes | None
     return None
 
 
+_PROBE_DECODER = None
+
+
 def _opus_decode_peak(data: bytes) -> int:
-    if not data or data == _OPUS_SILENCE:
+    """Peak of a probe decode — the one discriminator between decrypted Opus
+    and ciphertext garbage (which decodes saturated). One cached probe decoder
+    instead of a fresh libopus decoder per packet (50/s per speaker); the real
+    per-SSRC decoders downstream stay untouched."""
+    global _PROBE_DECODER
+    if not data or data == OPUS_SILENCE:
         return 0
     try:
         from discord.opus import Decoder
 
-        pcm = Decoder().decode(data, fec=False)
+        if _PROBE_DECODER is None:
+            _PROBE_DECODER = Decoder()
+        pcm = _PROBE_DECODER.decode(data, fec=False)
     except Exception:
+        _PROBE_DECODER = None
         return 0
     return _opus_pcm_peak(pcm)
 
 
 def _opus_output_acceptable(data: bytes) -> bool:
     """Reject saturated decrypt output; allow DTX/silence Opus packets."""
-    if not data or data == _OPUS_SILENCE:
+    if not data or data == OPUS_SILENCE:
         return False
     peak = _opus_decode_peak(data)
     if peak >= 28000:
@@ -283,13 +323,6 @@ def _opus_output_acceptable(data: bytes) -> bool:
     if peak > 0:
         return True
     return is_valid_opus_packet(data)
-
-
-def _opus_decodes_clean(data: bytes) -> bool:
-    if not data or data == _OPUS_SILENCE:
-        return False
-    peak = _opus_decode_peak(data)
-    return 0 < peak < 28000
 
 
 def _passthrough_raw_payload(packet) -> bytes | None:
@@ -314,17 +347,9 @@ def _recover_silence_passthrough(packet, raw_payload: bytes | None = None) -> by
     return opus
 
 
-def _recover_gen0_passthrough(packet, raw_payload: bytes) -> bytes | None:
-    """Deprecated alias — generation alone cannot distinguish passthrough vs encrypted."""
-    return _recover_silence_passthrough(packet, raw_payload)
-
-
 def apply_dave_decrypt_enhance_patch() -> None:
     """Validate decrypt output and recover true passthrough on silence."""
-    try:
-        from discord.voice.receive.reader import PacketDecryptor
-    except ImportError:
-        return
+    from discord.voice.receive.reader import PacketDecryptor
     upstream = PacketDecryptor.decrypt_rtp
     if getattr(upstream, '_discord_cognitive_enhanced', False):
         return
@@ -334,19 +359,19 @@ def apply_dave_decrypt_enhance_patch() -> None:
         if ssrc is not None:
             note_ssrc_packet(int(ssrc))
         result = upstream(self, packet)
-        if result and result != _OPUS_SILENCE:
+        if result and result != OPUS_SILENCE:
             if _opus_output_acceptable(result):
                 if ssrc is not None:
                     mark_ssrc_decrypt_ready(int(ssrc))
                 return result
-            packet.decrypted_data = _OPUS_SILENCE
+            packet.decrypted_data = OPUS_SILENCE
             logger.debug(
                 'DAVE decrypt output rejected ssrc=%s seq=%s head=%s',
                 ssrc,
                 getattr(packet, 'sequence', '?'),
                 result[:4].hex(),
             )
-            result = _OPUS_SILENCE
+            result = OPUS_SILENCE
         recovered = _recover_silence_passthrough(packet)
         if recovered:
             packet.decrypted_data = recovered
@@ -366,185 +391,37 @@ def apply_dave_decrypt_enhance_patch() -> None:
     logger.info('Applied DAVE decrypt enhance patch (discord_cognitive)')
 
 
-def apply_dave_silence_passthrough_patch() -> None:
-    """Deprecated — use apply_dave_decrypt_enhance_patch."""
-    apply_dave_decrypt_enhance_patch()
-
-
-def apply_dave_opus_validate_patch() -> None:
-    """Deprecated — use apply_dave_decrypt_enhance_patch."""
-    apply_dave_decrypt_enhance_patch()
-
-
-def apply_dave_passthrough_fallback_patch() -> None:
-    """Deprecated — passthrough recovery injected ciphertext; use opus validate instead."""
-    apply_dave_opus_validate_patch()
-
-
-def apply_dave_unified_decrypt_patch() -> None:
-    """Deprecated — encrypted DAVE frames also end in 0xFAFA; do not strip pre-decrypt."""
-    apply_dave_passthrough_fallback_patch()
-
-
-def apply_dave_bruteforce_patch() -> None:
-    """Deprecated alias — unified decrypt supersedes this."""
-    apply_dave_unified_decrypt_patch()
-
-
-def apply_dave_supplement_patches() -> None:
-    """Optional passthrough recovery when upstream returns Opus silence only."""
-    try:
-        from discord.voice.receive.reader import PacketDecryptor
-    except ImportError:
-        return
-    if getattr(PacketDecryptor.decrypt_rtp, '_discord_cognitive_supplement', False):
-        return
-    original = PacketDecryptor.decrypt_rtp
-
-    def decrypt_rtp_supplement(self, packet):
-        result = original(self, packet)
-        if result and result != _OPUS_SILENCE:
-            return result
-        outer = getattr(packet, '_outer_decrypted', None)
-        if not outer and not looks_like_passthrough_payload(result or b''):
-            return result
-        recovered = recover_passthrough_opus(packet, result, outer)
-        if recovered != _OPUS_SILENCE:
-            packet.decrypted_data = recovered
-            return recovered
-        return result
-
-    decrypt_rtp_supplement._discord_cognitive_supplement = True
-    PacketDecryptor.decrypt_rtp = decrypt_rtp_supplement
-    logger.info('Applied DAVE supplement passthrough patch (discord_cognitive)')
-
-
 def apply_dave_voice_patches() -> None:
     global _DAVE_PATCHED
     global _PATCH_MODE
     if _DAVE_PATCHED:
         return
     try:
-        import davey
-        from discord.voice.receive.reader import PacketDecryptor
+        import davey  # noqa: F401 — the decrypt library itself
+        from discord.voice.receive.reader import PacketDecryptor  # noqa: F401
     except ImportError as exc:
         logger.warning('DAVE voice patches skipped (missing dependency): %s', exc)
         _PATCH_MODE = 'none'
         return
 
-    apply_ssrc_user_map_patch()
-
-    if getattr(PacketDecryptor.decrypt_rtp, '_discord_cognitive_dave_patched', False):
-        _DAVE_PATCHED = True
-        _PATCH_MODE = 'legacy'
-        return
+    apply_patch('dave_ssrc_user_map', apply_ssrc_user_map_patch)
 
     mode = requested_dave_mode()
-    upstream_fixed = _upstream_dave_decrypt_fixed()
-
-    if upstream_fixed and mode in {'auto', 'upstream', 'legacy'}:
-        if mode == 'legacy':
-            logger.warning(
-                'DISCORD_VOICE_DAVE_MODE=legacy ignored — py-cord already ships the upstream '
-                'DAVE receive fix; using upstream decrypt with ssrc patch only'
-            )
-        apply_dave_decrypt_enhance_patch()
-        _PATCH_MODE = 'upstream+enhance'
-        _DAVE_PATCHED = True
-        logger.info('Using upstream DAVE decrypt with enhance patch (mode=%s)', mode)
-        return
-
     if mode == 'legacy':
-        logger.info('DISCORD_VOICE_DAVE_MODE=legacy — applying full legacy DAVE decrypt patches')
-    PacketDecryptor._dave_success = {}
-    PacketDecryptor._dave_failure = {}
-    PacketDecryptor._dave_consecutive_failures = {}
-    PacketDecryptor._dave_last_success_time = {}
-    PacketDecryptor._dave_passthrough_recovered = {}
-
-    def _decrypt_rtp_aead_xchacha20_poly1305_rtpsize(self, packet):
-        from nacl.exceptions import CryptoError
-
-        packet.adjust_rtpsize()
-        nonce = packet.nonce + b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-        try:
-            result = self.box.decrypt(
-                packet.decrypted_data or packet.data,
-                bytes(packet.header),
-                nonce,
-            )
-        except Exception as exc:
-            logger.error('Critical error at AEAD: %s', exc)
-            raise CryptoError(exc) from exc
-        if packet.extended:
-            offset = packet.update_extended_header(result)
-        else:
-            offset = 0
-        packet._outer_decrypted = result
-        return result[offset:]
-
-    def decrypt_rtp(self, packet):
-        state = self.client._connection
-        dave = state.dave_session
-        raw_payload = self._decryptor_rtp(packet)
-        if packet.extended:
-            dave_input = raw_payload
-        else:
-            dave_input = getattr(packet, '_outer_decrypted', raw_payload)
-        packet.decrypted_data = None
-        if dave is not None and dave.ready:
-            uid = state.ssrc_user_map.get(packet.ssrc)
-            if uid:
-                try:
-                    packet.decrypted_data = dave.decrypt(
-                        uid,
-                        davey.MediaType.audio,
-                        dave_input,
-                    )
-                    self._dave_success[packet.ssrc] = self._dave_success.get(packet.ssrc, 0) + 1
-                    self._dave_consecutive_failures[packet.ssrc] = 0
-                    self._dave_last_success_time[packet.ssrc] = time.perf_counter()
-                except Exception as exc:
-                    fail_count = self._dave_failure.get(packet.ssrc, 0) + 1
-                    self._dave_failure[packet.ssrc] = fail_count
-                    consec = self._dave_consecutive_failures.get(packet.ssrc, 0) + 1
-                    self._dave_consecutive_failures[packet.ssrc] = consec
-                    if 'UnencryptedWhenPassthroughDisabled' in str(exc):
-                        packet.decrypted_data = recover_passthrough_opus(
-                            packet,
-                            raw_payload,
-                            dave_input,
-                        )
-                        if packet.decrypted_data != _OPUS_SILENCE:
-                            self._dave_passthrough_recovered[packet.ssrc] = (
-                                self._dave_passthrough_recovered.get(packet.ssrc, 0) + 1
-                            )
-                    else:
-                        if consec == 1 or fail_count <= 3:
-                            logger.warning(
-                                'DAVE decrypt fail ssrc=%s uid=%s seq=%s err=%s',
-                                packet.ssrc,
-                                uid,
-                                getattr(packet, 'sequence', '?'),
-                                exc,
-                            )
-                        packet.decrypted_data = _OPUS_SILENCE
-        if packet.decrypted_data is None:
-            if dave is None:
-                if packet.extended:
-                    offset = packet.update_extended_header(raw_payload)
-                    packet.decrypted_data = raw_payload[offset:]
-                    return packet.decrypted_data
-                packet.decrypted_data = raw_payload
-                pass
-                return packet.decrypted_data
-            packet.decrypted_data = _OPUS_SILENCE
-        return packet.decrypted_data
-
-    decrypt_rtp._discord_cognitive_dave_patched = True
-    _decrypt_rtp_aead_xchacha20_poly1305_rtpsize._discord_cognitive_dave_patched = True
-    PacketDecryptor.decrypt_rtp = decrypt_rtp
-    PacketDecryptor._decrypt_rtp_aead_xchacha20_poly1305_rtpsize = _decrypt_rtp_aead_xchacha20_poly1305_rtpsize
+        logger.warning(
+            'DISCORD_VOICE_DAVE_MODE=legacy is retired (2026-09-13): the legacy decrypt branch '
+            'was dead by the py-cord pin — using upstream decrypt with the enhance patch'
+        )
+    version = _pycord_version()
+    if _upstream_dave_decrypt_fixed(version):
+        _PATCH_MODE = 'upstream+enhance'
+    else:
+        logger.warning(
+            'py-cord %s predates the pinned DAVE receive fix (%s) — voice receive may be garbled; '
+            'reinstall per voice_deps.INSTALL_HINT',
+            version or 'unknown', PINNED_PYCORD_COMMIT,
+        )
+        _PATCH_MODE = 'upstream+enhance(unverified)'
+    apply_patch('dave_decrypt_enhance', apply_dave_decrypt_enhance_patch)
     _DAVE_PATCHED = True
-    _PATCH_MODE = 'legacy'
-    logger.info('Applied legacy DAVE voice receive decrypt patches (discord_cognitive)')
+    logger.info('Using upstream DAVE decrypt with enhance patch (mode=%s, py-cord %s)', mode, version or 'unknown')

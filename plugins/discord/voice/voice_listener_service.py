@@ -9,7 +9,7 @@ import time
 from plugins.discord.models.voice import VoiceMode
 from plugins.discord.sapphire.voice_prompt import format_voice_turn_text
 from plugins.discord.transport.discord_audio import concat_wav_bytes
-from plugins.discord.voice.voice_workers import VOICE_WORKER_POOL
+from plugins.discord.voice import voice_workers
 
 logger = logging.getLogger(__name__)
 _UTTERANCE_MERGE_SECONDS = 4.0
@@ -244,7 +244,7 @@ class VoiceListenerService:
         session._utterance_loop = loop
 
         def on_utterance(user_id, speaker_name, wav_bytes):
-            VOICE_WORKER_POOL.submit(
+            voice_workers.submit(
                 self._handle_utterance,
                 session.account_name,
                 str(session.channel_id),
@@ -328,7 +328,13 @@ class VoiceListenerService:
         key = (account_name, str(channel_id))
         session = self._sessions.pop(key, None)
         if session and self.conversation_runner:
-            self.conversation_runner.stop(session.session_id)
+            # runner.stop joins the source thread (2 s) and makes a SYNC transport
+            # call that raises on the daemon loop — off-loop it (M21).
+            stop_async = getattr(self.conversation_runner, 'stop_async', None)
+            if stop_async is not None:
+                await stop_async(session.session_id)
+            else:
+                self.conversation_runner.stop(session.session_id)
         return await self.voice_transport.stop_listening_async(account_name, str(channel_id))
 
     def _handle_utterance(
@@ -351,8 +357,6 @@ class VoiceListenerService:
             return
         key = (account_name, channel_id, user_id)
         pending = self._merge_pending.get(key)
-        if pending and pending.get('handle') and hasattr(pending['handle'], 'cancel'):
-            pending['handle'].cancel()
         if pending:
             pending['wav_bytes'] = concat_wav_bytes(pending['wav_bytes'], wav_bytes)
             pending['speaker_name'] = speaker_name
@@ -368,7 +372,7 @@ class VoiceListenerService:
             state = self._merge_pending.pop(key, None)
             if not state:
                 return
-            VOICE_WORKER_POOL.submit(
+            voice_workers.submit(
                 self._flush_merged_utterance,
                 account_name,
                 channel_id,
@@ -377,7 +381,18 @@ class VoiceListenerService:
                 state['wav_bytes'],
             )
 
-        pending['handle'] = loop.call_later(_UTTERANCE_MERGE_SECONDS, _flush)
+        def _arm():
+            # Runs on the loop: call_later and handle.cancel are not
+            # thread-safe, and this path is entered from a worker thread.
+            prev = pending.get('handle')
+            if prev is not None and hasattr(prev, 'cancel'):
+                prev.cancel()
+            pending['handle'] = loop.call_later(_UTTERANCE_MERGE_SECONDS, _flush)
+
+        try:
+            loop.call_soon_threadsafe(_arm)
+        except RuntimeError:
+            _flush()  # loop gone — don't strand the audio
 
     def _flush_merged_utterance(
         self,

@@ -89,20 +89,6 @@ class VoiceTransport:
         state['state'] = 'disconnected'
         return {'status': 'disconnected', **state}
 
-    def connection_health(self, account_name: str, channel_id: str) -> dict:
-        key = (account_name, str(channel_id))
-        if self.discord_transport:
-            try:
-                state = self.discord_transport.get_voice_channel_state_sync(account_name, str(channel_id))
-                if state.get('bot_connected'):
-                    return {'state': 'connected', 'health': 'ok'}
-            except Exception:
-                logger.debug('Voice health check failed for %s:%s', account_name, channel_id, exc_info=True)
-        state = self._connections.get(key)
-        if not state:
-            return {'state': 'disconnected', 'health': 'unknown'}
-        return {'state': state.get('state', 'connected'), 'health': state.get('health', 'ok')}
-
     def play_audio_sync(self, account_name: str, channel_id: str, audio_bytes: bytes, **kwargs) -> dict:
         key = (account_name, str(channel_id))
         if key not in self._connections and self.discord_transport:
@@ -143,35 +129,6 @@ class VoiceTransport:
         if not self.discord_transport:
             return {'status': 'unavailable'}
         return await self.discord_transport.stop_voice_listener_async(account_name, str(channel_id))
-
-    async def play_audio_async(self, account_name: str, channel_id: str, audio_bytes: bytes, **kwargs) -> dict:
-        key = (account_name, str(channel_id))
-        if key not in self._connections and self.discord_transport:
-            state = await self.discord_transport.get_voice_channel_state_async(account_name, str(channel_id))
-            if not state.get('bot_connected'):
-                return {'status': 'not_connected'}
-        elif key not in self._connections:
-            return {'status': 'not_connected'}
-        if self.discord_transport:
-            audio_format = str(kwargs.get('format') or kwargs.get('audio_format') or 'wav')
-            return await self.discord_transport.play_voice_audio_async(
-                account_name,
-                str(channel_id),
-                audio_bytes,
-                audio_format=audio_format,
-            )
-        return {
-            'status': 'played',
-            'account_name': account_name,
-            'channel_id': channel_id,
-            'bytes': len(audio_bytes or b''),
-            **kwargs,
-        }
-
-    async def stop_playback_async(self, account_name: str, channel_id: str) -> dict:
-        if not self.discord_transport:
-            return {'status': 'unavailable'}
-        return await self.discord_transport.stop_voice_playback_async(account_name, str(channel_id))
 
     def start_listening_sync(self, account_name: str, channel_id: str, *, on_utterance, loop=None, **kwargs) -> dict:
         if not self.discord_transport:

@@ -21,6 +21,10 @@ ALWAYS_SKIP = {'.git', '__pycache__', 'node_modules', '.pytest_cache',
                '.claude'}
 # Usernames too generic to be a meaningful beacon (CI boxes, containers).
 GENERIC_USERS = {'user', 'admin', 'root', 'ubuntu', 'debian', 'sapphire'}
+# Placeholder names docs legitimately use in example paths.
+GENERIC_PATH_PLACEHOLDERS = {'you', 'yourname', 'your-name', 'your_name', 'username', 'name',
+                             'me', 'pi', 'example', 'someone', 'owner', 'operator', 'dev', 'krem',
+                             'yourusername', 'your-username', 'your_username', 'myuser', 'myname'}
 MAX_BYTES = 2_000_000
 
 
@@ -114,11 +118,25 @@ def test_no_developer_environment_leaks():
                         re.compile(rf'(?<![A-Za-z0-9_]){re.escape(user)}'
                                    rf'(?![A-Za-z0-9_])')))
     needles.extend(_owner_needles())
+    # Generic home-path literals (D7, 2026-09-13): the beacon above only sees
+    # THIS box's home. A path from any developer's machine is the same shark.
+    generic = '|'.join(sorted(GENERIC_USERS | GENERIC_PATH_PLACEHOLDERS))
+    needles.append(('/home/<name>/', 'home path literal',
+                    re.compile(rf'/home/(?!(?:{generic})/)[A-Za-z0-9_.-]+/', re.I)))
+    needles.append(('/Users/<name>/', 'macOS home path literal',
+                    re.compile(rf'/Users/(?!(?:{generic})/)[A-Za-z0-9_.-]+/', re.I)))
+    needles.append(('C:\\Users\\<name>\\', 'Windows home path literal',
+                    re.compile(rf'[A-Za-z]:\\Users\\(?!(?:{generic})\\)[A-Za-z0-9_.-]+\\', re.I)))
     if not needles:
         return   # nothing derivable to hunt with on this box
 
     skip = ALWAYS_SKIP | _gitignored_dirs()
     hits = []
+    # Generic home-path literals in user-band plugins (they ship on their own,
+    # but their scrub is their owner's call) — reported as a warning, not a
+    # red suite. The real beacon (this box's home / username) stays strict.
+    soft_kinds = {'home path literal', 'macOS home path literal', 'Windows home path literal'}
+    soft_hits = []
     roots = [REPO] + _shipped_outside_git()
     seen = set()
     for root in roots:
@@ -154,7 +172,13 @@ def test_no_developer_environment_leaks():
                 if pos < 0:
                     continue
                 line_no = text.count('\n', 0, pos) + 1
+                if root is not REPO and kind in soft_kinds:
+                    soft_hits.append(f"{rel}:{line_no} — {kind}")
+                    continue
                 hits.append(f"{rel}:{line_no} — {kind}")
+    if soft_hits:
+        import warnings
+        warnings.warn("home-path literals in user-band plugins (owner's scrub):\n  " + "\n  ".join(soft_hits))
     assert not hits, (
         "Developer-environment strings found in shippable files — scrub "
         "before pushing:\n  " + "\n  ".join(hits))

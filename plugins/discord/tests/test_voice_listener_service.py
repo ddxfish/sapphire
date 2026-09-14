@@ -269,3 +269,53 @@ def test_submit_conversation_turn_passes_speaker_and_live_occupancy():
     assert result['status'] == 'submitted'
     assert calls[0][2] == {'speaker_id': '42', 'humans': 1}
     assert calls[0][1].startswith('Krem:')
+
+
+def test_merge_timer_is_armed_on_the_loop_from_a_worker_thread():
+    # The legacy (non-core) lane merges utterances with a loop timer from a
+    # pool thread — bookkeeping must hop to the loop (call_later is not
+    # thread-safe).
+    from plugins.discord.models.settings import SettingsOverlay
+
+    class Loop:
+        def __init__(self):
+            self.hops = 0
+            self.armed = []
+
+        def call_soon_threadsafe(self, fn, *args):
+            self.hops += 1
+            fn(*args)
+
+        def call_later(self, delay, cb):
+            self.armed.append(delay)
+            return type('H', (), {'cancel': lambda self_: None})()
+
+    store = SettingsStore()
+    store.global_overlay = SettingsOverlay.from_dict(
+        {'voice': {'enabled': True, 'mode': VoiceMode.CONVERSATIONAL.value, 'speaking_enabled': True,
+                   'conversation_core_enabled': False}}
+    )
+    service = VoiceListenerService(voice_transport=FakeTransport(), voice_perception_service=FakePerception(),
+                                   settings_store=store)
+    loop = Loop()
+    session = VoiceSession(session_id='s1', account_name='alpha', guild_id='g1', channel_id='vc1',
+                           mode=VoiceMode.CONVERSATIONAL)
+    service._sessions[('alpha', 'vc1')] = session
+    session._utterance_loop = loop
+    import io
+    import wave
+
+    def _wav():
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b'\x00\x01' * 160)
+        return buf.getvalue()
+
+    service._handle_utterance('alpha', 'vc1', 42, 'Krem', _wav())
+    service._handle_utterance('alpha', 'vc1', 42, 'Krem', _wav())
+    assert loop.hops == 2
+    assert len(loop.armed) == 2
+    assert ('alpha', 'vc1', 42) in service._merge_pending

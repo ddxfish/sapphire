@@ -185,6 +185,13 @@ class ConversationService:
             })
             self._record_debug_rejection(trigger, reason='direct_messages_disabled', stage='safety')
             return False
+        if trigger.is_dm and not self._dm_within_budget(trigger, settings):
+            self.trace_repository.record_trace('event_dropped', 'DM daily budget reached', {
+                'message_id': trigger.message_id,
+                'author_id': trigger.author_id,
+            })
+            self._record_debug_rejection(trigger, reason='dm_daily_budget', stage='safety')
+            return False
         profiles_on = _profiles_enabled(settings)
         if self.profile_service and profiles_on:
             self.profile_service.record_interaction(
@@ -193,6 +200,7 @@ class ConversationService:
                 username=trigger.username,
                 display_name=trigger.display_name,
                 message_text=getattr(trigger, 'clean_content', '') or '',
+                origin='dm' if trigger.is_dm else str(trigger.guild_id or ''),
             )
         world_state = self._world_state_for(trigger, trigger_eval, settings=settings)
         situation = world_state.get('_situation_obj')
@@ -503,6 +511,11 @@ class ConversationService:
             'attachments': trigger.attachments,
             'reply_to_message_id': trigger.reply_to_message_id,
             'mention_map': mention_map,
+            # Image attachments as bytes (core's plugin-event image contract):
+            # she SEES them when her reply model has vision, and each one gets
+            # an img: handle in the Discord chat → memory_save_image can file
+            # it. The caption lane stays as the text fallback. 2026-09-13.
+            'images': self._payload_images(trigger, settings),
         }
         hints = []
         follow_up_hints = list(getattr(trigger, 'follow_up_hints', []) or [])
@@ -570,17 +583,6 @@ class ConversationService:
         }
         self.trace_repository.record_trace('event_emitted', 'Queued Discord message event', {'message_id': trigger.message_id})
         return True
-
-    def queue_slash_command(self, command_name: str, content: str, context: dict) -> ReplyMessageIntention:
-        return ReplyMessageIntention(
-            intention_type='reply_message',
-            account_name=context['account_name'],
-            channel_id=context['channel_id'],
-            message_id=context['message_id'],
-            reason=f'slash:{command_name}',
-            prompt=content or f'/{command_name}',
-            metadata={'slash_command': command_name},
-        )
 
     def pending_reply(self, message_id: str) -> dict | None:
         return self._pending.get(message_id)
@@ -880,6 +882,59 @@ class ConversationService:
         except (TypeError, ValueError):
             return
 
+    _PAYLOAD_IMAGE_MAX = 4
+
+    def _payload_images(self, trigger, settings) -> list[dict]:
+        media = getattr(settings, 'media', None) if settings else None
+        if not media or not getattr(media, 'enabled', False) or not getattr(media, 'image_understanding_enabled', False):
+            return []
+        service = getattr(self, 'media_service', None)
+        bridge = getattr(service, 'vision_bridge', None) if service else None
+        fetch = getattr(bridge, 'fetch_bytes', None)
+        if not callable(fetch) or not getattr(trigger, 'attachments', None):
+            return []
+        import base64
+        out: list[dict] = []
+        try:
+            artifacts = service.detect_artifacts(trigger.message_id, trigger.channel_id, trigger.account_name, trigger.attachments)
+        except Exception:
+            return []
+        for artifact in artifacts:
+            if artifact.media_kind not in ('image', 'gif') or not artifact.source_url:
+                continue
+            try:
+                data, media_type = fetch(artifact.source_url)   # streamed, 10 MB cap, no redirects
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).debug('payload image skipped (%s): %s', artifact.source_url, exc)
+                continue
+            if not data:
+                continue
+            out.append({'data': base64.b64encode(data).decode('ascii'), 'media_type': str(media_type or 'image/png')})
+            if len(out) >= self._PAYLOAD_IMAGE_MAX:
+                break
+        return out
+
+    def _dm_within_budget(self, trigger, settings) -> bool:
+        """safety.dm_daily_budget (M19): DM messages per person per day she
+        answers. In-memory, keyed by local day; other days are dropped on
+        rollover so the map stays the size of today's DM senders."""
+        budget = int(getattr(getattr(settings, 'safety', None), 'dm_daily_budget', 30) or 0)
+        if budget <= 0:
+            return True
+        counts = getattr(self, '_dm_counts', None)
+        if counts is None:
+            counts = self._dm_counts = {}
+        day = time.strftime('%Y-%m-%d')
+        for key in [k for k, (d, _n) in counts.items() if d != day]:
+            counts.pop(key, None)
+        key = (str(trigger.account_name), str(trigger.author_id))
+        _day, used = counts.get(key, (day, 0))
+        if used >= budget:
+            return False
+        counts[key] = (day, used + 1)
+        return True
+
     def _world_state_for(self, trigger, trigger_eval: dict, *, settings=None) -> dict:
         state = {
             'account_name': trigger.account_name,
@@ -948,6 +1003,16 @@ class ConversationService:
         situation = world_state.get('situation') or {}
         vibe = str(situation.get('vibe') or '')
         if vibe == 'heated':
+            return
+        # One check-in per (channel, person, day) — a chatty channel used to
+        # queue one per unanswered message (H7).
+        has_pending = getattr(wm, 'has_pending_task', None)
+        if callable(has_pending) and has_pending(
+            trigger.account_name, 'social_check_in',
+            target_id=trigger.channel_id,
+            payload_contains=f'"author_id": "{trigger.author_id}"',
+            since=time.time() - 86400.0,
+        ):
             return
         run_at = time.time() + 1800.0
         task_id = wm.create_task(

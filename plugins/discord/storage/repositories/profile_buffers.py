@@ -16,6 +16,7 @@ class ProfileBufferRepository:
         content: str,
         *,
         created_at: float | None = None,
+        origin: str = '',
     ) -> int:
         text = str(content or '').strip()
         if not text:
@@ -24,10 +25,10 @@ class ProfileBufferRepository:
         conn = self.sqlite_service.connection()
         cursor = conn.execute(
             '''
-            INSERT INTO profile_buffers (account_name, user_id, content, created_at, processed)
-            VALUES (?, ?, ?, ?, 0)
+            INSERT INTO profile_buffers (account_name, user_id, content, created_at, processed, origin)
+            VALUES (?, ?, ?, ?, 0, ?)
             ''',
-            (account_name, user_id, text[:500], now),
+            (account_name, user_id, text[:500], now, str(origin or '')),
         )
         conn.commit()
         return int(cursor.lastrowid)
@@ -55,7 +56,7 @@ class ProfileBufferRepository:
     ) -> list[dict]:
         rows = self.sqlite_service.connection().execute(
             '''
-            SELECT id, account_name, user_id, content, created_at, processed
+            SELECT id, account_name, user_id, content, created_at, processed, origin
             FROM profile_buffers
             WHERE account_name = ? AND user_id = ? AND processed = 0
             ORDER BY created_at ASC
@@ -66,13 +67,17 @@ class ProfileBufferRepository:
         return [dict(row) for row in rows]
 
     def mark_processed(self, buffer_ids: list[int]) -> int:
+        """Distilled snippets are DELETED, not flagged (H7, hunt 2026-09-12):
+        the buffer holds members' raw chat and only exists to feed the
+        distiller; once a fact has been drawn from it there is no reason to
+        keep the text around."""
         ids = [int(i) for i in buffer_ids if i]
         if not ids:
             return 0
         conn = self.sqlite_service.connection()
         placeholders = ','.join('?' for _ in ids)
         cursor = conn.execute(
-            f'UPDATE profile_buffers SET processed = 1 WHERE id IN ({placeholders})',
+            f'DELETE FROM profile_buffers WHERE id IN ({placeholders})',
             ids,
         )
         conn.commit()

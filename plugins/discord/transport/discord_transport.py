@@ -26,7 +26,6 @@ class DiscordTransport:
         self._mention_map_service = mention_map_service
         self._accounts: dict[str, dict] = {}
         self._event_adapter = None
-        self._command_service = None
         self._message_pipeline = None
         self._on_account_connected = None
         self._execution = DiscordExecution(self)
@@ -38,14 +37,8 @@ class DiscordTransport:
     def set_event_adapter(self, adapter) -> None:
         self._event_adapter = adapter
 
-    def set_command_service(self, service) -> None:
-        self._command_service = service
-
     def set_message_pipeline(self, pipeline) -> None:
         self._message_pipeline = pipeline
-
-    def set_mention_map_service(self, service) -> None:
-        self._mention_map_service = service
 
     def _resolve_outbound_text(self, text: str, *, channel_id: str, account_name: str | None, guild_id: str = '') -> str:
         if not self._mention_map_service or not text:
@@ -217,10 +210,6 @@ class DiscordTransport:
             self.account_repository.update_connection_state(name, 'disconnected', bot_name=state.get('bot_name', ''), bot_id=state.get('bot_id', ''), last_error='')
         return self.account_health(name)
 
-    async def reconnect_account(self, name: str, token: str) -> dict:
-        await self.disconnect_account(name)
-        return await self.connect_account(name, token)
-
     async def close_all(self) -> None:
         for name in list(self._accounts.keys()):
             await self.disconnect_account(name)
@@ -254,10 +243,6 @@ class DiscordTransport:
     def account_health(self, name: str) -> dict:
         state = self._accounts.get(name) or {'name': name, 'state': 'disconnected', 'bot_name': '', 'bot_id': '', 'last_error': ''}
         return {'name': name, 'state': state.get('state', 'disconnected'), 'bot_name': state.get('bot_name', ''), 'bot_id': state.get('bot_id', ''), 'last_error': state.get('last_error', '')}
-
-    async def test_account_token(self, token: str) -> dict:
-        from plugins.discord.lib.token_check import check_bot_token
-        return await check_bot_token(token)
 
     def list_servers(self):
         servers = []
@@ -415,15 +400,6 @@ class DiscordTransport:
                     })
         targets.sort(key=lambda item: (item['account'].lower(), item['guild_name'].lower(), item['channel_name'].lower()))
         return targets
-
-    def list_proactive_targets_sync(self) -> list[dict]:
-        return self._run_on_loop(self.list_proactive_targets(), timeout=60)
-
-    def list_voice_targets_sync(self) -> list[dict]:
-        return self._run_on_loop(self.list_voice_targets(), timeout=60)
-
-    def list_guild_bots_sync(self) -> list[dict]:
-        return self._run_on_loop(self.list_guild_bots(), timeout=60)
 
     def get_voice_channel_state_sync(self, account_name: str, channel_id: str) -> dict:
         try:
@@ -616,13 +592,6 @@ class DiscordTransport:
             logger.error('Streaming playback start failed for %s:%s: %s', account_name, channel_id, exc, exc_info=True)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
-    async def feed_streaming_chunk_async(self, account_name: str, channel_id: str, chunk: dict) -> dict:
-        try:
-            return await self._execution.feed_streaming_chunk(account_name, channel_id, chunk)
-        except Exception as exc:
-            logger.warning('Streaming chunk feed failed for %s:%s: %s', account_name, channel_id, exc)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
     def feed_streaming_chunk_sync(self, account_name: str, channel_id: str, chunk: dict) -> dict:
         try:
             return self._run_on_loop(
@@ -631,13 +600,6 @@ class DiscordTransport:
             )
         except Exception as exc:
             logger.warning('Streaming chunk feed failed for %s:%s: %s', account_name, channel_id, exc)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
-    async def finish_streaming_playback_async(self, account_name: str, channel_id: str) -> dict:
-        try:
-            return await self._execution.finish_streaming_playback(account_name, channel_id)
-        except Exception as exc:
-            logger.warning('Streaming playback finish failed for %s:%s: %s', account_name, channel_id, exc)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
     def finish_streaming_playback_sync(self, account_name: str, channel_id: str) -> dict:
@@ -650,13 +612,6 @@ class DiscordTransport:
             logger.warning('Streaming playback finish failed for %s:%s: %s', account_name, channel_id, exc)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
-    async def stop_streaming_playback_async(self, account_name: str, channel_id: str) -> dict:
-        try:
-            return await self._execution.stop_streaming_playback(account_name, channel_id)
-        except Exception as exc:
-            logger.debug('Streaming playback stop failed for %s:%s: %s', account_name, channel_id, exc)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
     def stop_streaming_playback_sync(self, account_name: str, channel_id: str) -> dict:
         try:
             return self._run_on_loop(
@@ -665,23 +620,6 @@ class DiscordTransport:
             )
         except Exception as exc:
             logger.debug('Streaming playback stop failed for %s:%s: %s', account_name, channel_id, exc)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
-    async def wait_streaming_playback_async(
-        self,
-        account_name: str,
-        channel_id: str,
-        *,
-        timeout: float = 180.0,
-    ) -> dict:
-        try:
-            return await self._execution.wait_streaming_playback(
-                account_name,
-                channel_id,
-                timeout=timeout,
-            )
-        except Exception as exc:
-            logger.warning('Streaming playback wait failed for %s:%s: %s', account_name, channel_id, exc)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
     def wait_streaming_playback_sync(
@@ -776,6 +714,25 @@ class DiscordTransport:
         except Exception as exc:
             logger.error('Discord GIF send failed for channel %s: %s', channel, exc, exc_info=True)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel)}
+
+    def send_file_sync(self, channel, data: bytes, filename: str, caption: str = '', account_name=None):
+        try:
+            return self._run_on_loop(
+                self._execution.send_file(channel, data, filename, caption=caption, account_name=account_name),
+                timeout=60,
+            )
+        except Exception as exc:
+            logger.error('Discord file send failed for channel %s: %s', channel, exc, exc_info=True)
+            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel)}
+
+    def channel_reach_sync(self, channel, account_name=None) -> dict:
+        return self._run_on_loop(self._execution.channel_reach(account_name, channel), timeout=30)
+
+    def list_channels_sync(self, kind: str = 'text') -> list[dict]:
+        """Text or voice channels across every connected bot (the tools' door
+        to the same roster the Settings pickers use)."""
+        coro = self.list_voice_targets() if kind == 'voice' else self.list_proactive_targets()
+        return self._run_on_loop(coro, timeout=60)
 
     def send_gif_sync(self, channel, query, account_name=None):
         url = str(query or '').strip()

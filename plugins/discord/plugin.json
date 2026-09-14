@@ -2,8 +2,8 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.23.0",
-  "min_core_version": "2.10.1",
+  "version": "1.25.0",
+  "min_core_version": "2.13.0",
   "description": "Discord cognitive agent \u2014 bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
@@ -23,7 +23,8 @@
       "tools/discord_tools.py"
     ],
     "hooks": {
-      "prompt_inject": "hooks/voice_prompt_inject.py"
+      "prompt_inject": "hooks/voice_prompt_inject.py",
+      "post_chat": "hooks/hangup_sentinel.py"
     },
     "scopes": [
       {
@@ -33,7 +34,7 @@
         "data_key": "accounts",
         "value_field": "name",
         "name_field": "name",
-        "label_template": "{bot_name}"
+        "label_template": "{label}"
       }
     ],
     "daemon": {
@@ -270,6 +271,11 @@
         "method": "GET",
         "path": "debug/cognition",
         "handler": "api/debug.py:get_cognition_debug"
+      },
+      {
+        "method": "POST",
+        "path": "debug/clear",
+        "handler": "api/debug.py:clear_llm_debug"
       }
     ],
     "schedule": [
@@ -459,6 +465,22 @@
         "default": false,
         "tab": "Cognition",
         "help": "OFF (default): legacy organic % roll, then optional silent react on miss. ON: score reply vs react-only vs silence from situation + relationship (mentions/DMs still always reply)."
+      },
+      {
+        "key": "cognitive.llm_debug_enabled",
+        "type": "boolean",
+        "label": "LLM debug ring",
+        "default": false,
+        "tab": "Cognition",
+        "help": "Keep the last 10 prompts and replies in memory for the Debug panel — full prompts, other people's messages included. Off = nothing retained. Clear it from the panel any time."
+      },
+      {
+        "key": "cognitive.side_lanes_local_only",
+        "type": "boolean",
+        "label": "Side lanes: local providers only",
+        "default": true,
+        "tab": "Cognition",
+        "help": "ON (default): greetings, goodnights, ambient distill and image captions on 'auto' pick only providers marked local in Settings › LLM — server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick always wins."
       },
       {
         "key": "presence.situation_presence_enabled",
@@ -1061,9 +1083,25 @@
         "key": "safety.allow_direct_messages",
         "type": "boolean",
         "label": "Allow DMs",
+        "default": false,
+        "tab": "Safety",
+        "help": "OFF (default): she won't reply to direct messages — anyone who shares a server can DM a bot, so it is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM)."
+      },
+      {
+        "key": "safety.dm_daily_budget",
+        "type": "number",
+        "label": "DM budget per person per day",
+        "default": 30,
+        "tab": "Safety",
+        "help": "When DMs are on: how many DM messages from one person she answers per day before going quiet on them until tomorrow. 0 = unlimited."
+      },
+      {
+        "key": "safety.tools_stay_in_server",
+        "type": "boolean",
+        "label": "Tools stay in the server",
         "default": true,
         "tab": "Safety",
-        "help": "ON (default): the bot replies to direct messages. OFF: she won't reply to DMs (they are still stored in the plugin database, and scheduled reminders she owes someone may still deliver by DM)."
+        "help": "ON (default): while she is replying inside a Discord server, her Discord tools can only read or post in THAT server — a message in one server can't make her post into another, or into someone's DMs. From your own chats she can reach any channel. OFF: no reach limit inside events."
       },
       {
         "key": "safety.rate_limit_seconds",

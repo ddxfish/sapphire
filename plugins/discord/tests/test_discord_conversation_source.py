@@ -102,3 +102,18 @@ def test_reply_end_fires_after_drain_and_on_interrupt():
     source.interrupt_playback()
 
     assert ends == ['end', 'end']
+
+
+def test_batch_fallback_never_speaks_the_hangup_tag():
+    source, playback = _source()
+    source._running = True
+    source._audio_bytes_fed = 0
+    source.speech_bridge = MagicMock()
+    source.speech_bridge.synthesize_speech.return_value = {'audio_bytes': b'wav'}
+    source.voice_transport = MagicMock()
+    source.voice_transport.play_audio_sync.return_value = {'status': 'playing'}
+    source._latest_assistant_text = lambda: 'Talk soon, take care. <<HANG UP>>'
+
+    source.wait(timeout=0.01)
+
+    source.speech_bridge.synthesize_speech.assert_called_once_with('Talk soon, take care.')

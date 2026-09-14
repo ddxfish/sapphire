@@ -556,6 +556,7 @@ function renderShell(container, data) {
         <p class="dcg-help">Last 10 LLM-related events — successful exchanges and policy rejections. Shows configured vs resolved model, prompt breakdown, delivery edits, and why blocked messages never reached the AI.</p>
         <div class="dcg-target-toolbar">
           <button type="button" class="dcg-btn" id="dcg-debug-refresh">Refresh now</button>
+          <button type="button" class="dcg-btn" id="dcg-debug-clear">Clear</button>
           <span class="dcg-help" id="dcg-debug-status"></span>
         </div>
         <div id="dcg-debug-list" class="dcg-debug-list">
@@ -1063,6 +1064,16 @@ function initDebugPanel(container, initialEntries = []) {
   if (!list) return;
   renderDebugEntries(list, initialEntries);
   refreshBtn?.addEventListener('click', () => refreshDebugPanel(container));
+  container.querySelector('#dcg-debug-clear')?.addEventListener('click', async () => {
+    try {
+      await api('debug/clear', { method: 'POST', body: {} });
+    } catch (err) {
+      const status = container.querySelector('#dcg-debug-status');
+      if (status) status.textContent = err.message;
+      return;
+    }
+    refreshDebugPanel(container);
+  });
   if (_debugRefreshTimer) {
     clearInterval(_debugRefreshTimer);
     _debugRefreshTimer = null;

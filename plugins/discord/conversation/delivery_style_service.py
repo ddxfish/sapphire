@@ -42,6 +42,9 @@ class DeliveryPlan:
     edit_text: str = ''
 
 
+_PROTECTED_RE = re.compile(r"https?://\S+|`[^`]*`|:[A-Za-z0-9_+\-]+:|<[@#][^>]+>")
+
+
 class DeliveryStyleService:
     def plan_delivery(
         self,
@@ -218,13 +221,26 @@ class DeliveryStyleService:
             return None
         return delay, stripped, stripped + suffix
 
+    @staticmethod
+    def _protected_spans(text: str) -> list[tuple[int, int]]:
+        """Never typo inside a link, inline code, :emoji:, or a <@mention>/<#channel>
+        — a garbled URL is a dead link, not a human slip."""
+        return [(m.start(), m.end()) for m in _PROTECTED_RE.finditer(text or '')]
+
+    @staticmethod
+    def _overlaps(spans: list[tuple[int, int]], start: int, end: int) -> bool:
+        return any(start < e and end > s for s, e in spans)
+
     def _introduce_common_typo(self, text: str) -> Optional[tuple[str, str]]:
         stripped = (text or '').strip()
         if len(stripped) < 8:
             return None
+        protected = self._protected_spans(stripped)
         candidates = []
         for correct, typos in RAW_MISSPELLINGS.items():
             for match in self._word_pattern(correct).finditer(stripped):
+                if self._overlaps(protected, match.start(), match.end()):
+                    continue
                 original = match.group(0)
                 typo_form = random.choice(typos)
                 candidates.append((
@@ -243,7 +259,10 @@ class DeliveryStyleService:
 
     def _introduce_subtle_typo(self, text: str) -> str:
         words = text.split()
-        candidates = [index for index, word in enumerate(words) if len(word) >= 5 and any(char.isalpha() for char in word)]
+        candidates = [
+            index for index, word in enumerate(words)
+            if len(word) >= 5 and any(char.isalpha() for char in word) and not _PROTECTED_RE.search(word)
+        ]
         if not candidates:
             return text
         index = random.choice(candidates)

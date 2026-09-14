@@ -33,7 +33,9 @@ class BotInteractionSettings:
 
 @dataclass
 class SafetySettings:
-    allow_direct_messages: bool = True
+    allow_direct_messages: bool = False   # M19: a stranger's DM is an outside line — opt in per install
+    dm_daily_budget: int = 30             # DM messages per person per day she will answer (0 = unlimited)
+    tools_stay_in_server: bool = True     # H3: inside a server event her tools reach only that server
     quiet_hours_enabled: bool = False
     quiet_hours_start: int = 0
     quiet_hours_end: int = 0
@@ -207,6 +209,11 @@ class CognitiveSettings:
     situation_enabled: bool = True
     situation_in_prompt: bool = True
     intention_competition_enabled: bool = False
+    # Debug ring holds full prompts (other people's messages) in memory — opt in.
+    llm_debug_enabled: bool = False
+    # Side lanes (greeting, goodnight, distill, vision) in 'auto' mode pick
+    # only providers marked local (M6). Explicit picks always win.
+    side_lanes_local_only: bool = True
 
 
 @dataclass
@@ -348,9 +355,53 @@ def core_global_overlay() -> SettingsOverlay:
     return overlay_from_flat(flat)
 
 
+def _coerce(current, value):
+    """Coerce an overlay value to the dataclass field's type (M29): a saved
+    '0.5' or 'false' used to land as a str and every `> 0` / `if flag` read
+    misjudged it. Unparseable → the existing value stands."""
+    if value is None:
+        return current
+    if isinstance(current, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in ('1', 'true', 'yes', 'on'):
+            return True
+        if text in ('0', 'false', 'no', 'off', ''):
+            return False
+        return current
+    if isinstance(current, int):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return current
+    if isinstance(current, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return current
+    if isinstance(current, list):
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        text = str(value).strip()
+        if text.startswith('['):
+            try:
+                import json as _json
+                parsed = _json.loads(text)
+                return list(parsed) if isinstance(parsed, list) else current
+            except ValueError:
+                return current
+        return [part.strip() for part in text.split(',') if part.strip()] if text else []
+    if isinstance(current, str):
+        return str(value)
+    return value
+
+
 def _apply_overlay(effective: EffectiveSettings, overlay: SettingsOverlay) -> None:
     for section, values in overlay.to_dict().items():
         target = getattr(effective, section)
         for key, value in values.items():
             if hasattr(target, key):
-                setattr(target, key, value)
+                setattr(target, key, _coerce(getattr(target, key), value))

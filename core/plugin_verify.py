@@ -211,8 +211,8 @@ def _verify_file_integrity(plugin_dir: Path, sig_data: dict) -> Tuple[bool, str]
             continue
         if f.suffix not in SIGNABLE_EXTENSIONS:
             continue
-        if "__pycache__" in f.parts:
-            continue
+        if "__pycache__" in f.parts or ".claude" in f.parts:
+            continue   # .claude/: Claude Code scratch (gitignored) — a scout's notes must not block the plugin
         rel = f.relative_to(plugin_dir).as_posix()
         if rel not in files_manifest:
             return False, f"unrecognized file not in manifest: {rel}"

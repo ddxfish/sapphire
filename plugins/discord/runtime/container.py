@@ -43,6 +43,7 @@ from plugins.discord.observability.cognition_debug_service import CognitionDebug
 from plugins.discord.observability.llm_debug_service import LlmDebugService
 from plugins.discord.observability.trace_service import TraceService
 from plugins.discord.runtime.health import RuntimeHealth
+from plugins.discord.runtime.forget_service import ForgetService
 from plugins.discord.runtime.retention_service import RetentionService
 from plugins.discord.runtime.lifecycle import LifecycleManager
 from plugins.discord.runtime.scheduler_loop import SchedulerLoop
@@ -67,7 +68,6 @@ from plugins.discord.storage.repositories.tasks import TaskRepository
 from plugins.discord.storage.repositories.traces import TraceRepository
 from plugins.discord.storage.repositories.voice_sessions import VoiceSessionRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
-from plugins.discord.transport.discord_commands import DiscordCommandService
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
 from plugins.discord.transport.discord_presence import DiscordPresenceService
 from plugins.discord.transport.discord_transport import DiscordTransport
@@ -128,7 +128,6 @@ class RuntimeContainer:
         self.reaction_service = None
         self.gif_service = None
         self.conversation_service = None
-        self.command_service = None
         self.world_model_service = None
         self.cognitive_orchestrator = None
         self.memory_service = None
@@ -192,7 +191,11 @@ class RuntimeContainer:
         self.trace_service = TraceService(trace_repository=self.trace_repository)
         self.llm_debug_service = LlmDebugService(limit=10, plugin_loader=self.plugin_loader)
         self.cognition_debug_service = CognitionDebugService()
-        self.retention_service = RetentionService(sqlite_service=self.sqlite_service, trace_repository=self.trace_repository)
+        self.forget_service = ForgetService(sqlite_service=self.sqlite_service, trace_repository=self.trace_repository)
+        self.retention_service = RetentionService(
+            sqlite_service=self.sqlite_service, trace_repository=self.trace_repository,
+            forget_service=self.forget_service,
+        )
         self.proactive_repository = ProactiveRepository(self.sqlite_service)
         self.presence_repository = PresenceRepository(self.sqlite_service)
         self.media_repository = MediaRepository(self.sqlite_service)
@@ -486,6 +489,18 @@ class RuntimeContainer:
                 self._connect_backoff[name] = time.monotonic() + 300
                 logger.exception('Failed to connect %s (retry in 5 min)', name)
 
+        # <<HANG UP>> sentinel: the runner leaves through the same door as
+        # /voice leave and the leave tool (session closed, listener stopped,
+        # summary, disconnect).
+        def _leave_voice(account_name: str, channel_id: str) -> dict:
+            from plugins.discord.models.intentions import LeaveVoiceIntention
+            return self.voice_service.leave(LeaveVoiceIntention(
+                intention_type='leave_voice', account_name=account_name,
+                channel_id=str(channel_id), message_id='', reason='hangup_sentinel',
+            ))
+
+        self.discord_conversation_runner.leave_fn = _leave_voice
+
     def build_transport(self) -> None:
         self.build_cognition()
         self.mention_map_service = MentionMapService(
@@ -572,13 +587,7 @@ class RuntimeContainer:
             conversation_service=self.conversation_service,
             trace_repository=self.trace_repository,
         )
-        self.command_service = DiscordCommandService(
-            conversation_service=self.conversation_service,
-            profile_service=self.profile_service,
-            memory_service=self.memory_service,
-        )
         self.transport.set_event_adapter(self.event_adapter)
-        self.transport.set_command_service(self.command_service)
         self.transport.set_message_pipeline(self.message_pipeline)
         self.transport.set_on_account_connected(self._on_account_connected)
         self.build_voice()

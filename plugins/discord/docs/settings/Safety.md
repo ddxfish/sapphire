@@ -8,9 +8,25 @@ DM allow, reply rate limits, proactive cooldowns, and presence-only quiet hours.
 
 - **Setting key:** `safety.allow_direct_messages`
 - **Type:** `boolean`
+- **Default:** OFF
+
+OFF (default, since 2026-09-13): she won't reply to direct messages. Anyone who shares a server with the bot can DM it, so a DM is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM). Existing installs that had DMs on keep their saved value.
+
+### DM budget per person per day
+
+- **Setting key:** `safety.dm_daily_budget`
+- **Type:** `number`
+- **Default:** `30`
+
+When DMs are on: how many DM messages from one person she answers per day before going quiet on them until tomorrow (a dropped message leaves an `event_dropped` trace). `0` = unlimited.
+
+### Tools stay in the server
+
+- **Setting key:** `safety.tools_stay_in_server`
+- **Type:** `boolean`
 - **Default:** ON
 
-ON (default): the bot replies to direct messages. OFF: she won't reply to DMs (they are still stored in the plugin database, and scheduled reminders she owes someone may still deliver by DM).
+While she is replying inside a Discord server, her Discord tools (send, GIF, image, reaction, read) can only act in that server; DM channels are never a target from inside an event. A message in one server cannot make her post into another. From the operator's own chats every channel is reachable. OFF removes the limit.
 
 ### Reply cooldown (seconds)
 

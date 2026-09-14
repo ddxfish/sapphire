@@ -719,6 +719,12 @@ class DiscordExecution:
             if channel_id and str(voice_client.channel.id) != str(channel_id):
                 continue
             left_channel = voice_client.channel
+            try:
+                from plugins.discord.voice.dave_voice_patches import forget_ssrcs
+                forget_ssrcs(list(getattr(voice_client, '_ssrc_to_id', {}) or {})
+                             + list((getattr(voice_client, '_id_to_ssrc', {}) or {}).values()))
+            except Exception:
+                logger.debug('DAVE ssrc eviction skipped', exc_info=True)
             await voice_client.disconnect(force=True)
             disconnected = True
             break
@@ -773,6 +779,37 @@ class DiscordExecution:
                 'status': status,
                 'activity': activity_text,
             },
+        }
+
+    async def send_file(
+        self,
+        channel_id: str | int,
+        data: bytes,
+        filename: str,
+        *,
+        caption: str = '',
+        account_name: str | None = None,
+    ) -> dict:
+        """Post bytes as an attachment (the image lane: core.images resolved
+        the bytes, nothing here ever reads a path)."""
+        import io
+
+        import discord
+
+        _, channel = await self._resolve_channel(account_name, channel_id)
+        attachment = discord.File(io.BytesIO(data), filename=str(filename or 'image.png'))
+        message = await channel.send(content=(caption or None), file=attachment)
+        return {'message_id': str(message.id), 'channel_id': str(channel.id)}
+
+    async def channel_reach(self, account_name: str | None, channel_ref: str | int) -> dict:
+        """Where a channel lives: its guild id ('' for a DM). The tools' reach
+        rule (H3): inside a server event she may only act in that server."""
+        _, channel = await self._resolve_channel(account_name, channel_ref)
+        guild = getattr(channel, 'guild', None)
+        return {
+            'channel_id': str(channel.id),
+            'guild_id': str(getattr(guild, 'id', '') or ''),
+            'is_dm': guild is None,
         }
 
     async def send_url(

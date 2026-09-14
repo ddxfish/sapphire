@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from plugins.discord.daemon import get_runtime, is_daemon_alive
-from plugins.discord.proactive.test_paths import collect_proactive_diagnostics, run_proactive_test
+from plugins.discord.proactive.diagnostics import collect_proactive_diagnostics, run_proactive_test
 
 
 def proactive_diagnostics(**kwargs):
