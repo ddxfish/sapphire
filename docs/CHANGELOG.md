@@ -6,6 +6,8 @@
 - Human-like reactions: delayed writes, multi-part messages, emoji
 - Slash command support
 - Memory system for past users that the AI sees
+- Discord plugin depends on py-cord (git-pinned build): uninstall discord.py first if you had it, and Git must be on PATH for pip to fetch the pin
+- Discord proactive schedules run only while their feature is on, at the configured hour (no more 15-minute heartbeats in the AI's upcoming tasks)
 # 2.12.9 - Images
 - AI can web search images and diplay or see them itself
 - AI can add images to its knowledge layer

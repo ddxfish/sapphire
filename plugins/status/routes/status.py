@@ -169,6 +169,18 @@ def _get_recent_activity(user_dir: Path, active_chat: str | None) -> dict:
     return info
 
 
+def _is_plugin_heartbeat(task: dict, cron_expr: str) -> bool:
+    """A plugin task whose cron fires more than once an hour is a maintenance
+    tick (Discord quiet-channel poll, distill poll), not an event she has
+    coming up. Left in, three such ticks own every 'Upcoming' slot and her
+    real tasks vanish into '(+N more)'. Rule: plugin-sourced AND the minute
+    field is not one fixed number. User tasks always show."""
+    if not str(task.get("source", "")).startswith("plugin:"):
+        return False
+    minute = str(cron_expr).split()[0] if str(cron_expr).split() else ""
+    return not minute.isdigit()
+
+
 def _get_upcoming_tasks(scheduler, hours: int = 4) -> list:
     """Continuity tasks due in the next `hours` hours. Cron tasks only —
     daemons/heartbeats run on intervals and aren't 'scheduled' in the
@@ -189,6 +201,8 @@ def _get_upcoming_tasks(scheduler, hours: int = 4) -> list:
                 continue
             cron_expr = t.get("schedule") or t.get("cron")
             if not cron_expr:
+                continue
+            if _is_plugin_heartbeat(t, cron_expr):
                 continue
             try:
                 it = croniter(cron_expr, now)

@@ -3,7 +3,7 @@
   "version": "1.25.0",
   "files": {
     "OPERATIONS.md": "sha256:e1773e56245708e237c12a5d001ae7d3bb2a5b7bd4087e7ac324e0bcd8736b62",
-    "README.md": "sha256:69470dccc13f0723566a9b7fee8c28d6753b74da6909fa4d35e71ad263db5983",
+    "README.md": "sha256:04ef0c98a8f86519105332df89ab79d99c0ed35986d326e38148b9c2030d3201",
     "__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "api/__init__.py": "sha256:01b39649711c6caba7cd872fc0e7660748dc4f065708124cd665399a744bc134",
     "api/accounts.py": "sha256:c5c3217f7ee20eabed3b228e100258fde089c6dec2fb3e9888924d58585a5a49",
@@ -95,19 +95,19 @@
     "observability/cognition_debug_service.py": "sha256:58055894cfcdc1d97898956cf622a370a9bb286a20c213c0caf53d9e90e2ba9a",
     "observability/llm_debug_service.py": "sha256:a0fafa243956528e9402b3cd2b197f84bcc224d8a845038001d71ecc07bba673",
     "observability/trace_service.py": "sha256:e13cb4c4da32508f209c0db8f39185cf642ae46c42bfffeac8784d5e81e9057e",
-    "plugin.json": "sha256:748e4fbe232a2c79c00080c35e444962c655a03481d903d07f1d5b449940e85a",
+    "plugin.json": "sha256:786e9e8ba6b32f8048b62930c33141fc98ef279a5ddebbb6370876fe9141b4bd",
     "presence/activity_parser.py": "sha256:bb757874d8b1b0e61059e4ffc95e47a5630f77162d0c2c284bc931d01e79a3a1",
     "presence/presence_catalog.py": "sha256:a4857cab82751e03900c1e83012225cf0248f80d0cddc36ff44fa7dce5138615",
     "presence/presence_service.py": "sha256:8d0429ab1c29fa41d44abb4557f64118059dca1f948c79cf2b902c05548eedd6",
     "proactive/bot_identity.py": "sha256:4c612734fcabcb68241de244e8cd0ee9211aaf48483180eb8da2a1538b214fb0",
-    "proactive/diagnostics.py": "sha256:27daf4867530c03152ea96d460a62d65db30430a9667d2a08558842653195e64",
+    "proactive/diagnostics.py": "sha256:f2e2a8404cfe2aae93c395ded78e4a6d6b2da1db87e41956e48fd9489a89612e",
     "proactive/greeting_service.py": "sha256:248aa1b82be2d8b357755e886203218ad174505de3f2915fb0c4bde6a3f43a46",
     "proactive/outreach_service.py": "sha256:c25ddd8cbe8625cd1c030c04e9d52bb95304d9f6a28c8e7627b0953e4cbe50a2",
     "proactive/proactive_coordinator.py": "sha256:33016bc90ef3b4a800c6469be6847a00a966647f6a05c21c9f24b2f1c16d390f",
     "proactive/proactive_executor.py": "sha256:7eaabed7d0f1ddcb444a74b1fafa694a61343580a1a1830f25a04c2bcd528120",
     "proactive/proactive_history.py": "sha256:f3a124e6abccfc82536aa3b7f49dc830e7584d10e43bd8ec8dee1e50f510f675",
     "proactive/proactive_message_service.py": "sha256:b828615a0989f102b6b2274b6e6793ef58e13c5c7267aade5948c32355e0e37f",
-    "proactive/sleep_service.py": "sha256:fb6cfe6c29c27d4be927240dda996237f4c73fe7f7611312dadef9fd524e56ec",
+    "proactive/sleep_service.py": "sha256:73a6031c3254ef83c1820f2376c3ffe1c8c10fbcd79976620991160050c07296",
     "proactive/targets.py": "sha256:885dee5268c3beb0f41d6d8f791bf76d6f2998a214ff060b9a22d39bea73089c",
     "runtime/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "runtime/container.py": "sha256:7a2f7cdbfa16978652e3fe032fc049e5bc6d5bdf1e4645eb6c95d9db32038979",
@@ -297,5 +297,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:d0ae1f9f0fc9c58ac6ccde6855af12dbb9ed728df37699f0bf0ec7d838678eb5"
   },
-  "signature": "qaTG/iNYi4+e+zwmw+XVcII6k8x+pQpKcJ95iA7CWy2B6ODpk21TjfaWDF2bMBqhEEwFA0vJjkrWuuhRuvQ1DQ=="
+  "signature": "qx4nk/B+v9dFYY1ZYJ2bEWM2KEGqu7awwKS29DAZRw8hoRPZEB1YF8aALfEkzVwIkGMr2Mm5oudTgKGCNZR4AA=="
 }

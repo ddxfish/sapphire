@@ -5,7 +5,7 @@
   "version": "1.25.0",
   "min_core_version": "2.13.0",
   "description": "Discord cognitive agent \u2014 bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
-  "author": "sapphire",
+  "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83c\udfae",
   "priority": 50,
@@ -281,21 +281,27 @@
     "schedule": [
       {
         "name": "morning_greeting",
-        "cron": "0 * * * *",
+        "cron": "0 9 * * *",
+        "time_setting": "proactive.greeting_utc_hour",
         "handler": "schedule/morning_greeting.py",
-        "description": "Post configured morning greetings (checks server-local hour each hour)"
+        "description": "Morning greetings + wake replay, once daily at the greeting hour (bound to Proactive > greeting hour)"
       },
       {
         "name": "quiet_outreach",
         "cron": "*/15 * * * *",
+        "enabled": false,
+        "enabled_setting": "proactive.outreach_enabled",
         "handler": "schedule/quiet_outreach.py",
-        "description": "Proactive conversation starters when configured channels go quiet"
+        "description": "Conversation starters when configured channels go quiet (checks every 15 min, only while Outreach is on)"
       },
       {
         "name": "sleep_goodnight",
-        "cron": "*/15 * * * *",
+        "cron": "0 22 * * *",
+        "enabled": false,
+        "time_setting": "proactive.sleep_utc_hour",
+        "enabled_setting": "proactive.sleep_schedule_enabled",
         "handler": "schedule/sleep_goodnight.py",
-        "description": "Goodnight messages and sleep state (checks sleep server-local hour with variable minute)"
+        "description": "Goodnight messages once daily at the sleep hour (bound to Proactive > sleep hour, only while the sleep schedule is on)"
       },
       {
         "name": "retention_purge",
@@ -306,8 +312,10 @@
       {
         "name": "ambient_distill",
         "cron": "*/15 * * * *",
+        "enabled": false,
+        "enabled_setting": "profile.ambient_distill_enabled",
         "handler": "schedule/ambient_distill.py",
-        "description": "Opt-in ambient chat distill into profile facts (honors profile.ambient_distill_interval_hours, default 1h)"
+        "description": "Opt-in ambient chat distill into profile facts (checks every 15 min, only while enabled; honors profile.ambient_distill_interval_hours, default 1h)"
       }
     ],
     "settings": [

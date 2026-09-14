@@ -11,7 +11,6 @@ from plugins.discord.proactive.targets import parse_target
 
 
 class SleepService:
-    GOODNIGHT_MINUTES = (0, 15, 30, 45)
     JUST_WOKEN_HINT = (
         "[You were asleep for the night but repeated @mentions woke you up. Reply helpfully, "
         "but briefly complain or grumble that people woke you — you're tired and will go back "
@@ -148,8 +147,6 @@ class SleepService:
             return []
         now = now or now_local()
         if not self.in_sleep_hours(settings, now=now):
-            return []
-        if now.minute not in self.GOODNIGHT_MINUTES:
             return []
         intentions = []
         for entry in proactive.greeting_targets or []:

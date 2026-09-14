@@ -41,14 +41,21 @@ STATIC_PLUGINS_JSON = PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui"
 
 
 def _time_to_cron(value, fallback: str) -> str:
-    """'HH:MM' → 'M H * * *' (daily). Anything unparsable keeps the manifest
-    cron, so a mistyped settings value degrades to the declared default."""
+    """'HH:MM' or a bare hour (9, 9.0, '9') → daily cron 'M H * * *'. Anything
+    unparsable keeps the manifest cron, so a mistyped settings value degrades
+    to the declared default. The bare-hour form lets a plugin bind a schedule
+    to an existing numeric hour setting (Discord greeting/sleep hours) instead
+    of polling every 15 min and guarding the hour inside the handler."""
     try:
-        hh, mm = str(value).strip().split(':')
-        hh, mm = int(hh), int(mm)
+        text = str(value).strip()
+        if ':' in text:
+            hh, mm = text.split(':')
+            hh, mm = int(hh), int(mm)
+        else:
+            hh, mm = int(float(text)), 0
         if 0 <= hh <= 23 and 0 <= mm <= 59:
             return f"{mm} {hh} * * *"
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, TypeError, OverflowError):
         pass
     return fallback
 

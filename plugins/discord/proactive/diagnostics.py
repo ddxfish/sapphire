@@ -74,7 +74,7 @@ def collect_proactive_diagnostics(runtime) -> dict[str, Any]:
     if now.hour != greeting_hour:
         greeting_hints.append(
             f'Current server hour is {now.hour}; greetings only fire at hour {greeting_hour}. '
-            f'Sapphire continuity cron runs hourly (plugin schedule morning_greeting).'
+            f'The morning_greeting schedule fires once daily at that hour (bound to the setting; changing it re-times the task).'
         )
     if not targets:
         greeting_hints.append('No greeting channels selected.')

@@ -143,9 +143,9 @@ These run via Sapphire's continuity scheduler (not the message daemon):
 
 | Job | Schedule | Description |
 |-----|----------|-------------|
-| `morning_greeting` | Every hour (`0 * * * *`) | Posts configured morning greetings when the server-local hour matches |
-| `quiet_outreach` | Every 15 min | Conversation starters when selected channels go quiet |
-| `sleep_goodnight` | Every 15 min | Goodnight messages and sleep state at the configured sleep hour |
+| `morning_greeting` | Daily at the greeting hour (bound to the setting) | Morning greetings + wake replay |
+| `quiet_outreach` | Every 15 min while Outreach is on | Conversation starters when selected channels go quiet |
+| `sleep_goodnight` | Daily at the sleep hour, while the sleep schedule is on | Goodnight messages and sleep state |
 
 Configure targets and hours under **Proactive** in plugin settings. Use the **Test proactive pathways** panel to dry-run or fire greetings, goodnight, and outreach manually.
 
