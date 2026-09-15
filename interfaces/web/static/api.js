@@ -239,16 +239,10 @@ const processSSEData = (data, handlers) => {
     // Inert when streaming TTS is disabled on the brain — these events
     // simply don't fire. Pass the full payload so audio.js can read
     // `stream_id` for per-stream isolation (2026-05-18 herring #5).
-    if (data.type === 'tts_stream_start') {
-        dispatch('tts_stream_start', data);
-        return {};
-    }
-    if (data.type === 'tts_chunk') {
-        dispatch('tts_stream_chunk', data);
-        return {};
-    }
-    if (data.type === 'tts_stream_end') {
-        dispatch('tts_stream_end', data);
+    // `mute`: a reattached viewer (attachTurn) never plays audio — it gets
+    // none from the server anyway, but a stale tail must not touch the queue.
+    if (data.type === 'tts_stream_start' || data.type === 'tts_chunk' || data.type === 'tts_stream_end') {
+        if (!handlers.mute) dispatch(data.type === 'tts_chunk' ? 'tts_stream_chunk' : data.type, data);
         return {};
     }
 
@@ -279,6 +273,13 @@ const processSSEData = (data, handlers) => {
 };
 
 // ---------------------------------------------------------------------------
+// A read that died under us — a network TypeError, or a body that ended
+// before the turn did — is a LOST FEED, not a cancel: the server keeps the
+// turn (server-owned turns, 2026-09-15) and the caller reattaches. Handler
+// bugs (any other TypeError) stay ordinary errors.
+const _feedLost = (msg) => { const e = new Error(msg); e.feedLost = true; return e; };
+const _isNetworkDeath = (e) => e instanceof TypeError && /network|fetch|load failed|connection/i.test(e.message || '');
+
 // /api/chat/stream reader — ONE loop for send / regen / continue.
 //
 // The awaited promise settles at `llm_done`: the LLM half of the turn is
@@ -312,7 +313,10 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
             const { done, value } = await reader.read();
             if (done) {
                 if (turnDone) { endTail(); return; }   // tail closed without `done`
-                return gotContent ? finishTurn() : onError(new Error("No content"));
+                // A body that ends before llm_done/done is a LOST FEED, never a
+                // finished turn: the old success path swapped the bubble with
+                // the last history row — the user's own message (H6, 2026-09-15).
+                return onError(_feedLost(gotContent ? 'Connection dropped mid-reply' : 'Connection dropped'));
             }
 
             buffer += decoder.decode(value, { stream: true });
@@ -326,6 +330,13 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
                 let data;
                 try { data = JSON.parse(line.slice(6)); }
                 catch (parseErr) { console.error('[SSE] Parse error:', parseErr, 'Line:', line); continue; }
+                if (typeof data.seq === 'number') handlers.lastSeq = data.seq;   // reattach cursor
+                if (data.type === 'resync') {
+                    // The turn's ring no longer reaches back to our seq: the
+                    // caller repaints from history, then we keep streaming.
+                    if (handlers.onResync) await handlers.onResync();
+                    continue;
+                }
                 // Two error shapes on the wire: {"error": msg} (route
                 // except-handlers, no type field) and {"type":"error",
                 // "text":...} (in-stream refusals like the private-
@@ -363,7 +374,8 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
         }
     } catch (e) {
         if (turnDone) { endTail(); return; }   // dropped mid-tail: audio only
-        onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
+        onError(e.name === 'AbortError' ? new Error('Cancelled')
+                : _isNetworkDeath(e) ? _feedLost(e.message) : e);
     } finally {
         try { await reader.cancel(); } catch {}
     }
@@ -407,7 +419,7 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
     await new Promise((settle) => {
         _readTurn(res.body.getReader(), handlers,
                   (ephemeral, meta) => { onComplete(ephemeral, meta); settle(); },
-                  (e, code) => { onError(e, code); settle(); })
+                  (e, code) => { onError(e, code, handlers.lastSeq); settle(); })
             .finally(settle);
     });
 };
@@ -418,6 +430,46 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
 export const streamChatContinue = (timestamp, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) =>
     _streamTurn({ text: '', continue_from: timestamp },
                 { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
+
+// Reattach to the live turn this tab lost its feed on (server-owned turns,
+// 2026-09-15). `since` = the last seq the tab saw; the server replays exact-
+// once after it and follows live. Resolves {live:true} once the turn ended
+// through the handlers, {live:false} when no turn is live on the chat (it
+// finished while we were away — refresh history), {live:null, error} when the
+// server was unreachable (retry). Text only: audio is never replayed, so the
+// completion reports ttsStreamed=false and the caller speaks the reply once.
+export const attachTurn = async (chat, since, handlers) => {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    let res;
+    try {
+        res = await fetch('/api/chat/attach', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ chat: chat || null, since: typeof since === 'number' ? since : null })
+        });
+    } catch (e) {
+        return { live: null, error: e };
+    }
+    if (res.status === 204) return { live: false };
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return { live: null, error: new Error(err.error || `HTTP ${res.status}`) };
+    }
+    const h = {
+        ...handlers,
+        mute: true,
+        onChunk: _wrapChunkWithAvatarScan(handlers.onChunk),
+        onReload: () => setTimeout(() => window.location.reload(), 500),
+    };
+    h.onLegacyChunk = h.onChunk;
+    await new Promise((settle) => {
+        _readTurn(res.body.getReader(), h,
+                  (ephemeral, meta) => { handlers.onComplete(ephemeral, { ...(meta || {}), ttsStreamed: false }); settle(); },
+                  (e, code) => { handlers.onError(e, code, h.lastSeq); settle(); })
+            .finally(settle);
+    });
+    return { live: true, lastSeq: h.lastSeq };
+};
 
 // Avatar tag scanner — wraps onChunk to detect <<avatar: trackname>> in streamed responses
 // Reads strip_tags setting from avatar plugin state (cached on page load)

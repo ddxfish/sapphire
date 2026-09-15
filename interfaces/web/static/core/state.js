@@ -53,6 +53,10 @@ export const getAbortController = () => currentAbortController;
 export const setAbortController = (ctrl) => { currentAbortController = ctrl; };
 export const getIsCancelling = () => isCancelling;
 export const setIsCancelling = (val) => { isCancelling = val; };
+// A tab that lost the feed of its own turn stops being its owner: the
+// controller goes, isProc stays — main.js's typing mirror holds the button and
+// Stop routes through /api/cancel by chat (features/viewer.js, 2026-09-15).
+export const releaseOwnership = () => { currentAbortController = null; isCancelling = false; };
 export const getPromptPrivacyRequired = () => promptPrivacyRequired;
 export const setPromptPrivacyRequired = (val) => { promptPrivacyRequired = val; };
 export const getConvo = () => convMode;

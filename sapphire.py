@@ -987,6 +987,19 @@ class VoiceChatSystem:
             self.tts_server_manager = None
             logger.info("Kokoro TTS server stopped")
 
+    def _drain_live_turns(self, timeout=5.0):
+        """Server-owned turns keep writing after every tab is gone; on shutdown
+        flag them and wait (bounded) so the engine's finally lands its row and
+        counters instead of leaving a dangling user message. 2026-09-15."""
+        llm = getattr(self, 'llm_chat', None)
+        if llm is None or not getattr(llm, 'any_streaming', lambda: False)():
+            return
+        n = llm.cancel_streams()
+        logger.info(f"Shutdown: cancelled {n} live turn(s), waiting up to {timeout}s for their writes")
+        ev = getattr(getattr(llm, 'session_manager', None), '_no_streams_event', None)
+        if ev is not None and not ev.wait(timeout):
+            logger.warning("Shutdown: live turn(s) still running after the wait — a row may be left dangling")
+
     def cancel_generation(self, chat_name: str = None, exclude_chats=None) -> bool:
         """Public cancel for in-progress LLM streaming.
 
@@ -1254,6 +1267,7 @@ class VoiceChatSystem:
             # can block, or it resurrects a child systemd already SIGTERMed
             # (KillMode=control-group) and the unit hangs in stop-sigterm.
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
+            ("live turns", self._drain_live_turns),
             ("plugin services", _pl.stop_all_services),
             ("plugin daemons", _pl.stop_all_daemons),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),

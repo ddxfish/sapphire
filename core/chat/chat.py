@@ -412,6 +412,15 @@ class LLMChat:
             ids = list(self._streams_by_chat.get(chat_name, set()))
             return [self._streams_by_id[i] for i in ids if i in self._streams_by_id]
 
+    def live_turn(self, chat_name):
+        """The server-owned Turn (core/chat/turn.py) still running on a chat,
+        or None. A viewer that lost its feed reattaches through this."""
+        for s in self.streams_for_chat(chat_name):
+            t = getattr(s, 'turn', None)
+            if t is not None and not t.done.is_set():
+                return t
+        return None
+
     def set_system_prompt(self, prompt_content: str) -> bool:
         self.current_system_prompt = prompt_content
         return True

@@ -2,6 +2,7 @@
 import * as ui from './ui.js';
 import * as api from './api.js';
 import * as audio from './audio.js';
+import { releaseOwnership } from './core/state.js';
 
 const handleError = (e, action) => {
     if (e.message === 'Cancelled') return console.log(`${action} cancelled by user`);
@@ -37,7 +38,12 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // whole transcript, so a background refresh (SSE event, autoRefresh poll)
     // would destroy the edit textarea and the unsaved text in it. The editor's
     // exit path replays it (takeHeldRefresh).
-    if (document.querySelector('#chat-container .message.editing')) {
+    // Same hold for a live bubble (a turn streaming, or one whose tab lost its
+    // feed — features/viewer.js): the reconnect resync and SERVER_RESTARTED
+    // call refresh() straight, and renderHistory would delete the bubble she
+    // is still filling. 2026-09-15.
+    if (document.querySelector('#chat-container .message.editing')
+            || document.getElementById('streaming-message')) {
         _heldRefresh = true;
         return { hist: null, len: lastLen };
     }
@@ -226,6 +232,7 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
 
 export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
     console.log(`[REGEN DEBUG] Starting regen at index ${idx}`);
+    let viewer = false;
     try {
         console.log('[REGEN DEBUG] Fetching history...');
         const hist = await api.fetchHistory();
@@ -341,6 +348,17 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     ui.showToast(e.message, 'error');
                     return;
                 }
+                if (e.feedLost) {
+                    // Server-owned turn: the reply keeps coming server-side.
+                    // Hand the button to the mirror (main.js) and let the
+                    // end-of-turn refresh paint the saved row. (The Send lane
+                    // reattaches live — features/viewer.js; regen/continue
+                    // reconcile at the end. 2026-09-15.)
+                    viewer = true;
+                    releaseOwnership();
+                    ui.showToast("Connection dropped — she's still working; the reply lands when she finishes", 'warning');
+                    return;
+                }
                 console.error('[REGEN DEBUG] Stream failed:', e.message);
                 streamOk && ui.cancelStreaming();
                 handleError(e, 'regenerate');
@@ -390,8 +408,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         return null;
     } finally {
         console.log('[REGEN DEBUG] Finally block - hiding status and unsetting proc');
-        ui.hideStatus();
-        setProc(false);
+        if (!viewer) { ui.hideStatus(); setProc(false); }
     }
 };
 
@@ -428,6 +445,7 @@ export const autoRefresh = async (isProc, lastLen, sceneUpdateFn) => {
 // On the page the existing bubble is adopted as the streaming message, so
 // the tool half of a turn stays put and the sentence carries on in place.
 export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
+    let viewer = false;
     try {
         const hist = await api.fetchHistory();
         const clicked = hist[idx];
@@ -476,6 +494,12 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 }
             },
             async (e) => {
+                if (e.feedLost) {   // see handleRegen — the turn goes on server-side
+                    viewer = true;
+                    releaseOwnership();
+                    ui.showToast("Connection dropped — she's still working; the reply lands when she finishes", 'warning');
+                    return;
+                }
                 ui.cancelStreaming();   // keeps what was rendered; the row on disk is the truth
                 if (e.message === 'Cancelled') return;
                 if (refreshFn) await refreshFn(true);
@@ -498,7 +522,6 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
         if (e.message !== 'Cancelled') handleError(e, 'continue');
         return null;
     } finally {
-        ui.hideStatus();
-        setProc(false);
+        if (!viewer) { ui.hideStatus(); setProc(false); }
     }
 };

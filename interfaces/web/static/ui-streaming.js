@@ -432,6 +432,7 @@ export const appendStream = (chunk, scrollCallback) => {
 
 // Internal function to actually create tool accordion
 const doStartTool = (toolId, toolName, args, scrollCallback) => {
+    if (state.toolAccordions[toolId]) return;   // replayed tool_start (reattach) — already on screen
     const isPending = toolId.startsWith('pending-');
 
     // Upgrade: real tool_start arrived for an existing pending accordion
@@ -650,6 +651,29 @@ export const cancelStreaming = () => {
         }
     }
 
+    streamMsg = null;
+    streamContent = '';
+    resetState();
+};
+
+// The turn goes on server-side but THIS bubble stops being live — the tab
+// lost its feed and either reattached past the ring horizon (resync) or the
+// typing mirror is finalizing for it. Finalize what's rendered, no
+// "cancelled" marker (nothing was cancelled); the end-of-turn refresh paints
+// the saved row. 2026-09-15.
+export const detachStreaming = () => {
+    _streamId++;
+    const msg = document.getElementById('streaming-message');
+    if (msg) {
+        msg.removeAttribute('id');
+        delete msg.dataset.streaming;
+        const contentDiv = msg.querySelector('.message-content');
+        if (contentDiv) {
+            contentDiv.querySelectorAll('.accordion-think.streaming').forEach(acc => acc.classList.remove('streaming'));
+            contentDiv.querySelectorAll('.accordion-tool.loading').forEach(acc => acc.remove());
+            wrapImageGalleries(contentDiv);
+        }
+    }
     streamMsg = null;
     streamContent = '';
     resetState();

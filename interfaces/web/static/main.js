@@ -629,7 +629,12 @@ function initEventBus() {
     eventBus.on(eventBus.Events.AI_TYPING_END, (data) => {
         if (_notMine(data)) return;
         console.log('[EventBus] AI typing ended');
-        if (_mirrored()) { ui.hideStatus(); setProc(false); }
+        if (_mirrored()) {
+            ui.hideStatus(); setProc(false);
+            // A bubble left live by a tab that lost its feed (features/
+            // viewer.js) finalizes here so the refresh below can paint the row.
+            if (document.getElementById('streaming-message')) ui.detachStreaming();
+        }
         debouncedRefresh();
     });
 
@@ -638,10 +643,12 @@ function initEventBus() {
     // longer holds. Release direction only — is_streaming aggregates phone /
     // background streams too, so it can't arm a fresh tab safely.
     eventBus.on('bus_connected', async () => {
-        if (!_mirrored()) return;
+        if (!_mirrored() && !_voiceTurnActive) return;
         try {
             const st = await fetchStatus();
-            if (st && !st.is_streaming && _mirrored()) {
+            if (st && !st.is_streaming && (_mirrored() || _voiceTurnActive)) {
+                _voiceTurnActive = false;   // a voice turn whose end we missed (SSE was down)
+                if (document.getElementById('streaming-message')) ui.detachStreaming();
                 ui.hideStatus();
                 setProc(false);
                 refresh(false);
@@ -933,6 +940,10 @@ function initEventBus() {
     // Server restart detection — full state resync
     eventBus.on(eventBus.Events.SERVER_RESTARTED, async () => {
         console.log('[Main] Server restarted — full resync');
+        // Whatever was streaming died with the server: finalize the bubble
+        // (nothing to reattach to) and release a mirrored button.
+        if (document.getElementById('streaming-message')) ui.detachStreaming();
+        if (_mirrored()) { ui.hideStatus(); setProc(false); }
         await refreshInitData();
         await populateChatDropdown();
         await refresh(false);

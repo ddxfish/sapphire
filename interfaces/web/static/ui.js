@@ -676,6 +676,10 @@ export const cancelStreaming = () => {
     Streaming.cancelStreaming();
 };
 
+export const detachStreaming = () => {
+    Streaming.detachStreaming();
+};
+
 export const hasVisibleContent = () => {
     return Streaming.hasVisibleContent();
 };

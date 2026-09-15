@@ -178,12 +178,9 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     stream.operator_lane = True   # a human typed this (talk-stamp + vault touch ride)
     system.web_active_inc()
 
-    # Release exactly once, from whichever side runs first. The generator's
-    # finally covers the normal path; the response background task covers the
-    # leak path -- a client that disconnects before the body iterator ever
-    # starts would leave the exclusive registration behind and 409 the chat
-    # until restart (S1 #4, hunt 2026-08-30). end_stream is idempotent;
-    # web_active_dec is a counter, hence the once-guard.
+    # Release exactly once (end_stream is idempotent; web_active_dec is a
+    # counter). Fires from the runner thread when the TURN ends — never when a
+    # viewer leaves. Server-owned turns, 2026-09-15.
     import threading as _threading
     _rel_lock = _threading.Lock()
     _released = [False]
@@ -196,107 +193,78 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
         system.llm_chat.end_stream(sid, active_chat)
         system.web_active_dec()
 
-    # ONE Context for the whole engine run (F1, 2026-09-08). Starlette drives
-    # a sync generator through iterate_in_threadpool, and anyio runs every
-    # next() in a fresh COPY of the request context — so a ContextVar set
-    # inside the engine (the A1 stream-brain override that pins a by-name
-    # turn to its chat) evaporated after the slice that set it: the user
-    # row landed in the named chat, the LLM loop and the final save ran on
-    # the active pointer, and the reset token raised "created in a
-    # different Context" (swallowed). The phone driver never saw it — it
-    # consumes the generator in one thread. Running every next() (and the
-    # close) through the same Context object keeps the engine's ContextVars
-    # alive for the turn; the event-loop side is untouched.
-    import contextvars as _cv
-    _engine_ctx = _cv.copy_context()
+    # SERVER-OWNED TURN (record tmp/server-owned-turns-plan.md). The engine
+    # runs on its own thread inside ONE Context from here on; this response is
+    # a VIEWER of it. The phone locking, the tab closing, a proxy timing out —
+    # a viewer leaving never touches the engine. Before this, Starlette drove
+    # the generator through the HTTP body: Brave dropping the socket on screen
+    # lock closed the engine mid-turn and its finally wrote "[Cancelled during
+    # tool execution]" with nobody pressing Stop. Stop is /api/cancel; a tab
+    # that lost its feed reattaches via /api/chat/attach `since` its last seq.
+    from core.chat.turn import Turn
+    try:
+        gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message,
+                                 images=images, files=files, continue_from=continue_from)
+        turn = Turn(stream, gen, on_end=_release, label=f"web:{active_chat}")
+        viewer = turn.attach(audio=True)   # BEFORE start: a fast engine must not outrun its first viewer
+        turn.start()
+    except Exception:
+        _release()
+        raise
+    return _viewer_response(turn, viewer)
 
+
+def _sse_line(event):
+    """One wire line per engine event — the SAME shapes the route always sent
+    (the browser reader and the route tests hold them); `seq` rides every line
+    so a viewer can reattach `since` it."""
+    t = event.get("type")
+    if t == "final":
+        return None         # terminal blob for blocking consumers; SSE clients streamed it
+    if t == "turn_end":
+        if event.get("error"):
+            out = {"error": event["error"]}
+        elif event.get("cancelled"):
+            out = {"cancelled": True}
+        else:
+            out = {"done": True, "ephemeral": bool(event.get("ephemeral"))}
+    elif t == "stream_started":
+        out = {"type": "stream_started"}
+    elif t == "iteration_start":
+        out = {"type": "iteration_start", "iteration": event.get("iteration", 1)}
+    elif t == "content":
+        out = {"type": "content", "text": event.get("text", "")}
+    elif t == "tool_pending":
+        out = {"type": "tool_pending", "name": event.get("name"), "index": event.get("index", 0)}
+    elif t == "tool_start":
+        out = {"type": "tool_start", "id": event.get("id"), "name": event.get("name"), "args": event.get("args", {})}
+    elif t == "tool_end":
+        out = {"type": "tool_end", "id": event.get("id"), "name": event.get("name"),
+               "result": event.get("result", ""), "error": event.get("error", False)}
+    elif t == "reload":
+        out = {"type": "reload"}
+    elif t == "notice":
+        out = {"type": "notice", "message": event.get("message", ""), "severity": event.get("severity", "warning")}
+    else:
+        out = dict(event)   # llm_done, tts_*, resync, anything new — as-is
+    if event.get("seq") is not None:
+        out["seq"] = event["seq"]
+    return f"data: {json.dumps(out)}\n\n"
+
+
+def _viewer_response(turn, viewer):
+    """SSE body over one viewer. Its finally only detaches — the turn goes on."""
     def generate():
-        gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files, continue_from=continue_from)
         try:
-            chunk_count = 0
-            while True:
-                try:
-                    event = _engine_ctx.run(next, gen)
-                except StopIteration:
-                    break
-                # Past llm_done the row is written: forward the tail as-is
-                # (the pump's own cancel_check bails it; `done` is withheld
-                # below and the browser's belt finalizes audio). A cancel
-                # in the gap before llm_done was forwarded painted
-                # "⊘ Cancelled" over a saved reply (E1#7).
-                if stream.cancel_flag and not stream.llm_done:
-                    logger.info(f"STREAMING CANCELLED at chunk {chunk_count}")
-                    yield f"data: {json.dumps({'cancelled': True})}\n\n"
-                    break
-
-                if event:
-                    chunk_count += 1
-
-                    if isinstance(event, dict):
-                        event_type = event.get("type")
-
-                        if event_type == "stream_started":
-                            yield f"data: {json.dumps({'type': 'stream_started'})}\n\n"
-                        elif event_type == "iteration_start":
-                            yield f"data: {json.dumps({'type': 'iteration_start', 'iteration': event.get('iteration', 1)})}\n\n"
-                        elif event_type == "content":
-                            yield f"data: {json.dumps({'type': 'content', 'text': event.get('text', '')})}\n\n"
-                        elif event_type == "tool_pending":
-                            yield f"data: {json.dumps({'type': 'tool_pending', 'name': event.get('name'), 'index': event.get('index', 0)})}\n\n"
-                        elif event_type == "tool_start":
-                            yield f"data: {json.dumps({'type': 'tool_start', 'id': event.get('id'), 'name': event.get('name'), 'args': event.get('args', {})})}\n\n"
-                        elif event_type == "tool_end":
-                            yield f"data: {json.dumps({'type': 'tool_end', 'id': event.get('id'), 'name': event.get('name'), 'result': event.get('result', ''), 'error': event.get('error', False)})}\n\n"
-                        elif event_type == "reload":
-                            yield f"data: {json.dumps({'type': 'reload'})}\n\n"
-                        elif event_type == "notice":
-                            yield f"data: {json.dumps({'type': 'notice', 'message': event.get('message', ''), 'severity': event.get('severity', 'warning')})}\n\n"
-                        elif event_type == "llm_done":
-                            # LLM half over, history row written — the browser
-                            # flips Stop→Send + paints metrics on this; the
-                            # streaming-TTS tail follows on the same body.
-                            yield f"data: {json.dumps(event)}\n\n"
-                        elif event_type == "final":
-                            # Terminal blob for blocking consumers (LLMChat.chat)
-                            # — SSE clients already streamed the content; don't
-                            # re-send the whole turn over the wire.
-                            pass
-                        else:
-                            yield f"data: {json.dumps(event)}\n\n"
-                    else:
-                        if '<<RELOAD_PAGE>>' in str(event):
-                            yield f"data: {json.dumps({'type': 'reload'})}\n\n"
-                        else:
-                            yield f"data: {json.dumps({'type': 'content', 'text': str(event)})}\n\n"
-
-            if not stream.cancel_flag:
-                ephemeral = stream.ephemeral
-                logger.info(f"STREAMING COMPLETE: {chunk_count} chunks, ephemeral={ephemeral}, chat={active_chat!r}")
-                yield f"data: {json.dumps({'done': True, 'ephemeral': ephemeral})}\n\n"
-
-        except ConnectionError as e:
-            logger.warning(f"STREAMING: {e}")
-            from core.chat.chat import friendly_llm_error
-            msg = friendly_llm_error(e) or str(e)
-            yield f"data: {json.dumps({'error': msg})}\n\n"
-        except Exception as e:
-            logger.error(f"STREAMING ERROR: {e}", exc_info=True)
-            from core.chat.chat import friendly_llm_error
-            msg = friendly_llm_error(e) or str(e)
-            yield f"data: {json.dumps({'error': msg})}\n\n"
+            for event in viewer:
+                line = _sse_line(event)
+                if line:
+                    yield line
+            if viewer.dropped:
+                logger.warning(f"[CHAT-STREAM] viewer of {turn.label} dropped (too far behind) — the browser reattaches")
         finally:
-            # A cancel `break` above leaves the engine generator suspended
-            # with its finally (tool-cycle close, cleanup writes) pending
-            # until GC -- which could land AFTER a new turn started on this
-            # chat. close() forces it to run NOW, before the registration is
-            # released (S1 #1 mitigation; full fix = stream-lifecycle session).
-            try:
-                _engine_ctx.run(gen.close)   # the engine's finally runs in ITS context (override reset)
-            except Exception as e:
-                logger.warning(f"[CHAT-STREAM] engine generator close failed: {e}")
-            _release()
+            turn.detach(viewer)
 
-    from starlette.background import BackgroundTask
     return StreamingResponse(
         generate(),
         media_type='text/event-stream',
@@ -304,9 +272,38 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no'
-        },
-        background=BackgroundTask(_release)
+        }
     )
+
+
+@router.post("/api/chat/attach")
+async def handle_chat_attach(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Reattach a viewer to the live turn on a chat (server-owned turns).
+
+    {chat?: name, since?: seq}. Replays the turn's ring exact-once after
+    `since`, then follows live on the same wire format as /api/chat/stream —
+    text only: audio is never replayed (the tab heard nothing while away; the
+    browser speaks the finished reply once). 204 = no live turn on that chat
+    (it ended while the tab was away — refresh history)."""
+    data = await request.json() or {}
+    chat = str(data.get('chat') or '').strip() or None
+    try:
+        since = int(data['since']) if data.get('since') is not None else None
+    except (TypeError, ValueError):
+        since = None
+    _sm = system.llm_chat.session_manager
+    if chat:
+        if _sm.is_chat_hidden(chat):
+            return JSONResponse({"error": f"Chat '{chat}' is sealed in a locked vault."}, status_code=409)
+        if _sm.read_chat_settings(chat) is None:
+            return JSONResponse({"error": f"Chat '{chat}' not found."}, status_code=404)
+    else:
+        chat = _sm.get_active_chat_name()
+    turn = system.llm_chat.live_turn(chat)
+    if turn is None:
+        return Response(status_code=204)
+    logger.info(f"[CHAT-ATTACH] viewer rejoining '{chat}' since seq {since}")
+    return _viewer_response(turn, turn.attach(since=since, audio=False))
 
 
 @router.post("/api/cancel")
