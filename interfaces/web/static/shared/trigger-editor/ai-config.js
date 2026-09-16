@@ -125,10 +125,11 @@ export function renderAIConfig(t, data, opts = {}) {
                             ${(() => {
                                 // Prompt-specific missing handler: a dangling
                                 // name that's a REFERENCED vault entry reads
-                                // "🗝 (vault)" — asleep, not broken.
+                                // "🗝 vault prompt (locked)" — asleep, not
+                                // broken; the name never renders sealed.
                                 if (!t.prompt || t.prompt === 'default' || prompts.some(p => p.name === t.prompt)) return '';
                                 const label = (data.vaultRefs || {})[t.prompt]
-                                    ? `${_esc(t.prompt)} \u{1F5DD} (vault)` : `${_esc(t.prompt)} (missing)`;
+                                    ? '\u{1F5DD} vault prompt (locked)' : `${_esc(t.prompt)} (missing)`;
                                 return `<option value="${_esc(t.prompt)}" selected>${label}</option>`;
                             })()}
                             ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`).join('')}

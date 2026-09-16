@@ -41,6 +41,25 @@ def _vault_sealed() -> bool:
         logger.warning(f"vault state unreadable — sealing private chats (fail closed): {e}")
         return True
 
+
+def sealed_prompt_name(name) -> bool:
+    """True when `name` is a vault prompt asleep behind a LOCKED vault. The
+    refs index is the one sealed-state oracle for vault names (ruling C):
+    such a name is offered nowhere while sealed and refs_stamp itself calls a
+    sealed stamp "a bug, not a feature" — so every chat-settings write funnel
+    refuses it, and the routes turn the refusal into an honest 409. Found
+    2026-09-15: a sidebar save landing on the vault-eviction chat deposited a
+    private chat's prompt name in a public row. An unreadable index answers
+    False — refusing every prompt write while sealed would be the bigger
+    failure; the landing apply's runtime fallback still handles a stale name."""
+    if not name or not _vault_sealed():
+        return False
+    try:
+        from core import prompt_vault
+        return name in prompt_vault.refs_names()
+    except Exception:
+        return False
+
 # Static (non-scope) system defaults for chat settings.
 # Scope defaults are merged in dynamically by get_system_defaults() from SCOPE_REGISTRY.
 # Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
@@ -4696,6 +4715,10 @@ class ChatSessionManager:
                                    "chat changed since the caller checked "
                                    "(eviction?)")
                     return False
+                if sealed_prompt_name(settings.get('prompt')):
+                    logger.warning("[VAULT] settings write refused — prompt "
+                                   "names a sealed vault prompt")
+                    return False
                 was_priv = bool(self.current_settings.get('private_chat'))
                 new_priv = bool(settings.get('private_chat', was_priv))
                 # Ruling F1 refusal LIFTED (v1.3, 2026-08-15): game/story
@@ -4763,6 +4786,10 @@ class ChatSessionManager:
                 # Sealed vault: legacy plaintext private chats = absent too.
                 if s.get('private_chat') and chat_name != self.active_chat_name \
                         and _vault_sealed():
+                    return False
+                if sealed_prompt_name(patch.get('prompt')):
+                    logger.warning("[VAULT] settings write refused — prompt "
+                                   "names a sealed vault prompt")
                     return False
                 was_priv = bool(s.get('private_chat'))
                 new_priv = bool(patch.get('private_chat', was_priv))

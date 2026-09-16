@@ -1587,6 +1587,16 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
                 # 409 instead.)
                 logger.warning(f"privacy-required check on settings PUT skipped: {e}")
 
+        # A sealed vault name can't be stamped on ANY chat (store funnels
+        # refuse too; this is the honest message). Name kept out of the
+        # detail — the toast shouldn't repeat a sealed name.
+        from core.chat.history import sealed_prompt_name
+        if sealed_prompt_name(new_settings.get('prompt')):
+            raise HTTPException(
+                status_code=409,
+                detail="That prompt is asleep in the locked vault — unlock it, "
+                       "or pick another prompt")
+
         if chat_name != session_manager.get_active_chat_name():
             # Non-active chats write straight to storage — same path the Twilio
             # daemon uses to configure call chats it never activates. No live

@@ -27,6 +27,7 @@ let sidebarLoaded = false;
 let _saveInFlight = 0;
 let saveTimer = null;
 let pendingSaveChatName = null;  // captured at debounce schedule time, not fire time
+let pendingPatch = {};           // {key: value} the user actually changed, captured at gesture time
 let llmProviders = [];
 let llmMetadata = {};
 let personasList = [];
@@ -36,6 +37,9 @@ let _docClickHandler = null;
 let _personaHandler = null;
 
 const SAVE_DEBOUNCE = 500;
+// One label for a prompt asleep in the locked vault — the name itself never
+// renders while sealed (personas.js / trigger editor use the same string).
+const SEALED_PROMPT_LABEL = '\u{1F5DD} vault prompt (locked)';
 
 // Soft sidebar refresh for bus ECHOES (DOM-refresh hunt, 2026-09-08). Seven
 // doors repainted the sidebar — her prompt_edit / switch_model tools publish
@@ -344,7 +348,7 @@ export default {
                 const active = btn.dataset.active !== 'true';
                 btn.dataset.active = active;
                 btn.classList.toggle('active', active);
-                debouncedSave(container);
+                debouncedSave(container, keysFor(btn));
             });
         });
 
@@ -382,7 +386,7 @@ export default {
                     const toggle = container.querySelector('#sb-spice-toggle');
                     if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
                 }
-                debouncedSave(container);
+                debouncedSave(container, keysFor(el));
             };
             // Both 'change' (selects, checkboxes, color) and 'input' (range sliders, textareas)
             sidebarRoot.addEventListener('change', handleSidebarInput);
@@ -718,14 +722,15 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
             ).join('');
             setSelect(promptSel, settings.prompt || 'sapphire');
             // Dangling vault name (locked): setSelect synthesized a bare
-            // option — label it so the user knows the prompt is asleep,
-            // not gone. Referenced names are the one surface allowed to
-            // show while sealed (refs index, ruling C).
+            // option — relabel it WITHOUT the name (Krem's ruling 2026-09-15,
+            // amending ruling C: a sealed vault name never renders). The
+            // option VALUE keeps the setting so it heals on unlock; the
+            // per-key save never ships an untouched select.
             const vrefs = init?.prompts?.vault_refs || {};
             const cur = settings.prompt;
             if (cur && cur in vrefs && !init.prompts.list.some(p => p.name === cur)) {
                 const opt = [...promptSel.options].find(o => o.value === cur);
-                if (opt) opt.textContent = `${cur} \u{1F5DD} (vault)`;
+                if (opt) opt.textContent = SEALED_PROMPT_LABEL;
             }
         }
 
@@ -885,21 +890,59 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
     }
 }
 
-function debouncedSave(container) {
-    clearTimeout(saveTimer);
-    // CAPTURE the chat name NOW, before any chat switch. When the debounce fires
-    // (or flushPendingSave runs during a chat switch), chatSelect.value may have
-    // already moved to the new chat, but the save belongs to the OLD chat.
+// The setting key(s) a sidebar control owns. A save ships ONLY the keys the
+// user touched, with the values captured at the gesture — never a snapshot
+// of the whole sidebar (Prime, 2026-09-15): after the vault-lock eviction
+// chat-select had already moved to the landing chat while the seven-fetch
+// repaint hadn't landed, so the first click shipped the evicted PRIVATE
+// chat's paint (prompt name, custom context, ghost context) onto the public
+// landing chat. R5 couldn't catch it — the target name was right; the
+// VALUES were another chat's. Unmapped controls (plugin accordions) save
+// nothing here — they own their own writes.
+const _KEY_BY_ID = {
+    'sb-prompt': ['prompt'], 'sb-toolset': ['toolset'], 'sb-spice-set': ['spice_set'],
+    'sb-voice': ['voice'], 'sb-pitch': ['pitch'], 'sb-speed': ['speed'],
+    'sb-spice-toggle': ['spice_enabled'], 'sb-spice-turns': ['spice_turns'],
+    'sb-datetime-toggle': ['inject_datetime'],
+    'sb-custom-context': ['custom_context'], 'sb-ghost-context': ['ghost_context'],
+    'sb-llm-primary': ['llm_primary', 'llm_model'],
+    'sb-llm-model': ['llm_model'], 'sb-llm-model-custom': ['llm_model'],
+    'sb-rag-context': ['rag_context'],
+};
+function keysFor(el) {
+    const id = el?.id || '';
+    if (_KEY_BY_ID[id]) return _KEY_BY_ID[id];
+    const m = /^sb-(.+)-scope$/.exec(id);   // shared/scope-dropdowns.js ids
+    return m ? [`${m[1]}_scope`] : [];
+}
+
+function debouncedSave(container, keys = []) {
+    if (!keys.length) return;
+    // CAPTURE NOW — the chat name (R8) AND the changed values. The fire
+    // sends this patch as captured, never a re-read of the DOM: a repaint
+    // between schedule and fire must not change what the gesture meant.
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
-    pendingSaveChatName = chatSelect?.value || null;
+    const chatNow = chatSelect?.value || null;
+    if (saveTimer && pendingSaveChatName && chatNow !== pendingSaveChatName) {
+        // The chat moved under an armed window (a remote switch, an
+        // eviction). The old chat's sub-second patch is dropped rather than
+        // written anywhere it could land wrong.
+        console.warn(`[SIDEBAR] pending save for '${pendingSaveChatName}' dropped — chat moved to '${chatNow}'`);
+        pendingPatch = {};
+    }
+    clearTimeout(saveTimer);
+    pendingSaveChatName = chatNow;
+    Object.assign(pendingPatch, pickSettings(container, keys));
     // Vault hunt R8: clear the pair AT fire time. A fired timer that left
     // saveTimer/pendingSaveChatName standing let a later flushPendingSave
-    // re-fire a full sidebar payload at a name captured chats ago.
+    // re-fire a payload at a name captured chats ago.
     saveTimer = setTimeout(() => {
         saveTimer = null;
         const n = pendingSaveChatName;
+        const patch = pendingPatch;
         pendingSaveChatName = null;
-        saveSettings(container, n);
+        pendingPatch = {};
+        saveSettings(container, n, patch);
     }, SAVE_DEBOUNCE);
 }
 
@@ -908,20 +951,23 @@ export function cancelPendingSave() {
     clearTimeout(saveTimer);
     saveTimer = null;
     pendingSaveChatName = null;
+    pendingPatch = {};
 }
 
 /** Flush any pending debounced save — fires the save synchronously for the OLD chat
- *  before a chat switch proceeds. Uses the chat name captured at debounce-schedule
- *  time, NOT the current chatSelect.value (which may already point at the new chat). */
+ *  before a chat switch proceeds. Uses the chat name AND the patch captured at
+ *  debounce-schedule time, NOT the current DOM (which may already show the new chat). */
 export async function flushPendingSave() {
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
     const chatName = pendingSaveChatName;
+    const patch = pendingPatch;
     pendingSaveChatName = null;
+    pendingPatch = {};
     const container = document.getElementById('view-chat');
     if (container && chatName) {
-        try { await saveSettings(container, chatName); }
+        try { await saveSettings(container, chatName, patch); }
         catch (e) { console.warn('Flush-pending save failed:', e); }
     }
 }
@@ -1018,7 +1064,7 @@ function _renderModalMotionRow(overlay) {
     }));
 }
 
-async function saveSettings(container, chatNameOverride = null) {
+async function saveSettings(container, chatNameOverride = null, patch = null) {
     // Prefer the override (set by debouncedSave / flushPendingSave) over the live
     // chatSelect.value — the override is the chat the user was on when they made
     // the change, which may differ from the current chat if they switched fast.
@@ -1026,12 +1072,17 @@ async function saveSettings(container, chatNameOverride = null) {
     const chatName = chatNameOverride || chatSelect?.value;
     if (!chatName) return;
 
-    const settings = collectSettings(container);
+    // Per-key writes only (2026-09-15): the server MERGES a settings PUT, so
+    // a patch is complete on its own. No patch = nothing changed = no write.
+    const settings = patch || {};
+    if (!Object.keys(settings).length) return;
     _saveInFlight++;
 
     try {
         const result = await api.updateChatSettings(chatName, settings);
-        updateSendButtonLLM(settings.llm_primary, settings.llm_model);
+        if ('llm_primary' in settings || 'llm_model' in settings) {
+            updateSendButtonLLM(getVal(container, '#sb-llm-primary') || 'auto', getSelectedModel(container));
+        }
 
         // Sync toolset dropdown directly from save response.
         // The PUT response returns live toolset/function state so we update
@@ -1050,6 +1101,9 @@ async function saveSettings(container, chatNameOverride = null) {
         }
     } catch (e) {
         console.warn('Auto-save failed:', e);
+        // Never a silent persist failure: a refused prompt (asleep in the
+        // locked vault), a vanished chat, a 500 — the user hears why.
+        ui.showToast(e?.message || 'Setting not saved', 'error', 4000);
     } finally {
         _saveInFlight--;
         softSidebar.kick();   // run the echo refresh this save held back
@@ -1083,6 +1137,14 @@ function collectSettings(container) {
         ...scopeValues,
         rag_context: getVal(container, '#sb-rag-context') || 'normal'
     };
+}
+
+/** The subset of collectSettings() a gesture owns — what a save ships. */
+function pickSettings(container, keys) {
+    const all = collectSettings(container);
+    const out = {};
+    for (const k of keys) if (k in all) out[k] = all[k];
+    return out;
 }
 
 function updateModelSelector(container, providerKey, currentModel) {
@@ -1226,21 +1288,9 @@ async function refreshVoiceDropdown() {
         // Update speed slider range for new provider
         _updateSpeedRange(container, data);
         // Save the new voice to chat so backend TTS uses it immediately
-        if (voiceChanged) {
-            // Vault hunt R8: capture the name like debouncedSave does — an
-            // armed timer WITHOUT pendingSaveChatName desynced the pair, so
-            // a chat switch inside the 100ms window flushed a full foreign
-            // payload onto whatever stale name the pair still held.
-            if (saveTimer) clearTimeout(saveTimer);
-            const chatSel = document.getElementById('chat-select');
-            pendingSaveChatName = chatSel?.value || null;
-            saveTimer = setTimeout(() => {
-                saveTimer = null;
-                const n = pendingSaveChatName;
-                pendingSaveChatName = null;
-                saveSettings(container, n);
-            }, 100);
-        }
+        // One save path (was a hand-rolled R8 twin): the voice key only,
+        // captured now, name-bound like every other gesture.
+        if (voiceChanged) debouncedSave(container, ['voice']);
     } catch (e) {
         console.warn('[chat] Failed to refresh voice dropdown:', e);
     }

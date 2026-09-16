@@ -1017,6 +1017,11 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
     # private_chat through the switch (the eyeball is the only thing that
     # flips it). A persona's stored flag is ignored either direction.
     session_manager = system.llm_chat.session_manager
+    from core.chat.history import sealed_prompt_name
+    if sealed_prompt_name(settings.get('prompt')):
+        raise HTTPException(status_code=409,
+                            detail="This persona's prompt is asleep in the locked "
+                                   "vault — unlock it first")
     # R5 intent: a vault eviction between this request and the write must
     # refuse — a persona payload must never merge into the landing chat.
     _active = session_manager.get_active_chat_name()
