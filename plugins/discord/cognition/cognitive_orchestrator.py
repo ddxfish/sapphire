@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 
+from plugins.discord.conversation.ignored_channels import is_channel_ignored
 from plugins.discord.models.intentions import ReplyMessageIntention
 
 
@@ -77,6 +78,10 @@ class CognitiveOrchestrator:
             return None
         channel_id = task.get('target_id') or ''
         if not channel_id:
+            return None
+        # A task whose target is an ignored channel never posts there (H6) —
+        # greeting/outreach/sleep already check; this lane didn't.
+        if settings and is_channel_ignored(account_name, channel_id, settings):
             return None
         task_type = task.get('task_type') or 'follow_up'
         # Explicit user reminders are a promise — deliver on time even if the room

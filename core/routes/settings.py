@@ -183,57 +183,10 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # and leave N memories/knowledge rows invisible to search. Require explicit
     # `confirm_embedding_swap: true` when the swap would invalidate vectors.
     # Scout finding #3 — 2026-04-20.
+    # One gate for both doors — the single-key PUT below shares it (M-C9).
     if 'EMBEDDING_PROVIDER' in settings_dict:
-        new_provider = settings_dict['EMBEDDING_PROVIDER']
-        current_provider = settings.get('EMBEDDING_PROVIDER')
-        if new_provider and new_provider != current_provider and not data.get('confirm_embedding_swap'):
-            try:
-                from core.embeddings import integrity_report
-                # to_thread — see /api/embedding/integrity for rationale
-                # (scout #14). Same 6-select blocking scan.
-                report = await asyncio.to_thread(integrity_report)
-                tables = report.get('tables', {}) or {}
-                def _count(t):
-                    return (t.get('matching_active') or 0) + (t.get('legacy_unstamped') or 0)
-                affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people'))
-                if affected > 0:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "error": "embedding_swap_requires_confirmation",
-                            "affected_vectors": affected,
-                            "message": (
-                                f"Swapping EMBEDDING_PROVIDER would make {affected} stored "
-                                "vectors invisible to semantic search until re-embedded. "
-                                "Resubmit with `confirm_embedding_swap: true` to proceed."
-                            ),
-                        },
-                    )
-            except HTTPException:
-                raise
-            except Exception as e:
-                # 2026-04-22 fix C — fail CLOSED, not open. Pre-fix, a transient
-                # integrity_report failure (DB busy >10s during re-embed/VACUUM/
-                # heavy-search) caused the gate to silently pass, proceeding with
-                # a destructive swap the user would have refused if the warning
-                # had rendered. The only cases where that's acceptable are ones
-                # the caller explicitly opts into via `confirm_embedding_swap`.
-                logger.error(f"Embedding swap gate: integrity check failed: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "error": "embedding_swap_gate_unavailable",
-                        "reason": str(e),
-                        "message": (
-                            "Cannot verify swap safety — integrity check failed "
-                            "(DB may be busy with re-embed, VACUUM, or heavy "
-                            "search). Wait for the busy operation to finish, or "
-                            "resubmit with `confirm_embedding_swap: true` to "
-                            "bypass the gate if you accept the risk of "
-                            "invalidating stored vectors."
-                        ),
-                    },
-                )
+        await _guard_embedding_swap(settings, settings_dict['EMBEDDING_PROVIDER'],
+                                    bool(data.get('confirm_embedding_swap')))
     results = []
     # Defer provider switches until after all settings are applied
     # (e.g. API key must be in config before provider init reads it)
@@ -248,18 +201,11 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # silently. These get added to persisted_keys in the deferred-action loop
     # only on successful switch. Scout race #4 — 2026-04-21.
     _PROVIDER_SWITCH_KEYS = {'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER'}
-    # Service API keys that should route to credentials manager
-    _SERVICE_CRED_MAP = {
-        'STT_FIREWORKS_API_KEY': 'stt_fireworks',
-        'TTS_ELEVENLABS_API_KEY': 'tts_elevenlabs',
-        'EMBEDDING_API_KEY': 'embedding',
-    }
     for key, value in settings_dict.items():
         try:
-            # Route service API keys to credentials, not settings.json
-            if key in _SERVICE_CRED_MAP and value and isinstance(value, str) and value.strip():
-                from core.credentials_manager import credentials
-                credentials.set_service_api_key(_SERVICE_CRED_MAP[key], value.strip())
+            # Route service API keys to credentials, not settings.json (one
+            # funnel with the single-key PUT — broadsword H11).
+            if _store_service_key(key, value):
                 results.append({"key": key, "status": "success", "tier": "hot"})
                 continue
             tier = settings.validate_tier(key)
@@ -512,6 +458,88 @@ async def get_setting(key: str, request: Request, _=Depends(require_login)):
     return {"key": key, "value": value, "tier": tier, "user_override": is_user_override}
 
 
+# Service API keys live in the credentials manager, never settings.json
+# (SettingsManager.save blanks them on disk). ONE funnel for the batch route
+# AND the single-key PUT — the setup wizard saves through the PUT, which had
+# no branch: "✓ Saved", worked for the session, gone after restart, never in
+# credentials (broadsword H11).
+_SERVICE_CRED_MAP = {
+    'STT_FIREWORKS_API_KEY': 'stt_fireworks',
+    'TTS_ELEVENLABS_API_KEY': 'tts_elevenlabs',
+    'EMBEDDING_API_KEY': 'embedding',
+}
+
+
+def _store_service_key(key, value) -> bool:
+    """True when `key` is a service API key and was stored in credentials."""
+    if key in _SERVICE_CRED_MAP and value and isinstance(value, str) and value.strip():
+        from core.credentials_manager import credentials
+        credentials.set_service_api_key(_SERVICE_CRED_MAP[key], value.strip())
+        return True
+    return False
+
+
+async def _guard_embedding_swap(settings, new_provider, confirmed: bool):
+    """Server-side gate for an EMBEDDING_PROVIDER swap. The JS shows a
+    count-of-affected confirmation dialog, but that gate is client-side only —
+    a direct curl, a stale browser tab, or a toolmaker-generated plugin could
+    silently swap the provider and leave N memories/knowledge rows invisible
+    to search. Require explicit `confirm_embedding_swap: true` when the swap
+    would invalidate vectors. Scout finding #3 — 2026-04-20. Shared by the
+    batch route and the single-key PUT (broadsword M-C9: the PUT was the hole
+    the comment above describes)."""
+    current_provider = settings.get('EMBEDDING_PROVIDER')
+    if not new_provider or new_provider == current_provider or confirmed:
+        return
+    try:
+        from core.embeddings import integrity_report
+        # to_thread — see /api/embedding/integrity for rationale
+        # (scout #14). Same 6-select blocking scan.
+        report = await asyncio.to_thread(integrity_report)
+        tables = report.get('tables', {}) or {}
+        def _count(t):
+            return (t.get('matching_active') or 0) + (t.get('legacy_unstamped') or 0)
+        affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people'))
+        if affected > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "embedding_swap_requires_confirmation",
+                    "affected_vectors": affected,
+                    "message": (
+                        f"Swapping EMBEDDING_PROVIDER would make {affected} stored "
+                        "vectors invisible to semantic search until re-embedded. "
+                        "Resubmit with `confirm_embedding_swap: true` to proceed."
+                    ),
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 2026-04-22 fix C — fail CLOSED, not open. Pre-fix, a transient
+        # integrity_report failure (DB busy >10s during re-embed/VACUUM/
+        # heavy-search) caused the gate to silently pass, proceeding with
+        # a destructive swap the user would have refused if the warning
+        # had rendered. The only cases where that's acceptable are ones
+        # the caller explicitly opts into via `confirm_embedding_swap`.
+        logger.error(f"Embedding swap gate: integrity check failed: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "embedding_swap_gate_unavailable",
+                "reason": str(e),
+                "message": (
+                    "Cannot verify swap safety — integrity check failed "
+                    "(DB may be busy with re-embed, VACUUM, or heavy "
+                    "search). Wait for the busy operation to finish, or "
+                    "resubmit with `confirm_embedding_swap: true` to "
+                    "bypass the gate if you accept the risk of "
+                    "invalidating stored vectors."
+                ),
+            },
+        )
+
+
 @router.put("/api/settings/{key}")
 async def update_setting(key: str, request: Request, _=Depends(require_login)):
     """Update a setting."""
@@ -526,6 +554,12 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     # Don't overwrite real secrets with masked placeholder
     if value == '••••••••':
         return {"status": "success", "key": key, "value": value, "tier": settings.validate_tier(key), "persisted": False}
+    # Same two rules the batch route applies (H11 / M-C9): service keys go
+    # to credentials, an embedding swap must be confirmed.
+    if _store_service_key(key, value):
+        return {"status": "success", "key": key, "value": '••••••••', "tier": "hot", "persisted": True}
+    if key == 'EMBEDDING_PROVIDER':
+        await _guard_embedding_swap(settings, value, bool(data.get('confirm_embedding_swap')))
     persist = data.get('persist', True)
     tier = settings.validate_tier(key)
     # Provider-switch keys: defer persist until after switch verifies. Pre-fix,

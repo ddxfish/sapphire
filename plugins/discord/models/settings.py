@@ -123,7 +123,6 @@ class VoiceSettings:
     enabled: bool = False
     transcription_enabled: bool = False
     speaking_enabled: bool = False
-    emergency_disabled: bool = False
     mode: str = 'listen_only'
     join_targets: list = field(default_factory=list)
     min_silence_seconds: float = 1.5

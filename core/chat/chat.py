@@ -564,42 +564,11 @@ class LLMChat:
         extra_toolsets unions module/toolset function sets on top — same
         semantics as update_enabled_functions (chat setting `extra_toolsets`;
         'none' + extras is the story engine's default)."""
-        fm = self.function_manager
-        if (not toolset_name or toolset_name == "none") and not extra_toolsets:
-            return None
+        # ONE rule, in the manager (broadsword H12): this mirror skipped the
+        # hidden-tool filter, so every stream-brain lane with toolset "all"
+        # offered the librarian ritual verbs + elevate_toolset to the model.
         try:
-            from core.toolsets import toolset_manager
-
-            def _fn_names(name):
-                if name in getattr(fm, "function_modules", {}):
-                    return fm.function_modules[name]["available_functions"]
-                if toolset_manager.toolset_exists(name):
-                    return toolset_manager.get_toolset_functions(name)
-                return [name]
-
-            if not toolset_name or toolset_name == "none":
-                tools = []
-            elif toolset_name == "all":
-                tools = list(fm.all_possible_tools)
-            else:
-                fn_set = set(_fn_names(toolset_name))
-                tools = [t for t in fm.all_possible_tools if t["function"]["name"] in fn_set]
-            if extra_toolsets:
-                have = {t["function"]["name"] for t in tools}
-                extra_set = set()
-                for name in extra_toolsets:
-                    extra_set |= set(_fn_names(name))
-                extra_set -= have
-                tools += [t for t in fm.all_possible_tools if t["function"]["name"] in extra_set]
-            if hasattr(fm, "_apply_mode_filter"):
-                tools = fm._apply_mode_filter(tools)
-            # Settings gate: same pair ExecutionContext._resolve_tools applies.
-            # Without it, stream-brain streams (phone calls, driver/daemon
-            # targets) saw gated tools (switch_model et al) with their
-            # Settings > Tools toggles OFF. Silent-default class. 2026-08-17.
-            if hasattr(fm, "_apply_settings_gate"):
-                tools = fm._apply_settings_gate(tools)
-            return tools or None
+            return self.function_manager.resolve_tools(toolset_name, extra_toolsets)
         except Exception as e:
             logger.warning(f"_resolve_toolset_tools('{toolset_name}') failed: {e}")
             return None

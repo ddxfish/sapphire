@@ -1047,26 +1047,84 @@ class FunctionManager:
             self._union_extra_toolsets(extra_toolsets)
 
     def _union_extra_toolsets(self, extras: list):
-        from core.toolsets import toolset_manager
         with self._tools_lock:
             have = {t['function']['name'] for t in self._enabled_tools}
-            for name in extras:
-                try:
-                    if name in self.function_modules:
-                        fn_names = self.function_modules[name]['available_functions']
-                    elif toolset_manager.toolset_exists(name):
-                        fn_names = toolset_manager.get_toolset_functions(name)
-                    else:
-                        logger.warning(f"extra_toolsets: '{name}' is no known module/toolset — skipped")
-                        continue
-                    fn_set = set(fn_names) - have
-                    if fn_set:
-                        self._enabled_tools.extend(
-                            t for t in self.all_possible_tools
-                            if t['function']['name'] in fn_set)
-                        have |= fn_set
-                except Exception as e:
-                    logger.warning(f"extra_toolsets '{name}' union failed: {e}")
+            fn_set = self._extra_names(extras, have)
+            if fn_set:
+                self._enabled_tools.extend(
+                    t for t in self.all_possible_tools
+                    if t['function']['name'] in fn_set)
+
+    def resolve_tool_names(self, enabled_names: list) -> tuple:
+        """THE toolset name rule — pure, no state touched (broadsword H12).
+
+        `enabled_names` is what a chat/task setting carries: ["all"], ["none"],
+        [<module>], [<saved toolset>], [<unknown>] or an ad-hoc function list.
+        Returns (names, label, dangling):
+          names    — function names the selection resolves to
+          label    — what current_toolset_name would become
+                     ("all"/"none"/module/toolset/"custom"; "none" for dangling)
+          dangling — the unknown single name, else None
+        Hidden tools (`_hidden_tools`: librarian ritual verbs, elevate_toolset)
+        drop out of "all", a module, and an ad-hoc list; ONLY a saved toolset
+        naming them resolves them — that is intent, the others are stale state.
+        The live setter and every read-only lane (stream-brain chats, cron,
+        Discord/Telegram/email auto-replies) share this; the two mirrors that
+        skipped the hidden rule offered `run_librarian` to a phone call."""
+        names = list(enabled_names or [])
+        if len(names) == 1:
+            one = names[0]
+            if one == "all":
+                return ([t['function']['name'] for t in self.all_possible_tools
+                         if t['function']['name'] not in self._hidden_tools], "all", None)
+            if one == "none":
+                return ([], "none", None)
+            if one in self.function_modules:
+                return ([n for n in self.function_modules[one]['available_functions']
+                         if n not in self._hidden_tools], one, None)
+            if toolset_manager.toolset_exists(one):
+                return (list(toolset_manager.get_toolset_functions(one)), one, None)
+            # Single-name input that's NOT a known toolset / module → a dangling
+            # reference (deleted toolset, plugin removed, stale chat settings).
+            # "none" is safe-by-default; the caller surfaces the bad name.
+            return ([], "none", one)
+        return ([n for n in names if n not in self._hidden_tools], "custom", None)
+
+    def _extra_names(self, extras: list, have: set) -> set:
+        """Function names an `extra_toolsets` list unions on top (module or
+        saved toolset each; unknown names skipped with a warning)."""
+        out = set()
+        for name in extras or []:
+            try:
+                if name in self.function_modules:
+                    # same hidden rule as a module named as THE toolset
+                    fn_names = [n for n in self.function_modules[name]['available_functions']
+                                if n not in self._hidden_tools]
+                elif toolset_manager.toolset_exists(name):
+                    fn_names = toolset_manager.get_toolset_functions(name)
+                else:
+                    logger.warning(f"extra_toolsets: '{name}' is no known module/toolset — skipped")
+                    continue
+                out |= set(fn_names) - have - out
+            except Exception as e:
+                logger.warning(f"extra_toolsets '{name}' union failed: {e}")
+        return out
+
+    def resolve_tools(self, toolset_name, extra_toolsets=None):
+        """READ-ONLY tool schemas for a toolset setting + extras: the same
+        names as the live setter would enable, then the mode filter and the
+        settings gate. None when nothing resolves. Used by every lane that
+        must not mutate the manager (stream-brain chats, ExecutionContext)."""
+        if (not toolset_name or toolset_name == "none") and not extra_toolsets:
+            return None
+        names, _label, dangling = self.resolve_tool_names([toolset_name] if toolset_name else ["none"])
+        if dangling:
+            logger.warning(f"resolve_tools: toolset '{dangling}' does not exist — no tools")
+        want = set(names)
+        want |= self._extra_names(extra_toolsets, want)
+        tools = [t for t in self.all_possible_tools if t['function']['name'] in want]
+        tools = self._apply_settings_gate(self._apply_mode_filter(tools))
+        return tools or None
 
     def _update_enabled_base(self, enabled_names: list):
         """Update enabled tools based on function names from config or ability name."""
@@ -1085,69 +1143,26 @@ class FunctionManager:
                     logger.info("Re-apply 'custom' with empty selection — no tools enabled")
                     return
 
-            # Determine what ability name was requested
-            requested_ability = enabled_names[0] if len(enabled_names) == 1 else "custom"
-
-            # Special case: "all" loads every function from every module
-            # (except hidden tools — those only resolve by name via a saved toolset)
-            if len(enabled_names) == 1 and enabled_names[0] == "all":
-                self.current_toolset_name = "all"
-                self._enabled_tools = [t for t in self.all_possible_tools
-                                       if t['function']['name'] not in self._hidden_tools]
-                logger.debug(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
-                return
-
-            # Special case: "none" disables all functions
-            if len(enabled_names) == 1 and enabled_names[0] == "none":
-                self.current_toolset_name = "none"
-                self._enabled_tools = []
-                logger.debug(f"Ability 'none' - all functions disabled")
-                return
-
-            # Check if this is a module ability name
-            if len(enabled_names) == 1 and enabled_names[0] in self.function_modules:
-                ability_name = enabled_names[0]
-                self.current_toolset_name = ability_name
-                module_info = self.function_modules[ability_name]
-                enabled_names = [n for n in module_info['available_functions']
-                                 if n not in self._hidden_tools]
-                logger.debug(f"Ability '{ability_name}' (module) requesting {len(enabled_names)} functions")
-
-            # Check if this is a toolset name
-            elif len(enabled_names) == 1 and toolset_manager.toolset_exists(enabled_names[0]):
-                toolset_name = enabled_names[0]
-                self.current_toolset_name = toolset_name
-                enabled_names = toolset_manager.get_toolset_functions(toolset_name)
-                logger.debug(f"Ability '{toolset_name}' (toolset) requesting {len(enabled_names)} functions")
-
-            # Single-name input that's NOT a known toolset / module → it's a
-            # dangling reference (deleted toolset, plugin removed, stale chat
-            # settings). Fall back to "none" (safe-by-default) and record the
-            # bad name so the API layer can surface a toast to the user. The
-            # subsequent chat will demonstrate the failure (no tools available)
-            # if the user ignores the toast. Old behavior silently fell through
-            # to "custom" → zero tools with no signal. 2026-05-16.
-            elif len(enabled_names) == 1:
-                bad = enabled_names[0]
+            enabled_names, label, dangling = self.resolve_tool_names(enabled_names)
+            self.current_toolset_name = label
+            if dangling:
+                # Record the bad name so the API layer can surface a toast;
+                # the next chat demonstrates the failure (no tools) if the
+                # user ignores it. Old behaviour silently fell through to
+                # "custom" → zero tools with no signal. 2026-05-16.
                 logger.warning(
-                    f"Toolset/ability '{bad}' does not exist (likely deleted or "
+                    f"Toolset/ability '{dangling}' does not exist (likely deleted or "
                     f"a stale chat setting). Falling back to 'none' — fix the "
                     f"chat's toolset setting to restore tool access."
                 )
-                self.last_dangling_toolset = bad
-                self.current_toolset_name = "none"
+                self.last_dangling_toolset = dangling
                 self._enabled_tools = []
-                logger.info(f"Fallback applied: zero tools enabled (dangling reference: {bad!r})")
+                logger.info(f"Fallback applied: zero tools enabled (dangling reference: {dangling!r})")
                 return
-
-            # Otherwise treat as direct function name list (custom).
-            # Hidden tools are filtered here too — the UI never offers them,
-            # so a hidden name in an ad-hoc list is stale state, not intent.
-            # (A SAVED toolset naming them resolves above, unfiltered.)
-            else:
-                self.current_toolset_name = "custom"
-                enabled_names = [n for n in enabled_names
-                                 if n not in self._hidden_tools]
+            if label == "none":
+                self._enabled_tools = []
+                logger.debug("Ability 'none' - all functions disabled")
+                return
 
             # Store expected count before filtering
             expected_count = len(enabled_names)
@@ -1157,7 +1172,7 @@ class FunctionManager:
                 tool for tool in self.all_possible_tools
                 if tool['function']['name'] in enabled_names
             ]
-        
+
             actual_names = [tool['function']['name'] for tool in self._enabled_tools]
             missing = set(enabled_names) - set(actual_names)
 

@@ -133,10 +133,26 @@ class ConversationDriver:
     def _on_barge_in(self):
         logger.info("[CONV] barge-in fired -> cancelling LLM + cutting audio")
         try:
-            # Scope the cancel to THIS conversation's chat — an unscoped cancel
-            # kills every live stream in the system (a phone barge-in would
-            # cancel a concurrent web-UI reply). None = active chat (local/browser).
-            self.system.cancel_generation(chat_name=self._chat_name)
+            # Scope the cancel to THIS conversation's chat. cancel_streams
+            # treats chat_name=None as EVERY stream in the process (the old
+            # comment here said "None = active chat" — it never was), so a
+            # local/browser barge-in killed a live phone call / Discord turn
+            # / cadence turn mid-sentence (broadsword H9 ×2). Resolve the
+            # active chat for the operator's own driver; if even that fails,
+            # at least spare the external (phone) chats like the web routes do.
+            chat = self._chat_name
+            exclude = None
+            if chat is None:
+                try:
+                    chat = self.system.llm_chat.session_manager.get_active_chat_name()
+                except Exception:
+                    chat = None
+                if chat is None:
+                    try:
+                        exclude = list(self.system.get_conversation_manager().external_chats())
+                    except Exception:
+                        exclude = None
+            self.system.cancel_generation(chat_name=chat, exclude_chats=exclude)
         except Exception as e:
             logger.warning(f"[CONV] barge-in cancel_generation failed: {e}")
         sink = self._active_sink

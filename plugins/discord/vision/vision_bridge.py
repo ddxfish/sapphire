@@ -27,9 +27,33 @@ class VisionBridge:
     def __init__(self, provider_client=None, http_client=None, fetch_bytes=None, trace_recorder=None, debug_logger=None):
         self.provider_client = provider_client
         self.http_client = http_client or self._post_json
-        self.fetch_bytes = fetch_bytes or self._fetch_bytes
+        self._raw_fetch = fetch_bytes or self._fetch_bytes
+        self.fetch_bytes = self._fetch_cached
+        # url -> (bytes, media_type), newest last, 8 deep. The caption lane
+        # fetches an attachment OFF the daemon loop (transport to_thread →
+        # interpret_media); seconds later the batch's payload lane wanted the
+        # same bytes and fetched them AGAIN, synchronously, ON the loop —
+        # 3 attempts with sleeps, per attachment (broadsword H5). Now the
+        # payload lane reads this cache and never fetches.
+        self._bytes_cache: dict = {}
         self.trace_recorder = trace_recorder
         self.debug_logger = debug_logger or logger
+
+    def _fetch_cached(self, source_url: str) -> tuple[bytes, str]:
+        key = str(source_url or '').strip()
+        hit = self._bytes_cache.get(key)
+        if hit is not None:
+            return hit
+        data, media_type = self._raw_fetch(key)
+        self._bytes_cache[key] = (data, media_type)
+        while len(self._bytes_cache) > 8:
+            self._bytes_cache.pop(next(iter(self._bytes_cache)))
+        return data, media_type
+
+    def cached_bytes(self, source_url: str):
+        """(bytes, media_type) if the caption lane already fetched this
+        attachment, else None. NEVER fetches — safe on the daemon loop."""
+        return self._bytes_cache.get(str(source_url or '').strip())
 
     def describe_media(
         self,

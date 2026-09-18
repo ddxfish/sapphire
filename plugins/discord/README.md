@@ -184,7 +184,7 @@ Voice features require py-cord + davey and appropriate Discord permissions. Enab
 |------|-----------|
 | `listen_only` | Join and listen; minimal processing |
 | `transcribe_only` | Transcribe speech to text |
-| `summarize_only` | Transcribe and summarize |
+| `summarize_only` | Transcribe and keep a short excerpt of the session (the first 500 characters — there is no LLM summary yet) |
 | `conversational` | Full two-way voice using Sapphire's streaming LLM + TTS |
 
 **Auto-join** polls selected voice channels every ~15s and joins when someone is present (disabled during sleep hours).
@@ -268,7 +268,7 @@ Useful API endpoints (under `/api/plugin/discord/`):
 | **Daemon not firing** | Try empty filter `{}` first; confirm the selected bot account is connected |
 | **Reactions not working** | Add Reactions permission; check Social → Reactions enabled |
 | **GIFs fail** | Media → GIF enabled + API key configured |
-| **Voice join fails** | Connect/Speak permissions; voice not emergency-disabled; not in sleep mode |
+| **Voice join fails** | Connect/Speak permissions; `voice.enabled` on; not in sleep mode |
 | **Voice transcribes but silent** | Speaking enabled; TTS streaming on in Sapphire; addressing mode may require saying the bot's name |
 | **Bot allowlist empty** | Enable Server Members Intent; refresh picker with daemon running |
 | **Proactive skipped** | Check Proactive diagnostics — wrong hour, no greeting targets, daemon offline, or channel asleep |

@@ -19,7 +19,7 @@ def test_high_irritability_blocks_voice_speak():
     )
     decision = policy.evaluate_voice_speak(intention, settings)
     assert decision['allowed'] is True
-    settings.voice.emergency_disabled = True
+    settings.voice.enabled = False   # the one switch (the emergency twin was removed, broadsword H4)
     assert policy.evaluate_voice_speak(intention, settings)['allowed'] is False
 
 

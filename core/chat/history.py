@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 import time
+import functools
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
@@ -187,12 +188,26 @@ threading.Thread(target=get_tokenizer, daemon=True, name="tiktoken-warm").start(
 
 def count_tokens(text: str) -> int:
     """Token count for budgeting. Soft-fails to an estimate rather than raising —
-    counting is telemetry, never worth crashing a chat turn over."""
+    counting is telemetry, never worth crashing a chat turn over.
+
+    Memoised per string once the tokenizer is up: the LLM trim, /api/history
+    and /api/status each tokenized the WHOLE chat every turn (three O(N)
+    passes, two of them on the event loop — broadsword H17). The keys are the
+    history's own string objects, so the cache adds no copies; 8192 entries
+    bounds the multimodal text parts it does copy."""
     if not text:
         return 0
+    if not isinstance(text, str):
+        text = str(text)
     tok = get_tokenizer()
     if tok is None:
-        return max(1, len(str(text)) // 3)
+        return max(1, len(text) // 3)     # never cached: an estimate must not outlive the warm-up
+    return _count_tokens_cached(text)
+
+
+@functools.lru_cache(maxsize=8192)
+def _count_tokens_cached(text: str) -> int:
+    tok = get_tokenizer()
     try:
         # disallowed_special=() -> count special-token strings like '<|endoftext|>'
         # as normal text instead of raising. We only use the length, never the IDs.
@@ -685,6 +700,7 @@ class ConversationHistory:
             refs.append(refs_here)
         
         # TRIMMING STEP 1: Turn-based trimming (skip if max_history is 0)
+        trimmed = False   # did either trim below pop anything? (drives the front cleanup)
         max_history = getattr(config, 'LLM_MAX_HISTORY', 30)
         if max_history > 0 and len(msgs) > max_history:
             user_count = sum(1 for m in msgs if m["role"] == "user")
@@ -699,6 +715,7 @@ class ConversationHistory:
                         removed_users += 1
                     msgs.pop(0)
                     refs.pop(0)
+                    trimmed = True
 
         # VISION WINDOW (image upgrade 2026-09-10): after the turn trim, before
         # the token trim — so the budget below sees the replayed images
@@ -731,16 +748,29 @@ class ConversationHistory:
                 for m in msgs
             )
 
-            while total_tokens > effective_limit and len(msgs) > 1:
-                removed = msgs.pop(0)
-                total_tokens -= count_message_tokens(
-                    removed.get("content", ""), include_images=True
-                )
+            if total_tokens > effective_limit:
+                # Past the limit: trim down to 85% so the FRONT of the window
+                # holds still for many turns. One-row-per-turn trimming moved
+                # the prefix every turn = a 100% Claude prompt-cache miss for
+                # the rest of the chat's life (broadsword H16c / M-L6).
+                trim_target = int(effective_limit * 0.85)
+                while total_tokens > trim_target and len(msgs) > 1:
+                    removed = msgs.pop(0)
+                    trimmed = True
+                    total_tokens -= count_message_tokens(
+                        removed.get("content", ""), include_images=True
+                    )
 
-        # Clean up orphaned tool results at the front.
-        # Trimming can remove an assistant message with tool_calls while leaving
-        # its tool_result messages behind — LLM APIs reject these.
-        while len(msgs) > 1 and msgs[0].get("role") in ("tool",):
+        # Clean up the front. Both trims above are role-blind (the turn trim
+        # stops the moment it has popped its Nth user row, the token trim pops
+        # one row at a time), so a TRIMMED window can start on an assistant
+        # row — Anthropic 400s on that — or on tool results whose tool_calls
+        # row is gone; after a trim the window always starts on a user row
+        # (broadsword H16). UNTRIMMED, only orphaned tool results go: a chat
+        # that legitimately opens on an assistant row (a phone greeting) keeps
+        # it — the Claude provider's belt handles that case on the wire.
+        _front = ("user",) if trimmed else ("assistant", "user", "system")
+        while len(msgs) > 1 and msgs[0].get("role") not in _front:
             removed = msgs.pop(0)
             if context_limit > 0:
                 total_tokens -= count_message_tokens(
@@ -3338,6 +3368,12 @@ class ChatSessionManager:
                     if 'private_chat' in settings:
                         logger.warning(f"create_chat('{safe_name}'): private_chat ignored "
                                        f"at birth — use the vault flip")
+                    # Birth is the third chat-settings funnel; the other two
+                    # refuse a sealed prompt NAME (2026-09-15). Same rule here
+                    # (broadsword M-C7). Name-free log, like its siblings.
+                    if sealed_prompt_name(extra.get('prompt')):
+                        logger.warning(f"create_chat('{safe_name}'): sealed prompt refused at birth")
+                        extra.pop('prompt', None)
                     birth = {**birth, **extra}
                 conn.execute(
                     """INSERT INTO chats (name, settings, messages, updated_at, created_at, storage_format)

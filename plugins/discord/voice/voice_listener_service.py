@@ -53,7 +53,7 @@ class VoiceListenerService:
             if self.settings_store
             else None
         )
-        if settings and (not settings.voice.enabled or settings.voice.emergency_disabled):
+        if settings and not settings.voice.enabled:
             return False
         mode = session.mode
         mode_value = mode.value if isinstance(mode, VoiceMode) else str(mode)
@@ -83,7 +83,6 @@ class VoiceListenerService:
             return False
         if settings and (
             not settings.voice.enabled
-            or settings.voice.emergency_disabled
             or not settings.voice.speaking_enabled
         ):
             return False

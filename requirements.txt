@@ -85,3 +85,6 @@ mcp>=1.26.0
 
 # Async HTTP (embeddings, STT/TTS providers)
 httpx[socks]>=0.27.0  # [socks]=socksio: SOCKS-for-all env routing (2026-08-31); PySocks above covers only the requests lane
+
+# Timezone auto-detect on Windows (sapphire.py soft-imports it; the /etc/localtime walk is Linux-only — broadsword M-W5)
+tzlocal>=5.0

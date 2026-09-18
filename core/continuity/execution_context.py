@@ -213,50 +213,12 @@ class ExecutionContext:
         same semantics as update_enabled_functions."""
         toolset_name = self.task_settings.get("toolset", "none")
         extra_toolsets = self.task_settings.get("extra_toolsets") or []
-
-        if (not toolset_name or toolset_name == "none") and not extra_toolsets:
-            return None
-
-        # Resolve toolset name to function names — same logic as update_enabled_functions
-        # but without mutating _enabled_tools or current_toolset_name
-        from core.toolsets import toolset_manager
-
-        def _fn_names(name):
-            if name in self.fm.function_modules:
-                return self.fm.function_modules[name]['available_functions']
-            if toolset_manager.toolset_exists(name):
-                return toolset_manager.get_toolset_functions(name)
-            return [name]
-
-        if not toolset_name or toolset_name == "none":
-            tools = []
-        elif toolset_name == "all":
-            tools = self.fm.all_possible_tools.copy()
-        else:
-            fn_set = set(_fn_names(toolset_name))
-            tools = [t for t in self.fm.all_possible_tools
-                     if t['function']['name'] in fn_set]
-
-            if not tools:
-                logger.warning(f"[ExecCtx] Toolset '{toolset_name}' resolved to 0 tools")
-
-        if extra_toolsets:
-            have = {t['function']['name'] for t in tools}
-            extra_set = set()
-            for name in extra_toolsets:
-                extra_set |= set(_fn_names(name))
-            extra_set -= have
-            tools += [t for t in self.fm.all_possible_tools
-                      if t['function']['name'] in extra_set]
-
-        # Apply mode filter + settings gate (both read-only) — same pair the
-        # web path applies. Skipping the gate here exposed gated tools
-        # (switch_model et al) to daemon runs even with their Settings > Tools
-        # toggles OFF; execution was still refused in-handler, but the AI saw
-        # a tool it could never use. Silent-default class.
-        tools = self.fm._apply_settings_gate(self.fm._apply_mode_filter(tools))
-        logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools)} tools")
-        return tools if tools else None
+        # ONE rule, in the manager (broadsword H12) — same names the live
+        # setter enables (hidden tools included in the rule), then the mode
+        # filter + settings gate, no mutation.
+        tools = self.fm.resolve_tools(toolset_name, extra_toolsets)
+        logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools or [])} tools")
+        return tools
 
     def _build_scopes(self) -> Optional[Dict]:
         """Build scopes from task settings. Sets ContextVars for this thread only.

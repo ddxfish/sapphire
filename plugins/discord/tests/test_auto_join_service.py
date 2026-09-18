@@ -46,10 +46,9 @@ class FakeTransport:
 
 
 class FakeSettings:
-    def __init__(self, *, enabled=True, emergency_disabled=False, join_targets=None):
+    def __init__(self, *, enabled=True, join_targets=None):
         self.voice = type('V', (), {
             'enabled': enabled,
-            'emergency_disabled': emergency_disabled,
             'join_targets': join_targets or [],
         })()
 

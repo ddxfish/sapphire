@@ -93,11 +93,8 @@ class VoiceSessionService:
         summary_id = self.voice_session_repository.save_summary(
             session_id, session.account_name, session.channel_id, summary,
         )
-        if self.world_model_service:
-            self.world_model_service.create_task(
-                session.account_name,
-                'voice_follow_up',
-                target_id=session.channel_id,
-                reason='voice_session_summary',
-            )
+        # No follow-up task here (broadsword H7, Krem's ruling): it was created
+        # with no run_at, fired on the next proactive tick, and posted the canned
+        # "Following up after the recent voice session." into the channel after
+        # EVERY session with transcripts. A summary is a record, not a prompt.
         return {'status': 'summarized', 'summary_id': summary_id, 'summary': summary}

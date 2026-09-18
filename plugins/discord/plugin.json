@@ -1366,14 +1366,6 @@
         "hidden": true
       },
       {
-        "key": "voice.emergency_disabled",
-        "type": "boolean",
-        "label": "Emergency stop",
-        "help": "Kill switch \u2014 overrides all voice settings",
-        "default": false,
-        "tab": "Voice"
-      },
-      {
         "key": "voice.join_targets",
         "type": "list",
         "label": "Auto-join voice channels",

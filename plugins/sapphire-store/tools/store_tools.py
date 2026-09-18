@@ -21,7 +21,7 @@ DEFAULT_STORE_URL = "https://sapphireblue.dev/wp-json/sapphire-store/v1/"
 TOOLS = [
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "store_browse",
             "description": "Browse the Sapphire plugin store.\n  search='X' — query by name/keyword/slug (exact slug = full detail)\n  category='X' — filter\n  (none) — full list",
@@ -48,7 +48,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "store_install",
             "description": "Install a plugin from the Sapphire Store by its slug. Downloads from GitHub, GitLab, or a direct .zip URL and installs locally. Requires user confirmation before proceeding.",

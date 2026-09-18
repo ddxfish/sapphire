@@ -26,8 +26,6 @@ class VoiceAutoJoinService:
             return {'enabled': False, 'reason': 'no_settings', 'targets': []}
         if not settings.voice.enabled:
             return {'enabled': False, 'reason': 'voice_disabled', 'targets': []}
-        if settings.voice.emergency_disabled:
-            return {'enabled': False, 'reason': 'voice_emergency_disabled', 'targets': []}
         if self._voice_blocked_for_sleep(account_name, settings):
             return {'enabled': False, 'reason': 'sleeping', 'targets': []}
         targets = settings.voice.join_targets or []
@@ -80,8 +78,10 @@ class VoiceAutoJoinService:
 
     def _tick_sync(self, account_name: str) -> list[dict]:
         settings = self.settings_store.resolve() if self.settings_store else None
-        if not settings or not settings.voice.enabled or settings.voice.emergency_disabled:
+        if not settings:
             return []
+        if not settings.voice.enabled:
+            return self._leave_all_sync(account_name)
         targets = settings.voice.join_targets or []
         if not targets:
             return []
@@ -105,8 +105,14 @@ class VoiceAutoJoinService:
 
     async def _tick_async(self, account_name: str) -> list[dict]:
         settings = self.settings_store.resolve() if self.settings_store else None
-        if not settings or not settings.voice.enabled or settings.voice.emergency_disabled:
+        if not settings:
             return []
+        if not settings.voice.enabled:
+            # voice.enabled is THE switch. Its "emergency stop" twin was
+            # removed (broadsword H4): both only gated ENTRY, so flipping
+            # either while she was in a channel left her there, recording,
+            # talking. Off now means leave now.
+            return await self._leave_all_async(account_name)
         targets = settings.voice.join_targets or []
         if not targets:
             return []
@@ -332,16 +338,47 @@ class VoiceAutoJoinService:
         result = self.voice_service.leave(intention)
         return self._record_leave(account_name, channel_id, result)
 
-    async def _leave_async(self, account_name: str, channel_id: str) -> dict | None:
+    async def _leave_async(self, account_name: str, channel_id: str, *, reason: str = 'auto_join_empty') -> dict | None:
         intention = LeaveVoiceIntention(
             intention_type='leave_voice',
             account_name=account_name,
             channel_id=channel_id,
             message_id='',
-            reason='auto_join_empty',
+            reason=reason,
         )
         result = await self.voice_service.leave_async(intention)
         return self._record_leave(account_name, channel_id, result)
+
+    def _live_channels(self, account_name: str) -> list[str]:
+        """Channel ids of this account's live voice sessions (the session
+        repository is the one record of where she is)."""
+        svc = getattr(self.voice_service, 'voice_session_service', None)
+        repo = getattr(svc, 'voice_session_repository', None)
+        if repo is None:
+            return []
+        try:
+            return [str(s.channel_id) for s in repo.list_active_sessions(account_name) if getattr(s, 'channel_id', '')]
+        except Exception as exc:
+            logger.warning('Voice sessions unreadable for %s: %s', account_name, exc)
+            return []
+
+    def _leave_all_sync(self, account_name: str) -> list[dict]:
+        out = []
+        for channel_id in self._live_channels(account_name):
+            intention = LeaveVoiceIntention(intention_type='leave_voice', account_name=account_name,
+                                            channel_id=channel_id, message_id='', reason='voice_disabled')
+            r = self._record_leave(account_name, channel_id, self.voice_service.leave(intention))
+            if r:
+                out.append(r)
+        return out
+
+    async def _leave_all_async(self, account_name: str) -> list[dict]:
+        out = []
+        for channel_id in self._live_channels(account_name):
+            r = await self._leave_async(account_name, channel_id, reason='voice_disabled')
+            if r:
+                out.append(r)
+        return out
 
     def _record_leave(self, account_name: str, channel_id: str, result: dict) -> dict:
         if self.trace_service:

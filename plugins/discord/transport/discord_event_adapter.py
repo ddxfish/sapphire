@@ -88,6 +88,33 @@ class DiscordEventAdapter:
             attachments=attachments,
             reply_to_message_id=str(getattr(reference, 'message_id', '') or ''),
         )
+        # Ignored channels are dropped BEFORE anything observes them (broadsword
+        # H6): this check used to sit at the END, so an ignored channel was
+        # still stored, scanned for commitments, distilled and counted as
+        # activity — and a commitment made there could even draw a follow-up
+        # post. The doc says "fully ignored… dropped before batching".
+        if self.settings_store:
+            settings = self.settings_store.resolve(
+                guild_id=observation.guild_id,
+                channel_id=observation.channel_id,
+                dm_id=observation.channel_id if observation.is_dm else None,
+            )
+            if is_channel_ignored(observation.account_name, observation.channel_id, settings):
+                if self.trace_repository:
+                    self.trace_repository.record_trace('event_dropped', 'Ignored channel', {
+                        'message_id': observation.message_id,
+                        'channel_id': observation.channel_id,
+                        'account_name': observation.account_name,
+                    })
+                if self.cognition_debug_service:
+                    self.cognition_debug_service.record_gate(
+                        gate='channel_ignored',
+                        account_name=observation.account_name,
+                        channel_id=observation.channel_id,
+                        channel_name=observation.channel_name,
+                        detail={'reason': 'ignored_channels', 'message_id': observation.message_id},
+                    )
+                return None
         if self.world_model_service:
             self.world_model_service.record_text_observation(observation)
         elif self.message_repository:
@@ -127,22 +154,6 @@ class DiscordEventAdapter:
                 channel_id=observation.channel_id,
                 dm_id=observation.channel_id if observation.is_dm else None,
             )
-            if is_channel_ignored(observation.account_name, observation.channel_id, settings):
-                if self.trace_repository:
-                    self.trace_repository.record_trace('event_dropped', 'Ignored channel', {
-                        'message_id': observation.message_id,
-                        'channel_id': observation.channel_id,
-                        'account_name': observation.account_name,
-                    })
-                if self.cognition_debug_service:
-                    self.cognition_debug_service.record_gate(
-                        gate='channel_ignored',
-                        account_name=observation.account_name,
-                        channel_id=observation.channel_id,
-                        channel_name=observation.channel_name,
-                        detail={'reason': 'ignored_channels', 'message_id': observation.message_id},
-                    )
-                return None
             if self.sleep_service and self.sleep_service.should_drop_observation(observation, settings):
                 if self.trace_repository:
                     self.trace_repository.record_trace('event_dropped', 'Sleep dormant message ignored', {

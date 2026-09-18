@@ -841,16 +841,16 @@ class ContinuityExecutor:
                                 "speed": getattr(self.system.tts, "speed", None),
                             })
                     elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
-                        from core.voice_privacy import tts_gate_reason
-                        _gate = tts_gate_reason({"private_chat": _priv_chat or
-                                                 bool(task_settings.get("privacy_required"))})
-                        if _gate:
-                            logger.info(f"[Continuity] TTS gated: {_gate}")
-                        else:
-                            try:
-                                self.system.tts.speak_sync(response)
-                            except Exception as tts_err:
-                                logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                        # The gate rides INSIDE speak_sync now (one rule for
+                        # every lane — broadsword H3). The old pre-gate here
+                        # was doubled by speak_sync's own self-gate reading
+                        # the operator's active chat, so a public task chat
+                        # went silent whenever the operator sat on a private one.
+                        try:
+                            self.system.tts.speak_sync(response, chat_settings={
+                                "private_chat": _priv_chat or bool(task_settings.get("privacy_required"))})
+                        except Exception as tts_err:
+                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
                 result["responses"].append({
                     "iteration": 1,

@@ -300,6 +300,13 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
                     overthought = True
                     stream.cancel_flag = True
                     logger.warning(f"[CADENCE] '{chat}': thinking past {THINK_BUDGET_CHARS} chars with no answer — cancelled")
+    except Exception as e:
+        # chat_stream RE-RAISES provider/connection errors (chat_streaming
+        # :1472/:1498). Without this, VOICE_TURN_END below never fired, and
+        # the browser — which only clears its voice-turn latch on END — sat
+        # wedged in Stop with every refresh suppressed (broadsword H8). The
+        # error still surfaces: END carries it, then the raise below fires.
+        errored = errored or f"{type(e).__name__}: {e}"
     finally:
         llm.end_stream(sid, chat_name)
     final = visible_text(''.join(parts)) if not cancelled or overthought else ''
@@ -318,7 +325,12 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
         raise RuntimeError(errored)
     if speak == 'speakers' and final:
         try:
-            system.tts.speak(final)
+            # The gate must judge THIS session's chat: the stream's brain
+            # override is already reset, so a bare speak() would read the
+            # operator's active chat (broadsword H3 ×2). A sealed/unreadable
+            # chat fails closed.
+            gate_settings = sm.get_settings_for(chat) or {'private_chat': True}
+            system.tts.speak(final, chat_settings=gate_settings)
         except Exception as e:
             logger.warning(f"[CADENCE] speakers lane failed: {e}")
     return final

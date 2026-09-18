@@ -45,7 +45,7 @@ def _allow_all_enabled():
 TOOLS = [
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "get_inbox",
             "description": "Latest emails from a folder. Returns names, subjects, dates. Use read_email(index) for full content.",
@@ -68,7 +68,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "read_email",
             "description": "Read full email by index from last get_inbox().",
@@ -86,7 +86,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "archive_emails",
             "description": "Archive emails by index (from last get_inbox). Moves to Archive — recoverable.",
@@ -105,7 +105,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "delete_emails",
             "description": "Delete emails by index (from last get_inbox). Moves to Trash — recoverable from your mail client.",
@@ -124,7 +124,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "search_emails",
             "description": "Search a folder. Give at least one of sender / content / date. Results load like get_inbox — use read_email(index), reply, archive, delete on them.",
@@ -159,7 +159,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "forward_email",
             "description": "Forward an inbox email (by index from get_inbox) to a contact. Body text only — attachments are not carried.",
@@ -189,7 +189,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "get_recipients",
             "description": "Whitelisted email contacts (ids + names, no addresses). Use id with send_email.",
@@ -234,7 +234,7 @@ _send_desc = "Send an email. One of recipient_id / reply_to_index / address is r
 
 TOOLS.append({
     "type": "function",
-    "is_local": True,
+    "is_local": False,
     "function": {
         "name": "send_email",
         "description": _send_desc,

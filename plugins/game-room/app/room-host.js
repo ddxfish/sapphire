@@ -900,13 +900,15 @@ function speakText(me, line) {
         if (R !== me) return;
         try {
             const voice = (me.seat && me.seat.voice) || null;
-            const ok = await playTextStreaming(line, voice);
+            // chat = this room's session: the server's privacy gate judges the
+            // session's chat, not whatever the operator's active chat is (H3).
+            const ok = await playTextStreaming(line, voice, me.session);
             if (ok) return;
             if (voice) {
                 const res = await fetch('/api/tts/preview', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
-                    body: JSON.stringify({ text: line, voice }),
+                    body: JSON.stringify({ text: line, voice, chat: me.session }),
                 });
                 if (!res.ok) throw new Error('preview HTTP ' + res.status);
                 const blob = await res.blob();

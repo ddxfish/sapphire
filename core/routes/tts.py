@@ -153,6 +153,20 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
 
 
 @router.post("/api/tts/stream")
+def _gate_settings_for(system, chat):
+    """Settings the TTS privacy gate should judge: the named chat's when the
+    caller says which chat produced the text, else None (= the effective
+    chat, resolved inside the gate). A named chat that can't be read
+    (unknown, sealed) fails CLOSED. Broadsword H3."""
+    chat = (str(chat or '')).strip()
+    if not chat:
+        return None
+    try:
+        return system.llm_chat.session_manager.get_settings_for(chat) or {'private_chat': True}
+    except Exception:
+        return {'private_chat': True}
+
+
 async def handle_tts_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Streaming TTS for known text (Replay button, future re-synth flows).
 
@@ -186,10 +200,13 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
     voice = (data.get('voice') or '').strip() or None
     if voice:
         voice = _validate_tts_voice(voice)
+    # The producing chat, when the caller names one (a room's bound session)
+    # — the pump's privacy gate judges it instead of the active chat (H3).
+    gate_settings = _gate_settings_for(system, data.get('chat'))
 
     def generate():
         from core.tts.stream_pump import StreamingTTSPump
-        pump = StreamingTTSPump(system=system, voice_override=voice)
+        pump = StreamingTTSPump(system=system, voice_override=voice, chat_settings=gate_settings)
         try:
             # Whole text in one push — chunker splits at sentence boundaries.
             # The final sentence (no trailing uppercase) emerges from flush.
@@ -232,9 +249,11 @@ async def tts_preview(request: Request, _=Depends(require_login), system=Depends
     # Voice privacy gate — same posture as /api/tts file-mode above. Preview
     # takes arbitrary user text and hands it straight to the provider; with
     # the active chat private + a cloud TTS provider that's text egress the
-    # main lane refuses. 403, never 401.
+    # main lane refuses. 403, never 401. `chat` names the chat that produced
+    # the text (a room's bound session speaking a cadence turn) — the gate
+    # judges THAT chat, not the operator's active one (broadsword H3).
     from core.voice_privacy import tts_gate_reason
-    _gate = tts_gate_reason()
+    _gate = tts_gate_reason(_gate_settings_for(system, data.get('chat')))
     if _gate:
         raise HTTPException(status_code=403, detail=_gate)
 

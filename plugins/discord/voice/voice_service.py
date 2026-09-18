@@ -64,7 +64,7 @@ class VoiceService:
             guild_id=guild_id,
             channel_id=channel_id,
         ) if self.settings_store else None
-        if settings and (not settings.voice.enabled or settings.voice.emergency_disabled):
+        if settings and not settings.voice.enabled:
             return None, {'status': 'skipped', 'reason': 'voice_disabled'}
         mode = settings.voice.mode if settings else VoiceMode.LISTEN_ONLY.value
         logger.debug(
@@ -114,7 +114,7 @@ class VoiceService:
             guild_id=intention.guild_id,
             channel_id=intention.channel_id,
         ) if self.settings_store else None
-        if settings and (not settings.voice.enabled or settings.voice.emergency_disabled):
+        if settings and not settings.voice.enabled:
             return {'status': 'blocked', 'reason': 'voice_disabled'}
         transport_result = self.voice_transport.connect_sync(
             intention.account_name,
@@ -146,7 +146,7 @@ class VoiceService:
             guild_id=intention.guild_id,
             channel_id=intention.channel_id,
         ) if self.settings_store else None
-        if settings and (not settings.voice.enabled or settings.voice.emergency_disabled):
+        if settings and not settings.voice.enabled:
             return {'status': 'blocked', 'reason': 'voice_disabled'}
         transport_result = await self.voice_transport.connect_async(
             intention.account_name,

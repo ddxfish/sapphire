@@ -20,7 +20,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "get_wallet",
             "description": "Get the current Bitcoin wallet address and balance. Shows the receive address for incoming payments.",
@@ -33,7 +33,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "send_bitcoin",
             "description": "Send Bitcoin to an address. Amount in BTC (e.g. 0.001). Returns transaction ID on success.",
@@ -55,7 +55,7 @@ TOOLS = [
     },
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "get_transactions",
             "description": "Get recent Bitcoin transactions for the current wallet.",

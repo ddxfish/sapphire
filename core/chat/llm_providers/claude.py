@@ -837,7 +837,14 @@ class ClaudeProvider(BaseProvider):
                 else:
                     if content and content.strip():
                         claude_messages.append({"role": "user", "content": content})
-        
+
+        # Anthropic requires the first message to be role=user. The history
+        # trims are role-blind and an assistant-initiated chat (phone
+        # greeting, unprompted turn) can start on an assistant row → 400.
+        # Same belt anthropic_compat.py carries (broadsword H16b).
+        if claude_messages and claude_messages[0].get("role") == "assistant":
+            claude_messages.insert(0, {"role": "user", "content": "[conversation started]"})
+
         return system_prompt, claude_messages, needs_thinking_disabled, dynamic_system
     
     def _convert_tools(self, tools: List[Dict[str, Any]], cache_enabled: bool = False, cache_ttl: str = '5m') -> List[Dict[str, Any]]:

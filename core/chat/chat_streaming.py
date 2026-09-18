@@ -1007,7 +1007,7 @@ class StreamingChat:
                                     "id": tool_call_id,
                                     "name": function_name,
                                     "result": error_result,
-                                    "is_error": True,
+                                    "error": True,   # was `is_error` — a key with zero consumers, so the failed tool rendered green (broadsword M-C6)
                                 }
                                 continue
 

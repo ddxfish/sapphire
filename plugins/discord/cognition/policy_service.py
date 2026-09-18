@@ -35,7 +35,7 @@ class PolicyService:
 
     def evaluate_voice_speak(self, intention, settings) -> dict:
         voice = settings.voice
-        if voice.emergency_disabled or not voice.enabled:
+        if not voice.enabled:
             return {'allowed': False, 'reason': 'voice_disabled'}
         if not voice.speaking_enabled and intention.reason != 'explicit_command':
             return {'allowed': False, 'reason': 'speaking_disabled'}

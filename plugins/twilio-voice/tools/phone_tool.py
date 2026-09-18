@@ -22,7 +22,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "phone_call",
             "description": (

@@ -77,9 +77,14 @@ class StreamingTTSPump:
     def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None,
                  voice_override: Optional[str] = None,
                  split_override: Optional[str] = None,
-                 disabled: bool = False):
+                 disabled: bool = False,
+                 chat_settings: Optional[dict] = None):
         self.system = system
         self.tts = getattr(system, "tts", None)
+        # Settings of the chat that PRODUCED the text, when the owner knows
+        # (/api/tts/stream with `chat`). The privacy gate judges these instead
+        # of the effective chat (broadsword H3). None = legacy resolution.
+        self._chat_settings = chat_settings
         self.provider = getattr(self.tts, "_provider", None) if self.tts else None
         # Explicit per-pump voice (e.g. /api/tts/stream `voice` param). Beats
         # the brain-override ContextVar and the global voice. None = unchanged
@@ -180,7 +185,7 @@ class StreamingTTSPump:
             # State mirrors the plugin skip_tts cancel; no hooks fired yet, so
             # none need closing.
             from core.voice_privacy import tts_gate_reason
-            _gate = tts_gate_reason()
+            _gate = tts_gate_reason(self._chat_settings)
             if _gate:
                 logger.info(f"[TTS-STREAM] {_gate} — streaming TTS skipped")
                 self._skip_turn = True

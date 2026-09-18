@@ -177,7 +177,10 @@ def test_run_turn_speakers_lane_and_cancel():
     cadence._system = sysobj
     with patch('core.cadence.publish') as pub:
         cadence.run_turn('c', 'cue', speak='speakers')
-    sysobj.tts.speak.assert_called_once_with('Hi')
+    # speak() now carries the SESSION chat's settings for the privacy gate
+    # (broadsword H3) — the text is still the answer.
+    assert sysobj.tts.speak.call_count == 1 and sysobj.tts.speak.call_args.args == ('Hi',)
+    assert 'chat_settings' in sysobj.tts.speak.call_args.kwargs
     assert pub.call_args_list[0][0][1]['foreign'] is False            # armed on the active chat = not foreign
     sysobj2, stream2, llm2 = _system([{'type': 'content', 'text': 'partial'}, {'type': 'final', 'text': 'partial', 'cancelled': True}])
     cadence._system = sysobj2
@@ -333,7 +336,7 @@ def test_answer_with_thinking_speaks_only_the_words():
     with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))):
         out = cadence.run_turn('c', 'cue', speak='speakers')
     assert out == 'Solid clear.' and published[-1][1]['text'] == 'Solid clear.'
-    sysobj.tts.speak.assert_called_once_with('Solid clear.')
+    assert sysobj.tts.speak.call_count == 1 and sysobj.tts.speak.call_args.args == ('Solid clear.',)
     llm.session_manager.remove_last_messages.assert_not_called()
 
 

@@ -220,6 +220,11 @@ class TTSClient:
             r'`[^`]+`',                      # Inline code
             r'!\[.*?\]\(.*?\)',              # Image markdown ![alt](url)
             r'\|.*?\|(?:\n\|.*?\|)*',        # Markdown tables
+            # Avatar display token BEFORE the HTML catch-all: `<[^>]+>` ate
+            # `<<avatar: wave 2s>` and left a stray `>` that got SPOKEN on
+            # every blob-lane speak (streaming.py had this order since
+            # 2026-05-28; this cleaner never got it — broadsword M-C5).
+            r'<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>',
             r'<[^>]+>',                      # HTML tags
         ]
         for pattern in block_patterns:
@@ -246,13 +251,20 @@ class TTSClient:
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         return processed_text
 
-    def speak(self, text):
-        """Send text to TTS server and play audio (non-blocking)."""
+    def speak(self, text, chat_settings=None):
+        """Send text to TTS server and play audio (non-blocking).
+
+        chat_settings: the settings of the chat that PRODUCED the text. Pass
+        it from any lane that speaks after its stream ended (cadence, the
+        continuity executor) — by then the stream-brain override is gone and
+        the self-gate below would read the operator's ACTIVE chat instead
+        (broadsword H3: a private game session's reply reached a cloud TTS
+        provider because the operator sat on a public chat). None = resolve
+        the effective chat (the wake door, mid-stream callers)."""
         # Voice privacy gate (vault v1.1): private chat + cloud TTS = the
-        # response text leaves the machine as a synthesis request. Effective
-        # chat resolved inside the gate (stream-brain aware).
+        # response text leaves the machine as a synthesis request.
         from core.voice_privacy import tts_gate_reason
-        _gate = tts_gate_reason()
+        _gate = tts_gate_reason(chat_settings)
         if _gate:
             logger.info(f"[TTS] {_gate} — speech skipped")
             return False
@@ -319,10 +331,11 @@ class TTSClient:
             return self._generate_and_play_audio
         return self._generate_and_play_audio_stream
 
-    def speak_sync(self, text):
-        """Send text to TTS server, play audio, and block until playback finishes."""
+    def speak_sync(self, text, chat_settings=None):
+        """Send text to TTS server, play audio, and block until playback finishes.
+        chat_settings: see speak() — the producing chat's settings for the gate."""
         from core.voice_privacy import tts_gate_reason
-        _gate = tts_gate_reason()
+        _gate = tts_gate_reason(chat_settings)
         if _gate:
             logger.info(f"[TTS] {_gate} — speech skipped")
             return False

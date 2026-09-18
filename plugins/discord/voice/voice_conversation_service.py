@@ -56,7 +56,6 @@ class VoiceConversationService:
             return {'status': 'skipped', 'reason': 'not_conversational'}
         if settings and (
             not settings.voice.enabled
-            or settings.voice.emergency_disabled
             or not settings.voice.speaking_enabled
         ):
             logger.warning(

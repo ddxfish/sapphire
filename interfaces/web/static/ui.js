@@ -288,6 +288,19 @@ export const forceUpdateToolbars = updateToolbars;
 // MESSAGE CREATION
 // =============================================================================
 
+// Identity of a history row for renderHistory's reconcile (broadsword H15):
+// role + server timestamp + content length + part count. Cheap, computed on
+// the RAW server object (before the avatar strip mutates content) on both
+// sides. An edit changes the length; a regen changes the timestamp; the
+// streaming bubble and the optimistic user row carry no key at all.
+const historyKey = (m) => {
+    if (!m || typeof m !== 'object') return '';
+    const c = typeof m.content === 'string' ? m.content.length
+        : (Array.isArray(m.content) ? m.content.length : 0);
+    const p = Array.isArray(m.parts) ? m.parts.length : 0;
+    return `${m.role || 'user'}|${m.timestamp || ''}|${c}|${p}`;
+};
+
 const createMessage = (msg, idx = null, total = null, isHistoryRender = false) => {
     const clone = msgTpl.content.cloneNode(true);
     const msgEl = clone.querySelector('.message');
@@ -456,15 +469,33 @@ export const renderHistory = (hist) => {
     // up keeps their place. Chat load / switch / clear / import call
     // forceScrollToBottom() themselves — there the user asked for the bottom.
     const keepTop = sticky ? null : (chatbgOverlay?.scrollTop ?? null);
+    if (!hist || !Array.isArray(hist)) hist = [];
+
+    // RECONCILE, don't rebuild (broadsword H15): this ran on every turn and
+    // removed + re-created DOM for EVERY row (markdown, highlight, toolbar,
+    // metadata, listeners) — thousands of rows = seconds per reply and an
+    // empty transcript at boot once the 20 s bound tripped. Now: keep the
+    // longest prefix whose rows still match the server (historyKey), drop
+    // from the first mismatch, append the rest. The streaming bubble and
+    // the optimistic user row have no key → they are the first mismatch →
+    // replaced by the server's rows. Edits/regens/deletes mismatch at their
+    // row and rebuild from there. Every caller stays as it was.
+    const existing = Array.from(chat.querySelectorAll('.message:not(.status):not(.error)'));
+    let keep = 0;
+    while (keep < existing.length && keep < hist.length) {
+        const key = existing[keep].dataset.key;
+        if (!key || key !== historyKey(hist[keep])) break;
+        keep++;
+    }
     // INVARIANT: no layout reads between this removal and the re-append below.
     // A forced layout here would clamp scrollTop to 0 → the scroll listener
     // reads it as a user scroll-up → sticky reader stranded at the top (D1#11).
-    chat.querySelectorAll('.message:not(.status):not(.error)').forEach(msg => msg.remove());
+    for (let i = keep; i < existing.length; i++) existing[i].remove();
 
-    if (!hist || !Array.isArray(hist)) return;
-
-    hist.forEach((msg, i) => {
-        if (!msg || typeof msg !== 'object') return;
+    for (let i = keep; i < hist.length; i++) {
+        const msg = hist[i];
+        if (!msg || typeof msg !== 'object') continue;
+        const key = historyKey(msg);
         // Strip avatar tags from history if setting is enabled
         if (window._avatarStripTags) {
             if (msg.content) msg.content = msg.content.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
@@ -472,10 +503,12 @@ export const renderHistory = (hist) => {
                 ? { ...p, text: p.text.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '') } : p);
         }
         const { clone } = createMessage(msg, i, hist.length, true);
+        const el = clone.querySelector('.message');
+        if (el) el.dataset.key = key;
         chat.appendChild(clone);
-    });
+    }
 
-    updateToolbars();
+    updateToolbars();   // re-derives index / Continue / trash counts on the kept rows too
 
     // Restore the reader's place NOW — the removal above clamped scrollTop to
     // 0. (Restoring inside the image wait below could land up to 5 s later,

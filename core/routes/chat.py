@@ -62,9 +62,11 @@ async def get_history(request: Request, chat: str = None, _=Depends(require_logi
     display_messages = format_messages_for_display(raw_messages)
 
     context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
+    # Display rows already fold `thinking` INTO content (history.py
+    # _reconstruct_thinking_content); adding it again double-counted every
+    # reasoning turn and pinned the context bar (broadsword M-L8 / H17).
     history_tokens = sum(
         count_message_tokens(m.get("content", ""), include_images=False)
-        + count_tokens(m.get("thinking", "") or "")
         for m in raw_messages
     )
 

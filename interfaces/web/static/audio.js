@@ -267,7 +267,11 @@ export const replayTts = async (idx) => {
 /** Stream a known text via /api/tts/stream → SSE → existing playback queue.
  * Returns true if at least one chunk arrived, false if the endpoint was
  * unavailable (503) so the caller can fall back. Other errors throw. */
-export const playTextStreaming = async (text, voice = null) => {
+// `chat`: the chat that produced the text (a room's bound session). The
+// server's privacy gate judges THAT chat instead of the operator's active
+// one — a private room speaking through a public active chat used to reach
+// a cloud TTS provider (broadsword H3). Omit for the operator's own chat.
+export const playTextStreaming = async (text, voice = null, chat = null) => {
     stop(true);  // clear any current playback before starting new stream
 
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -276,7 +280,7 @@ export const playTextStreaming = async (text, voice = null) => {
         res = await fetch('/api/tts/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify(voice ? { text, voice } : { text }),
+            body: JSON.stringify({ text, ...(voice ? { voice } : {}), ...(chat ? { chat } : {}) }),
         });
     } catch (e) {
         throw new Error(`network: ${e.message}`);

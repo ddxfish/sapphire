@@ -59,14 +59,6 @@ Tick while she thinks, ding on barge-in
 
 Off = a voice channel's chat is deleted 30 min after her last session there. Each voice channel gets its own chat (`discord_<guild>_<channel>`); with this off it is marked ephemeral like a phone call and reaped once idle. A chat with a live conversation is never reaped. Set it per server (guild override) to keep the home server's history and let strangers' fade.
 
-### Emergency stop
-
-- **Setting key:** `voice.emergency_disabled`
-- **Type:** `boolean`
-- **Default:** OFF
-
-Kill switch — overrides all voice settings
-
 ### Addressing: mode
 
 - **Setting key:** `voice.addressing_mode`
@@ -122,7 +114,7 @@ She is never forced to stay. In any voice conversation she can end it by saying 
 
 Custom picker stored as `voice.join_targets` (`account:channelId` voice channels).
 
-While the daemon runs, the plugin polls ~every 15s: join when someone is present, leave when empty (subject to voice being enabled and not emergency-stopped).
+While the daemon runs, the plugin polls ~every 15s: join when someone is present, leave when empty. Turning voice off leaves every channel on the next poll — that is the kill switch.
 
 ## Voice Conversation Prompt
 

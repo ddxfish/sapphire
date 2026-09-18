@@ -1148,9 +1148,16 @@ class PluginLoader:
             registry = self._get_provider_registry(system_name)
             if registry:
                 if registry.get_active_key() == prov_key:
-                    from core.settings_manager import settings_manager
-                    settings_manager.set(registry.setting_key, 'none')
-                    logger.info(f"[PLUGINS] Reset {registry.setting_key} to 'none' (was '{prov_key}' from disabled plugin)")
+                    # Wrapped like every sibling leg: this used to import a
+                    # name that doesn't exist (`settings_manager`) and blow
+                    # the whole unload half-way whenever the disabled plugin
+                    # provided the ACTIVE provider (broadsword hunt H10).
+                    try:
+                        from core.settings_manager import settings
+                        settings.set(registry.setting_key, 'none', persist=True)
+                        logger.info(f"[PLUGINS] Reset {registry.setting_key} to 'none' (was '{prov_key}' from disabled plugin)")
+                    except Exception as e:
+                        logger.warning(f"[PLUGINS] {name}: failed to reset {registry.setting_key}: {e}")
                 registry.unregister_plugin(name)
 
         # Unregister memory layers (registered layers go dark in the memory

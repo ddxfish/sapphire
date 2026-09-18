@@ -920,7 +920,10 @@ class ConversationService:
             return []
         service = getattr(self, 'media_service', None)
         bridge = getattr(service, 'vision_bridge', None) if service else None
-        fetch = getattr(bridge, 'fetch_bytes', None)
+        # Cache-only: process_batch runs ON the daemon loop; a fetch here
+        # froze the gateway for every account (broadsword H5). The caption
+        # lane already pulled these bytes off-loop — read its cache.
+        fetch = getattr(bridge, 'cached_bytes', None)
         if not callable(fetch) or not getattr(trigger, 'attachments', None):
             return []
         import base64
@@ -932,14 +935,10 @@ class ConversationService:
         for artifact in artifacts:
             if artifact.media_kind not in ('image', 'gif') or not artifact.source_url:
                 continue
-            try:
-                data, media_type = fetch(artifact.source_url)   # streamed, 10 MB cap, no redirects
-            except Exception as exc:
-                import logging
-                logging.getLogger(__name__).debug('payload image skipped (%s): %s', artifact.source_url, exc)
+            hit = fetch(artifact.source_url)   # the caption lane's bytes (10 MB cap, no redirects) or None
+            if not hit or not hit[0]:
                 continue
-            if not data:
-                continue
+            data, media_type = hit
             out.append({'data': base64.b64encode(data).decode('ascii'), 'media_type': str(media_type or 'image/png')})
             if len(out) >= self._PAYLOAD_IMAGE_MAX:
                 break

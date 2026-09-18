@@ -279,7 +279,11 @@ class Backup:
                 # snapshots are complete, checkpointed copies).
                 for _db, _snap in snapshots.items():
                     _rel = _db.relative_to(user_root)
-                    if _is_excluded(str(_rel), merged_patterns):
+                    # as_posix: the matcher is posix-only and the estimator
+                    # (:582) already feeds it forward slashes — str() on
+                    # Windows handed it backslashes, so a `history/*` exclude
+                    # silently missed every DB snapshot (broadsword H13).
+                    if _is_excluded(_rel.as_posix(), merged_patterns):
                         continue
                     tar.add(_snap, arcname=f"user/{_rel}", recursive=False)
                     kept_files[0] += 1

@@ -288,7 +288,7 @@ Common skip reasons:
 3. `GET /voice/sessions` — active sessions and `conversation_active` flag
 4. Settings: `voice.enabled`, `voice.speaking_enabled`, `voice.mode`
 5. Sapphire: TTS streaming must be enabled for conversational mode
-6. Emergency stop: set `voice.emergency_disabled` — blocks all voice output immediately
+6. Stop everything: turn `voice.enabled` off — she leaves every voice channel on the next tick (the separate "emergency stop" switch was removed; it only blocked new joins)
 
 | Symptom | Check |
 |---------|-------|
@@ -373,7 +373,7 @@ Content-Type: application/json
 
 | Setting | Effect |
 |---------|--------|
-| `voice.emergency_disabled` | Immediately blocks all voice output |
+| `voice.enabled` = off | Leaves every voice channel on the next tick and blocks all voice output |
 | `safety.rate_limit_seconds` | Per-channel reply cooldown after approval |
 | `safety.proactive_cooldown_hours` | Minimum gap between proactive actions per channel/action |
 | `safety.quiet_hours_enabled` + start/end | Idle presence, skip proactive outreach (mentions still allowed) |
@@ -436,7 +436,7 @@ talk in a channel she replies in; she leaves voice on her own with `<<HANG UP>>`
 ### Stuck voice session
 
 1. `GET /voice/sessions` — identify session
-2. Set `voice.emergency_disabled` temporarily
+2. Turn `voice.enabled` off temporarily
 3. Reload plugin (triggers graceful voice disconnect)
 4. Check `voice/diagnostics` after restart
 

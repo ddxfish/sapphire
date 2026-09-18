@@ -268,6 +268,12 @@ def _local_view_images(arguments):
     if not paths:
         return "Give me paths (absolute file paths) or a folder (absolute directory).", False
     paths = [str(q).strip() for q in paths if str(q).strip()][:12]
+    # This tool is is_local (allowed in private chats) and ci.resolve() takes a
+    # URL before it takes a path — a `paths=["https://…"]` entry was real egress
+    # from a private chat (broadsword H2). Files only, by construction.
+    bad = [q for q in paths if not Path(q).is_absolute()]
+    if bad:
+        return f"Only absolute file paths here (not {bad[0]!r}) — for a URL use web_view_images.", False
     if len(paths) == 1:
         out, ok = _view_one(paths[0])
         if ok and head and isinstance(out, dict):
