@@ -27,7 +27,7 @@ def test_proactive(**kwargs):
     account_name = str(body.get('account_name') or '').strip() or None
     channel_id = str(body.get('channel_id') or '').strip() or None
     dry_run = bool(body.get('dry_run'))
-    reset_sleep_state = bool(body.get('reset_sleep_state', True))
+    reset_sleep_state = bool(body.get('reset_sleep_state', False))    # opt-in (row 17)
     result = run_proactive_test(
         runtime,
         kind,

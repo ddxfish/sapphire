@@ -1828,6 +1828,18 @@ def _propagate_settings_change(plugin_name: str, effective: dict):
     except Exception as e:
         logger.debug(f"settings-saved provider notify skipped: {e}")
 
+    # Daemon plugins were never told their settings changed — a value read at
+    # construct time stayed frozen until restart (Discord hunt 2.13.0, row 80).
+    # Opt-in, same shape as the provider hook: daemon.on_settings_saved(settings).
+    try:
+        from core.plugin_loader import plugin_loader as _pl
+        _info = _pl.get_plugin_info(plugin_name) or {}
+        _daemon = _info.get("daemon_module")
+        if _daemon is not None and hasattr(_daemon, "on_settings_saved"):
+            _daemon.on_settings_saved(dict(effective))
+    except Exception as e:
+        logger.warning(f"[{plugin_name}] daemon on_settings_saved failed: {e}")
+
 
 @router.delete("/api/webui/plugins/{plugin_name}/settings")
 async def reset_plugin_settings(plugin_name: str, request: Request, _=Depends(require_login)):

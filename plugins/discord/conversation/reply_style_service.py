@@ -7,6 +7,8 @@ import re
 from plugins.discord.conversation.gif_service import strip_placeholder_gif_urls
 from plugins.discord.conversation.think_tags import strip_think_tags
 
+_FENCE_LINE_RE = re.compile(r'(?m)^[ \t]*```')
+
 
 @dataclass
 class ParsedReply:
@@ -71,7 +73,10 @@ class ReplyStyleService:
         carry = False
         for chunk in chunks:
             text = ('```\n' + chunk) if carry else chunk
-            if text.count('```') % 2 == 1:
+            # Only a fence that STARTS a line opens/closes a block — a bare ```
+            # inside prose ("you type ``` before it") used to flip every later
+            # chunk into a code block (hunt 2.13.0, row 34).
+            if len(_FENCE_LINE_RE.findall(text)) % 2 == 1:
                 text = text + '\n```'
                 carry = True
             else:
@@ -107,6 +112,12 @@ class ReplyStyleService:
 
     def should_skip_auto_reply(self, message_id: str) -> bool:
         return str(message_id) in self._tool_sent
+
+    def discard(self, message_id: str) -> None:
+        """Forget a message's latches without delivering — the listen-only lane
+        never reached the consumers, so both grew forever (row 24)."""
+        self._tool_sent.pop(str(message_id), None)
+        self._gif_sent.discard(str(message_id))
 
     def consume_tool_sent_text(self, message_id: str) -> str:
         return self._tool_sent.pop(str(message_id), '')

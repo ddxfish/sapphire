@@ -90,6 +90,7 @@ class ConversationService:
         policy_service,
         prompt_context_service,
         trace_repository,
+        media_service=None,
         reply_style_service=None,
         delivery_style_service=None,
         edit_history_service=None,
@@ -132,6 +133,9 @@ class ConversationService:
         self.world_model_service = world_model_service
         self.cognition_debug_service = cognition_debug_service
         self._pending: dict[str, dict] = {}
+        # Image-IN lane (Wave F): the container never handed this over, so
+        # _payload_images always returned [] in production (row 14).
+        self.media_service = media_service
 
     def process_batch(self, batch) -> bool:
         trigger = batch.observations[-1]
@@ -456,6 +460,13 @@ class ConversationService:
                 detail=decision,
             )
             return False
+        # The trigger rides the batch so prompt context builds for the SAME
+        # message every gate keyed off (row 15) — attribute, not argument, so
+        # every context double with a one-arg build() keeps working.
+        try:
+            batch.trigger = trigger
+        except Exception:
+            pass
         context = self.prompt_context_service.build(batch)
         reply_content = build_reply_content(trigger.clean_content, context.get('media') or [])
         mention_map = {}
@@ -576,16 +587,35 @@ class ConversationService:
             self.trace_repository.record_trace('event_dropped', 'No Sapphire task accepted event', {'message_id': trigger.message_id})
             self._record_debug_rejection(trigger, reason='no_daemon_task', stage='daemon')
             return False
+        self._sweep_pending()
         self._pending[trigger.message_id] = {
             'channel_id': trigger.channel_id,
             'account_name': trigger.account_name,
             'payload': payload,
+            'at': time.time(),
         }
         self.trace_repository.record_trace('event_emitted', 'Queued Discord message event', {'message_id': trigger.message_id})
         return True
 
     def pending_reply(self, message_id: str) -> dict | None:
         return self._pending.get(message_id)
+
+    _PENDING_TTL_SECONDS = 1800
+
+    def _sweep_pending(self) -> int:
+        """M9's twin: _pending held the full payload (content, history, images)
+        forever on any lane that never reached handle_llm_response (row 24)."""
+        now = time.time()
+        stale = [mid for mid, row in self._pending.items() if now - float(row.get('at') or now) > self._PENDING_TTL_SECONDS]
+        for mid in stale:
+            self._pending.pop(mid, None)
+        return len(stale)
+
+    def discard_pending(self, message_id: str) -> None:
+        """Drop a message's pending payload and reply latches without delivery."""
+        self._pending.pop(str(message_id), None)
+        if self.reply_style_service and hasattr(self.reply_style_service, 'discard'):
+            self.reply_style_service.discard(message_id)
 
     def _record_llm_debug_response(
         self,

@@ -87,8 +87,8 @@ def ensure_discord_voice_chat_settings(
             from core.chat.function_manager import scope_setting_keys
             scope_keys = [k for k in scope_setting_keys() if k != 'discord_scope']
         except Exception as exc:
-            logger.warning('Discord voice chat %s: scope isolation unavailable (%s) — chat keeps the owner defaults', chat_name, exc)
-            scope_keys = None
+            # Fail CLOSED (row 69): never start a public VC on the owner's scopes.
+            raise RuntimeError(f'scope isolation unavailable for {chat_name}: {exc}') from exc
         if scope_keys is not None:
             updates['toolset'] = 'none'
             for key in scope_keys:
@@ -120,6 +120,9 @@ def ensure_discord_voice_chat_settings(
         return
     if setter(chat_name, updates):
         logger.info('Discord voice chat %s settings updated: %s', chat_name, sorted(updates))
+    elif 'discord_voice_isolated' in updates:
+        # The stamp did not land (chat missing / sealed): refuse the session (row 69).
+        raise RuntimeError(f'voice chat {chat_name} refused the isolation stamp (missing or sealed chat)')
 
 
 def touch_voice_chat(system, chat_name: str) -> None:

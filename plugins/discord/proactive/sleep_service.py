@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from plugins.discord.lib.server_time import now_local
+from plugins.discord.lib.server_time import now_local, user_hour
 from plugins.discord.models.intentions import GoodnightIntention, ReplyMessageIntention
 from plugins.discord.conversation.ignored_channels import is_channel_ignored
 from plugins.discord.proactive.targets import parse_target
@@ -35,7 +35,7 @@ class SleepService:
         now = now or now_local()
         sleep = int(proactive.sleep_utc_hour) % 24
         wake = int(proactive.greeting_utc_hour) % 24
-        hour = now.hour
+        hour = user_hour(now)
         if sleep == wake:
             return False
         if sleep < wake:
@@ -203,7 +203,20 @@ class SleepService:
     def list_buffered(self, account_name: str, channel_id: str) -> list[dict]:
         return self.proactive_repository.list_buffered(account_name, channel_id)
 
-    def drain_wake_buffer(self, account_name: str, channel_id: str, *, max_replies: int = 3) -> list[ReplyMessageIntention]:
+    def commit_wake_drain(self, account_name: str, channel_id: str) -> int:
+        """Mark EVERY pending buffered mention processed and wake the channel —
+        called by the cron leg AFTER its sends. The old drain committed before
+        the first send, so a bot stuck in `connecting` ate the night's mentions
+        with nothing posted (hunt 2.13.0, row 7)."""
+        pending = self.proactive_repository.list_buffered(account_name, channel_id, limit=200)
+        ids = [row['id'] for row in pending if row.get('id') is not None]
+        if ids:
+            self.proactive_repository.mark_buffered_processed(ids)
+        self.wake_channel(account_name, channel_id)
+        return len(ids)
+
+    def drain_wake_buffer(self, account_name: str, channel_id: str, *, max_replies: int = 3,
+                          commit: bool = True) -> list[ReplyMessageIntention]:
         """Turn mentions she slept through into pipeline replies for wake-up.
 
         use_llm routes each through the persona pipeline (she answers the
@@ -245,8 +258,9 @@ class SleepService:
                     },
                 },
             ))
-        self.proactive_repository.mark_buffered_processed(ids)
-        self.wake_channel(account_name, channel_id)
+        if commit:
+            self.proactive_repository.mark_buffered_processed(ids)
+            self.wake_channel(account_name, channel_id)
         return intentions
 
     def check_forced_wake(self, account_name: str, channel_id: str, settings, *, now_ts: float) -> bool:

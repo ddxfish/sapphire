@@ -198,16 +198,21 @@ class ProfileRepository:
         conn.commit()
         return cursor.rowcount
 
-    def search_facts(self, account_name: str, query: str, *, limit: int = 20) -> list[dict]:
+    def search_facts(self, account_name: str, query: str, *, limit: int = 20,
+                     for_guild: str | None = None) -> list[dict]:
         like = f"%{str(query or '').strip()}%"
+        # for_guild: the origin rule list_facts already honours — DM-learned facts
+        # never surface in a server (row 29: honoured on write and in the prompt,
+        # not on this read path).
+        origin_clause = " AND f.origin != 'dm'" if for_guild else ''
         rows = self.sqlite_service.connection().execute(
-            '''
+            f'''
             SELECT f.id, f.user_id, f.content, f.source, f.created_at, f.pinned, f.forgotten,
                    p.username, p.display_name, p.birthday_username, p.birthday_display_name
             FROM profile_facts f
             LEFT JOIN user_profiles p
               ON p.account_name = f.account_name AND p.user_id = f.user_id
-            WHERE f.account_name = ? AND f.content LIKE ? AND f.forgotten = 0
+            WHERE f.account_name = ? AND f.content LIKE ? AND f.forgotten = 0{origin_clause}
             ORDER BY f.pinned DESC, f.created_at DESC LIMIT ?
             ''',
             (account_name, like, max(1, int(limit))),

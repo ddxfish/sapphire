@@ -187,6 +187,7 @@ class ConversationDriver:
         # sees a mismatch and leaves the NEW turn's sink and engine state alone.
         entry_gen = self._turn_gen
         my_gen = None
+        _foreign = False
         try:
             text = self._transcribe_fn(pcm)
             if not (text and text.strip()):
@@ -271,11 +272,6 @@ class ConversationDriver:
                         break
             finally:
                 self.system.llm_chat.end_stream(sid, chat)
-
-            sink.finish()
-            self._wait_sink(sink)                  # stay RESPONDING until audio finishes
-            publish(Events.VOICE_TURN_END, {"message_id": message_id,
-                                            "chat": self._chat_name, "foreign": _foreign})
         except Exception as e:
             logger.error(f"[CONV] streaming turn failed: {e}")
             # Spoken failure cue: a dead provider must not read as a hung line.
@@ -286,8 +282,33 @@ class ConversationDriver:
             pulse_stop.set()
             owner = my_gen if my_gen is not None else entry_gen
             if self._turn_gen == owner:
-                self._active_sink = None
-                self.engine.turn_finished()        # no-op if a barge-in already moved us on
+                if my_gen is not None:
+                    # finish / wait / TURN_END used to sit in the try body, so any
+                    # provider or TTS error skipped all three: playback never
+                    # finished, the phone's armed <<HANG UP>> never fired, the local
+                    # chunker's worker spun forever, the browser's Stop stayed lit
+                    # (Discord hunt 2.13.0, row 64). my_gen is None = an early
+                    # return before sink.start(): nothing to finish. Guarded by the
+                    # generation so a replaced turn never finishes the NEW turn's
+                    # stream (row 11).
+                    try:
+                        sink.finish()
+                    except Exception as _e:
+                        logger.debug(f"[CONV] sink.finish failed: {_e}")
+                    try:
+                        self._wait_sink(sink)          # stay RESPONDING until audio finishes
+                    except Exception as _e:
+                        logger.debug(f"[CONV] sink wait failed: {_e}")
+                    publish(Events.VOICE_TURN_END, {"message_id": message_id,
+                                                    "chat": self._chat_name, "foreign": _foreign})
+                # Re-check AFTER the drain: a surface can replace this turn while
+                # its audio is still playing (H14's test), and then the sink and
+                # engine belong to the newer turn.
+                if self._turn_gen == owner:
+                    self._active_sink = None
+                    self.engine.turn_finished()    # no-op if a barge-in already moved us on
+                else:
+                    logger.debug("[CONV] turn replaced during its drain — cleanup left to the newer turn")
             else:
                 logger.debug("[CONV] stale turn cleanup skipped — a newer turn owns the sink")
 
@@ -325,9 +346,17 @@ class ConversationDriver:
         self.engine.arm_barge()
         try:
             sink.feed_chunk({"audio_b64": base64.b64encode(audio_bytes).decode()})
-            sink.finish()
-            self._wait_sink(sink)
         finally:
+            # Same leg as _run_turn (row 64): a feed failure must still finish
+            # and drain the sink, or the surface stays "speaking" forever.
+            try:
+                sink.finish()
+            except Exception as _e:
+                logger.debug(f"[CONV] speak_direct finish failed: {_e}")
+            try:
+                self._wait_sink(sink)
+            except Exception as _e:
+                logger.debug(f"[CONV] speak_direct wait failed: {_e}")
             self._active_sink = None
             self.engine.turn_finished()    # no-op if a barge-in already moved us on
         return True

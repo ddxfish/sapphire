@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from plugins.discord.lib.server_time import now_local
+from plugins.discord.lib.server_time import now_local, user_hour
 from plugins.discord.models.intentions import GoodnightIntention, GreetChannelIntention, OutreachIntention
 from plugins.discord.proactive.targets import parse_target
 from plugins.discord.schedule._runtime import connected_accounts, execute_proactive, reload_settings
@@ -31,6 +31,45 @@ def _iter_targets(
             continue
         rows.append((account, channel))
     return rows
+
+
+def _cooldown_hints(runtime, settings, targets, now) -> list[str]:
+    policy = getattr(runtime, 'policy_service', None)
+    last = getattr(policy, '_last_proactive_at', None) or {}
+    if not last:
+        return []
+    try:
+        hours = max(1, int(getattr(settings.safety, 'proactive_cooldown_hours', 6)))
+    except Exception:
+        hours = 6
+    now_ts = now.timestamp()
+    hints = []
+    for account, channel in targets:
+        at = float(last.get((account, channel, 'greet_channel'), 0) or 0)
+        left = hours * 3600 - (now_ts - at)
+        if at and left > 0:
+            hints.append(f'{account}:{channel} greeted {int((now_ts - at) // 60)} min ago — '
+                         f'proactive cooldown ({hours}h) blocks another for {int(left // 60)} min.')
+    return hints
+
+
+def _task_filter_hints(runtime, targets) -> list[str]:
+    loader = getattr(runtime, 'plugin_loader', None)
+    pick = getattr(loader, 'get_enabled_daemon_task', None)
+    if not callable(pick):
+        return []
+    hints = []
+    for account, channel in targets:
+        try:
+            task = pick('discord_message', account=account,
+                        payload={'account': account, 'channel_id': channel, 'proactive_kind': 'greeting'})
+        except Exception:
+            continue
+        if task is None:
+            hints.append(f'{account}:{channel}: no daemon task accepts a proactive post — every task filter '
+                         f'requires a field a scheduled post does not carry (e.g. mentioned=True). '
+                         f'The static fallback text posts instead of an AI-written one.')
+    return hints
 
 
 def _sleep_state(runtime, account_name: str, channel_id: str) -> dict:
@@ -68,29 +107,36 @@ def collect_proactive_diagnostics(runtime) -> dict[str, Any]:
     greeting_hour = int(proactive.greeting_utc_hour) % 24
     sleep_hour = int(proactive.sleep_utc_hour) % 24
 
+    hour = user_hour(now)
     greeting_hints: list[str] = []
     if not proactive.greeting_enabled:
         greeting_hints.append('Morning greetings are disabled (proactive.greeting_enabled).')
-    if now.hour != greeting_hour:
+    if hour != greeting_hour:
         greeting_hints.append(
-            f'Current server hour is {now.hour}; greetings only fire at hour {greeting_hour}. '
+            f'Current hour on Sapphire\'s clock is {hour}; greetings only fire at hour {greeting_hour}. '
             f'The morning_greeting schedule fires once daily at that hour (bound to the setting; changing it re-times the task).'
         )
     if not targets:
         greeting_hints.append('No greeting channels selected.')
     if not accounts:
         greeting_hints.append('No connected Discord bot accounts.')
+    # The two gates that actually stop a greeting had no hint at all (row 19):
+    # the in-memory cooldown, and a daemon-task filter that refuses a proactive
+    # event (it carries no `mentioned`) — the static fallback posts instead.
+    greeting_hints.extend(_cooldown_hints(runtime, settings, targets, now))
+    greeting_hints.extend(_task_filter_hints(runtime, targets))
 
     scheduled_greeting = []
     if runtime.greeting_service:
         for account in accounts:
-            scheduled_greeting.extend(runtime.greeting_service.evaluate(account, settings, now=now))
+            # wake=False: diagnostics must not wake channels (row 17)
+            scheduled_greeting.extend(runtime.greeting_service.evaluate(account, settings, now=now, wake=False))
 
     outreach_hints: list[str] = []
     if not proactive.outreach_enabled:
         outreach_hints.append('Quiet outreach is disabled (proactive.outreach_enabled).')
     if runtime.outreach_service:
-        if now.hour in runtime.outreach_service._greeting_blocked_hours(proactive):
+        if hour in runtime.outreach_service._greeting_blocked_hours(proactive):
             outreach_hints.append(
                 f'Outreach is blocked near greeting hour (lead={proactive.greeting_outreach_lead_hours}h).'
             )
@@ -120,13 +166,8 @@ def collect_proactive_diagnostics(runtime) -> dict[str, Any]:
         goodnight_hints.append(
             f'Not in sleep window (sleep hour {sleep_hour} → wake/greeting hour {greeting_hour}).'
         )
-    if proactive.sleep_schedule_enabled and now.minute not in getattr(
-        runtime.sleep_service, 'GOODNIGHT_MINUTES', (0, 15, 30, 45)
-    ):
-        goodnight_hints.append(
-            f'Goodnight only fires at minutes {getattr(runtime.sleep_service, "GOODNIGHT_MINUTES", (0, 15, 30, 45))}; '
-            f'now is :{now.minute:02d}. Sapphire cron runs every 15 minutes.'
-        )
+    # (The old "fires at minutes 0/15/30/45" hint described a rule the 09-14
+    # schedule binding deleted — goodnight fires once daily at the sleep hour.)
     if not targets:
         goodnight_hints.append('No greeting channels selected.')
     if not accounts:
@@ -151,7 +192,7 @@ def collect_proactive_diagnostics(runtime) -> dict[str, Any]:
 
     return {
         'server_time': now.isoformat(),
-        'server_hour': now.hour,
+        'server_hour': hour,
         'server_minute': now.minute,
         'connected_accounts': accounts,
         'greeting_targets': [f'{a}:{c}' for a, c in targets],
@@ -313,7 +354,9 @@ def run_proactive_test(
             'hint': 'Select greeting channels in the targets picker above and save settings.',
         }
 
-    if reset_sleep_state and runtime.sleep_service:
+    if reset_sleep_state and not dry_run and runtime.sleep_service:
+        # Never on a dry run: "preview only" used to wipe every target's sleep
+        # state before dry_run was even looked at (row 17).
         for intention in intentions:
             runtime.sleep_service.wake_channel(intention.account_name, intention.channel_id)
 

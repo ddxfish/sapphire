@@ -1564,10 +1564,13 @@ function initMemoryBrowser(container, accounts) {
         const label = rowEl.querySelector('strong')?.textContent || rowEl.dataset.user;
         if (!window.confirm(`Forget everything about ${label}? This deletes their profile, facts, milestones, interests, and pinned memories.`)) return;
         try {
-          await api('admin/forget-user', {
+          const res = await api('admin/forget-user', {
             method: 'POST',
             body: JSON.stringify({ account_name: account, user_id: rowEl.dataset.user }),
           });
+          // The route answers {error} at HTTP 200 when the daemon is down — the
+          // row used to vanish with "Forgot X." and nothing deleted (row 32).
+          if (res && res.error) throw new Error(res.error);
           rowEl.remove();
           setStatus(`Forgot ${label}.`);
         } catch (err) {
@@ -2626,7 +2629,13 @@ function formatProactiveTestResult(data) {
     // 'sent' from the pipeline means "a continuity task ACCEPTED the event" —
     // the LLM runs async and can still fail. Say what's true; the internal
     // status value stays 'sent' (coordinator follow-ups key on it).
-    const shown = row.status === 'sent' ? 'queued (LLM runs async — watch the channel)' : (row.status || 'unknown');
+    // delivery='static' = the fallback TEXT posted because no daemon task took
+    // the event — this used to read "queued" for exactly that failure (row 18).
+    const shown = row.status === 'sent'
+      ? (row.delivery === 'static'
+          ? 'posted the STATIC fallback text — no daemon task accepted the event (see hints above)'
+          : 'queued (LLM runs async — watch the channel)')
+      : (row.status || 'unknown');
     lines.push(`  ${row.account_name}:${row.channel_id} → ${shown}${row.reason ? ` (${row.reason})` : ''}${preview}`);
   }
   lines.push('Note: preview text is the static fallback — the live message is LLM-written and may differ.');
@@ -2653,7 +2662,7 @@ async function runProactiveTest(container, kind) {
   try {
     const data = await api('proactive/test', {
       method: 'POST',
-      body: JSON.stringify({ kind, dry_run: dryRun, reset_sleep_state: true }),
+      body: JSON.stringify({ kind, dry_run: dryRun, reset_sleep_state: !dryRun }),
     });
     output.textContent = formatProactiveTestResult(data);
   } catch (err) {

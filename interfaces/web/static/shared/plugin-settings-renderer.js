@@ -306,8 +306,14 @@ function renderWidget(field, value) {
                 <input type="checkbox" id="${id}" ${value ? 'checked' : ''}>
             </label>`;
 
-        case 'number':
-            return `<input type="number" id="${id}" value="${value}" step="any" placeholder="${escapeHtml(field.placeholder || '')}">`;
+        case 'number': {
+            // min/max from the schema — a plugin author could not express a
+            // range before (Discord hunt 2.13.0, row 81: hour 24 fell to the
+            // manifest cron silently).
+            const bounds = (field.min !== undefined ? ` min="${Number(field.min)}"` : '')
+                + (field.max !== undefined ? ` max="${Number(field.max)}"` : '');
+            return `<input type="number" id="${id}" value="${value}" step="any"${bounds} placeholder="${escapeHtml(field.placeholder || '')}">`;
+        }
 
         case 'list': {
             // Chips + "+ Add" row. Value lives as JSON in a hidden input so
@@ -392,7 +398,12 @@ function getFieldValue(container, key, field) {
 
 function coerce(value, field) {
     if (!field) return value;
-    if (field.type === 'number') return Number(value) || 0;
+    if (field.type === 'number') {
+        let n = Number(value) || 0;
+        if (field.min !== undefined && n < Number(field.min)) n = Number(field.min);
+        if (field.max !== undefined && n > Number(field.max)) n = Number(field.max);
+        return n;
+    }
     if (field.type === 'boolean') return Boolean(value);
     if (field.type === 'list') {
         try { const a = JSON.parse(value); return Array.isArray(a) ? a : []; } catch { return []; }

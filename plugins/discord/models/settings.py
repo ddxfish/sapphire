@@ -303,6 +303,16 @@ class SettingsStore:
             _merge_overlay(merged.dm_overrides[key], overlay)
         return merged
 
+    def replace_from(self, other: 'SettingsStore') -> 'SettingsStore':
+        """Swap this store's overlays for another's IN PLACE. Services capture
+        the store object at build time; rebinding runtime.settings_store left
+        them on the boot-time overlays until restart (hunt 2.13.0, row 44)."""
+        self.global_overlay = other.global_overlay
+        self.guild_overrides = other.guild_overrides
+        self.channel_overrides = other.channel_overrides
+        self.dm_overrides = other.dm_overrides
+        return self
+
     def resolve(self, guild_id: str | None = None, channel_id: str | None = None, dm_id: str | None = None) -> EffectiveSettings:
         effective = EffectiveSettings()
         overlays = [

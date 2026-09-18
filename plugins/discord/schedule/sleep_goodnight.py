@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from plugins.discord.lib.server_time import now_local
+from plugins.discord.lib.server_time import now_local, user_hour
 from plugins.discord.schedule._runtime import connected_accounts, execute_proactive, reload_settings
 
 
@@ -33,4 +33,4 @@ def run(event):
                 sent += 1
             else:
                 skipped += 1
-    return f'Sleep goodnight complete ({sent} sent, {skipped} skipped, hour={now.hour})'
+    return f'Sleep goodnight complete ({sent} sent, {skipped} skipped, hour={user_hour(now)})'

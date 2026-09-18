@@ -143,6 +143,12 @@ class DistillService:
         min_messages: int,
     ) -> dict:
         rows = self.buffer_repository.list_unprocessed_for_user(account_name, user_id, limit=40)
+        # One origin per pass: a mixed DM+guild batch stamped EVERY extracted
+        # fact with the guild origin, laundering DM facts public (hunt 2.13.0,
+        # row 30). The other origin's rows stay pending for the next pass.
+        if rows:
+            first_origin = str(rows[0].get('origin') or '')
+            rows = [r for r in rows if str(r.get('origin') or '') == first_origin]
         if not rows:
             return {'user_id': user_id, 'status': 'skipped', 'reason': 'empty_buffer'}
         if not force and len(rows) < min_messages:

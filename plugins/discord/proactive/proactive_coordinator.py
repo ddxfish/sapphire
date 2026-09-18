@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from plugins.discord.lib.server_time import now_local
+from plugins.discord.lib.server_time import now_local, user_hour
 from plugins.discord.models.intentions import ReplyMessageIntention, UpdatePresenceIntention
+from plugins.discord.proactive.targets import parse_target
 
 
 class ProactiveCoordinator:
@@ -127,16 +128,15 @@ class ProactiveCoordinator:
             situation_service = self.cognitive_orchestrator.channel_situation_service
             targets = list(getattr(settings.proactive, 'greeting_targets', None) or [])
             for entry in targets:
-                # account:channel_id
-                parts = str(entry).split(':', 1)
-                if len(parts) == 2 and parts[0] == account_name and parts[1]:
-                    situation = situation_service.build(account_name, parts[1])
+                parsed = parse_target(entry)      # the ONE parser (row 43)
+                if parsed and parsed[0] == account_name and parsed[1]:
+                    situation = situation_service.build(account_name, parsed[1])
                     break
         choice = self.presence_service.select_presence(
             settings,
             asleep=asleep,
             forced_wake=forced_wake,
-            local_hour=now.hour,
+            local_hour=user_hour(now),
             situation=situation,
         )
         mode = choice.get('mode', 'awake')

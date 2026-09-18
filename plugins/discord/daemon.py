@@ -27,6 +27,13 @@ def _reply_handler(task, event_data: dict, response_text: str):
         runtime.event_bridge.clear_pending_payload(message_id)
     if str(trigger_config.get('auto_reply', True)).lower() in {'false', '0'}:
         logger.info('Discord task is listen-only (auto_reply off) — response not delivered')
+        # Drop the per-message latches too: this lane never reached
+        # handle_llm_response, so _pending (full payload) and the tool-sent /
+        # gif-sent sets grew forever on the Help Bot task (row 24).
+        try:
+            runtime.conversation_service.discard_pending(message_id)
+        except Exception:
+            logger.debug('discard_pending failed for %s', message_id, exc_info=True)
         return {'status': 'skipped', 'reason': 'auto_reply_disabled'}
     result = runtime.conversation_service.handle_llm_response(task, event_data or {}, response_text)
     if result and result.get('status') == 'sent':
@@ -62,7 +69,9 @@ def start(plugin_loader, settings):
         try:
             plugin_loader.register_reply_handler(handle.plugin_name, _reply_handler)
         except Exception:
-            logger.debug('Reply handler registration unavailable', exc_info=True)
+            # Without a handler every reply is answered into the void for the
+            # life of the process — this was a DEBUG line (row 62).
+            logger.error('[DISCORD] Reply handler registration FAILED — replies will not be delivered', exc_info=True)
         logger.info('[DISCORD] Daemon started (health=%s)', get_health_state())
 
 
@@ -81,6 +90,34 @@ def stop():
         if handle.thread and handle.thread.is_alive():
             handle.thread.join(timeout=10)
         daemon_state.handle = None
+        # A handler bound to a dead runtime consumed events into "runtime is
+        # unavailable" (row 85). Core's unload pops it too; a bare stop didn't.
+        try:
+            unreg = getattr(handle.plugin_loader, 'unregister_reply_handler', None)
+            if callable(unreg):
+                unreg(handle.plugin_name)
+        except Exception:
+            logger.debug('Reply handler unregister failed', exc_info=True)
+
+
+def on_settings_saved(settings: dict):
+    """Core's settings-saved hook for daemon plugins (hunt 2.13.0, row 80).
+    Rebuild the settings store IN PLACE so every service that captured it at
+    build time sees the new overlays without a restart."""
+    runtime = get_runtime()
+    if not runtime:
+        return
+    try:
+        repo = getattr(runtime, 'channel_repository', None)
+        store = getattr(runtime, 'settings_store', None)
+        if repo is not None and store is not None and hasattr(store, 'replace_from'):
+            store.replace_from(repo.load_settings_store())
+        # The one construct-time scalar (row 80): the batch window.
+        batching = getattr(runtime, 'batching_service', None)
+        if batching is not None and store is not None and hasattr(batching, 'default_window_seconds'):
+            batching.default_window_seconds = max(1.0, float(store.resolve().channel.batching_seconds))
+    except Exception:
+        logger.debug('[DISCORD] settings store reload failed', exc_info=True)
 
 
 def get_runtime() -> Optional[RuntimeContainer]:

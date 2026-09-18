@@ -194,7 +194,13 @@ def _get_upcoming_tasks(scheduler, hours: int = 4) -> list:
     except Exception:
         return upcoming
     try:
-        now = datetime.now()
+        # Same clock the scheduler fires on (USER_TIMEZONE) — the OS clock put
+        # her "Upcoming" off by the tz offset on a mismatched box (row 82).
+        try:
+            from core.continuity.scheduler import _user_now
+            now = _user_now().replace(tzinfo=None)
+        except Exception:
+            now = datetime.now()
         cutoff = now + timedelta(hours=hours)
         for t in scheduler.list_tasks():
             if not t.get("enabled"):

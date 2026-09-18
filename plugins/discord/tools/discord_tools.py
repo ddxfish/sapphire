@@ -322,10 +322,25 @@ def _reach_error(channel: str, account_name: str | None) -> str | None:
     if reach.get('is_dm'):
         return 'From inside a server I never post into DMs.'
     event_guild = str(event.get('guild_id') or '')
-    if event_guild and str(reach.get('guild_id') or '') != event_guild:
+    if not event_guild:
+        # Fail CLOSED: an event with no guild id used to skip the cross-server
+        # check entirely (hunt 2.13.0, row 9). The event channel itself stays
+        # reachable (handled above).
+        return "I can't tell which server this conversation is in, so I only act in this channel."
+    if str(reach.get('guild_id') or '') != event_guild:
         return ("That channel is in a different server than this conversation. From inside a server "
                 "I only act in this server — ask the owner to post there from their own chat.")
     return None
+
+
+def _event_for_guild(event: dict | None) -> str | None:
+    """Origin filter for memory READS inside a Discord turn (row 29): in a
+    server, DM-learned facts stay out; in a DM or an operator chat, everything."""
+    if not event:
+        return None
+    if str(event.get('is_dm', '')).lower() in {'1', 'true'}:
+        return None
+    return str(event.get('guild_id') or '') or 'guild'
 
 
 def _scope_account() -> str | None:
@@ -449,6 +464,12 @@ def discord_get_servers():
     if not transport:
         return ('Discord runtime is not available', False)
     servers = transport.list_servers()
+    event = _event_data()
+    if event and _tools_stay_in_server():
+        # Its sibling discord_list_channels was filtered; this one disclosed
+        # every server from inside any of them (row 33).
+        event_guild = str(event.get('guild_id') or '')
+        servers = [s for s in servers if str(s.get('id') or '') == event_guild]
     if not servers:
         return ('No servers available (bot may still be connecting).', True)
     return ('\n'.join(f"{item['name']} ({item['id']})" for item in servers), True)
@@ -473,7 +494,8 @@ def discord_list_channels(*, server: str = '', kind: str = 'text'):
     # Inside a server event, the roster is that server's (H3 reach).
     event = _event_data()
     event_guild = str(event.get('guild_id') or '') if event else ''
-    if event_guild and _tools_stay_in_server():
+    if event and _tools_stay_in_server():
+        # inside ANY event: this server only; no guild id = nothing else (row 9)
         rows = [r for r in rows if str(r.get('guild_id') or '') == event_guild]
     if not rows:
         return ('No channels found' + (f' matching {server!r}' if needle else '') + ' (bot may still be connecting).', True)
@@ -674,6 +696,9 @@ def discord_join_voice(*, channel: str):
         resolved = transport.resolve_voice_channel_sync(channel, account_name=account_name)
     except Exception as exc:
         return (f'Voice channel not found: {exc}', False)
+    reach = _reach_error(str(resolved.get('channel_id') or ''), account_name)   # H3 (row 33)
+    if reach:
+        return (reach, False)
     from plugins.discord.models.intentions import JoinVoiceIntention
 
     intention = JoinVoiceIntention(
@@ -716,6 +741,8 @@ def discord_leave_voice(*, channel=None):
             str(row.get('channel_id') or '')
             for row in (voice_transport.list_connections(account_name) if voice_transport else [])
         ]
+    # H3 (row 33): from inside a server, only that server's voice channel(s).
+    targets = [t for t in targets if t and not _reach_error(t, account_name)]
     if not targets:
         return ('Not connected to any voice channel.', True)
     from plugins.discord.models.intentions import LeaveVoiceIntention
@@ -775,6 +802,12 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
     event = _event_data()
     event_account = str(event.get('account') or '').strip()
     event_author = str(event.get('author_id') or '').strip()
+    if event and not event_author:
+        # A turn with no human author (a scheduled post) has NO per-person
+        # memory reach: the guards below armed only when identity was present,
+        # i.e. they were OFF in exactly the turn whose prompt is untrusted
+        # channel text (hunt 2.13.0, row 8).
+        return ('This is a scheduled post with no one asking — Discord memory is not available here.', False)
     if event_account:
         account_name = event_account
     else:
@@ -797,7 +830,7 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
             if event_author and str(row['user_id']) != event_author:
                 return ('In a Discord conversation I only share what I remember about the person '
                         'asking — the owner can browse everyone in Settings > Discord > Memory.', False)
-            facts = repo.list_facts(account_name, row['user_id'], limit=20)
+            facts = repo.list_facts(account_name, row['user_id'], limit=20, for_guild=_event_for_guild(event))
             label = _memory_user_label(row)
             header = f"{label} (user_id {row['user_id']}, {int(row.get('message_count') or 0)} messages seen"
             if int(row.get('birthday_month') or 0):
@@ -807,7 +840,7 @@ def discord_memory(*, action: str, user: str = '', content: str = '', query: str
                 return (f'{header}: no stored facts yet.', True)
             return ('\n'.join([header + ':'] + [f"- {f['content']}" for f in facts]), True)
         if str(query or '').strip():
-            rows = repo.search_facts(account_name, query, limit=20)
+            rows = repo.search_facts(account_name, query, limit=20, for_guild=_event_for_guild(event))
             if event_author:
                 rows = [f for f in rows if str(f.get('user_id') or '') == event_author]
             if not rows:
@@ -880,11 +913,13 @@ def execute(function_name, arguments, config=None):
         event = current_event_data.get() or {}
         if isinstance(event, dict):
             _bind_task_follow_up_context(event)
-            if event.get('channel_id'):
-                _reply_channel_id.set(str(event['channel_id']))
-            valid_message_id = _valid_reply_message_id(event.get('message_id'))
-            if valid_message_id:
-                _reply_message_id.set(valid_message_id)
+            # Set-or-CLEAR inside an event: these used to stick from the previous
+            # event on a reused drain thread when the current one lacked the
+            # field — a queued proactive post quote-replied a stale id (row 25).
+            # No event (operator chat / core-provided routing) leaves them alone.
+            if event:
+                _reply_channel_id.set(str(event['channel_id']) if event.get('channel_id') else None)
+                _reply_message_id.set(_valid_reply_message_id(event.get('message_id')))
             if event.get('account'):
                 _reply_account.set(str(event['account']))
             else:

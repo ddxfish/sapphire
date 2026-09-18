@@ -412,13 +412,16 @@ class VoiceListenerService:
             channel_id,
             len(wav_bytes or b''),
         )
-        try:
-            if self._use_core_conversation(session) and self.conversation_runner:
-                self.conversation_runner.interrupt_active_turn(session.session_id)
-            else:
+        # Core-conversation mode: the ADDRESSING gate decides whether this
+        # utterance replaces her turn (submit_turn_text interrupts only when
+        # addressed). Interrupting here, before the gate, let any bystander cut
+        # her off mid-sentence — the 2026-09-13 mic fix's missing half (hunt
+        # 2.13.0, row 10). Legacy mode keeps its unconditional stop.
+        if not (self._use_core_conversation(session) and self.conversation_runner):
+            try:
                 self.voice_transport.stop_playback_sync(account_name, channel_id)
-        except Exception:
-            logger.debug('Barge-in playback stop failed for %s:%s', account_name, channel_id, exc_info=True)
+            except Exception:
+                logger.debug('Barge-in playback stop failed for %s:%s', account_name, channel_id, exc_info=True)
         result = self.voice_perception_service.process_audio(
             session.session_id,
             audio_bytes=wav_bytes,

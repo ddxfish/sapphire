@@ -220,6 +220,17 @@ class SapphireSpeechBridge:
         tts = getattr(system, 'tts', None) if system else None
         if not tts or not hasattr(tts, 'generate_audio_data'):
             return {'audio_bytes': b'', 'format': 'wav'}
+        # The registry substitutes a Null provider on a constructor failure; a
+        # hasattr probe read it as healthy — bot joins, listens, never speaks,
+        # one WARNING (row 73). Ask the provider itself.
+        probe = getattr(getattr(tts, 'provider', tts), 'is_available', None)
+        if callable(probe):
+            try:
+                if not probe():
+                    logger.warning('[DISCORD] TTS provider reports unavailable — nothing will be spoken')
+                    return {'audio_bytes': b'', 'format': 'wav', 'error': 'tts_unavailable'}
+            except Exception:
+                pass
         try:
             audio_bytes = tts.generate_audio_data(str(text or '').strip())
         except Exception as exc:

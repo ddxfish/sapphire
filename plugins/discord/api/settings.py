@@ -55,5 +55,9 @@ def save_settings(**kwargs):
         store = storage.channel_repository.load_settings_store()
     runtime = get_runtime()
     if runtime:
-        runtime.settings_store = store
+        current = getattr(runtime, 'settings_store', None)
+        if current is not None and hasattr(current, 'replace_from'):
+            current.replace_from(store)      # in place (row 44)
+        else:
+            runtime.settings_store = store
     return {'status': 'saved', 'scope_type': scope_type, 'scope_id': scope_id, 'daemon_running': is_daemon_alive(), 'daemon_state': get_health_state()}

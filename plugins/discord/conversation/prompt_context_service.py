@@ -27,8 +27,12 @@ class PromptContextService:
         self.channel_situation_service = channel_situation_service
         self.settings_store = settings_store
 
-    def build(self, batch) -> dict:
-        last = batch.observations[-1]
+    def build(self, batch, trigger=None) -> dict:
+        # One identity for the whole turn: the reply gates key off the newest
+        # ADDRESSED message, but this used to build profile facts, recall and
+        # the transcript exclusion from observations[-1] — Bob's stored notes
+        # labelled with Alice's name (hunt 2.13.0, row 15).
+        last = trigger or getattr(batch, 'trigger', None) or batch.observations[-1]
         transcript_rows = self.message_repository.get_recent_messages(last.account_name, last.channel_id, limit=20)
         media_by_message = {}
         if self.media_service:

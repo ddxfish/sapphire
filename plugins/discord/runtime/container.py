@@ -416,7 +416,14 @@ class RuntimeContainer:
         await self._reconcile_accounts()
         for account_name in self.transport.list_connected():
             if self.proactive_coordinator:
-                await self.proactive_coordinator.tick_async(account_name)
+                try:
+                    await self.proactive_coordinator.tick_async(account_name)
+                except Exception:
+                    # Was the only unguarded await in the tick: one presence
+                    # failure skipped voice auto-join AND the VC reaper for
+                    # every later account, 15 s at a time (live on dev
+                    # 2026-09-15 for 7.5 min — hunt 2.13.0, row 41).
+                    logger.exception("Proactive tick failed for %s", account_name)
             if self.voice_auto_join_service:
                 try:
                     await self.voice_auto_join_service.tick_async(account_name)
@@ -563,6 +570,7 @@ class RuntimeContainer:
             policy_service=self.policy_service,
             prompt_context_service=self.prompt_context_service,
             trace_repository=self.trace_repository,
+            media_service=self.media_service,        # image-IN lane was never wired (row 14)
             reply_style_service=self.reply_style_service,
             delivery_style_service=self.delivery_style_service,
             edit_history_service=self.edit_history_service,

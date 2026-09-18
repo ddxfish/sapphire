@@ -74,6 +74,13 @@ class DiscordConversationRunner:
         return {'status': 'active', 'chat_name': chat_name}
 
     async def start_async(self, session) -> dict:
+        with self._lock:
+            live = self._sessions.get(session.session_id)
+        if live:
+            # The 15 s tick called this for every occupied VC: a full driver
+            # stack was built and thrown away, and the VC chat's settings were
+            # rewritten every tick (row 38). Check BEFORE building.
+            return {'status': 'already_active', 'chat_name': live.get('chat_name', '')}
         prepared = self._prepare_session(session)
         if prepared.get('status') != 'prepared':
             return prepared
@@ -124,7 +131,8 @@ class DiscordConversationRunner:
             transport=self.transport,
             account_name=session.account_name,
         )
-        chat_name = ensure_voice_chat(
+        try:
+            chat_name = ensure_voice_chat(
             system,
             session.guild_id,
             session.channel_id,
@@ -137,7 +145,12 @@ class DiscordConversationRunner:
             llm_provider=str(getattr(settings.voice, 'llm_provider', '') or '') if settings else '',
             llm_model=str(getattr(settings.voice, 'llm_model', '') or '') if settings else '',
             keep_history=bool(getattr(settings.voice, 'keep_chat_history', False)) if settings else False,
-        )
+            )
+        except Exception as exc:
+            # Fail CLOSED (row 69): a VC chat that could not be isolated used to
+            # start anyway on the OWNER's toolset and memory scopes.
+            logger.error('Discord voice chat for %s:%s refused — %s', session.account_name, session.channel_id, exc)
+            return {'status': 'error', 'error': f'voice_chat_unavailable: {exc}'}
         driver, gate, source, frame_feed = self._build_stack(
             system,
             session=session,

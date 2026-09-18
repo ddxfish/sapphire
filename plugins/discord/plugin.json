@@ -814,10 +814,12 @@
       {
         "key": "proactive.greeting_utc_hour",
         "type": "number",
-        "label": "Greeting hour (server local)",
+        "label": "Greeting hour",
         "default": 9,
+        "min": 0,
+        "max": 23,
         "tab": "Proactive",
-        "help": "Hour (0-23, server local time) when the morning greeting posts. Also the sleep-schedule wake hour and the start of the birthday-wish window."
+        "help": "Hour (0-23) in Sapphire's configured timezone (Settings > Identity) — the same clock the Triggers page uses — when the morning greeting posts. Also the sleep-schedule wake hour and the start of the birthday-wish window."
       },
       {
         "key": "proactive.greeting_use_llm",
@@ -871,10 +873,12 @@
       {
         "key": "proactive.sleep_utc_hour",
         "type": "number",
-        "label": "Sleep hour (server local)",
+        "label": "Sleep hour",
         "default": 22,
+        "min": 0,
+        "max": 23,
         "tab": "Proactive",
-        "help": "Hour (0-23, server local time) when sleep starts; runs until the greeting hour (wraps past midnight). Set equal to the greeting hour to disable the window."
+        "help": "Hour (0-23) in Sapphire's configured timezone when sleep starts; runs until the greeting hour (wraps past midnight). Set equal to the greeting hour to disable the window."
       },
       {
         "key": "proactive.goodnight_use_llm",
@@ -922,6 +926,8 @@
         "type": "number",
         "label": "Birthday wish spread end hour",
         "default": 20,
+        "min": 0,
+        "max": 23,
         "tab": "Proactive",
         "help": "Birthday wishes post at a per-person random time between the greeting hour and this hour (0-23, server local) instead of all at once."
       },

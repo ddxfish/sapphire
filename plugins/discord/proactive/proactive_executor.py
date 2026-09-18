@@ -153,7 +153,9 @@ class ProactiveExecutor:
             on_sent(intention)
         if self.trace_repository:
             self.trace_repository.record_trace('proactive_sent', f'Sent {marker}', {'channel_id': intention.channel_id, 'reason': intention.reason})
-        return {'status': 'sent', 'transport': result}
+        # delivery='static': the fallback TEXT posted because no daemon task took
+        # the event — the panel called this "queued" (row 18).
+        return {'status': 'sent', 'delivery': 'static', 'transport': result}
 
     async def _send_text_async(self, intention, *, marker: str, on_sent=None, reply_to=None, account_name=None) -> dict:
         if not self.transport and not self.event_bridge:
@@ -287,6 +289,10 @@ class ProactiveExecutor:
             account_name=intention.account_name or None,
             guild_id=str(payload.get('guild_id') or self._guild_id_for_channel(intention.channel_id) or '') or None,
         )
+        if result.get('status') != 'sent':
+            # A 403/404 reminder used to be traced as sent and the task marked
+            # completed — the reminder was gone, silently (hunt 2.13.0, row 5).
+            return {'status': 'error', 'reason': result.get('error', 'send_failed'), 'transport': result, 'fallback': reason}
         if self.trace_repository:
             self.trace_repository.record_trace('proactive_sent', f'Sent {marker} via direct transport', {'channel_id': intention.channel_id, 'reason': intention.reason, 'task_id': intention.metadata.get('task_id'), 'fallback': reason})
         return {'status': 'sent', 'transport': result, 'fallback': reason}
@@ -419,10 +425,24 @@ class ProactiveExecutor:
         return prompt
 
     def _guild_id_for_channel(self, channel_id: str) -> str:
-        if not self.channel_repository or not channel_id:
+        if not channel_id:
             return ''
-        channel = self.channel_repository.get_channel(str(channel_id)) or {}
-        return str(channel.get('guild_id') or '').strip()
+        channel = (self.channel_repository.get_channel(str(channel_id)) or {}) if self.channel_repository else {}
+        guild_id = str(channel.get('guild_id') or '').strip()
+        if guild_id:
+            return guild_id
+        # The channels table is written from INBOUND messages only — a quiet
+        # target channel has no row, and an empty guild_id disarmed the reach
+        # rule and dropped the server/channel prompt lines (hunt 2.13.0, row 9).
+        # Ask the transport (no-op on the daemon loop thread, where the sync
+        # bridge refuses to block).
+        reach = getattr(self.transport, 'channel_reach_sync', None)
+        if callable(reach):
+            try:
+                return str((reach(str(channel_id)) or {}).get('guild_id') or '').strip()
+            except Exception:
+                return ''
+        return ''
 
     def _prime_mention_map(self, payload: dict) -> None:
         if not self.mention_map_service:

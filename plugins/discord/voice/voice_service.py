@@ -180,8 +180,10 @@ class VoiceService:
             active = self.voice_session_service.get_active_session(intention.account_name, intention.channel_id)
             if active:
                 session = self.voice_session_service.close_session(active.session_id)
-        transport_result = self.voice_transport.disconnect_sync(intention.account_name, intention.channel_id)
+        # Listener first, then the socket: stopping after the disconnect raised
+        # on "not connected" before the sink could clean up (row 37).
         self._stop_listener(intention.account_name, intention.channel_id)
+        transport_result = self.voice_transport.disconnect_sync(intention.account_name, intention.channel_id)
         summary = {}
         if session:
             summary = self.voice_session_service.summarize_session(session.session_id)

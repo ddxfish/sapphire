@@ -57,9 +57,13 @@ class ForgetService:
             cursor = conn.execute('DELETE FROM messages WHERE author_id = ?', (user_id,))
             removed['messages'] = int(cursor.rowcount or 0)
             # Pending follow-ups that name them (social check-ins, reminders).
+            # Reminders/commitments key the person as "user_id", social check-ins
+            # as "author_id" — the old LIKE matched only the latter, so a
+            # forgotten person's reminder still fired and @-mentioned them (row 31).
             cursor = conn.execute(
-                "DELETE FROM tasks WHERE account_name = ? AND status = 'pending' AND payload_json LIKE ?",
-                (account_name, f'%"author_id": "{user_id}"%'),
+                "DELETE FROM tasks WHERE account_name = ? AND status IN ('pending', 'processing') "
+                "AND (payload_json LIKE ? OR payload_json LIKE ?)",
+                (account_name, f'%"author_id": "{user_id}"%', f'%"user_id": "{user_id}"%'),
             )
             removed['tasks'] = int(cursor.rowcount or 0)
         if self.trace_repository:

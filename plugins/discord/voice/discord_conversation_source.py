@@ -117,7 +117,14 @@ class DiscordConversationSource:
             except queue.Full:
                 pass
 
+    def _stale(self) -> bool:
+        """A newer turn owns this shared source (H14 generation): the replaced
+        turn's finish/wait/feed must not touch the new turn's stream (row 11)."""
+        gen = getattr(self, '_gen', None)
+        return gen is not None and getattr(self.driver, '_turn_gen', gen) != gen
+
     def start(self, *, start_playback: bool = True) -> None:
+        self._gen = getattr(self.driver, '_turn_gen', None)
         self._stop_flag.clear()
         if self._running:
             self._audio_bytes_fed = 0
@@ -189,7 +196,7 @@ class DiscordConversationSource:
                     logger.error('[DISCORD] frame processing failed: %s', exc)
 
     def feed_chunk(self, chunk: dict) -> None:
-        if self._stop_flag.is_set() or not chunk:
+        if self._stale() or self._stop_flag.is_set() or not chunk:
             return
         audio_b64 = chunk.get('audio_b64')
         if not audio_b64:
@@ -217,13 +224,15 @@ class DiscordConversationSource:
         self._fire_reply_end()
 
     def finish(self) -> None:
-        if not self._stop_flag.is_set():
+        if not self._stale() and not self._stop_flag.is_set():
             self.playback_service.finish(self.account_name, self.channel_id)
 
     def stop(self) -> None:
         self.interrupt_playback()
 
     def wait(self, timeout: float = 180.0) -> None:
+        if self._stale():
+            return          # the new turn owns playback and its fallback (row 11)
         self.playback_service.wait(self.account_name, self.channel_id, timeout=timeout)
         # The fallback exists for "streaming TTS produced nothing". A turn cut
         # by a barge-in also fed nothing — and its partial row ("Honestly, K")

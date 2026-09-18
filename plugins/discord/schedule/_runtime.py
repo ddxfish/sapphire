@@ -7,7 +7,12 @@ def reload_settings(runtime):
     if not runtime:
         return None
     if getattr(runtime, 'channel_repository', None):
-        runtime.settings_store = runtime.channel_repository.load_settings_store()
+        fresh = runtime.channel_repository.load_settings_store()
+        current = getattr(runtime, 'settings_store', None)
+        if current is not None and hasattr(current, 'replace_from'):
+            current.replace_from(fresh)      # in place: every service holds this object (row 44)
+        else:
+            runtime.settings_store = fresh
     return runtime.settings_store.resolve() if runtime.settings_store else None
 
 

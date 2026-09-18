@@ -11,7 +11,7 @@ from plugins.discord.cognition.relationship_policy import (
     relationship_snapshot,
     relationship_strength,
 )
-from plugins.discord.lib.server_time import now_local
+from plugins.discord.lib.server_time import now_local, user_hour
 from plugins.discord.models.intentions import OutreachIntention
 from plugins.discord.proactive.targets import parse_target
 
@@ -50,7 +50,7 @@ class OutreachService:
             return False
         sleep = int(proactive.sleep_utc_hour) % 24
         wake = int(proactive.greeting_utc_hour) % 24
-        hour = now.hour
+        hour = user_hour(now)
         if sleep == wake:
             return False
         if sleep < wake:
@@ -78,7 +78,7 @@ class OutreachService:
             return []
         now = now or now_local()
         now_ts = now_ts if now_ts is not None else now.timestamp()
-        if now.hour in self._greeting_blocked_hours(proactive):
+        if user_hour(now) in self._greeting_blocked_hours(proactive):
             return []
         if self._in_sleep_hours(proactive, now):
             return []

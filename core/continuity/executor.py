@@ -948,6 +948,10 @@ class ContinuityExecutor:
             output = run_func(event)
             result["responses"].append({"output": str(output) if output else None})
             result["success"] = True
+            # The handler's one-line receipt used to live only in activity.json
+            # (a count) and tasks.json (purged per boot) — three days of dev
+            # journal showed MATCHED/Triggering and never a result (row 77).
+            logger.info(f"[Continuity] Plugin task '{task.get('name')}' -> {str(output)[:200] if output else '(no output)'}")
 
             if response_cb and output:
                 try: response_cb(str(output))

@@ -50,8 +50,14 @@ class BaseWorker:
     def start(self):
         self.status = 'running'
         self._start_time = time.time()
+        # Carry the spawning turn's ContextVars (event data, reply routing)
+        # onto the worker — a bare thread saw an EMPTY event and the Discord
+        # reach rule read that as "operator chat, full reach" (row 53).
+        # Same shape as core/chat/turn.py; scopes are rebuilt per persona.
+        import contextvars
+        _ctx = contextvars.copy_context()
         self._thread = threading.Thread(
-            target=self._run_wrapper, daemon=True, name=f'agent-{self.name}'
+            target=_ctx.run, args=(self._run_wrapper,), daemon=True, name=f'agent-{self.name}'
         )
         self._thread.start()
 

@@ -19,4 +19,8 @@ def parse_target(entry) -> tuple[str, str] | None:
         return parts[0], parts[1]
     if len(parts) >= 3:
         return parts[0], parts[-1]
+    # A typo'd target used to vanish silently and the panel echoed only the
+    # parsed ones (hunt 2.13.0, row 43).
+    import logging
+    logging.getLogger(__name__).warning('Discord proactive target %r is not account:channel_id — ignored', text)
     return None

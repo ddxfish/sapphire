@@ -8,7 +8,6 @@ import json
 import logging
 import time
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
@@ -499,14 +498,13 @@ class VisionBridge:
             return data, 'image/gif'
 
     def _post_json(self, url: str, payload: dict, *, headers: dict, timeout: int) -> dict:
-        request = Request(
-            url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers=headers,
-            method='POST',
-        )
-        with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode('utf-8') or '{}')
+        # core.net: the one egress door (SOCKS/NO_PROXY policy, LAN classify).
+        # This POST — image bytes + the API key — rode raw urllib while its
+        # fetch twin was moved onto the facade in M13 (row 67).
+        from core import net
+        response = net.post(url, json=payload, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        return response.json() or {}
 
     def _debug(self, payload: dict, trace_type: str, summary: str, detail: dict, log_message: str, *args) -> None:
         if not payload.get('debug_enabled'):

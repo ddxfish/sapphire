@@ -85,13 +85,27 @@ def _get_roberta():
         if _roberta_pipeline is not None:
             return _roberta_pipeline
         try:
+            import os
             from transformers import pipeline
-            _roberta_pipeline = pipeline(
-                'sentiment-analysis',
-                model=_ROBERTA_MODEL,
-                top_k=None,
-                truncation=True,
-            )
+            # Offline-first, the house rule for every cached model (core/vibes.py,
+            # whisper, kokoro): a warm cache must load with zero network, and the
+            # hub is dialled once only when the files are missing (row 68).
+            _prev = os.environ.get('HF_HUB_OFFLINE')
+            os.environ['HF_HUB_OFFLINE'] = '1'
+            try:
+                _roberta_pipeline = pipeline('sentiment-analysis', model=_ROBERTA_MODEL, top_k=None, truncation=True)
+            except (OSError, EnvironmentError):
+                if _prev is None:
+                    os.environ.pop('HF_HUB_OFFLINE', None)
+                else:
+                    os.environ['HF_HUB_OFFLINE'] = _prev
+                logger.info('[DISCORD] RoBERTa not in the local cache — downloading once')
+                _roberta_pipeline = pipeline('sentiment-analysis', model=_ROBERTA_MODEL, top_k=None, truncation=True)
+            finally:
+                if _prev is None:
+                    os.environ.pop('HF_HUB_OFFLINE', None)
+                else:
+                    os.environ['HF_HUB_OFFLINE'] = _prev
             logger.info('[DISCORD] Twitter RoBERTa sentiment pipeline loaded')
         except ImportError:
             logger.warning(

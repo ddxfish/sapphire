@@ -173,6 +173,15 @@ root_logger.addHandler(console_handler)
 _NOISY_LOGGERS = ('uvicorn.access', 'telethon', 'httpx', 'httpcore', 'discord')
 
 def _quiet_noisy_loggers():
+    # LOG_LEVEL=DEBUG lifts the pin: py-cord's gateway/heartbeat lines are the
+    # diagnostics a stuck login needs, and they were unreachable from the UI
+    # (Discord hunt 2.13.0, row 83). Any other level keeps the libraries quiet.
+    # uvicorn.access stays pinned at every level — one line per HTTP request
+    # would drown the diagnostics the user flipped to DEBUG to see.
+    if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+        for _name in _NOISY_LOGGERS:
+            logging.getLogger(_name).setLevel(logging.WARNING if _name == 'uvicorn.access' else logging.NOTSET)
+        return
     for _name in _NOISY_LOGGERS:
         logging.getLogger(_name).setLevel(logging.WARNING)
 

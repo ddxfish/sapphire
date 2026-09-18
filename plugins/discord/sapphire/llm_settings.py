@@ -50,13 +50,14 @@ def proactive_llm_from_settings(settings, *, kind: str = 'greeting') -> tuple[st
     goodnight_provider = str(getattr(proactive, 'goodnight_model_provider', '') or '').strip()
     goodnight_model = str(getattr(proactive, 'goodnight_model_name', '') or '').strip()
 
-    if kind == 'goodnight':
-        provider = goodnight_provider or greeting_provider or cognitive_primary
-        model = goodnight_model or greeting_model or cognitive_model
-    else:
-        provider = greeting_provider or cognitive_primary
-        model = greeting_model or cognitive_model
-    return provider, model
+    # Provider and model inherit as a PAIR: a greeting provider with a blank
+    # model used to inherit the Reply LLM's MODEL id and ship it to the other
+    # provider — 400 on the wire, cooldown already burned (hunt 2.13.0, row 28).
+    if kind == 'goodnight' and goodnight_provider:
+        return goodnight_provider, goodnight_model
+    if greeting_provider:
+        return greeting_provider, greeting_model
+    return cognitive_primary, cognitive_model
 
 
 def distill_llm_from_settings(settings) -> tuple[str, str]:
@@ -67,7 +68,7 @@ def distill_llm_from_settings(settings) -> tuple[str, str]:
         return cognitive_primary, cognitive_model
     provider = str(getattr(profile, 'distill_model_provider', '') or '').strip()
     model = str(getattr(profile, 'distill_model_name', '') or '').strip()
-    return (provider or cognitive_primary), (model or cognitive_model)
+    return (provider, model) if provider else (cognitive_primary, cognitive_model)    # pair (row 28)
 
 
 def side_lanes_local_only() -> bool:
@@ -184,6 +185,7 @@ def resolve_task_llm(
                 get_system(),
                 'auto',
                 resolved_model,
+                local_only=False,     # mirror core's auto path exactly (row 57)
             )
             if selected_key:
                 resolved_primary = selected_key

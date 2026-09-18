@@ -308,10 +308,10 @@ class FakeProfileRepo:
                 return dict(row)
         return None
 
-    def list_facts(self, account_name, user_id, limit=20):
+    def list_facts(self, account_name, user_id, limit=20, *, for_guild=None, include_forgotten=False):
         return list(self.facts.get(user_id, []))
 
-    def search_facts(self, account_name, query, limit=20):
+    def search_facts(self, account_name, query, limit=20, *, for_guild=None):
         return [f for rows in self.facts.values() for f in rows if query.lower() in f['content'].lower()]
 
     def list_profiles(self, account_name, limit=30):

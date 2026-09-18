@@ -277,6 +277,17 @@ class PluginLoader:
                     # no UI click needed.
                     info["enabled"] = False
                     blocked.append(name)
+                    # Surface it: the reload path publishes on a block, the boot path
+                    # only logged — the user saw a toggle that was simply off
+                    # (Discord hunt 2.13.0, row 84).
+                    err_data = {"plugin": name,
+                                "error": f"Blocked at boot: {info.get('verify_msg') or 'load failure'}"}
+                    self._load_errors.append(err_data)
+                    try:
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                    except Exception:
+                        pass
 
         if blocked:
             logger.warning(f"[PLUGINS] Enabled but blocked (intent preserved, retry next restart): {blocked}")
@@ -919,6 +930,13 @@ class PluginLoader:
                     publish(Events.PLUGIN_LOAD_ERROR, err_data)
                 except Exception as e:
                     logger.error(f"[PLUGINS] Failed to load daemon for {name}: {e}", exc_info=True)
+                    err_data = {"plugin": name, "error": f"Daemon failed to load: {e}"}
+                    self._load_errors.append(err_data)
+                    try:
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                    except Exception:
+                        pass
 
         # Subprocess services (capabilities.services) — spawned via
         # ProcessManager with the plugin's own conda env python when the
@@ -1178,9 +1196,10 @@ class PluginLoader:
                         logger.warning(f"[PLUGINS] Failed to delete schedule task {tid}: {e}")
                 self._plugins[name].pop("schedule_task_ids", None)
             self._event_sources.pop(name, None)
-            self._reply_handlers.pop(name, None)
             if name in self._plugins:
                 daemon_mod = self._plugins[name].get("daemon_module")
+            if not (daemon_mod and hasattr(daemon_mod, "stop")):
+                self._reply_handlers.pop(name, None)
 
         # Stop daemon outside _lock (daemon.stop() acquires _lifecycle_lock)
         if daemon_mod and hasattr(daemon_mod, "stop"):
@@ -1189,6 +1208,11 @@ class PluginLoader:
                 logger.info(f"[PLUGINS] Stopped daemon for {name}")
             except Exception as e:
                 logger.warning(f"[PLUGINS] Failed to stop daemon for {name}: {e}")
+            # Reply handler goes AFTER the daemon is down (row 85): popping it
+            # first left a window where an inbound event ran the LLM and the
+            # scheduler dropped the answer (reply_callback=None, no log).
+            with self._lock:
+                self._reply_handlers.pop(name, None)
             # Clean sys.modules so file handles are released (needed for Windows rmtree)
             pkg = getattr(daemon_mod, "_pkg_name", None)
             if pkg:
@@ -1519,7 +1543,15 @@ class PluginLoader:
         if sched.get("time_setting") or sched.get("enabled_setting"):
             s = self.get_plugin_settings(name)
             if sched.get("time_setting"):
-                cron = _time_to_cron(s.get(sched["time_setting"]), cron)
+                raw = s.get(sched["time_setting"])
+                parsed = _time_to_cron(raw, None)
+                if parsed is None and raw not in (None, ""):
+                    # The fallback is deliberate (a bad value never kills the task)
+                    # but it used to be silent: the resync log printed the manifest
+                    # cron as if the user had chosen it (row 81).
+                    logger.warning(f"[PLUGINS] {name}: {sched['time_setting']}={raw!r} is not a valid "
+                                   f"hour or HH:MM — schedule '{sched.get('name')}' keeps '{cron}'")
+                cron = parsed or cron
             if sched.get("enabled_setting") and sched["enabled_setting"] in s:
                 enabled = bool(s[sched["enabled_setting"]])
         return {
@@ -1663,6 +1695,15 @@ class PluginLoader:
                 logger.info(f"[PLUGINS] Started deferred daemon for {name}")
             except Exception as e:
                 logger.error(f"[PLUGINS] Failed to start deferred daemon for {name}: {e}", exc_info=True)
+                # A daemon that failed to start used to leave the plugin "loaded
+                # and on" with no bot behind it — error log only (row 75).
+                err_data = {"plugin": name, "error": f"Daemon failed to start: {e}"}
+                self._load_errors.append(err_data)
+                try:
+                    from core.event_bus import publish, Events
+                    publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                except Exception:
+                    pass
 
     # ── Plugin services (subprocess servers, optional per-plugin conda env) ──
 
@@ -2097,6 +2138,12 @@ class PluginLoader:
             self._reply_handlers[plugin_name] = handler
         logger.debug(f"[PLUGINS] Registered reply handler for {plugin_name}")
 
+    def unregister_reply_handler(self, plugin_name: str):
+        """Drop a daemon's reply handler (its stop() calls this — a handler bound
+        to a dead runtime consumed events into 'runtime unavailable', row 85)."""
+        with self._lock:
+            self._reply_handlers.pop(plugin_name, None)
+
     def _get_reply_handler(self, source_name: str) -> Optional[Callable]:
         """Find the reply handler for an event source by looking up its plugin."""
         with self._lock:
@@ -2133,7 +2180,11 @@ class PluginLoader:
         any_accepted = False
         for task in tasks:
             result = self._scheduler.fire_event_task(task["id"], event_data, reply_callback=reply_handler)
-            if result.get("success", False) or result.get("error") not in ("Event filtered out", "Account mismatch"):
+            # Accepted = the task took it (ran or queued). Before 2026-09-17 this was a
+            # negative allowlist — task-disabled / not-found / wrong-type / unparseable /
+            # queue-full all reported "accepted", so a plugin recorded its cooldown and
+            # posted nothing (Discord hunt 2.13.0, rows 3 + 52).
+            if result.get("success", False):
                 any_accepted = True
         return any_accepted
 

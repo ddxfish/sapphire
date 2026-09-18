@@ -18,7 +18,9 @@ class FakeTransport:
             'reply_to_message_id': reply_to_message_id,
             'account_name': account_name,
         })
-        return {'status': 'ok', 'messages': [{'message_id': 'bot-1'}]}
+        # The real transport answers 'sent'; a 'sent' check now guards the
+        # direct follow-up path (hunt 2.13.0, row 5).
+        return {'status': 'sent', 'messages': [{'message_id': 'bot-1'}]}
 
     def hold_typing_sync(self, channel_id, duration, *, account_name=None):
         return None

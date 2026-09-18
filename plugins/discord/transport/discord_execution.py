@@ -97,6 +97,10 @@ class DiscordExecution:
         account_name = str(account_name or '').strip()
         if account_name and account_name in self.transport._accounts:
             return account_name, self.transport._accounts[account_name]
+        if account_name:
+            # Never substitute: a renamed/typo'd account used to post as the
+            # first connected bot with no warning (hunt 2.13.0, row 27).
+            raise RuntimeError(f"Discord account '{account_name}' is not connected or not configured")
         connected = self.transport.list_connected()
         if connected:
             name = connected[0]
@@ -709,7 +713,22 @@ class DiscordExecution:
             raise RuntimeError(f"Account '{name}' has no Discord client")
         for key in list(self._voice_listeners):
             if key[0] == name and (not channel_id or key[1] == str(channel_id)):
-                self._voice_listeners.pop(key, None)
+                # Clean the sink here: leave() disconnects first, so the later
+                # stop_voice_listener raised on "not connected" before it could
+                # (row 37) — timers, buffers and the playback entry leaked.
+                entry = self._voice_listeners.pop(key, None) or {}
+                try:
+                    vc = entry.get('voice_client')
+                    if vc and getattr(vc, 'is_recording', lambda: False)():
+                        vc.stop_recording()
+                except Exception:
+                    logger.debug('stop_recording on leave failed for %s', key, exc_info=True)
+                try:
+                    sink = entry.get('sink')
+                    if sink and hasattr(sink, 'cleanup'):
+                        sink.cleanup()
+                except Exception:
+                    logger.debug('sink cleanup on leave failed for %s', key, exc_info=True)
         disconnected = False
         left_channel = None
         for guild in getattr(client, 'guilds', []) or []:
