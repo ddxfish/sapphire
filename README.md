@@ -93,7 +93,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 ## Requirements
 
 - Ubuntu 22.04+ or Windows 11+
-- Mac is Docker-only
+- Mac is Docker-only (Intel and Apple Silicon — the image is multi-arch)
 - Python 3.11+ (via conda)
 - 16GB+ system RAM with TTS STT
 - More RAM if you need a local LLM
@@ -171,7 +171,7 @@ docker compose up -d
 
 Web UI: https://localhost:8073 — TTS and STT work through the browser, no mic hardware needed.
 
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or [Docker Engine](https://docs.docker.com/engine/install/) (Linux). GPU support and full docs: [DOCKER.md](docs/DOCKER.md)
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or [Docker Engine](https://docs.docker.com/engine/install/) (Linux). The image runs natively on `amd64` and `arm64`, so Apple Silicon Macs need no extra flags; the NVIDIA GPU image is `amd64` only. GPU support and full docs: [DOCKER.md](docs/DOCKER.md)
 
 ## Update
 ```bash

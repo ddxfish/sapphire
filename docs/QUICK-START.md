@@ -217,10 +217,11 @@ Connect a Discord bot to your server.
 1. Create a bot at [Discord Developer Portal](https://discord.com/developers/applications)
 2. Enable **Message Content Intent** in the Bot tab
 3. Invite the bot to your server via OAuth2 URL
-4. In Sapphire: Settings → expand Plugin Settings → Discord → paste bot token
-5. Enable Discord tools in your toolset
+4. In Sapphire: Settings → Plugins → enable **Discord**. If a **Missing: …** strip appears, click **Install** and restart — the Discord library installs from a git commit, so Git has to be on your PATH (and `discord.py` must not be installed)
+5. Settings → expand Plugin Settings → Discord → paste bot token
+6. Enable Discord tools in your toolset
 
-The AI can read channels and send messages. See the Discord plugin docs in Help → Plugins for full details.
+The AI can read channels and send messages, and can join voice channels to talk. Direct messages are off until you turn them on (Safety tab). See the Discord plugin docs in Help → Plugins for full details.
 
 ---
 

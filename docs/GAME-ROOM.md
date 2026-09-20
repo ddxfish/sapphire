@@ -31,17 +31,31 @@ This is the core idea worth internalizing:
 Click Play on a game tile. You get:
 
 - **The board** in the main pane, with your action buttons below it.
-- **Table talk** on the right — a running banter log. Type in the composer to chat; your line rides along with your next move, or hit Send to talk without moving.
+- **The chat** on the right — the real chat rail, not a separate log. **One table, one transcript:** every move lands on the session chat as a pair of rows (your move, `↳ raise to 20`, then her lines), so reading the chat back is reading the whole game.
+- **The composer** rides your move — type a line, click a move button, and the two go together (the buttons wear a 💬 while your text is waiting). Press Send instead and it's an ordinary chat turn: she answers, the game doesn't move.
 - **🔊 Speak** in the sidebar toggles her table talk out loud (when TTS is on).
-- **Sidebar** — session picker, new/clear/delete session, and the same per-chat settings (persona, model, voice) any chat has. The persona you pick is who sits across the table.
+- **Sidebar** — session picker, new/clear/delete session, the same per-chat settings (persona, model, voice) any chat has, and this game's own room settings (see [Settings](#settings)). The persona you pick is who sits across the table.
 
-She plays through a sealed seat: the engine shows her exactly what a player in her seat could see — never your hidden cards. The rules engine validates every move (hers and yours), so nobody can cheat, including her.
+In a hidden-information game like Hold'em she plays through a sealed seat: the engine shows her exactly what a player in her seat could see — never your hidden cards. Games with nothing to hide (a board you both watch) skip the seat and simply play in the chat. Either way the rules engine validates every move, hers and yours, so nobody can cheat — including her.
 
 The ← back button returns you to the library; leaving the Game Room entirely hands the Chat view back to your regular chats, so a game session is never left sitting as your active conversation.
 
 ### Game settings (⚙)
 
 The gear on a tile (or **Game Settings** in the room sidebar) opens that game's settings — the schema comes from the game itself. Hold'em, for example, exposes her playing style instructions, temperature, starting chips, and blinds. These are **per-game, not per-session**: your poker settings follow you across every poker session.
+
+The Game Room's own settings (her turns, voice route, costume line…) are not in that gear — they're accordions in the sidebar, and they inherit. See [Settings](#settings).
+
+### Her own turns
+
+Some games want her watching, not only answering. **her turns** in a game room's sidebar decides how that works:
+
+- **none** — she never speaks unprompted.
+- **per move** — she answers each of your moves and messages through her seat (Hold'em).
+- **per event** — the game posts its own moments (a wave cleared) and every Nth one is her turn. A game's final moments always come through.
+- **on a timer** — her turns come on a random clock between a min and max number of seconds.
+
+With **show screen** on, those turns carry frames of the board so she can see what's happening — the frames reach her for that turn only and are never kept in the chat; her words are. A pill in the stage bar says what's coming ("her turn every 3rd wave", "her turn in 40s") and its **⏸** pauses her turns for this session. Leaving the room stops them, and with **end summary** on she writes the session up in her own words as it closes.
 
 ### Playing a story
 
@@ -99,15 +113,23 @@ With the vault set up and **unlocked**, every Play button grows a ▾ menu with 
 
 ## Settings
 
-In the library sidebar's **Room** section:
+Room settings **inherit**. They live in the library sidebar as accordions (Room, Cadence, Voice, Identity) and every game starts from them. Inside a game, the same rows appear in that room's sidebar pre-filled with what the game inherited — change one there and it becomes that game's own, across all its sessions: a ● marks it, and **↺** hands it back to the inherited value. A game can ship its own defaults too, sitting between your room defaults and your per-game edits. (A game's nature — how her turns work — is set inside the game, never in the library, so "on a timer" can't mean "this applies to poker".)
 
 | Setting | What it does |
 |---------|--------------|
-| Player name | Your seat name in new sessions |
-| Model | Override stamped onto game/story sessions as you enter them; default leaves each chat on its persona's model |
-| Return prompt | Who the chat becomes when you ⏸ pause a story, and the default after it ends; blank = stay in the story costume |
+| player name | Your seat name in new sessions |
+| model | Stamped onto game/story sessions as you enter them; blank leaves each chat on its persona's model |
+| return prompt | Who the chat becomes when you ⏸ pause a story, and the default after it ends; blank = stay in the story costume |
+| her turns | none / per move / per event / on a timer — shown inside a game, not in the library |
+| min gap, max gap | Timer mode only: the random wait between her unprompted turns |
+| every N events | Event mode only: she takes a turn on every Nth moment the game posts |
+| show screen | Send her frames of the screen with her unprompted turns (with frames/turn and frame size) |
+| end summary | She writes the session up in her own words when it ends |
+| plays on | Her voice out of this browser or the machine's speakers (sits in the room's Voice section) |
+| costume line | A sentence or two she wears in this game's sessions, on top of the persona |
+| game toolset | The toolset new sessions of this game are born with (library only — existing sessions keep theirs) |
 
-Per-game rules live behind each tile's ⚙. Per-session persona/voice/model live in the room sidebar like any chat. Story conduct lives in the story gear (GM tabs).
+Per-game rules (chips, blinds, her playing style) live behind each tile's ⚙ — that schema comes from the game itself. Per-session persona/voice/model live in the room sidebar like any chat; the session's only spine setting is the pause button. Story conduct lives in the story gear (GM tabs).
 
 ---
 
@@ -120,6 +142,7 @@ Per-game rules live behind each tile's ⚙. Per-session persona/voice/model live
 | Library says no games installed | The game-room plugin itself may be disabled/unsigned | Same check — the host plugin must load for any tiles to appear |
 | Saves gone after deleting a chat | Did you 🗑 the session? | That's by design — the chat IS the save; deleting it deletes chips, journals, everything. Use ✕ clear to reset without deleting |
 | Story tools missing mid-run | Sidebar: "include story tools" checkbox; gear → Setup: the AI tools fence | Re-tick the checkbox, or unfence the tool; a ⏸ paused story also runs without story context until resumed |
+| She talks too often (or never) while you play | Sidebar → Cadence: **her turns**, and the gap / every-N under it | Change the mode, widen the gap, raise every-N — or ⏸ on the stage pill to silence this session |
 | Private session vanished | Vault locked? | Unlock the vault — sealed sessions return untouched |
 | Clearing a story chat restarted the tale | Expected — journals die with the transcript | Your placed objects and settings survive; the story replays from the top |
 
@@ -139,7 +162,10 @@ Per-game rules live behind each tile's ⚙. Per-session persona/voice/model live
 GAME ROOM (plugin `game-room`, host only — games/stories ship as separate plugins registering via core games_registry / any plugin's stories/ dir):
 - Library: nav Chat-group flyout → Game Room app; tiles from GET /api/games (capabilities.games) + story scan; Play resumes newest session else creates one.
 - Sessions ARE chats: mode='game', game_id='<id>' or 'story:<slug>'; hidden from normal chat picker; state in chat-scoped plugin storage (plugin_chat_data) — survives restarts, DIES WITH THE CHAT on delete (by design, warn users). Clear chat = game reset; for stories only journals die (costumes/objects survive, tale restarts).
-- Games: engine validates all moves (server-side, gameroom_core); AI seat sees view_for_ai only (no hidden opponent info). Per-game settings = engine SETTINGS schema, stored per-game not per-session (routes play/{game}/settings). Table talk composer rides with moves or sends solo.
+- Games: engine validates all moves (server-side, gameroom_core); a sealed AI seat (hidden-info games only) sees view_for_ai — no hidden opponent info; public-board games have no seat. Per-game settings = engine SETTINGS schema, stored per-game not per-session (routes play/{game}/settings).
+- ONE TABLE, ONE TRANSCRIPT: the room transplants the real chat rail; composer text rides the clicked move (💬 badge), Send alone = a normal chat turn. Every seat call appends one pair to the session chat — player row `↳ <move> — <words>`, her row (dealer lines + quip); silent `_` verbs log nothing.
+- Settings spine: effective = shipped ⊕ room defaults (library sidebar accordions Room/Cadence/Voice/Identity) ⊕ the game's manifest room_defaults ⊕ per-game overrides (same accordions in the game room's sidebar) ⊕ session. Fields show the inherited value; ● = overridden, ↺ = inherit again. Session layer = the ⏸ pause only. Keys: cadence_mode off|turn|event|timer (game/session, room-shown), cadence_min/max (timer), cadence_every (event), send_frames + frames_per_tick + frame_short_edge_px, session_end_summary, tts_route, session_prompt_piece, new_session_toolset (library), player_name/llm_primary/return_prompt (room).
+- Cadence organ (core/cadence.py) + perception inbox (core/perception.py): a game room arms her unprompted turns for its session and keeps them alive while open; event games poke moments (every Nth = her turn, terminal ones forced), timer games roll a random gap; frames are model-only for that turn (never persisted), her own live turn skips the tick, leaving disarms and runs the end summary. Stage pill = mode/countdown + ⏸.
 - Stories: referee engine rules, AI narrates (story_act tool = only world-mutation door; story_place authors new objects; story_end closes; story_status for plain chats only — in-story context already carries state). Ghost block injects live room state per turn; solutions never in AI context.
 - Identity modes story/local/combined (sidebar dropdown); "include story tools" = extra_toolsets union of module plugin_game-room_story_tools; 👁 = exact prompt preview.
 - Sealed blanks: player-written reveals, never pass through the AI; reach → popup with live countdown (extendable, capped) → honest hold if unfilled (AI knows a surprise exists, not what); Skip → author fallback only if pack ships one; ✍ chips = early fill; journaled at write, replay never re-prompts.

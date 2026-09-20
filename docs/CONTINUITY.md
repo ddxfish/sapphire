@@ -104,6 +104,7 @@ Heartbeat and Scheduled are the time-driven views this doc covers. Each item can
 
 - Start with infrequent schedules while testing to avoid spam
 - Use the ▶ Run now button to test without waiting for the schedule
+- ⏹ stops a run that's already going. It lands at the next safe point — between the model's rounds — so a task waiting on a slow LLM call finishes that one call before it stops. Anything queued behind the run is dropped, and the task stays enabled for its next schedule.
 - Background tasks (blank Chat Name) are great for things you don't need to see
 - Combine with Home Assistant tools for smart home automation
 - Low chance % + frequent schedule = occasional surprises
@@ -139,6 +140,11 @@ KEY FIELDS:
 
 MANUAL TRIGGER:
 - ▶ Run now on any task in the Heartbeat/Scheduled views
+
+CANCEL A RUN:
+- ⏹ on a running card → POST /api/continuity/tasks/{id}/cancel; toggling the task off cancels implicitly, as does deleting it
+- Lands at the next cancel point (each round, and between an LLM reply and its tool batch) — a blocking LLM call in flight completes its round first; queued fires behind the run are dropped; the task stays enabled
+- Activity log: `cancel_requested` → `cancelled`
 
 TROUBLESHOOTING:
 - Task not running: check enabled toggle, cron syntax, active-hours window

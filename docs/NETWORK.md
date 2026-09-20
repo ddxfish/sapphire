@@ -94,9 +94,9 @@ For auth-less proxies (Tor), any placeholder pair works. Saving or clearing cred
 
 When SOCKS is **off**, Sapphire checks whether your OS has a system proxy configured (on Windows, the IE/WinINET registry proxy — often a leftover VPN, Fiddler, or corporate setting; on any OS, shell-set `HTTP_PROXY`/`HTTPS_PROXY`). If one exists, the trust strip shows an amber warning: your traffic is *not* direct even though Sapphire's proxy is off. Clear it in your OS network settings, or turn Sapphire's SOCKS on to override it.
 
-### Installed from the minimal requirements?
+### Trust strip says SOCKS support is missing
 
-The SOCKS support for the httpx lane (`httpx[socks]`, i.e. the `socksio` package) is in the root `requirements.txt` but **not** in `install/requirements-minimal.txt`. On a minimal install with SOCKS enabled, LLM and other httpx-based cloud requests will fail; the trust strip warns about it. Fix: `pip install 'httpx[socks]'`.
+The httpx lane needs `httpx[socks]` (the `socksio` package) to carry LLM and other cloud calls through the proxy. It's in both `requirements.txt` and `install/requirements-minimal.txt`, so a current install has it — older minimal installs predate that and an environment built by hand may not. Without it, those requests fail with SOCKS on and the trust strip warns. Fix: `pip install 'httpx[socks]'`.
 
 ### What never phones home — egress invariants
 
@@ -139,7 +139,7 @@ Proxy credentials (username/password) are set in the same tab but stored in the 
 | Tools error "credentials not found" | Proxy Credentials section shows "Not set" | Set both username and password. Auth-less proxy (Tor)? Any placeholders work. |
 | Every request fails "host unreachable" | Is **DNS via proxy** (`SOCKS_REMOTE_DNS`) on? | Your proxy has no server-side DNS — turn it off. The boot probe warns about exactly this. |
 | LLM requests fail with 403/blocked while proxied | Did you turn `SOCKS_ROUTE_LLM` on? | The provider blocks proxy IPs — turn it back off (the default). A learn-once toast points here too. |
-| LLM/cloud calls fail, web tools fine | Trust strip: `httpx[socks]` warning? | `pip install 'httpx[socks]'` — missing on minimal installs. |
+| LLM/cloud calls fail, web tools fine | Trust strip: `httpx[socks]` warning? | `pip install 'httpx[socks]'` — it ships in both requirements files now, so this means an older or hand-built environment. |
 | LAN device unreachable with SOCKS on | Does its hostname have dots and a public-looking TLD? | Add it to `SOCKS_NO_PROXY_EXTRA`, or address it by IP / `.local` name. |
 | Plugin daemon ignoring new proxy settings | Was it running when you changed them? | Daemons inherit the environment at spawn — restart the plugin. |
 | Trust strip warns about a system proxy with SOCKS off | OS proxy settings (Windows: WinINET/IE proxy) | Clear the leftover OS proxy, or enable Sapphire's SOCKS to override it. |
@@ -178,7 +178,7 @@ UI/ROUTES:
 - Learn-once toast: LLM 403/blocked/proxy-ish failure while SOCKS_ENABLED and SOCKS_ROUTE_LLM both on -> one PLUGIN_NOTICE per provider per boot suggesting the Route LLM exemption.
 - Windows honesty: SOCKS off -> proxy_status reports urllib.getproxies() (WinINET registry / shell env) as system_proxy; strip shows amber not-direct warning.
 
-DEPENDENCY: httpx[socks] (socksio) in root requirements.txt only — NOT install/requirements-minimal.txt. Minimal install + SOCKS on = LLM/httpx lane fails; strip warns; fix: pip install 'httpx[socks]'.
+DEPENDENCY: httpx[socks] (socksio) ships in BOTH requirements.txt and install/requirements-minimal.txt (2026-09-20 parity). Missing = older or hand-built env: LLM/httpx lane fails with SOCKS on; strip warns; fix: pip install 'httpx[socks]'.
 
 EGRESS INVARIANTS (independent of proxy):
 - Cached models load offline: whisper/CLIP/embeddings local_files_only (retry online only if missing); kokoro arms HF_HUB_OFFLINE when cached, lifts once if files missing; silero VAD pinned to exact commit URL; tiktoken cache persistent at user/cache/tiktoken.

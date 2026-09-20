@@ -112,7 +112,9 @@ Notes:
 
 ### Reset Password
 
-Delete the password hash file and restart Sapphire. This resets your login — you'll set a new password on next visit. Your chats, settings, and user data are untouched.
+If you still know the current one, you don't need any of this: change it in **Settings › System › Login Password**. That tab stays logged in and every *other* device is logged out once — sign back in there with the new password.
+
+Genuinely forgotten? Delete the password hash file and restart Sapphire. This resets your login — you'll set a new password on next visit. Your chats, settings, and user data are untouched.
 
 **Linux:**
 ```bash
@@ -209,6 +211,11 @@ You'll need to re-run setup and reconfigure settings.
 - Run `pip install -r requirements.txt` after every pull. Major version jumps may need a fresh env — see [Reinstall Packages](#reinstall-packages-conda-env-only).
 - Launcher users: the **Update** button does the pull and the pip install together.
 
+**Claude (or MCP) stopped working right after you upgraded packages by hand**
+- `requirements.txt` caps `openai<3`, `anthropic<1` and `mcp<2` — majors Sapphire has not been ported to. `anthropic` 1.0 removed the temperature/top_p/top_k arguments, so every call through the Claude and Anthropic-compatible providers fails; `mcp` 2.0 dropped the HTTP client the MCP plugin uses.
+- `pip install --upgrade openai anthropic mcp` steps over the caps. Put it back with `pip install -r requirements.txt` — it reinstalls inside the bounds.
+- Installs you haven't touched are fine: neither the pip line above nor the in-app update upgrades a package that already satisfies the file.
+
 ## Web UI Issues
 
 **403 Forbidden**
@@ -230,6 +237,16 @@ You'll need to re-run setup and reconfigure settings.
 **UI loads but chat doesn't respond**
 - Check browser console (F12) for errors
 - Verify LLM server is responding: `curl http://127.0.0.1:1234/v1/models`
+
+**My reply vanished when the phone locked / the tab slept**
+- It didn't. Turns run on the server, so a browser losing its connection never cancels one — only Stop does.
+- Wake the tab: it says "Connection dropped — she's still working, reconnecting…" and rejoins the live reply on its own, picking up where it stopped.
+- If it can't reconnect (roughly a minute of tries), the reply still finishes and lands in the chat — reload the page and it's there.
+- Audio isn't replayed for the part you missed; with TTS on the finished reply is spoken once when it arrives.
+
+**"Sapphire is still replying in this chat"**
+- One turn per chat, on purpose — a second send (Enter past the Stop button, or another tab on the same chat) is refused so two interleaved turns can't corrupt the transcript.
+- Press Stop, then send. Other tabs on that chat show Stop while a turn is live.
 
 ## Audio Issues
 
@@ -421,6 +438,11 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 **Plugin acting stale after an update**
 - Plugins load at boot only — restart Sapphire, then hard-refresh the browser (Ctrl+Shift+R) if the plugin has UI.
 
+**Settings > Plugins shows a "Missing: …" strip on a plugin**
+- That plugin needs extra pip packages. Click **Install** — Sapphire installs them into its own conda environment or venv and reloads the plugin, no restart needed.
+- Running on plain system Python (Docker, or a distro Python)? Auto-install is refused on purpose; the strip shows the exact command to run yourself. It's quoted so it pastes into PowerShell, cmd or bash unchanged.
+- **Discord** needs **Git on your PATH** — its `py-cord` dependency installs from a pinned git commit. Windows: `winget install Git.Git`, then reopen the terminal. If `discord.py` is installed, `pip uninstall discord.py` first: it owns the same `discord` import name and conflicts.
+
 ## Continuity Issues
 
 **Task not running at scheduled time**
@@ -428,6 +450,11 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 - Verify cron syntax is correct (minute hour day month weekday)
 - Check cooldown hasn't blocked it (see Activity tab for "skipped - cooldown")
 - Low chance % may have rolled unfavorably (see Activity tab for "skipped - chance")
+
+**Tasks fire at the wrong hour / her clock is off (often Windows)**
+- Timezone is auto-detected at first start. Linux/macOS read `/etc/localtime`; Windows needs the `tzlocal` package (it's in `requirements.txt` and the minimal set). Without it the log warns and `USER_TIMEZONE` stays UTC — schedules and the clock in her prompt run in UTC.
+- Fix: pick your timezone in the setup wizard's Identity step, or set `USER_TIMEZONE` in `user/settings.json`, then restart. `pip install tzlocal` makes detection work next boot.
+- Docker: set `TZ` in `docker-compose.yml`.
 
 **"Invalid cron schedule" error**
 - Cron format: `minute hour day month weekday`

@@ -61,6 +61,7 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 |--------|----------|---------|
 | POST | `/api/chat` | Send message, get response |
 | POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409**. Optional `chat` in the body addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed → 409, missing → 404. `continue_from` (an assistant turn's timestamp) resumes the chat's last reply in place: no user row is sent or saved, the row is edited on success and untouched on Stop |
+| POST | `/api/chat/attach` | Rejoin the live turn on a chat after losing the feed (`{chat?, since?}`). Turns are server-owned: the engine runs on its own thread and a viewer leaving never ends it. Replays the turn's ring exact-once after `since` (every SSE line carries `seq`), then follows live in the same wire format — text only, audio is never replayed. **204** = no live turn on that chat; 404 unknown chat; 409 sealed chat |
 | POST | `/api/cancel` | Cancel active stream (`?chat=` scopes to one chat) |
 | GET | `/api/events` | SSE event stream (real-time UI updates) |
 | GET | `/api/history` | Get chat message history (`?chat=` reads a chat by name; absent = active) |
@@ -377,6 +378,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | PUT | `/api/continuity/tasks/{id}` | Update task |
 | DELETE | `/api/continuity/tasks/{id}` | Delete task |
 | POST | `/api/continuity/tasks/{id}/run` | Run task now |
+| POST | `/api/continuity/tasks/{id}/cancel` | Stop a task's in-flight run (the ⏹ on a running card). Ends at the next cancel point — between LLM rounds — and drops queued fires behind it; the task stays enabled. Toggling a task off cancels implicitly |
 | GET | `/api/continuity/status` | Scheduler status |
 | GET | `/api/continuity/activity` | Recent activity log |
 | GET | `/api/continuity/timeline` | Upcoming schedule (future only) |
@@ -630,7 +632,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/system/api-tokens` | List programmatic API tokens |
 | POST | `/api/system/api-tokens` | Create a named API token |
 | DELETE | `/api/system/api-tokens/{token_id}` | Revoke an API token |
-| POST | `/api/system/password` | Change the login password (`{current, new}`; verifies the current one, 5/min; sessions survive; rotates the legacy X-API-Key hash) |
+| POST | `/api/system/password` | Change the login password (`{current, new}`; verifies the current one, 5/min, 10+ chars and ≤72 bytes). The calling tab stays logged in; **every other session is logged out**. Rotates the legacy X-API-Key hash — named bearer tokens are unaffected |
 
 ### Media (Tool-Generated Images)
 
@@ -698,7 +700,7 @@ KEY ENDPOINTS:
 CHAT FLOW:
 1. POST /api/chat or /api/chat/stream with {"text": "message", "chat": "optional chat name"} — `chat` names the target chat; the active chat runs as before, another chat runs pinned to its own stored settings (never the active pointer)
 2. Response streams as SSE events (content, tool_pending, tool_start, tool_end, reload)
-3. POST /api/cancel (?chat= to scope) to abort; a second stream on the same busy chat returns 409
+3. POST /api/cancel (?chat= to scope) to abort; a second stream on the same busy chat returns 409. Turns are server-owned: dropping the SSE socket does NOT cancel — POST /api/chat/attach {chat?, since?} rejoins the live turn (every line carries `seq`; 204 = it already finished)
 4. GET /api/history?chat=<name> reads any chat by name; GET /api/chats?kind=game&slim=1 lists game/story sessions with trimmed settings; POST /api/chats {"name", "settings"} stamps settings at birth (private_chat refused there — use the vault flip)
 
 PLUGIN MANAGEMENT:

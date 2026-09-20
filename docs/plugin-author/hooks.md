@@ -181,7 +181,7 @@ def tools_filter(event):
 
 ## Surfaces — where presence hooks fire
 
-A chat is shown on a **surface**: `chat` (the chat view, with plugin sidebar accordions) or `game` (the Game Room — stories and games, where core sections render but plugin accordions don't). The story engine stamps the chat setting `surface: "game"` while a story is active and hands it back at the end.
+A chat is shown on a **surface**: `chat` (the chat view, with plugin sidebar accordions) or `game` (the Game Room — stories and games, where core sections render but plugin accordions don't). Core derives it: an explicit `surface` chat setting wins, otherwise any session tagged `mode: "game"` (every game and story session) resolves to `game`. Nothing has to stamp it by hand.
 
 If your plugin injects text *because something is on screen* — an avatar, a scene, a soundscape — declare where that something actually lives:
 
@@ -638,7 +638,7 @@ The ghost rail is **labeled operator metadata**, not invisible puppetry. If you 
 - `chat_cleared`: chat-scoped store rows SURVIVE a clear (unlike delete) — use this hook to drop turn-anchored rows whose message anchors are gone.
 - `event.metadata.get("system")` (VoiceChatSystem) is stamped on: `post_stt`, `pre_chat`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, and the `tts_stream_*`/`tts_chunk_*` hooks. NOT on: `prompt_inject`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`, or the lifecycle hooks.
 - Private chats: every hook is withheld from plugins without top-level `"privacy_aware": true` (fail-closed on resolver error). ALWAYS_DELIVER regardless of privacy: `chat_renamed`, `chat_deleted`, `chat_cleared`, `plugins_ready`, `provider_switched`, `on_wake`.
-- Surfaces: manifest top-level `"surfaces": ["chat"|"game"]` withholds ONLY `prompt_inject`/`ghost_inject` on other surfaces; user override wins; absent = fire everywhere.
+- Surfaces: manifest top-level `"surfaces": ["chat"|"game"]` withholds ONLY `prompt_inject`/`ghost_inject` on other surfaces; user override wins; absent = fire everywhere. A chat's surface = explicit `surface` setting, else derived (`mode: "game"` → `game`).
 - `ghost_inject`: set `event.ghost_text` (one string per plugin per turn); runner attributes it by plugin name in the envelope; ephemeral (never saved, cache-friendly); oversized contributions are truncated; `event.config` is None here.
 - Streaming TTS: `tts_stream_end` fires exactly once per turn on every exit path; `tts_chunk_audio` may fire fewer times than `tts_chunk_text`; `stream_id` correlates a turn's hooks; only streaming-capable providers fire these (legacy providers use `pre_tts`/`post_tts`).
 - Handler errors are isolated (logged, next handler fires). Mutations persist across handlers in priority order: system plugins 0-99 first, user plugins 100-199.

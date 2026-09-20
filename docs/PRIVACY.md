@@ -42,8 +42,8 @@ You can tell a private chat by the glow on the chat area border, the 🗝 next t
 | Rule | What happens |
 |------|--------------|
 | **Local models only** | Auto mode only picks providers ticked *Local / private server*. Pinning a cloud provider refuses the turn with a message. |
-| **Local tools only** | Any tool that reaches the network refuses and tells the AI why. Tools that declare no locality at all (many older plugins predate the flag) are blocked too, fail-closed — if your unflagged plugins only talk to local hardware, **Settings > Privacy > "allow tools with no locality flag"** lets them run; explicitly network tools stay blocked regardless. |
-| **Voice stays local** | Cloud STT and TTS refuse — you get a short notice instead of speech. |
+| **Local tools only** | Any tool that reaches the network refuses and tells the AI why — including the ones that feel personal but hand text to a service: email, phone calls, Telegram, the plugin store, `ask_claude`. Tools that declare no locality at all (many older plugins predate the flag) are blocked too, fail-closed — if your unflagged plugins only talk to local hardware, **Settings > Privacy > "allow tools with no locality flag"** lets them run; explicitly network tools stay blocked regardless. |
+| **Voice stays local** | Cloud STT and TTS refuse — you get a short notice instead of speech. The check follows the chat the speech belongs to, so a background turn (a scheduled task, a voice session) is judged on *its* chat, not on whichever chat you happen to have open. |
 | **Encrypted at rest** | Messages, chat settings, tool images, and plugin data are stored as AES-256-GCM values (`@enc1:` prefixed) under the vault's key. |
 | **Invisible when sealed** | Lock the vault and the chat is gone from the picker, Chat Manager, chat search, and the API — it answers exactly like a chat that never existed. |
 
@@ -65,6 +65,8 @@ Vault membership *is* the privacy flag for prompts. There's no separate "private
 - Un-ticking it writes the prompt back out as plaintext, so it asks first.
 - Vault prompts (and any assembled prompt that uses a vault piece) refuse to export — content doesn't leave the vault.
 - Lock the vault and vault prompts vanish from the selector. If one was active, the active prompt falls back to `default`.
+- A chat that still points at a sealed prompt shows **🗝 vault prompt (locked)** where the name would be — chat sidebar, persona editor, trigger editors. The name is never rendered while sealed, and the chat heals back to the real prompt on unlock.
+- While it's sealed, that name can't be written onto *any* chat: the save is refused with *"That prompt is asleep in the locked vault — unlock it, or pick another prompt."* This is what stops a private prompt's name from being copied onto a public chat when the vault locks under you.
 - Older prompts flagged before the vault existed still show a 🔒 and still refuse cloud providers. Move them into the vault when convenient.
 
 See [PROMPTS.md](PROMPTS.md) for prompt authoring itself.
@@ -123,7 +125,7 @@ Plugin authors: see [Private chats & `privacy_aware`](plugin-author/hooks.md#pri
 - **Old backups and old exports** made while a chat was public stay plaintext.
 - **Managed mode** (hosted/Docker-managed installs) disables the vault and private chats entirely.
 - A corrupted vault file is quarantined beside itself as `prompt_vault.enc.bad-<timestamp>` rather than deleted — restore from a backup.
-- **Web image tiles ride DuckDuckGo's image proxy.** `web_search_images` results (and any tile gallery a tool shows you) load through `external-content.duckduckgo.com` with no referrer — your browser never hot-links the source host. When the model looks at an image itself, the fetch goes through the app's network facade (your SOCKS settings apply), so the source host sees Sapphire's egress, not your browser.
+- **Web image searches run server-side.** `web_view_images` queries the search engine through the app's network facade (your SOCKS settings apply) — your browser never talks to it. The tiles you see are thumbnails the server already fetched and stored with the chat; anything that still has to load from outside (a lightbox original, a tile whose thumbnail failed) goes through `external-content.duckduckgo.com` with no referrer, so your browser never hot-links the source host either.
 
 ---
 
@@ -162,6 +164,7 @@ PROMPTS:
 - Vault membership is the privacy flag; new prompts saved while unlocked go into the vault
 - Vault prompts and prompts using vault pieces refuse export; locked vault hides them and resets the active prompt to `default`
 - Legacy `privacy_required` prompts still refuse cloud providers until moved into the vault
+- A sealed name never renders: chat sidebar, persona editor and trigger editors show `🗝 vault prompt (locked)` while keeping the stored value, so the chat heals on unlock. Every chat-settings write funnel refuses a sealed name (`sealed_prompt_name` in core/chat/history.py, refs index = the sealed oracle); the PUT settings and persona-load routes answer 409 without naming it
 
 BACKUPS:
 - Chat DB and vault file are both backed up — restore them together (the vault holds the chat data key)

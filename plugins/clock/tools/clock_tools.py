@@ -3,9 +3,7 @@
 # Tight tool surface: 4 tools, terse descriptions, schema carries the contract.
 
 import logging
-import os
 import re
-import subprocess
 import threading
 import time
 from datetime import datetime, timedelta
@@ -177,30 +175,33 @@ def _format_remaining(seconds):
 # PING — sound playback with volume + TTS mute
 # =============================================================================
 
-def _play_ping():
-    """Play ping.wav. Mutes Sapphire's TTS during, restores volume after."""
+def _ping_unavailable():
+    """Why a ping would be silent on this box, or None when it can play.
+    Checked at set-time too, so the model can warn instead of promising."""
     if not _PING_WAV.exists():
-        logger.warning(f"[clock] ping.wav not found at {_PING_WAV}")
-        return False
-
-    aplay = '/usr/bin/aplay'
-    amixer = '/usr/bin/amixer'
-    if not os.path.isfile(aplay):
-        logger.warning("[clock] aplay not installed; ping will be silent")
-        return False
-
+        return f"ping.wav not found at {_PING_WAV}"
     try:
-        # Snapshot current volume
-        prev_vol = None
-        if os.path.isfile(amixer):
-            r = subprocess.run(
-                [amixer, 'get', 'Master'], capture_output=True, text=True, timeout=2,
-                encoding='utf-8', errors='replace',
-            )
-            m = re.search(r'(\d+)%', r.stdout or '')
-            prev_vol = int(m.group(1)) if m else None
-            subprocess.run([amixer, '-q', 'set', 'Master', '40%'], timeout=2,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        from core.audio import backend
+    except Exception as e:
+        return f"audio backend import failed: {e}"
+    if not backend.ensure():
+        return f"no audio output ({backend.error()})"
+    return None
+
+
+def _play_ping():
+    """Play ping.wav twice through the core audio backend (sounddevice — the
+    same lane the Settings test tone and TTS use). Stops Sapphire's TTS first
+    so the ping isn't talked over. Was /usr/bin/aplay + amixer, which made
+    every timer silent on Windows and macOS (Windows scout 2026-09-20)."""
+    why = _ping_unavailable()
+    if why:
+        logger.warning(f"[clock] ping silent: {why}")
+        return False
+    try:
+        import soundfile as sf
+        from core.audio.backend import sd
+        data, rate = sf.read(str(_PING_WAV), dtype='float32')
         # Mute Sapphire's TTS so the ping isn't talked over
         try:
             from core.api_fastapi import get_system
@@ -209,14 +210,12 @@ def _play_ping():
                 sys_obj.tts.stop()
         except Exception:
             pass
-        # Play twice with a short gap — distinguishable from random noise
+        # Play twice with a short gap — distinguishable from random noise.
+        # 0.4 gain replaces the old "amixer Master 40%" without touching the mixer.
         for _ in range(2):
-            subprocess.run([aplay, '-q', str(_PING_WAV)], timeout=5,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            sd.play(data * 0.4, rate)
+            sd.wait()
             time.sleep(0.6)
-        if prev_vol is not None and os.path.isfile(amixer):
-            subprocess.run([amixer, '-q', 'set', 'Master', f'{prev_vol}%'], timeout=2,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception as e:
         logger.error(f"[clock] ping failed: {e}")
@@ -337,6 +336,11 @@ def _set_timer(arguments):
             'cancel_event': cancel_event,
         }
         thread.start()
+    why = _ping_unavailable()
+    if why:
+        # Expiry is ONLY the ping — say so now rather than promise a sound.
+        return (f"Timer '{name}' set for {_format_remaining(seconds)}, but it will "
+                f"be silent when it expires ({why}). Tell the user.", True)
     return f"Timer '{name}' set for {_format_remaining(seconds)}.", True
 
 

@@ -72,10 +72,18 @@ One primitive (`core/images.py`), one return contract, one handle. Every tool th
 | `local_view_images` | mindpalace library_tools.py | Image files on this machine: `paths` (one → the image; several → a sheet) or a `folder` (paged, subfolders listed) |
 | `memory_save_image` | mindpalace library_tools.py | Keep an image in the library under a topic (Knowledge tab; pixel + caption search; optional `private_key`) |
 | `get_website` (`show_image_urls`) | web.py | `true` appends the page's image URLs (alt, size) to the text; `only` returns just that list |
-
-Pasted images get the same treatment: they're kept in the chat's image store with an `img:` receipt she can hand to any image tool. **Images › Image memory turns** (default 3) keeps every image the model saw visible to it for that many turns; older ones she re-views by handle.
 | `telegram_send_image` | telegram plugin | Send an image (`source=` any handle; default = newest image of this chat) |
+| `discord_send_image` | discord plugin | Post an image to a Discord channel (`source=` any handle or URL; default = newest image of this chat) |
 | `generate_image` | sd-server plugin | Generate images on a local SD server (single or contact sheet) |
+
+Images you paste into the composer get the same treatment: they're kept in the chat's image store with an `img:` receipt she can hand to any image tool.
+
+**Settings › Images** holds the two knobs:
+
+- **Image memory turns** (default 3) — how long an image she has already looked at stays in front of the model. Past that window she re-views it by handle, so a long chat doesn't drag every picture along.
+- **Safe search** — the filter applied to `web_view_images` searches (off by default).
+
+Pixels only reach the model if the provider is known to accept them — tick the **👁 vision** checkbox on the provider in Settings › LLM. Without it the image stays home and she's told `[image not sent: this model has no vision]`, so she knows why she's working blind instead of guessing.
 
 ### Self-Modification
 
@@ -214,6 +222,7 @@ TOOL MODULES:
 - Mind Palace engine (when enabled) swaps in its own memory tool surface: same core verbs plus update_memory(memory_id, ...), layered saves
 - web.py: web_search, get_website(url, show_image_urls?=false|true|only), get_wikipedia, research_topic, get_site_links, web_view_images(query? | url?, count?=6, page?=1, view?=true)
 - mindpalace library_tools.py: library, read_document, memory_view_image(query? + count? | document_id | image_id=img:<id>, private_key?), local_view_images(paths? | folder?, page?, count?), memory_save_image(source, topic, caption?, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
+- Image settings (Settings › Images): IMAGE_MEMORY_TURNS (default 3 — turns an already-seen image stays in the model's view), WEB_IMAGES_SAFESEARCH (default off). Image blocks ride to the model only when the provider's vision flag is on; otherwise '[image not sent: this model has no vision]'
 - ai.py: ask_claude
 - meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools]
 - scene.py: set_scene(name) — chat scene background, 'none' clears

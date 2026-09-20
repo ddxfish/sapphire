@@ -5,7 +5,6 @@ import logging
 import os
 import sys
 import threading
-from pathlib import Path as _Path
 
 import numpy as np
 import requests
@@ -25,19 +24,9 @@ EMBEDDING_ONNX_FILE = 'onnx/model_quantized.onnx'
 # config.EMBEDDING_MODEL_REVISION.
 EMBEDDING_MODEL_REVISION = getattr(config, 'EMBEDDING_MODEL_REVISION', None)
 
-# Windows MAX_PATH safety: the HuggingFace cache directory nests quite deep
-# (`~/.cache/huggingface/hub/models--{slug}/snapshots/<40charSHA>/...`), which
-# routinely overflows Windows' 260-char path limit especially when combined
-# with a non-ASCII username. Redirect the cache to a project-local short path
-# on Windows. Linux/macOS keep the default HF location so existing caches work.
-if sys.platform == 'win32' and not os.environ.get('HF_HOME'):
-    try:
-        _hf_home = _Path(__file__).parent.parent.parent / 'user' / 'models' / 'hf'
-        _hf_home.mkdir(parents=True, exist_ok=True)
-        os.environ['HF_HOME'] = str(_hf_home)
-        logger.info(f"Set HF_HOME={_hf_home} for Windows MAX_PATH safety")
-    except Exception as _e:
-        logger.debug(f"HF_HOME redirect skipped: {_e}")
+# Windows MAX_PATH redirect of HF_HOME lives in sapphire.py's env block now —
+# it has to be in place before the TTS server is spawned, and this module is
+# only imported once the memory plugin loads (2026-09-20).
 
 
 class LocalEmbedder:

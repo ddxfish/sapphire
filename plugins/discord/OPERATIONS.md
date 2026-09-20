@@ -29,7 +29,7 @@ Check status:
 1. Load settings store from SQLite
 2. Open SQLite + run migrations
 3. Build repositories, Sapphire bridges, voice patches (py-cord + DAVE)
-4. Connect Discord transport and stored bot accounts
+4. Connect Discord transport and the stored bot accounts that an **enabled daemon task selects** (accounts nothing selects stay logged out; the log says `no enabled daemon task selects it`)
 5. Start message pipeline and internal scheduler loop (~15s tick)
 6. Mark health `ready`
 
@@ -99,7 +99,8 @@ Settings overlays (global, guild, channel, DM) are stored in the channel reposit
 
 `GET /traces?limit=50`
 
-Returns recent structured traces plus a summary count by type and current cognitive snapshot (affect, activation, pending tasks, voice sessions).
+Returns recent structured traces, a summary count by type, and a small snapshot (pending world-model
+tasks, active voice sessions). Add `?type=<trace_type>` to filter.
 
 Traces explain **why** the agent acted, skipped, or was blocked. They intentionally exclude full prompt dumps.
 
@@ -110,7 +111,6 @@ Traces explain **why** the agent acted, skipped, or was blocked. They intentiona
 | `intention_generated` | Cognitive layer produced a reply/proactive intention |
 | `policy_rejected` | Safety/cooldown/sleep gate blocked an action |
 | `memory_injected` | Profile/pinned memory added to prompt context |
-| `affect_modulated` | Relationship/mood scores adjusted activation thresholds |
 | `proactive_action` | Proactive intention executed (via trace service helper) |
 | `proactive_sent` | Greeting/outreach/goodnight/task follow-up delivered |
 | `proactive_skipped` | Proactive blocked (cooldown, low energy, high irritability, no task) |
@@ -134,7 +134,6 @@ Aggregated snapshot:
 
 - Runtime health
 - Trace summary (counts by type)
-- Account affect state
 - Pending world-model tasks (up to 10)
 - Active voice sessions
 - Connected accounts
@@ -153,11 +152,21 @@ Useful log lines:
 - `Scheduler tick failed` / `Voice auto-join tick failed`
 - `Discord cognitive daemon crashed`
 
-### Profiles & affect
+### Profiles
 
 `GET /profiles?account=<name>`
 
-Returns user profiles, account-level affect (energy, sociability, irritability, fondness), and top activation entities for debugging cognitive gating.
+Returns the account's user profiles (up to 50). Per-user facts, milestones, and interests have their
+own routes under `/profiles/…`; the settings UI Memory tab wraps all of them.
+
+### Cognition & LLM debug
+
+`GET /debug/cognition` — recent channel situations, intention scores (reply / react / silent), gate
+multipliers, and which Cognition switches are on.
+
+`GET /debug/llm?limit=N` and `POST /debug/clear` — the debug ring. It holds the **last 10 full
+prompts and replies in memory**, other people's messages included, and stays empty unless
+`cognitive.llm_debug_enabled` is turned on. Nothing is written to disk; Clear empties it at once.
 
 ## API Reference
 
@@ -167,6 +176,7 @@ Returns user profiles, account-level affect (energy, sociability, irritability, 
 |--------|------|---------|
 | `GET` | `/accounts` | List configured bots (token redacted) |
 | `POST` | `/accounts` | Add bot — body: `{ "account_name", "token" }` |
+| `POST` | `/accounts/test` | Validate a token before saving it |
 | `DELETE` | `/accounts/{name}` | Remove bot and disconnect |
 | `POST` | `/accounts/{name}/test` | Validate token and connectivity |
 
@@ -186,7 +196,7 @@ Query params on GET: `guild_id`, `channel_id`, `dm_id` for resolved preview.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/health` | Daemon health and connected accounts |
-| `GET` | `/traces?limit=N` | Recent traces + cognitive snapshot |
+| `GET` | `/traces?limit=N&type=<trace_type>` | Recent traces + counts by type |
 
 ### Proactive
 
@@ -235,7 +245,14 @@ See [docs/discord_voice_conversation_operator.md](docs/discord_voice_conversatio
 | `GET` | `/admin/summary` | Operator snapshot |
 | `POST` | `/admin/purge` | Run retention cleanup immediately |
 | `POST` | `/admin/forget-user` | GDPR-style user data removal |
-| `POST` | `/admin/import-leona` | Import from leona_discord database |
+
+### Debug
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/debug/llm?limit=N` | Opt-in LLM debug ring (`cognitive.llm_debug_enabled`) |
+| `POST` | `/debug/clear` | Empty the ring |
+| `GET` | `/debug/cognition` | Situations, intention scores, gates, and the Cognition switches |
 
 ## Scheduled Jobs
 
@@ -243,13 +260,22 @@ Two schedulers cooperate:
 
 ### Sapphire continuity cron (plugin.json)
 
-| Job | Cron | Handler |
-|-----|------|---------|
-| `morning_greeting` | `0 * * * *` | Hourly check; fires when server-local hour matches `proactive.greeting_utc_hour` |
-| `quiet_outreach` | `*/15 * * * *` | Conversation starters when channels go stale |
-| `sleep_goodnight` | `*/15 * * * *` | Goodnight + sleep state at `proactive.sleep_utc_hour` (minutes 0/15/30/45) |
-| `retention_purge` | `30 4 * * *` | Daily chunked purge of plugin data past the Retention day limits (off until `retention.enabled`) |
-| `ambient_distill` | `*/15 * * * *` | Opt-in ambient chat distill into profile facts (honours `profile.ambient_distill_interval_hours`) |
+Since 1.25.0 the manifest binds these to their settings (`time_setting` / `enabled_setting`), so a
+schedule runs **once, at the configured hour, only while its feature is on** — no more sub-hourly
+heartbeats that wake up just to learn the feature is off. Saving plugin settings re-times the live
+task; no restart needed.
+
+| Job | Cron | Bound to | Handler |
+|-----|------|----------|---------|
+| `morning_greeting` | `0 9 * * *` | hour ← `proactive.greeting_utc_hour` | Morning greetings + wake replay |
+| `quiet_outreach` | `*/15 * * * *` | on ← `proactive.outreach_enabled` (off by default) | Conversation starters when channels go stale |
+| `sleep_goodnight` | `0 22 * * *` | hour ← `proactive.sleep_utc_hour`, on ← `proactive.sleep_schedule_enabled` (off by default) | Goodnight + sleep state |
+| `retention_purge` | `30 4 * * *` | always registered | Daily chunked purge of plugin data past the Retention day limits (does nothing until `retention.enabled`) |
+| `ambient_distill` | `*/15 * * * *` | on ← `profile.ambient_distill_enabled` (off by default) | Opt-in ambient chat distill into profile facts (honours `profile.ambient_distill_interval_hours`) |
+
+Hour comparisons ride **Sapphire's configured timezone** (`config.USER_TIMEZONE`, Settings → Identity)
+— the same clock the continuity cron matches on. An unparsable hour setting is logged and the manifest
+cron is kept.
 
 These require the plugin daemon to be running and at least one connected bot account.
 
@@ -265,21 +291,23 @@ When greetings, outreach, or goodnight do not fire:
 2. Confirm daemon running: `GET /health`
 3. Confirm greeting channels selected in settings (`greeting_targets`)
 4. Confirm connected accounts match target account prefixes (`account:channel_id` format)
-5. Check server-local hour vs configured greeting/sleep hours
+5. Check the hour on Sapphire's clock (`server_hour` in the response) vs configured greeting/sleep hours
 6. Check sleep state per channel in diagnostics `channels[]` — asleep channels buffer mentions
 7. Use `POST /proactive/test` with `dry_run: true` to preview message text
-8. Check traces for `proactive_skipped` with reasons: `proactive_cooldown`, `low_energy`, `high_irritability`
+8. Check traces for `proactive_skipped`, and `policy_rejected` with `proactive_cooldown`
 
 Common skip reasons:
 
 | Hint | Fix |
 |------|-----|
-| `Morning greetings are disabled` | Enable `proactive.greeting_enabled` |
-| `Current server hour is X; greetings only fire at hour Y` | Wait for correct hour or adjust `greeting_utc_hour` |
+| `Morning greetings are disabled (proactive.greeting_enabled)` | Enable it |
+| `Current hour on Sapphire's clock is X; greetings only fire at hour Y` | Wait for the hour, or change `greeting_utc_hour` (the schedule re-times itself on save) |
 | `No greeting channels selected` | Pick targets in Proactive settings |
 | `No connected Discord bot accounts` | Fix token / enable plugin |
-| `Currently in sleep hours` | Expected — outreach suppressed overnight |
-| `Goodnight only fires at minutes (0, 15, 30, 45)` | Wait for next 15-min boundary |
+| `Currently in sleep hours — outreach is skipped` | Expected — outreach suppressed overnight |
+| `Sleep schedule is disabled (proactive.sleep_schedule_enabled)` | Enable it; the goodnight task stays switched off until you do |
+| `… greeted N min ago — proactive cooldown (Nh) blocks another …` | Wait, or lower `safety.proactive_cooldown_hours` |
+| `… no daemon task accepts a proactive post …` | Loosen the daemon task's filters, or add a task for that account/channel |
 
 ## Voice Operations Runbook
 
@@ -296,6 +324,10 @@ Common skip reasons:
 | Garbled transcripts | DAVE not ready — reinstall `davey`, check py-cord patches in diagnostics |
 | Auto-join not working | Targets configured, not in sleep mode, daemon running |
 | `conversation_slot_cap` in logs | Lower concurrent VCs or raise `max_conversation_sessions` |
+| She cuts herself off on coughs, clicks, keyboard noise | Raise `voice.barge_hold_ms` (250 ms default) |
+| She answers speech meant for someone else | `voice.solo_no_name` (alone = no name needed) and `voice.follow_up_seconds` decide when a name is optional |
+| Nothing lands in `voice_transcripts` | Only `transcribe_only` / `summarize_only` always archive; every other mode needs `voice.transcription_enabled` |
+| VC chat disappeared from the sidebar | Expected — VC chats are ephemeral and reap 30 min after the last session unless `voice.keep_chat_history` is on |
 
 ## Privacy & Retention
 
@@ -346,26 +378,11 @@ One door (`ForgetService`, since 2026-09-13) removes, in one transaction:
 
 The response carries a count per table.
 
+Not covered by this transaction: **voice session summaries** (`voice_summaries`, which quote speaker
+names) and **trace rows**, which can carry an excerpt of what was said. Both age out through the
+Retention purge (`transcript_days` / `trace_days`) — turn Retention on if you need them gone on a clock.
+
 The Settings › Discord › Memory "forget user" action invokes the same profile and memory paths (there is no `/forget-me` slash command — it was never registered).
-
-## Import from leona_discord
-
-Optional migration — does **not** modify `plugins/leona_discord/`. The `discord` and `leona_discord` plugins use independent storage; import is the supported bridge.
-
-```http
-POST /admin/import-leona
-Content-Type: application/json
-
-{
-  "leona_db_path": "/path/to/leona.sqlite3",
-  "include": ["pinned_memories", "profile_facts", "profile_summaries", "settings"],
-  "leona_settings": { "global": { ... } }
-}
-```
-
-- Imports are **idempotent** via the `import_audit` table — re-running skips already-imported records
-- Settings mapping translates Leona keys to Discord plugin overlay keys (greeting, sleep, GIF, presence, etc.)
-- Pass `leona_settings` when importing settings without reading from the Leona DB file
 
 ## Safety Controls
 
@@ -377,8 +394,12 @@ Content-Type: application/json
 | `safety.rate_limit_seconds` | Per-channel reply cooldown after approval |
 | `safety.proactive_cooldown_hours` | Minimum gap between proactive actions per channel/action |
 | `safety.quiet_hours_enabled` + start/end | Idle presence, skip proactive outreach (mentions still allowed) |
-| `safety.allow_direct_messages` | Drop DM observations when false |
-| `channel.reply_mode` | Hard gate: `mentions_only`, `default`, `disabled` |
+| `safety.allow_direct_messages` | **Off by default** — anyone sharing a server can DM a bot, so the DM line stays shut until you open it |
+| `safety.dm_daily_budget` | With DMs on: replies per person per day before she goes quiet on them until tomorrow (default 30, `0` = unlimited) |
+| `safety.tools_stay_in_server` | **On by default** — inside a server conversation her Discord tools can only read/post in *that* server, never another server or someone's DMs. Your own chats are unrestricted. |
+| `cognitive.side_lanes_local_only` | **On by default** — greetings, goodnights, distill, and image captions on `auto` pick only providers marked local, so server chatter never rides to a cloud model by accident |
+| `cognitive.llm_debug_enabled` | Off by default. On = last 10 full prompts/replies held in memory for the Debug panel |
+| `channel.reply_mode` | Hard gate: `mentions_only`, `default`, `all`, `disabled` |
 | `channel.human_response_chance` / `channel.bot_response_chance` | Organic (unaddressed) reply % in `default` mode; mentions/DMs bypass |
 | `bot.reply_mode` + allowlist | Control bot-to-bot debate sessions |
 
@@ -388,12 +409,10 @@ Policy blocks are recorded as `policy_rejected` traces:
 
 | Reason | Trigger |
 |--------|---------|
-| `cooldown` | Reply rate limit not elapsed |
-| `proactive_cooldown` | Proactive action too soon |
-| `high_irritability` | Affect irritability > 0.85 blocks proactive |
-| `low_energy` | Affect energy < 0.15 blocks outreach/greeting |
-| `low_fondness` | Blocks meme/media sends |
-| `voice_disabled` / `speaking_disabled` / `mode_*` | Voice policy blocks |
+| `cooldown` | `safety.rate_limit_seconds` not elapsed for that channel |
+| `missing_author` | Observation arrived with no author id |
+| `proactive_cooldown` | Same proactive action in the same channel inside `safety.proactive_cooldown_hours` (scheduled task follow-ups bypass this) |
+| `voice_disabled` / `speaking_disabled` / `mode_*` | Voice off, speaking off, or the voice mode doesn't speak |
 
 Sleep schedule gates reply delivery and suppresses silent reactions during overnight hours.
 
@@ -406,6 +425,11 @@ Registered Discord slash commands:
 | `/voice join [channel]` | Bring her into a voice channel (defaults to yours) |
 | `/voice leave` | Disconnect her from voice in this server |
 
+`/voice join` has **no permission or allowlist gate** — any member who can use slash commands in a
+server the bot is in can pull her into a voice channel, which starts an STT/LLM/TTS session on your
+budget. Until that is gated, keep `voice.enabled` off on public servers, or restrict the command in
+Discord's own **Server Settings → Integrations → your bot**.
+
 (`/ask`, `/summarize`, `/remember`, `/forget-me` were documented but never registered — the
 handler behind them was removed 2026-09-13. Text conversation needs no command: mention her or
 talk in a channel she replies in; she leaves voice on her own with `<<HANG UP>>`.)
@@ -416,8 +440,12 @@ talk in a channel she replies in; she leaves voice on her own with `<<HANG UP>>`
 
 1. Reload plugin under Settings → Plugins
 2. Check Sapphire logs for startup exception
-3. Verify pip dependencies installed (py-cord, davey, PyNaCl)
-4. `GET /health` — if `error`, read `detail`
+3. Verify pip dependencies installed (py-cord from the pinned git commit, davey, PyNaCl, dateparser,
+   vaderSentiment). `GET /api/plugins/discord/check-deps` lists what is missing plus the exact pip
+   command; **Git must be on PATH** and `discord.py` must not be installed alongside py-cord
+4. Check for a shadowing copy: `[PLUGINS] 'discord' (user band) shadows the system copy` means an old
+   `user/plugins/discord` is running instead of the shipped one — delete that folder and restart
+5. `GET /health` — if `error`, read `detail`
 
 ### Bot connected but no message events
 
@@ -449,17 +477,19 @@ talk in a channel she replies in; she leaves voice on her own with `<<HANG UP>>`
 
 ## Cognitive Configuration
 
-Configure under **Cognitive** settings tab (`cognitive` overlay):
+The `cognitive` overlay is split across the **Models**, **Tasks**, and **Cognition** settings tabs:
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `enabled` | `true` | Route messages through intention engine before LLM |
-| `mode` | `integrated` | `conservative` / `integrated` / `expressive` |
-| `llm_primary` / `llm_model` | `auto` | Discord-specific LLM override |
-| `task_follow_up_enabled` | `true` | Deliver scheduled world-model tasks |
-| `commitment_followups_enabled` | `true` | Parse and follow up on future promises |
-| `reminder_followups_enabled` | `true` | Handle "remind me in …" requests |
-| `affect_modulation_enabled` | `true` | Mood/relationship adjust reply thresholds |
+| Setting | Default | Tab | Purpose |
+|---------|---------|-----|---------|
+| `llm_primary` / `llm_model` | `auto` / `''` | Models | Discord-specific LLM override (`auto` = whatever the daemon task uses) |
+| `task_follow_up_enabled` | `true` | Tasks | Deliver scheduled world-model tasks |
+| `commitment_followups_enabled` | `true` | Tasks | Parse and follow up on future promises |
+| `reminder_followups_enabled` | `true` | Tasks | Handle "remind me in …" requests |
+| `situation_enabled` | `true` | Cognition | Short-lived channel vibe snapshot (quiet / calm / lively / playful / heated) |
+| `situation_in_prompt` | `true` | Cognition | Add that snapshot to reply instructions as a data fence |
+| `intention_competition_enabled` | `false` | Cognition | Score reply vs react-only vs silence instead of the legacy organic % roll |
+| `side_lanes_local_only` | `true` | Cognition | Side lanes on `auto` pick local providers only |
+| `llm_debug_enabled` | `false` | Cognition | Keep the last 10 prompts/replies in memory for the Debug panel |
 
 Task follow-ups and reminders require a Sapphire **discord_message** daemon task with **Auto-reply** enabled on the same bot account.
 

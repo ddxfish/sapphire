@@ -1512,6 +1512,20 @@ def check_plugin_update(plugin_name: str, _=Depends(require_login)):
     }
 
 
+def _conda_env_name():
+    """Name of the conda env this interpreter lives in, or None. CONDA_DEFAULT_ENV
+    only exists after `conda activate`; a launcher that runs the env's python.exe
+    directly has no such var, so the old check called a conda env "system Python"
+    and refused auto-install. conda envs always carry a conda-meta/ dir."""
+    import sys
+    name = os.environ.get("CONDA_DEFAULT_ENV")
+    if name:
+        return name
+    if os.path.isdir(os.path.join(sys.prefix, "conda-meta")):
+        return os.path.basename(sys.prefix)
+    return None
+
+
 @router.get("/api/plugins/{plugin_name}/check-deps")
 async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
     """Check dependency status for a plugin."""
@@ -1527,7 +1541,7 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
     missing = plugin_loader._check_dependencies(manifest)
 
     # Detect environment type
-    conda_env = os.environ.get("CONDA_DEFAULT_ENV")
+    conda_env = _conda_env_name()
     in_venv = sys.prefix != sys.base_prefix
     if conda_env:
         env_type, env_name = "conda", conda_env
@@ -1537,7 +1551,7 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
         env_type, env_name = "system", "system"
 
     can_auto = env_type in ("conda", "venv")
-    command = f"pip install {' '.join(missing)}" if missing else None
+    command = plugin_loader.pip_hint(missing) if missing else None
 
     return {
         "deps": deps, "missing": missing, "installed": [d for d in deps if d not in missing],
@@ -1566,12 +1580,12 @@ def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
         return {"status": "ok", "message": "All dependencies already installed", "installed": []}
 
     # Environment safety gate
-    conda_env = os.environ.get("CONDA_DEFAULT_ENV")
+    conda_env = _conda_env_name()
     in_venv = sys.prefix != sys.base_prefix
     if not conda_env and not in_venv:
         raise HTTPException(status_code=400, detail=(
             "Sapphire is running in system Python — auto-install disabled for safety. "
-            f"Run manually: pip install {' '.join(missing)}"
+            f"Run manually: {plugin_loader.pip_hint(missing)}"
         ))
 
     env_label = f"conda:{conda_env}" if conda_env else f"venv:{os.path.basename(sys.prefix)}"
@@ -1591,7 +1605,7 @@ def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     if result.returncode != 0:
         return JSONResponse(status_code=500, content={
             "status": "error", "message": "pip install failed",
-            "output": result.stderr or result.stdout, "command": f"pip install {' '.join(missing)}",
+            "output": result.stderr or result.stdout, "command": plugin_loader.pip_hint(missing),
         })
 
     # Verify deps are now importable

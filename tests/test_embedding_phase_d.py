@@ -40,10 +40,12 @@ def test_windows_hf_home_override_logic_present():
     """[REGRESSION_GUARD] On Windows, HF_HOME must be redirected to a
     project-local path if not already set — MAX_PATH defeats the default
     HuggingFace cache layout. Source-level check since we can't simulate
-    Windows in a test runner."""
-    src = (Path(__file__).parent.parent / 'core/embeddings/__init__.py').read_text()
+    Windows in a test runner. The redirect lives in sapphire.py's env block
+    (moved 2026-09-20: it must precede the TTS server spawn, and the
+    embeddings module only loads with the memory plugin)."""
+    src = (Path(__file__).parent.parent / 'sapphire.py').read_text(encoding='utf-8')
     assert "sys.platform == 'win32'" in src
-    assert 'HF_HOME' in src
+    assert 'os.environ.setdefault("HF_HOME"' in src
     assert 'MAX_PATH' in src, "comment should reference the reason"
 
 

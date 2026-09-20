@@ -297,7 +297,7 @@ Daemons survive hot-reload — `stop()` is called before unload, then `start()` 
 | Plugin | Event Source | What It Does |
 |--------|------------|--------------|
 | `plugins/telegram/` | `telegram_message` | Telethon client, listens for incoming messages via asyncio event loop |
-| `plugins/discord/` | `discord_message` | Discord.py bot, listens for channel messages |
+| `plugins/discord/` | `discord_message` | py-cord bot, listens for channel messages (also voice, presence, proactive schedules) |
 | `plugins/email/` | `email_message` | IMAP polling (configurable interval), checks for UNSEEN mail |
 | `plugins/mcp_client/` | — | MCP server connections (daemon without event sources) |
 

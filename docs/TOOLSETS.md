@@ -34,6 +34,10 @@ The Toolsets editor lives in the **Persona** nav group (Persona > Toolsets).
 
 Built-in defaults seed `user/toolsets/toolsets.json` on first run; after that the user file is authoritative, so your edits (and deletions) stick across restarts.
 
+Two names are always available in the dropdown beside your own: **`all`** (every tool the app has loaded) and **`none`** (no tools at all).
+
+> **After an update, check your custom toolsets.** A saved toolset is a list of tool *names*, so a tool that gets renamed or replaced simply stops being in the set — quietly, with no error. The shipped toolsets are refreshed for you; hand-made ones aren't. If she seems to have lost an ability, open the toolset and re-tick it. The September 2026 image rebuild is the current example: `get_images`, `view_image`, `image_view` and `web_search_images` are gone, replaced by `web_view_images`, `memory_view_image`, `local_view_images` and `memory_save_image`.
+
 ## Extra Toolsets (union)
 
 A chat carries one base toolset plus an optional list of **extra toolsets** merged in on top — the enabled tools are the union of all of them. This lets a feature add its tools to whatever toolset you already use without forcing you onto a special one. The first customer is the story system's "include story tools" checkbox, which unions the story tools into the chat's toolset and removes them cleanly when unchecked.
@@ -58,10 +62,13 @@ BUILT-IN TOOLSETS:
 - smarthome: Home Assistant control (scenes, lights, climate, areas) + knowledge
 - personality: self-modification — prompt tools, voice, memory, knowledge, goals
 
+- Plus the two reserved names `all` (everything loaded, minus hidden tools) and `none`
+
 HOW IT WORKS:
 - Each chat stores its active toolset (and optional extra_toolsets) in its chat settings
 - Switching chats switches toolsets automatically
 - extra_toolsets: list of additional toolsets unioned on top of the base (e.g. story tools checkbox)
+- A saved toolset is a list of tool NAMES: a renamed/retired tool silently drops out of user-made toolsets (shipped ones are refreshed). Renamed Sept 2026: get_images / view_image / image_view / web_search_images → web_view_images, memory_view_image, local_view_images, memory_save_image
 
 MANAGE TOOLSETS:
 - UI editor: Persona nav group > Toolsets

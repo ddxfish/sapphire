@@ -8,15 +8,33 @@ Meticulously crafted by ddxfish and zeebie-the-zebra
 
 ## Requirements
 
-The plugin installs these dependencies automatically when enabled:
+The plugin needs a few Python packages, and they are **not** installed for you. When you enable it,
+**Settings → Plugins → Discord** shows a **Missing: …** strip with an **Install** button. That button
+works when Sapphire runs inside a conda environment or a venv; on plain system Python it shows you the
+pip command to run by hand instead. Restart Sapphire after installing.
 
-- **py-cord** (with voice support) — Discord gateway and voice
+- **py-cord** (with voice support) — Discord gateway and voice. It installs from a **pinned git commit**, so **Git must be on your PATH** for pip to fetch it.
 - **davey** + **PyNaCl** — encrypted voice receive (DAVE)
 - **dateparser** — local parsing for reminders and commitments
 - **vaderSentiment** — lightweight autonomous reaction emoji picks (default sentiment engine)
 - **transformers** + **torch** — optional; enables Twitter RoBERTa for more accurate reaction sentiment (Settings → Social)
 
+> **If you ever installed `discord.py`, remove it first:** `pip uninstall discord.py`. It claims the same
+> `discord` import name as py-cord, and the two cannot live in one environment.
+
+**ffmpeg is not required.** Her speech is decoded in-process — no external media tool, no temp files.
+
 For **conversational voice**, you also need **TTS streaming enabled** in Sapphire Settings. Without it the bot can listen and transcribe but stays silent in conversational mode.
+
+## Upgrading from the older Discord plugin
+
+Discord now ships **with Sapphire**, in `plugins/discord`. If you installed the older version by hand it
+still sits in `user/plugins/discord` — and a user-installed copy always wins over the shipped one, so you
+keep running the old plugin until you remove that folder. The log says so at boot:
+`[PLUGINS] 'discord' (user band) shadows the system copy`.
+
+Delete the `user/plugins/discord` folder on disk, then restart Sapphire. (Use the file manager or your
+shell rather than the **Uninstall** button — uninstall also erases that plugin's saved settings.)
 
 ## Quick Start
 
@@ -45,9 +63,13 @@ Open the generated URL and add the bot to your server.
 ### 3. Enable and configure in Sapphire
 
 1. Go to **Settings → Plugins → Discord** and enable the plugin
-2. Reload the plugin if prompted — the settings page shows **Daemon is running** when healthy
-3. Under **Bot Accounts**, enter a name and paste the token → **Add Bot**
-4. Confirm the account shows **connected**
+2. If a **Missing: …** strip appears, click **Install** (or run the command it shows) and restart Sapphire — see [Requirements](#requirements)
+3. Reload the plugin if prompted — the settings page shows **Daemon is running** when healthy
+4. Under **Bot Accounts**, enter a name and paste the token → **Add Bot**
+
+A saved bot stays offline until an **enabled daemon task selects it** (next section) — that's the switch
+deciding which of your bots actually log in. Come back to this page afterwards and the account shows
+**connected**.
 
 ### 4. Create a message daemon task
 
@@ -74,20 +96,24 @@ Open **Settings → Plugins → Discord** for the full settings UI. Settings are
 
 | Tab | What it controls |
 |-----|------------------|
-| **Cognitive** | Intention engine before replies; LLM provider for Discord text/voice; task follow-ups, commitments, reminders, birthday wishes; affect modulation |
+| **Models** | Which LLM writes replies, greetings, goodnights, ambient distill, and voice-channel turns (default = the model the daemon task already uses; the vision model lives on Media) |
 | **Conversation** | Reply mode (mentions only, etc.); name match without @; message batching; typing/read delays; bot-to-bot debate allowlist and session limits |
+| **Tasks** | Task follow-ups, commitments, "remind me in…" requests, birthday capture and wishes |
+| **Memory** | Per-user memory on/off, ambient distill (opt-in) and its limits, the memory browser and forget-user action |
+| **Cognition** | Channel situation model, intention competition, relationship-aware timing, local-only side lanes, the opt-in LLM debug ring |
 | **Social** | Sentiment engine (VADER or Twitter RoBERTa); silent sentiment reactions; human delivery (auto typos, quote-replies, post-send edits) |
 | **Proactive** | Morning greetings, quiet outreach, sleep/goodnight schedule; greeting channel targets; forced-wake mention buffering; test buttons and diagnostics |
 | **Presence** | Discord status and activity while awake, quiet, or sleeping; activity cycling |
-| **Safety** | DM policy, per-channel reply cooldown, proactive cooldown, quiet hours |
+| **Safety** | DMs (**off by default**) and their daily budget, keeping her tools inside the server she is talking in, per-channel reply cooldown, proactive cooldown, quiet hours |
 | **Media** | GIF search (Klipy/Giphy/Tenor), image understanding (vision API), meme responses |
-| **Voice** | Voice modes, transcription, speaking, auto-join targets, conversational prompt template |
+| **Voice** | Voice modes, transcription, speaking, addressing, auto-join targets, conversational prompt template |
 | **Retention** | SQLite retention for messages, traces, and voice transcripts |
+| **Debug** | Decision traces, cognition preview, and the LLM debug ring (only fills while `cognitive.llm_debug_enabled` is on) |
 
-### Reply gating (two layers)
+### Reply gating
 
-1. **Conversation → Reply mode** is the hard gate (`mentions_only`, `default`, or `disabled`)
-2. **Cognitive mode** filters further (`conservative`, `integrated`, `expressive`) — it cannot override a blocked reply mode
+1. **Conversation → Reply mode** is the hard gate (`mentions_only`, `default`, `all`, or `disabled`)
+2. **Safety → Reply cooldown** is the only throttle after that — one reply per channel per cooldown window, DMs included
 
 With **Mentions only**, the bot only replies when @mentioned or when **Respond to bot name** (soft mention) is enabled.
 
@@ -146,10 +172,17 @@ These run via Sapphire's continuity scheduler (not the message daemon):
 | `morning_greeting` | Daily at the greeting hour (bound to the setting) | Morning greetings + wake replay |
 | `quiet_outreach` | Every 15 min while Outreach is on | Conversation starters when selected channels go quiet |
 | `sleep_goodnight` | Daily at the sleep hour, while the sleep schedule is on | Goodnight messages and sleep state |
+| `retention_purge` | Daily at 4:30 AM | Deletes plugin rows past the Retention day limits (does nothing until Retention is on) |
+| `ambient_distill` | Every 15 min while ambient distill is on | Turns buffered member chat into profile facts |
 
 Configure targets and hours under **Proactive** in plugin settings. Use the **Test proactive pathways** panel to dry-run or fire greetings, goodnight, and outreach manually.
 
-Proactive behaviour uses **server local time** for hour checks.
+Jobs that belong to an off-by-default feature stay **switched off** in Triggers until you turn that
+feature on, and the daily ones re-time themselves the moment you change the hour — no restart, and
+nothing ticking in her upcoming tasks for a feature you never enabled.
+
+Hour checks for greetings, sleep, and outreach use **Sapphire's configured timezone**
+(Settings → Identity) — the same clock the Triggers page uses.
 
 ## Available Tools
 
@@ -160,7 +193,7 @@ Add Discord tools to your active toolset. If you omit `channel`, tools use the c
 | `discord_list_channels` | List channels as `#name (id) — server`, text / voice / all, optional server filter — the way to learn a channel id or name |
 | `discord_get_servers` | List servers the bot is in |
 | `discord_read_messages` | Read the last N messages in a channel (1–50, default 20) as `[message_id] author: text`, oldest first |
-| `discord_send_message` | Send a message (max 2000 chars); supports quote-replies via `reply_to_message_id` |
+| `discord_send_message` | Send a message (long text is split into 1900-character posts); supports quote-replies via `reply_to_message_id` |
 | `discord_send_image` | Post an image from her image system: `img:<id>` handle, `doc:<N>` library image, or a URL (never a disk path) |
 | `discord_send_gif` | Send a GIF by search query or URL (requires GIF API key in Media settings) |
 | `discord_add_reaction` | Add an emoji reaction to a message |
@@ -197,12 +230,24 @@ Prerequisites:
 2. TTS streaming enabled in Sapphire Settings
 3. Bot has Connect + Speak permissions
 
-**Addressing modes** (configured in settings model; see operator doc for details):
+**Who she answers** (Voice tab):
 
-- `bot_name` (default) — replies when someone says the bot's display name or an alias
-- `always` — replies to every completed speech turn
+- **Addressing: mode** — `bot_name` (default) replies when someone says her display name or one of the
+  **name aliases**; `always` replies to every completed speech turn
+- **Alone = no name needed** (on by default) — when one person is in the channel with her, everything
+  they say is for her
+- **Follow-up window** (20s by default) — after she answers you, *you* can keep talking without her name
+  for that long. Everyone else still has to say it, so bystanders don't hijack the turn.
+- **Barge-in hold** (250 ms) — how long you have to keep talking over her before she stops. A click or a
+  thump can't hold that long; a word can.
+
+She can also hang up herself: writing `<<HANG UP>>` in a reply makes her leave the channel once her last
+words have played (the tag itself is never spoken or posted).
 
 Each voice channel gets a dedicated Sapphire chat, `discord_{guild_id}_{channel_id}`, locked to its own memory scopes with no tools. Voice turns persist there, not in the guild text channel chat — and unless **Keep voice chat history** is on, the chat is deleted 30 minutes after her last session there.
+
+**Transcripts** are only written when **Transcription** is on, or when the mode is `transcribe_only` /
+`summarize_only`. Conversational voice still hears every word — it just keeps no transcript row.
 
 For diagnostics and troubleshooting, see [docs/discord_voice_conversation_operator.md](docs/discord_voice_conversation_operator.md).
 
@@ -251,17 +296,21 @@ Useful API endpoints (under `/api/plugin/discord/`):
 | `GET profiles/interests` | Interest graph for a user |
 | `POST profiles/facts/update` | Edit, pin, soft-forget, or restore a profile fact |
 | `GET profiles/facts/review` | Ambient distill review queue (unpinned auto-facts) |
-| `GET admin/summary` | Operator summary (health, affect, tasks, voice) |
+| `GET admin/summary` | Operator summary (health, traces, pending tasks, voice sessions, connected accounts) |
 | `POST admin/purge` | Apply retention purge immediately |
 | `POST admin/forget-user` | GDPR-style user data removal |
-| `POST admin/import-leona` | Import memories/profiles from a Leona Discord database |
+| `GET debug/llm` / `POST debug/clear` | The opt-in LLM debug ring (last 10 prompts/replies) and its clear button |
+| `GET debug/cognition` | Recent channel situations, intention scores, and gate multipliers |
 
 ## Troubleshooting
 
 | Problem | Things to check |
 |---------|-----------------|
+| **Plugin won't load, "Missing: py-cord…"** | Click **Install** on the missing-dependency strip (conda/venv), or run the command it shows. Git must be on your PATH, and `discord.py` must not be installed. |
+| **Settings changes seem to do nothing** | An older hand-installed copy in `user/plugins/discord` shadows the shipped plugin — delete that folder and restart (see Upgrading above) |
+| **She ignores direct messages** | DMs are **off** by default — turn on Safety → Allow DMs. Then check the DM budget per person per day. |
 | **Daemon offline** | Enable the plugin under Settings → Plugins and reload. Check token validity. |
-| **Bot shows disconnected** | Invalid or revoked token; network; check account row for `last_error` |
+| **Bot shows disconnected** | No enabled daemon task selects that account (the plugin only logs in bots a task uses); invalid or revoked token; network; check account row for `last_error` |
 | **Can't see messages** | Message Content Intent enabled; bot has View Channels + Read Message History |
 | **Bot never auto-replies** | Daemon task exists with correct bot account; filters match; Reply mode allows the message; cognitive layer not blocking |
 | **Tools not available** | Add Discord tools to the active toolset |

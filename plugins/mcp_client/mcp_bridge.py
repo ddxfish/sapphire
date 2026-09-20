@@ -75,7 +75,7 @@ class MCPBridge:
                 self._ready.set()
         except Exception as e:
             if not self._connected:
-                self._error = str(e)
+                self._error = str(e) or repr(e)   # NotImplementedError stringifies to ""
                 self._ready.set()
             else:
                 logger.error(f"[MCP] Connection task error: {e}")

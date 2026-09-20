@@ -44,13 +44,22 @@ def kill_process_on_port(port: int) -> bool:
                 capture_output=True, text=True, timeout=5,
                 encoding='utf-8', errors='replace',
             )
+            killed = False
+            # "TCP  0.0.0.0:5012  0.0.0.0:0  LISTENING  1234" — compare the port
+            # EXACTLY: the old substring test on ':5012' also matched :50120-9,
+            # taskkilled a stranger, then returned before reaching the real orphan.
             for line in result.stdout.splitlines():
-                if f':{port}' in line and 'LISTENING' in line:
-                    pid = int(line.strip().split()[-1])
-                    if pid > 0:
-                        subprocess.run(['taskkill', '/F', '/PID', str(pid)], timeout=5)
-                        logger.info(f"Killed orphan process {pid} on port {port}")
-                        return True
+                parts = line.split()
+                if len(parts) < 5 or parts[3] != 'LISTENING':
+                    continue
+                if parts[1].rsplit(':', 1)[-1] != str(port):
+                    continue
+                pid = int(parts[-1])
+                if pid > 0:
+                    subprocess.run(['taskkill', '/F', '/PID', str(pid)], timeout=5)
+                    logger.info(f"Killed orphan process {pid} on port {port}")
+                    killed = True
+            return killed
         except Exception:
             pass
         return False

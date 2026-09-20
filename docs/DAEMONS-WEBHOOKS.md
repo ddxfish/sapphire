@@ -89,7 +89,8 @@ Fires on emails with "invoice" in the subject from someone named "accounting".
 |---------|-------------|
 | Bot Account | Which Discord bot this daemon listens on (required — only that bot connects) |
 | Auto-reply in channel | Send the AI's response back to the Discord channel. Off = listen-only (pipe to TTS, save to memory, act via tools without replying) |
-| Reply cooldown (seconds) | Minimum seconds between replies in the same channel. 0 = no limit; 60 = at most once a minute |
+
+The reply cooldown lives in the plugin now, not on the task: **Settings → Plugins → Discord → Safety → Reply cooldown (seconds)**, applied per channel across every task.
 
 ### Example: Server Helper Bot
 
@@ -389,7 +390,7 @@ Every daemon and webhook task has the same AI settings as scheduled tasks:
 Event-driven triggers. UI: **Triggers** nav group — the Daemons, Realtime, and Webhooks views (Heartbeat/Scheduled are time-driven, see CONTINUITY.md).
 
 TYPES:
-- daemon: plugin event listener (Discord/email/Telegram). trigger_config: source, account, filter (JSON object), plus plugin-declared task fields (auto_reply, cooldown, reply_format, ...)
+- daemon: plugin event listener (Discord/email/Telegram). trigger_config: source, account, filter (JSON object), plus plugin-declared task fields (auto_reply, reply_format, ...)
 - webhook: HTTP trigger at /api/events/webhook/{path}. trigger_config: path, method (GET/POST/PUT), secret (auto-generated on create)
 - realtime: a daemon task whose event source declares realtime:true (e.g. Twilio incoming_call). It GATES a live inbound session instead of firing a one-shot task — enabling the rule lets the daemon answer; per-rule config (endpoint/account, caller allowlist, saved vs ephemeral per-caller chat, greeting, phone context, public-line rails, toolset-elevation passphrase) lives on the rule. Rule selection is most-specific-wins (matching filter beats catch-all; no match = decline). Shown in the Realtime view, not Daemons. See PHONE-CALLS.md.
 

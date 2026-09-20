@@ -23,7 +23,8 @@ Every plugin needs a `plugin.json` in its root folder.
 | `essential` | bool\|string | No | false | `true` = core plugin: boot alarms if it fails to load, hidden from the plugin manager, toggle refused. A **string** names an alternates group (e.g. `"memory"` on both memory and mindpalace): visible and switchable, boot alarms only if NO plugin in the group loaded |
 | `managed_hide` | bool | No | false | Hide plugin entirely in managed/resale mode |
 | `settingsUI` | string\|null | No | `"auto"` | Controls settings panel: `"auto"` (from manifest schema), `"plugin"` (custom JS), `"core"` (hardcoded), or `null` (none) |
-| `pip_dependencies` | string[] | No | `[]` | Python packages required (pip specifiers, e.g. `["telethon>=1.34", "requests"]`). Checked before loading; missing deps shown in UI with install option |
+| `min_core_version` | string | No | — | Oldest Sapphire core your plugin works on. Compared against the `VERSION` file at load: if the core is older, the loader logs one loud `VERSION MISMATCH` warning and **loads anyway** — it never blocks. Set it so "my settings page is blank" becomes one readable log line |
+| `pip_dependencies` | string[] | No | `[]` | Python packages required (pip specifiers, e.g. `["telethon>=1.34", "requests"]`; a direct reference like `"py-cord[voice] @ git+https://…"` works too). Checked before any code loads; missing ones are shown in Settings › Plugins with an **Install** button that runs `pip install` for exactly those specs and reloads the plugin when they land. Auto-install is refused on bare system Python (conda/venv only) — the UI then shows the copy-paste command instead |
 | `environment` | object | No | — | Dedicated conda env for heavy deps that can't live in Sapphire's env: `{python, pip, conda, channels}`. Built on user consent as `sapphire-plugin-<name>`; pairs with `capabilities.services`. See [Subprocesses](subprocesses.md) |
 | `capabilities` | object | No | — | What the plugin provides (see below) |
 
@@ -185,6 +186,10 @@ Lower fires first. Within each band:
 
 User plugins use the same ranges but shifted to 100-199.
 
+If the same plugin **name** exists in both bands, the user copy wins and the shipped one never loads —
+the log says `[PLUGINS] '<name>' (user band) shadows the system copy at <path>`. A plugin that graduates
+into the shipped band therefore keeps running from `user/plugins/<name>/` until that folder is removed.
+
 ## Directory Structure
 
 ```
@@ -217,7 +222,7 @@ user/
 ## Reference for AI
 
 - Only `name` is required (unique; overrides folder name). Display title resolution: `short_display_name` → `display_name` → `short_name` → truncated first clause of `description` → `name`. Set `short_display_name` (2-4 words).
-- Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group), `default_enabled`, `priority` (int, lower fires first), `managed_hide`, `settingsUI` ("auto"|"plugin"|"core"|null), `pip_dependencies` (pip specifiers), `environment` ({python, pip, conda, channels} — dedicated conda env), `icon`/`emoji`, `url`, `author`, `version`.
+- Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group — e.g. `"memory"`, which is also how other plugins find the loaded memory engine), `default_enabled`, `priority` (int — a non-int is coerced to 50 with a warning; lower fires first), `managed_hide`, `settingsUI` ("auto"|"plugin"|"core"|null), `min_core_version` (warn-only version skew check against the `VERSION` file; never blocks), `pip_dependencies` (pip specifiers or direct references; missing ones → Install button, conda/venv only, then auto-reload), `environment` ({python, pip, conda, channels} — dedicated conda env), `icon`/`emoji`, `url`, `author`, `version`.
 - `capabilities` keys: `hooks`, `voice_commands`, `tools`, `scopes`, `routes`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `prompts`, `web`, `daemon`, `services`, `app`, `themes`, `widgets`, `sidebar_accordion`, `cleanup_paths`. Each has its own guide page.
 - Scope entry: `{key (python identifier), label, endpoint, data_key?, value_field?, name_field?, label_template?, nav_target?, default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
 - `sidebar_accordion`: `{title?, icon?, content?, script?}` — files live in the plugin's `web/` dir, served at `/plugin-web/{name}/...`; script exports `init(contentEl, pluginName)`, called after the HTML fragment lands; chat surface only; renders only while the plugin is enabled.

@@ -100,6 +100,7 @@ Personal or sensitive prompts go in the **vault** — an encrypted store guarded
 - Un-ticking writes the prompt back out as plaintext, so it asks first
 - Vault prompts (and prompts using vault pieces) can't be exported — content stays inside
 - Lock the vault and they disappear from the selector; if one was active, the active prompt falls back to `default`
+- A chat still pointing at a sealed prompt shows **🗝 vault prompt (locked)** instead of its name — in the chat sidebar, the persona editor, and trigger editors alike. The name itself never leaves the vault, and the chat heals back to the real prompt when you unlock. While it's sealed, saving that name onto any chat is refused ("That prompt is asleep in the locked vault — unlock it, or pick another prompt") so a private prompt's name can't be copied into a public chat by accident
 - Prompts flagged private before the vault existed still show 🔒 and still refuse cloud providers — move them into the vault when convenient
 
 **Use cases:** Personal diary prompts, sensitive conversations, shared computer scenarios.

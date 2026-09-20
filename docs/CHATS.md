@@ -41,6 +41,29 @@ You can't switch chats while a reply is generating — press Stop first.
 
 Each chat runs one turn at a time. If you send a message while Sapphire is still replying in that chat — Enter past the Stop button, or a second browser tab on the same chat — the send is refused with a toast: *"Sapphire is still replying in this chat — wait for her to finish or press Stop."* (An HTTP 409 under the hood.) Other tabs viewing the same chat flip their Send button to Stop while a turn is live. This protects the history: two interleaved turns used to corrupt the transcript in ways that broke the next request. Press Stop, then send.
 
+### Message actions — edit, regenerate, continue
+
+Hover a message for its little toolbar:
+
+- **🗑️ Delete from here** — removes that message and everything after it. The tooltip counts what would go.
+- **🔄 Regenerate** — throw away that reply and ask for a fresh one.
+- **▶️ Continue** — offered on the **last reply only**, and only useful when that reply ended mid-prose rather than in a tool call. She picks up where the message stopped and keeps writing into the same bubble; nothing is deleted first, and a Stop that produced nothing leaves the message exactly as it was. Some providers can't resume a reply in place — they ignore a trailing half-written message — and you get a plain notice saying so rather than a silent no-op.
+- **✏️ Edit** — rewrite the text in place. Only that one bubble redraws, so the rest of the chat doesn't jump. The editor holds the **prose only**: her stored thinking and the turn's tool results stay put and survive the save. **Esc** cancels, **Ctrl/Cmd+Enter** saves.
+- **🔊 Replay** — speak the message again.
+
+### If your connection drops mid-reply
+
+Her turn runs on the server, not in your browser. Lock your phone, let a tab sleep, walk behind a flaky proxy — the reply keeps being written.
+
+The page notices the feed died, says *"Connection dropped — she's still working, reconnecting…"*, and rejoins the live turn on its own, picking up exactly where it stopped. The bubble keeps filling in place and Stop still works. Reconnect attempts back off over roughly a minute.
+
+Two other endings:
+
+- **She finished while you were away** — there's nothing live to rejoin, so the page just reloads the history with the completed reply in it.
+- **Reconnecting never worked** — you get *"Couldn't reconnect — her reply lands in the chat when she finishes"*. It does; reload the page later and it's there.
+
+Audio is never replayed on a reconnect — you didn't hear the part you missed and it isn't re-read. With TTS on, the finished reply is spoken once when it lands.
+
 ### Import and export (single chat)
 
 - **Export** (sidebar ⋮ menu) downloads the current chat's messages as JSON.
@@ -138,6 +161,10 @@ There is no Chats section on the Settings page — per-chat settings *are* the s
 
 - **Send refused: "still replying in this chat"** → a turn is live in this chat (maybe another tab) → wait, or press Stop, then send again.
 - **Can't switch chats** → a reply is generating → Stop first; switching is blocked mid-generation.
+- **Reply seemed to die when my phone locked** → it didn't — the turn runs on the server → wake the tab and it reconnects itself; if it can't, the finished reply is in the chat after a reload.
+- **"Nothing to add — this provider doesn't continue a reply in place"** → that provider ignores a half-written reply (OpenAI, Fireworks, GLM/Z.AI behave this way) → the message is untouched; ask her to carry on in a new message, or switch that chat to a provider that accepts one.
+- **No ▶️ Continue button on a message** → it's only offered on the chat's *last* reply, and it follows the last reply as new messages land.
+- **"Nothing to continue — that reply ended in a tool call"** → there's no half-written sentence to pick up → send a normal message instead.
 - **Chat missing from the sidebar picker** → check the Chat Manager's Archive and Game Room tabs — archived and game/story chats never show in the picker → unarchive it, or open it by clicking its name in the Manager.
 - **Private chats vanished everywhere** → the vault is sealed → unlock via the sidebar 🔒 padlock; sealed means hidden, not gone.
 - **⚠ degraded badge / "read-only until repaired"** → some rows are unreadable → use the row's 🔧 Repair; if the dialog says most rows can't be decrypted, restore the matching vault backup instead.
@@ -192,6 +219,19 @@ DEGRADED / REPAIR (POST /api/chats/{name}/repair):
 
 ONE TURN PER CHAT:
 - POST /api/chat/stream is exclusive per chat; second send while live → 409 {"error": "...press Stop"}; other tabs mirror Send→Stop; cancel via POST /api/cancel
+
+SERVER-OWNED TURNS (core/chat/turn.py, 2026-09-15):
+- The engine runs on its own server thread; every HTTP body is a VIEWER of it. A viewer leaving (phone lock, tab sleep, proxy timeout) never ends the turn — only POST /api/cancel does
+- Every SSE line carries `seq`. POST /api/chat/attach {chat?, since?} replays the turn's ring exact-once after `since`, then follows live on the same wire format; 204 = no live turn (refresh history), 404 unknown chat, 409 sealed chat
+- Ring holds ~256KB of text; past it the viewer gets a `resync` event and repaints from history before streaming the remainder
+- Reattached feeds are text-only — audio is never replayed; the client speaks the finished reply once if TTS is on
+- Client: features/viewer.js (backoff 1s→15s, six tries), api.js attachTurn
+
+MESSAGE ACTIONS (per-message toolbar):
+- 🗑️ delete-from-here, 🔄 regenerate, ▶️ continue (last assistant row only), ✏️ edit, 🔊 replay TTS
+- Edit swaps one bubble (ui.replaceMessage, no full transcript rebuild); editor is prose-only so stored thinking and the turn's tool half survive; Esc cancels, Ctrl/Cmd+Enter saves
+- Continue = POST /api/chat/stream {continue_from: <assistant timestamp>}: no user row sent or saved, engine resumes from the tail row as prefill, edits that row in place on success, leaves it untouched on Stop; refused unless it's the chat's last prose row
+- Providers that ignore a trailing assistant message (OpenAI, Fireworks, GLM/Z.AI) yield a `notice` event and the row is left alone — honest no-op, never a silent one
 
 OTHER:
 - Archive = UI shade not freeze: hidden from sidebar picker, daemons/cron still reach it, Manager lists it, reversible (POST /api/chats/{name}/archive)

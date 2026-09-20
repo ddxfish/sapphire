@@ -2,8 +2,8 @@
   "plugin": "discord",
   "version": "1.25.0",
   "files": {
-    "OPERATIONS.md": "sha256:d292fd8ccbe1104c17bf80b8fb5216e0126b418b7b163564c6fcf7d527ecc3c1",
-    "README.md": "sha256:8686987c3374c016f6f572f852390a1e42d62f77d70503e32979a7b09d920b9c",
+    "OPERATIONS.md": "sha256:fc90eefa6cfd38f816c691efe06d817af0513817d792e0567e3856efe28fea39",
+    "README.md": "sha256:9bd602453ac455375efa09b0d4778194177a8c0959f1769f945130fae4566db2",
     "__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "api/__init__.py": "sha256:01b39649711c6caba7cd872fc0e7660748dc4f065708124cd665399a744bc134",
     "api/accounts.py": "sha256:c5c3217f7ee20eabed3b228e100258fde089c6dec2fb3e9888924d58585a5a49",
@@ -299,5 +299,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:be06171abb167a5f1d89c576ba946f01816cb3ae79f1d5275f44407c4ecf3d38"
   },
-  "signature": "QUE20KXfgveqAJ1y3qfSFt2GASuAlOkypjUjNyl0lP095iA53Jdm0RmeeUswF94AoRHrKNb11TG7L+r416nHCA=="
+  "signature": "HtFEk5wkGl8hVfUIyD+QJ48/rtVrzW/hu18HuGfP47+gBCGXbo0HJeRxmhWFem4CzjdWJz7ZTbQJjBg/C+xBBg=="
 }

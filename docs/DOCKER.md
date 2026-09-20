@@ -25,6 +25,8 @@ Docker works in **layers** — the base system, Python packages, AI models, and 
 - **Windows/Mac**: Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - **Linux**: Install [Docker Engine](https://docs.docker.com/engine/install/)
 
+> The CPU image is built for both `amd64` (Intel/AMD) and `arm64`, so Apple Silicon Macs and ARM64 Linux servers run it natively — nothing extra to set. Docker picks the right one for your machine.
+
 ### 2. Create a directory and download the compose file
 
 #### Linux / Mac (Terminal)
@@ -67,6 +69,19 @@ Go to **https://localhost:8073** in your browser and complete the setup wizard.
 
 ---
 
+## What's in the image
+
+Voice works out of the box: Kokoro TTS, Faster Whisper STT and the Nomic embedding model are baked in and pre-downloaded, so first start doesn't wait on downloads. Use the browser mic — **wake word is not included**, since a container has no microphone of its own.
+
+These work in the container too, once you configure them: the **Telegram** and **MCP** plugins, **EPUB files** in the Library, **HEIC/HEIF photos** (the iPhone default), and **SOCKS proxy** routing for the LLM lane. Their packages ship in the image.
+
+Two things to know:
+
+- **MCP servers**: HTTP servers work. `stdio` servers only work if the program they launch is inside the container — there is no Node.js/`npx` in the image, so `npx`-based servers need their own image.
+- **Plugins that need extra pip packages**: the container runs plain system Python as a non-root user, so the **Install** button in Settings > Plugins can't install into it — it shows you the command instead. Either use plugins whose dependencies are already in the image, or build your own image with the extra packages added.
+
+---
+
 ## GPU Support (NVIDIA only)
 
 If you have an NVIDIA GPU and want faster voice processing:
@@ -74,6 +89,7 @@ If you have an NVIDIA GPU and want faster voice processing:
 ### Prerequisites
 - NVIDIA GPU drivers installed
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
+- An `amd64` (Intel/AMD) host — unlike the CPU image, the GPU image is built for `amd64` only
 
 ### Use the GPU image
 
@@ -228,4 +244,4 @@ Check the logs for errors: `docker compose logs --tail 50`. Common causes:
 
 ## Reference for AI
 
-Docker install: image built from repo Dockerfile, CMD = main.py supervisor. docker-compose mounts three volumes (user data, backups, models cache); TZ + API-key + LMSTUDIO env vars pass through; extra_hosts maps host LLM servers. In-app Settings > Backup restore works in Docker (supervisor applies staged swap on restart). Data path answers: user/ rides the mounted volume — container replacement never loses it.
+Docker install: image built from repo Dockerfile, CMD = main.py supervisor. Tags: latest/cpu = amd64 + arm64 (Apple Silicon native), gpu = amd64 only. Deps = install/requirements-minimal + -tts + -stt (no wakeword: no container mic) + onnxruntime/transformers/huggingface_hub; Kokoro, Whisper base.en and Nomic pre-baked under HF_HOME=/app/models. Telegram/MCP/EPUB/HEIC/SOCKS deps are in minimal, so those plugins run; MCP stdio needs its binary in the image (no Node/npx), HTTP MCP works; plugin pip auto-install refuses inside the container (system Python, non-root) and prints the command. Port 8073, HEALTHCHECK curls https://localhost:8073/api/health. docker-compose mounts three volumes (user data, backups, config/credentials at /home/sapphire/.config/sapphire); TZ + API-key + LMSTUDIO env vars pass through; extra_hosts maps host LLM servers. In-app Settings > Backup restore works in Docker (supervisor applies staged swap on restart). Data path answers: user/ rides the mounted volume — container replacement never loses it.

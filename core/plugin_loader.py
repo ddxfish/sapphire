@@ -424,6 +424,17 @@ class PluginLoader:
         return missing
 
     @staticmethod
+    def pip_hint(missing: list) -> str:
+        """The copy-paste line for missing pip_dependencies. Specs carrying
+        operators / extras / direct references are double-quoted — the one
+        quote cmd, PowerShell and bash all accept. Unquoted, `davey>=0.1.4`
+        is a shell redirect and `py-cord[voice] @ git+…` splits at the `@`
+        (Windows scout 2026-09-20). Every hint site calls this."""
+        def q(s):
+            return f'"{s}"' if re.search(r'[<>=!~\[\]@ ;]', s) else s
+        return "pip install " + " ".join(q(s) for s in missing)
+
+    @staticmethod
     def _warn_min_core_version(name: str, manifest: dict):
         """Shout when a plugin declares min_core_version newer than this core.
 
@@ -612,7 +623,7 @@ class PluginLoader:
         info.pop("missing_deps", None)  # Clear stale dep state on reload
         if missing:
             info["missing_deps"] = missing
-            pip_cmd = f"pip install {' '.join(missing)}"
+            pip_cmd = self.pip_hint(missing)
             logger.warning(f"[PLUGINS] {name}: missing dependencies: {missing} — {pip_cmd}")
             err_data = {
                 "plugin": name,

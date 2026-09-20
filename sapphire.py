@@ -20,6 +20,14 @@ if sys.platform == 'win32':
 os.environ.setdefault("TIKTOKEN_CACHE_DIR",
                       str(Path(__file__).parent / "user" / "cache" / "tiktoken"))
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+# Windows MAX_PATH safety: HuggingFace's cache nests ~120 chars deep under the
+# profile dir and overflows 260 with a long username. Must be set HERE, before
+# the TTS server spawns with a copy of this env — it used to live in
+# core/embeddings, imported only when the memory plugin loaded (after Kokoro
+# had cached into the deep path), so the first monitor restart re-downloaded
+# the model. setdefault: a user's own HF_HOME wins. (Windows scout 2026-09-20)
+if sys.platform == 'win32':
+    os.environ.setdefault("HF_HOME", str(Path(__file__).parent / "user" / "models" / "hf"))
 
 # CRITICAL: Import logging setup FIRST before any core modules
 import core.sapphire_logging

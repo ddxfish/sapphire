@@ -27,14 +27,16 @@ Plugins can declare cron tasks that run on a timer, independent of any conversat
 | `description` | string | — | What the task does — also becomes the task's `initial_message` (the prompt sent to the AI when it fires) |
 | `enabled` | bool | true | Whether it runs |
 | `chance` | int | 100 | Percent chance to fire (1-100) |
-| `time_setting` | string | — | Plugin-settings key holding `"HH:MM"` — builds a daily cron from the user's setting. Falls back to `cron` if unset/unparsable |
-| `enabled_setting` | string | — | Plugin-settings key holding a boolean — lets users toggle the task from the plugin's settings panel |
+| `time_setting` | string | — | Plugin-settings key holding `"HH:MM"` **or a bare hour** (`9`, `"9"`, `9.0`) — builds a daily cron from the user's setting. Falls back to `cron` if unset, and logs a warning if the value is unparsable |
+| `enabled_setting` | string | — | Plugin-settings key holding a boolean — the task only runs while that setting is on, and users toggle it from the plugin's settings panel |
 
 Tasks appear in the Triggers UI and are removed when the plugin is unloaded (disable, uninstall, or hot-reload).
 
 ### Settings-linked schedules
 
 `time_setting` / `enabled_setting` make a task user-tunable without code: declare a settings field in the manifest, name its key here, and the loader resolves it at registration and re-syncs the live task whenever the plugin's settings are saved. Edits made directly in the Triggers UI do NOT persist for plugin tasks — they're re-registered from the manifest (and settings) on every boot, so settings are the durable source of truth.
+
+**Bind the schedule instead of polling.** If your feature already has an "hour" setting and an on/off switch, name them here rather than declaring `*/15 * * * *` and re-checking the clock inside the handler: a bound task fires once, at the configured time, only while the feature is on — instead of waking 96 times a day to learn it's disabled. (Sub-hourly plugin tasks are treated as maintenance ticks and hidden from the AI's "upcoming events" summary, so a polling schedule isn't visible as an event either.)
 
 ---
 
@@ -122,7 +124,7 @@ For full webhook documentation, see [DAEMONS-WEBHOOKS.md](../DAEMONS-WEBHOOKS.md
 ## Reference for AI
 
 PLUGIN SCHEDULED TASKS:
-- Manifest: `capabilities.schedule` = [{name (required), cron (5-field, default "0 9 * * *"), handler (required, path relative to plugin dir), description (also becomes the task's initial_message), enabled (default true), chance (1-100, default 100), time_setting? (plugin-settings key holding "HH:MM" -> daily cron, falls back to `cron`), enabled_setting? (plugin-settings key holding a bool)}].
+- Manifest: `capabilities.schedule` = [{name (required), cron (5-field, default "0 9 * * *"), handler (required, path relative to plugin dir), description (also becomes the task's initial_message), enabled (default true), chance (1-100, default 100), time_setting? (plugin-settings key holding "HH:MM" OR a bare hour -> daily cron; falls back to `cron`, warns on an unparsable value), enabled_setting? (plugin-settings key holding a bool — the task runs only while it's on)}]. Bind an existing hour/toggle setting instead of declaring a `*/15` poll that guards the hour in the handler.
 - Tasks appear under Triggers (Scheduled); removed when the plugin unloads (disable/uninstall/hot-reload). Plugin tasks are re-registered from the manifest+settings on every boot — Triggers-UI edits to them do NOT persist; settings-linked fields are the durable knobs, and the loader re-syncs the live task on every plugin settings save.
 - Handler contract: the file must export `def run(event)`. event = {"system": VoiceChatSystem, "config": config module, "task": task dict, "plugin_state": PluginState}. Optional return value is logged to the schedule activity feed.
 - PluginState: `state.get(key, default)` / `state.save(key, value)` — persistent per-plugin key-value store.

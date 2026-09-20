@@ -12,8 +12,15 @@ itsdangerous>=2.1.0
 cryptography>=41.0.0
 
 # LLM API Clients
-openai>=1.12.0
-anthropic>=0.39.0
+# Upper bounds (2026-09-20 release check): a fresh install resolved openai 3.x /
+# anthropic 1.x / mcp 2.x, none of which this codebase has ever run against.
+# anthropic 1.0 dropped the temperature/top_p/top_k kwargs (TypeError on every
+# anthropic_compat call) and rejects a plain httpx client; mcp 2.0 removed the
+# streamable-HTTP client and FastMCP; openai 3.0 moved to httpx2. Lift a bound
+# only after porting that provider and running it live. Existing installs are
+# unaffected either way (the updater's pip step never upgrades).
+openai>=1.12.0,<3.0.0
+anthropic>=0.39.0,<1.0.0
 
 # Audio Processing
 # numpy<3 prepares for the eventual numpy 3 ABI break the way numpy 2
@@ -80,8 +87,8 @@ bit>=0.8.0
 # Telegram client
 telethon>=1.34.0
 
-# MCP client (Model Context Protocol)
-mcp>=1.26.0
+# MCP client (Model Context Protocol) — <2: see the LLM API Clients note above
+mcp>=1.26.0,<2.0.0
 
 # Async HTTP (embeddings, STT/TTS providers)
 httpx[socks]>=0.27.0  # [socks]=socksio: SOCKS-for-all env routing (2026-08-31); PySocks above covers only the requests lane
