@@ -90,7 +90,7 @@ export default {
                 lastSaved = exTa.value;
                 const lines = exTa.value.split('\n').map(s => s.trim()).filter(Boolean);
                 try {
-                    await fetch('/api/settings/batch', {
+                    const r = await fetch('/api/settings/batch', {
                         method: 'PUT',
                         headers: {
                             'Content-Type': 'application/json',
@@ -98,7 +98,8 @@ export default {
                         },
                         body: JSON.stringify({ settings: { BACKUPS_EXCLUDE_PATTERNS: lines } })
                     });
-                    if (ctx.settings) ctx.settings.BACKUPS_EXCLUDE_PATTERNS = lines;
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);   // never commit an unconfirmed write
+                    ctx.commit('BACKUPS_EXCLUDE_PATTERNS', lines);
                 } catch (_) { lastSaved = null; }  // allow retry on failure
             };
             exTa.addEventListener('input', () => { clearTimeout(saveT); saveT = setTimeout(saveExcludes, 1200); });

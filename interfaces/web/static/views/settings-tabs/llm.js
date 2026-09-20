@@ -75,6 +75,7 @@ export default {
             t.addEventListener('change', async e => {
                 try {
                     await updateProvider(e.target.dataset.provider, { enabled: e.target.checked });
+                    ctx.commitMerge(_mapFor(ctx, e.target.dataset.provider), e.target.dataset.provider, { enabled: e.target.checked });
                     updateCardEnabledState(e.target.closest('.provider-card'), e.target.checked);
                 } catch (err) {
                     showToast('Failed to update provider', 'error');
@@ -105,7 +106,19 @@ export default {
                     let value = e.target.value;
                     if (field === 'timeout') value = parseFloat(value) || 5;
                     if (['use_as_fallback', 'thinking_enabled', 'cache_enabled', 'disable_thinking', 'disable_thinking_qwen'].includes(field)) value = e.target.checked;
+                    const card = e.target.closest('.provider-card');
+                    const nameEl = card?.querySelector('.provider-name');
+                    if (field === 'display_name') {
+                        value = value.trim();
+                        if (!value) {  // blank = keep the current name, don't blank the sidebar
+                            e.target.value = nameEl?.textContent || key;
+                            showToast('Name can\'t be empty', 'warning', 2000);
+                            return;
+                        }
+                    }
                     await updateProvider(key, { [field]: value });
+                    ctx.commitMerge(_mapFor(ctx, key), key, { [field]: value });
+                    if (field === 'display_name' && nameEl) nameEl.textContent = value;
                     showToast('Provider settings saved', 'success', 2000);
                 } catch (err) {
                     showToast('Failed to save provider settings', 'error');
@@ -128,9 +141,10 @@ export default {
             input.addEventListener('change', async () => {
                 const card = input.closest('.provider-card');
                 const model = card.querySelector('.generation-params-section')?.dataset.model;
-                if (!model) return;
+                if (!model) { showToast('Pick or type a model first — params are saved per model', 'warning', 2500); return; }
                 try {
                     generationProfiles = await saveGenerationParams(model, collectGenParamsFromCard(card), generationProfiles);
+                    ctx.commit('MODEL_GENERATION_PROFILES', generationProfiles);   // render() re-seeds from the snapshot
                     showToast('Model params saved', 'success', 2000);
                 } catch (e) {
                     showToast('Failed to save model params', 'error');
@@ -147,10 +161,15 @@ export default {
                 if (model) {
                     try {
                         await updateProvider(key, { model });
+                        ctx.commitMerge(_mapFor(ctx, key), key, { model });
                         loadModelGenParamsIntoCard(card, model, generationProfiles);
                     } catch (err) {
                         showToast(`Failed to save model: ${err.message || err}`, 'error');
                     }
+                } else {
+                    // "Other (custom)": no model yet — park the gen section so a
+                    // param edit can't land on the PREVIOUS model (scout U8).
+                    loadModelGenParamsIntoCard(card, '', generationProfiles);
                 }
             });
         });
@@ -164,6 +183,7 @@ export default {
                 if (model) {
                     try {
                         await updateProvider(key, { model });
+                        ctx.commitMerge(_mapFor(ctx, key), key, { model });
                         loadModelGenParamsIntoCard(card, model, generationProfiles);
                     } catch (err) {
                         showToast(`Failed to save model: ${err.message || err}`, 'error');
@@ -191,7 +211,7 @@ export default {
                 .map(c => c.dataset.provider);
             if (renderedOrder.length && JSON.stringify(renderedOrder) !== JSON.stringify(storedOrder)) {
                 updateFallbackOrder(renderedOrder)
-                    .then(() => { ctx.settings.LLM_FALLBACK_ORDER = renderedOrder; })
+                    .then(() => { ctx.commit('LLM_FALLBACK_ORDER', renderedOrder); })
                     .catch(() => {});   // next drag persists it
             }
         }
@@ -200,6 +220,7 @@ export default {
         initProviderDragDrop(el.querySelector('#providers-list'), async order => {
             try {
                 await updateFallbackOrder(order);
+                ctx.commit('LLM_FALLBACK_ORDER', order);   // tab switch re-renders from this snapshot (scout U4/S10)
             } catch (e) {
                 // Fire-and-forget left the UI showing an order the disk never
                 // got — surface the failure so the user re-drags.
@@ -212,6 +233,7 @@ export default {
             t.addEventListener('change', async e => {
                 try {
                     await updateProvider(e.target.dataset.provider, { enabled: e.target.checked });
+                    ctx.commitMerge('LLM_CUSTOM_PROVIDERS', e.target.dataset.provider, { enabled: e.target.checked });
                     const card = e.target.closest('.provider-card');
                     if (card) {
                         card.classList.toggle('disabled', !e.target.checked);
@@ -259,6 +281,12 @@ export default {
 };
 
 function _esc(s) { return s ? s.replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''; }
+
+// Which settings map a provider key lives in (core vs custom) — the commit
+// write-through merges into the same entry the route updated (U1 (b)).
+function _mapFor(ctx, key) {
+    return (key in (ctx.getValue('LLM_PROVIDERS') || {})) ? 'LLM_PROVIDERS' : 'LLM_CUSTOM_PROVIDERS';
+}
 
 // Custom provider card — same structure as core cards (header + accordion body)
 // so the shared collapse/drag machinery treats both identically. The body holds
@@ -394,6 +422,15 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
     const isAdd = opts.mode === 'add';
     const gen = config.generation_params || {};
     const shared = `
+        ${isAdd ? '' : `
+        <div class="field-row" style="margin-bottom:8px">
+            <label>Name</label>
+            <input type="text" id="${prefix}-display" value="${_esc(config.display_name || '')}" placeholder="Friendly name" maxlength="60" style="width:100%">
+        </div>
+        <div class="field-row" style="margin-bottom:8px">
+            <label title="Budget for the health probe Auto and pinned chats run before a reply. Local presets start at 0.3s (fail fast when the app isn't running); a LAN box with a big model loaded may need 1-2s or Auto skips it.">Health timeout (sec)</label>
+            <input type="number" id="${prefix}-timeout" value="${config.timeout ?? ''}" placeholder="10 cloud · 0.3 local" step="0.1" min="0.1" max="60" style="width:100%">
+        </div>`}
         <div class="field-row" style="margin-bottom:8px">
             <label>Base URL</label>
             <input type="text" id="${prefix}-url" value="${_esc(config.base_url || '')}" placeholder="https://api.example.com/v1" style="width:100%">
@@ -448,7 +485,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
                     ${opts.presetOptions || ''}
                     <option value="__manual_openai__">Manual: OpenAI Compatible</option>
                     <option value="__manual_anthropic__">Manual: Anthropic Compatible</option>
-                    <option value="__manual_responses__">Manual: Responses API</option>
+                    <option value="__manual_openai_responses__">Manual: Responses API</option>
                 </select>
             </div>
             <div id="${prefix}-body" style="display:none">
@@ -478,6 +515,18 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         const body = g('body');
         if (!val) { body.style.display = 'none'; return; }
         body.style.display = 'block';
+        // Fresh form on every pick: an API key typed for Fireworks must not ride
+        // into an OpenRouter add (scout U5, 2026-09-20). Gen fields go back to
+        // the form defaults; the preset's own generation_defaults apply below.
+        if (g('key')) g('key').value = '';
+        if (g('vision')) g('vision').checked = false;
+        if (g('fallback')) g('fallback').checked = true;
+        if (g('no-think')) g('no-think').checked = false;
+        if (g('extra-body')) g('extra-body').value = '';
+        if (g('temp')) g('temp').value = 0.7;
+        if (g('maxtok')) g('maxtok').value = 4096;
+        if (g('topp')) g('topp').value = 0.9;
+        _OPTIONAL_KNOBS.forEach(([id]) => { const el = g(id); if (el) el.value = ''; });
 
         if (val.startsWith('__manual_')) {
             selectedTemplate = val.replace('__manual_', '').replace('__', '');
@@ -581,6 +630,10 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         };
         const apiKey = g('key')?.value?.trim();
         if (apiKey) common.api_key = apiKey;
+        const displayName = g('display')?.value?.trim();   // edit form only
+        if (displayName) common.display_name = displayName;
+        const healthTimeout = parseFloat(g('timeout')?.value);   // edit form only
+        if (!isNaN(healthTimeout) && healthTimeout > 0) common.timeout = healthTimeout;
 
         // Vision override is tri-state in the backend: true/false force, absent
         // (None) falls through to the model-name heuristic. Only send an explicit

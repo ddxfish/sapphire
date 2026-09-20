@@ -198,7 +198,7 @@ class SettingsManager:
         custom = self._user.get('LLM_CUSTOM_PROVIDERS', {})
         template_map = {
             'fireworks': 'openai', 'openai': 'openai', 'claude': 'claude',
-            'anthropic': 'anthropic', 'responses': 'responses',
+            'anthropic': 'anthropic', 'responses': 'openai_responses',
             'gemini': 'gemini',
         }
 

@@ -160,9 +160,9 @@ The settings manager tracks which changes need restart via `get_pending_restart_
 ```json
 {
   "LLM_PROVIDERS": {
-    "claude": { "provider": "claude", "model": "claude-opus-4-8", "enabled": false },
-    "openai": { "provider": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "enabled": false },
-    "gemini": { "provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-2.5-flash", "enabled": false }
+    "claude": { "provider": "claude", "model": "claude-opus-5", "enabled": false },
+    "openai": { "provider": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-5.6-terra", "enabled": false },
+    "gemini": { "provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash", "enabled": false }
   },
   "LLM_CUSTOM_PROVIDERS": {
     "lmstudio": { "template": "openai", "base_url": "http://127.0.0.1:1234/v1", "is_local": true, "enabled": true }

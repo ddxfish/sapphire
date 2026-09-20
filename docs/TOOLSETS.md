@@ -8,7 +8,7 @@ Named groups of tools so you don't have to switch between memory and web for exa
 |---------|------|
 | `limited_web` | **Factory default for new chats.** Light web (search + fetch), memory, self-sheet, goals, and document/image reading |
 | `default` | Lean baseline used by background workers — the agent persona and the agents plugin point here. Web research, memory, knowledge, goals, notepad, help docs |
-| `work` | Research and productivity — web, goals, notepad, help docs, ask_claude |
+| `work` | Research and productivity — web, goals, notepad, help docs |
 | `smarthome` | Home Assistant control (scenes, lights, climate, areas) plus knowledge |
 | `personality` | Self-modification — prompt editing, prompt pieces, voice, memory, knowledge, goals |
 

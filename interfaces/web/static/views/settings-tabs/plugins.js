@@ -722,7 +722,7 @@ export default {
                         body: JSON.stringify({ settings: { ALLOW_UNSIGNED_PLUGINS: enabling } })
                     });
                     if (!res.ok) throw new Error('Failed to save');
-                    ctx.settings.ALLOW_UNSIGNED_PLUGINS = enabling;
+                    ctx.commit('ALLOW_UNSIGNED_PLUGINS', enabling);
                     ui.showToast(`Unsigned plugins ${enabling ? 'allowed' : 'blocked'}`, enabling ? 'warning' : 'success');
                     if (!enabling) await ctx.refreshTab();
                 } catch (err) {

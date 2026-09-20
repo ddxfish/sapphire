@@ -2,7 +2,7 @@
 """
 OpenAI Responses API provider.
 
-Handles the new Responses API format for GPT-5.x reasoning models:
+Handles the new Responses API format for GPT-5.x / GPT-6 reasoning models:
 - Uses /v1/responses endpoint instead of /v1/chat/completions
 - Supports reasoning summaries (visible chain-of-thought)
 - Different message/output structure
@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
 
-from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered, http_status, AUTH_DEAD_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class OpenAIResponsesProvider(BaseProvider):
     
     # Models that should use Responses API (reasoning models)
     RESPONSES_MODELS = {
+        'gpt-6',                      # gpt-6-astra (2026-09): same lane as 5.x
         'gpt-5', 'gpt-5.1', 'gpt-5.2',
         'gpt-5-mini', 'gpt-5-nano',
         'gpt-5.2-codex',
@@ -91,6 +92,9 @@ class OpenAIResponsesProvider(BaseProvider):
             self._client.models.list(timeout=self.health_check_timeout)
             return True
         except Exception as e:
+            if http_status(e) in AUTH_DEAD_STATUSES:   # refused key = dead (scout F2, 2026-09-20)
+                logger.info(f"Health check: {self.base_url} /models answered {http_status(e)} — key refused, provider skipped")
+                return False
             if server_answered(e):
                 logger.debug(f"Health check: {self.base_url} /models errored ({e}) but server is reachable")
                 return True

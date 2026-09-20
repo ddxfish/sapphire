@@ -121,7 +121,7 @@ export default {
 
     attachListeners(ctx, el) {
         // ── Identity row ────────────────────────────────────────────
-        _wireEditableName(el);
+        _wireEditableName(el, ctx);
         _wireOrb(el);
         _startNpcStar(el);
 
@@ -164,7 +164,7 @@ export default {
         checkForUpdate(el);
         loadComponentStatus(el);
         loadPluginSpotlight(el);
-        loadMetrics(el);
+        loadMetrics(el, ctx);
         loadMissingDeps(el, ctx);
         checkLastUpdateResult();
     }
@@ -189,7 +189,7 @@ function _setMood(el, mood) {
     }
 }
 
-function _wireEditableName(el) {
+function _wireEditableName(el, ctx) {
     const node = el.querySelector('#dash-hero-name');
     if (!node) return;
     node.addEventListener('blur', async e => {
@@ -204,11 +204,12 @@ function _wireEditableName(el) {
         // cache still carries the change.
         try {
             const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-            await fetch('/api/settings/batch', {
+            const r = await fetch('/api/settings/batch', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
                 body: JSON.stringify({ settings: { DASHBOARD_DISPLAY_NAME: trimmed }, persist: true }),
             });
+            if (r.ok) ctx?.commit?.('DASHBOARD_DISPLAY_NAME', trimmed);   // U1 (b): confirmed write → snapshot
         } catch { /* offline / network — local cache still has it */ }
     });
     node.addEventListener('keydown', e => {
@@ -1290,7 +1291,7 @@ const fmt = n => {
     return String(n);
 };
 
-async function loadMetrics(el) {
+async function loadMetrics(el, ctx) {
     const metricsEl = el.querySelector('#dash-metrics');
     const cb = el.querySelector('#metrics-enabled-cb');
     if (!metricsEl) return;
@@ -1306,11 +1307,13 @@ async function loadMetrics(el) {
     if (cb) {
         cb.addEventListener('change', async () => {
             try {
-                await fetch('/api/metrics/enabled', {
+                const r = await fetch('/api/metrics/enabled', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: cb.checked })
                 });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                ctx?.commit?.('METRICS_ENABLED', cb.checked);   // the route writes this settings key server-side
                 loadMetricsData(metricsEl, cb.checked);
             } catch { cb.checked = !cb.checked; }
         });

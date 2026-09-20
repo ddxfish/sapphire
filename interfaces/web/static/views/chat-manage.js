@@ -836,6 +836,10 @@ export default {
         // ears here, private names lingered on this table indefinitely
         // after an idle-lock (the walk-up exposure the vault exists to
         // prevent). Same PROMPT_CHANGED/action ride main.js uses.
+        // Provider add/delete/edit → forget the compress modal's roster (scout U6)
+        eventBus.on(eventBus.Events.SETTINGS_CHANGED, (data) => {
+            if (['LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS'].includes(data?.key)) _llmCache = null;
+        });
         eventBus.on(eventBus.Events.PROMPT_CHANGED, (data) => {
             if (data?.action === 'vault_changed' && visible) refresh();
         });

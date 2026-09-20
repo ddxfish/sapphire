@@ -20,7 +20,7 @@ from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
 
-from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered, http_status, AUTH_DEAD_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,11 @@ EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k')
 PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'top_k')
 
 
+# endpoint|model → optional params that endpoint refused (learn-once, lives
+# until restart — the toast says so). See OpenAICompatProvider.__init__.
+_REJECTED_PARAMS: Dict[str, set] = {}
+
+
 def _notify(message: str, severity: str = 'warning') -> None:
     """Surface a provider notice as a UI toast (best effort, never raises)."""
     try:
@@ -120,8 +125,11 @@ class OpenAICompatProvider(BaseProvider):
         else:
             self._fireworks_session_id = None
 
-        # Optional params this endpoint has refused (learn-once, see OPTIONAL_PARAMS)
-        self._rejected_params: set = set()
+        # Optional params this endpoint has refused (learn-once, see OPTIONAL_PARAMS).
+        # Process-lifetime memory keyed by endpoint+model: the provider object is
+        # rebuilt from config EVERY turn, so a per-instance set forgot the lesson
+        # immediately — every turn paid 400 → retry → toast (scout F1, 2026-09-20).
+        self._rejected_params: set = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{self.model}", set())
 
         logger.info(f"OpenAI-compat provider initialized: {self.base_url}")
     
@@ -184,24 +192,21 @@ class OpenAICompatProvider(BaseProvider):
     
     def _is_deepseek_official(self) -> bool:
         """
-        Check if this is DeepSeek's official reasoner endpoint.
+        Check if this is DeepSeek's official endpoint (api.deepseek.com).
 
-        DeepSeek's official API for `deepseek-reasoner` requires that
-        `reasoning_content` be round-tripped on every assistant message that
-        contains `tool_calls`. Without it, request 2+ in a tool cycle returns
-        400 "Missing reasoning_content field in the assistant message at
-        message index N". Other DeepSeek deployments (Fireworks, OpenRouter,
-        Featherless) don't enforce this — they accept the standard OpenAI
-        message shape. The strip-on-non-tool-turn rule still applies: we
-        ONLY add reasoning_content for assistant messages that have tool_calls.
-
-        Gating on the model name (`reasoner`) keeps `deepseek-chat` requests
-        clean — that model has no reasoning content and the field would be
-        ignored or rejected.
+        V4 contract (api-docs.deepseek.com/guides/thinking_mode, verified
+        2026-09-20): every model there (deepseek-v4-pro, deepseek-flash) thinks
+        by default, switched via extra_body {"thinking": {"type": ...}}, and
+        "for requests carrying the tools parameter, the reasoning_content must
+        be fully passed back in all subsequent requests — even for turns where
+        the model did not perform a tool call", else 400. The old name gate
+        (`reasoner` in model) matched a model that was discontinued 2026-07-24
+        and would have silently disarmed the round-trip for every V4 name.
+        Other DeepSeek hosts (Fireworks, OpenRouter, Featherless) accept the
+        plain OpenAI shape and ignore the field.
         """
         base_url = (self.base_url or '').lower()
-        model = (self.model or '').lower()
-        return 'api.deepseek.com' in base_url and 'reasoner' in model
+        return 'api.deepseek.com' in base_url
 
     def _is_fireworks_reasoning_model(self) -> bool:
         """
@@ -231,45 +236,60 @@ class OpenAICompatProvider(BaseProvider):
         """Access the underlying OpenAI client if needed."""
         return self._client
     
+    def _try_v1_autocorrect(self) -> bool:
+        """A missing /v1 suffix is the classic llama.cpp / Ollama misconfig
+        (`http://box:11434` instead of `…:11434/v1`). Probe the corrected URL
+        once; on success adopt it for this instance."""
+        base = self.base_url.rstrip('/')
+        if base.endswith('/v1'):
+            return False
+        corrected = base + '/v1'
+        try:
+            test_client = OpenAI(
+                base_url=corrected,
+                api_key=self.api_key,
+                timeout=self.request_timeout,
+                http_client=_shared_http_client(corrected),
+            )
+            test_client.models.list(timeout=self.health_check_timeout)
+        except Exception:
+            return False
+        logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")
+        self.base_url = corrected
+        self._client = test_client
+        return True
+
     def health_check(self) -> bool:
-        """Reachability probe via models.list(). ANY HTTP status response (4xx/5xx)
-        counts as reachable — a broken /models (e.g. Fireworks 500 'Error listing
-        deployed models', or xAI/Grok not exposing /models) does NOT mean completions
-        are down, and the older code wrongly hard-failed chat on it. Only a genuine
-        connection/DNS/timeout error marks the provider unhealthy."""
+        """Reachability probe via models.list().
+
+        Verdicts (2026-09-20 rework of the 2026-06-21 "any status = reachable"):
+        - 200 → healthy.
+        - 401/402/403 → DEAD. A refused key never fixes itself mid-turn; the old
+          verdict picked the provider every turn in Auto mode, the completion
+          failed, and everything behind it in the fallback order never ran.
+        - 404 → try the /v1 auto-correct first (Ollama answers 404 on
+          `{base}/models` when /v1 is missing — the old code only ran the fix
+          on connection errors, where it can't help). If that doesn't take,
+          count it reachable: a gateway without /models can still complete.
+        - any other status (500, 429, …) → reachable; the completion is the
+          judge (Fireworks' /models 500 must not mark a working box dead).
+        - connection/DNS/timeout → /v1 auto-correct, else dead.
+        """
         try:
             self._client.models.list(timeout=self.health_check_timeout)
             return True
         except Exception as e:
-            # Host answered with an HTTP status (incl. 500/401/429) → it's reachable.
-            # Let the actual completion be the judge of whether it truly works.
+            status = http_status(e)
+            if status in AUTH_DEAD_STATUSES:
+                logger.info(f"Health check: {self.base_url} /models answered {status} — key refused, provider skipped")
+                return False
+            if status == 404 and self._try_v1_autocorrect():
+                return True
             if server_answered(e):
                 logger.debug(f"Health check: {self.base_url} /models errored ({e}) but server is reachable")
                 return True
-
             logger.debug(f"Health check failed for {self.base_url}: {e}")
-
-            # Genuinely unreachable (connection/timeout) — auto-correct a missing
-            # /v1 suffix (common with llama.cpp, Ollama, etc.) and retry once.
-            base = self.base_url.rstrip('/')
-            if not base.endswith('/v1'):
-                corrected = base + '/v1'
-                try:
-                    test_client = OpenAI(
-                        base_url=corrected,
-                        api_key=self.api_key,
-                        timeout=self.request_timeout,
-                        http_client=_shared_http_client(corrected),
-                    )
-                    test_client.models.list(timeout=self.health_check_timeout)
-                    logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")
-                    self.base_url = corrected
-                    self._client = test_client
-                    return True
-                except Exception:
-                    pass
-
-            return False
+            return self._try_v1_autocorrect()
 
     def list_models(self) -> Optional[list]:
         """Discover available models via /v1/models endpoint."""
@@ -307,9 +327,9 @@ class OpenAICompatProvider(BaseProvider):
 
         model_lower = (self.model or '').lower()
 
-        # Detect reasoning models (GPT-5+, o1, o3)
+        # Detect reasoning models (GPT-5+/GPT-6, o1, o3)
         is_reasoning_model = (
-            model_lower.startswith('gpt-5') or
+            model_lower.startswith(('gpt-5', 'gpt-6')) or
             model_lower.startswith('o1') or
             model_lower.startswith('o3')
         )
@@ -563,15 +583,13 @@ class OpenAICompatProvider(BaseProvider):
             if msg.get('name') and role != 'tool':
                 clean_msg['name'] = msg['name']
 
-            # DeepSeek-reasoner official API requires reasoning_content
-            # round-trip on tool-calling assistant turns. Without this,
-            # the next request after a tool result hits 400 "Missing
-            # reasoning_content field in the assistant message at message
-            # index N". Only fires for the official endpoint + reasoner
-            # model — other providers ignore the field. 2026-05-11.
-            if (self._is_deepseek_official()
-                    and msg.get('tool_calls')
-                    and msg.get('thinking')):
+            # DeepSeek official API requires reasoning_content round-tripped
+            # on assistant turns — V4 (2026-09-20) says EVERY assistant turn
+            # once tools are in play, not just the tool-calling ones (the
+            # 2026-05-11 rule). Without it the next request 400s "Missing
+            # reasoning_content field in the assistant message at index N".
+            # Only the official endpoint; other hosts ignore the field.
+            if self._is_deepseek_official() and msg.get('thinking'):
                 clean_msg['reasoning_content'] = msg['thinking']
 
             clean.append(clean_msg)
@@ -686,6 +704,9 @@ class OpenAICompatProvider(BaseProvider):
                 # overrides the "medium" default set in build_request_kwargs.
                 kwargs['reasoning_effort'] = 'none'
                 fam = 'fireworks'
+            elif 'api.deepseek.com' in base:
+                extra['thinking'] = {'type': 'disabled'}          # DeepSeek V4 official (on by default)
+                fam = 'deepseek'
             elif model.startswith('glm') or any(h in base for h in ('z.ai', 'bigmodel', 'zhipu')):
                 extra['thinking'] = {'type': 'disabled'}          # GLM / Z.AI convention
                 fam = 'glm'

@@ -50,24 +50,33 @@ def _anthropic_compat(**over):
 MSGS = [{"role": "user", "content": "hi"}]
 
 
+def _off(kw):
+    """2026-09-20: on the adaptive family (Opus 5 / 4.x, Sonnet) "off" is an
+    EXPLICIT {type: "disabled"} with no output_config — Opus 5 thinks when the
+    param is omitted, so absence is no longer suppression (see the family
+    table in claude.py). No effort may ride with disabled (accepted ≤ high only)."""
+    return kw.get("thinking") == {"type": "disabled"} and "output_config" not in kw
+
+
 # ── ClaudeProvider (the primary path) ────────────────────────────────────────
 
 def test_claude_thinking_on_when_not_disabled():
     """Baseline: thinking_enabled + no disable → a thinking block IS sent. Proves the
     suppression tests below aren't vacuously passing."""
-    assert "thinking" in _run(_claude(disable_thinking=False), MSGS)
+    kw = _run(_claude(disable_thinking=False), MSGS)
+    assert kw["thinking"]["type"] == "adaptive" and "output_config" in kw
 
 
 def test_claude_config_disable_thinking_suppresses():
     """THE bridge: config disable_thinking=True suppresses thinking even with
     thinking_enabled=True and no per-request param. This was the silent no-op."""
-    assert "thinking" not in _run(_claude(disable_thinking=True), MSGS)
+    assert _off(_run(_claude(disable_thinking=True, reasoning_effort="max"), MSGS))
 
 
 def test_claude_per_request_param_still_wins():
     """A per-request disable param (continue/prefill) overrides config-enabled."""
-    assert "thinking" not in _run(_claude(disable_thinking=False),
-                                  MSGS, gen_params={"disable_thinking": True})
+    assert _off(_run(_claude(disable_thinking=False),
+                     MSGS, gen_params={"disable_thinking": True}))
 
 
 # ── AnthropicCompatProvider (custom Claude-template providers) ────────────────

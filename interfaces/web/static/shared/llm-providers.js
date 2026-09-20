@@ -150,6 +150,17 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
 export function renderProviderFields(key, config, meta) {
   const fields = [];
   const required = meta.required_fields || [];
+  const attr = v => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+  // Friendly name — what the sidebar, trigger editor and this card's header
+  // show. Saved as display_name on the provider (core and custom alike).
+  fields.push(`
+    <div class="field-row">
+      <label>Name</label>
+      <input type="text" class="provider-field" data-provider="${key}" data-field="display_name"
+             value="${attr(config.display_name || meta.display_name || key)}" placeholder="${attr(meta.display_name || key)}" maxlength="60">
+    </div>
+  `);
 
   // Base URL
   if (required.includes('base_url') || config.base_url !== undefined) {
@@ -182,7 +193,10 @@ export function renderProviderFields(key, config, meta) {
   if (meta.model_options && typeof meta.model_options === 'object') {
     const currentModel = config.model || '';
     const modelKeys = Object.keys(meta.model_options);
-    const isCustom = currentModel && !modelKeys.includes(currentModel);
+    // No model, or one the roster doesn't list → "Other (custom)" with the raw
+    // value in the box. A bare <select> with nothing selected paints its first
+    // option as if chosen — the card lied about the model in use (scout U7).
+    const isCustom = !currentModel || !modelKeys.includes(currentModel);
 
     fields.push(`
       <div class="field-row">
@@ -196,8 +210,8 @@ export function renderProviderFields(key, config, meta) {
       </div>
       <div class="field-row model-custom-row ${isCustom ? '' : 'hidden'}" data-provider="${key}">
         <label>Custom Model</label>
-        <input type="text" class="provider-field model-custom" 
-               data-provider="${key}" data-field="model" 
+        <input type="text" class="model-custom"
+               data-provider="${key}" data-field="model"
                value="${isCustom ? currentModel : ''}" placeholder="Custom model name">
       </div>
     `);
@@ -256,22 +270,18 @@ export function renderProviderFields(key, config, meta) {
  * Render generation parameters section.
  */
 export function renderGenerationParams(providerKey, modelName, genProfiles = {}) {
+  // Penalties carry NO default: blank = never sent (the 2026-08-23 ruling).
+  // The old 0.1 seed here was harvested by collectGenParamsFromCard on any
+  // touch and rode every request from then on (scout S12, 2026-09-20).
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { 
-    temperature: 0.7, 
-    top_p: 0.9, 
-    max_tokens: 4096, 
-    presence_penalty: 0.1, 
-    frequency_penalty: 0.1, 
-    ...fallback 
-  };
+  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, ...fallback };
   const params = genProfiles[modelName] || defaults;
 
   const temp = params.temperature ?? defaults.temperature;
   const topP = params.top_p ?? defaults.top_p;
   const maxTokens = params.max_tokens ?? defaults.max_tokens;
-  const presencePen = params.presence_penalty ?? defaults.presence_penalty;
-  const freqPen = params.frequency_penalty ?? defaults.frequency_penalty;
+  const presencePen = params.presence_penalty ?? defaults.presence_penalty ?? '';
+  const freqPen = params.frequency_penalty ?? defaults.frequency_penalty ?? '';
 
   return `
     <div class="generation-params-section" data-provider="${providerKey}" data-model="${modelName}">
@@ -360,7 +370,7 @@ export function renderProviderToggles(key, config) {
   // universal best-effort disable-thinking toggle (family-gated in the backend,
   // so it's harmless on models that don't support it). Advanced extra_body lives
   // in the edit-provider modal.
-  const isOpenAITemplate = (config.template === 'openai') || (config.provider === 'openai');
+  const isOpenAITemplate = config.template === 'openai';   // custom cards only — core OpenAI ignores it (scout U15)
   if (isOpenAITemplate) {
     const noThink = (config.disable_thinking ?? config.disable_thinking_qwen) || false;
     return `
@@ -391,14 +401,7 @@ export function renderProviderToggles(key, config) {
  */
 export function getGenerationParams(modelName, genProfiles) {
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { 
-    temperature: 0.7, 
-    top_p: 0.9, 
-    max_tokens: 4096, 
-    presence_penalty: 0.1, 
-    frequency_penalty: 0.1, 
-    ...fallback 
-  };
+  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, ...fallback };
   return genProfiles[modelName] || defaults;
 }
 
@@ -425,8 +428,8 @@ export function loadModelGenParamsIntoCard(card, modelName, genProfiles) {
   setVal('temperature', params.temperature ?? defaults.temperature);
   setVal('top_p', params.top_p ?? defaults.top_p);
   setVal('max_tokens', params.max_tokens ?? defaults.max_tokens);
-  setVal('presence_penalty', params.presence_penalty ?? defaults.presence_penalty);
-  setVal('frequency_penalty', params.frequency_penalty ?? defaults.frequency_penalty);
+  setVal('presence_penalty', params.presence_penalty ?? defaults.presence_penalty ?? '');
+  setVal('frequency_penalty', params.frequency_penalty ?? defaults.frequency_penalty ?? '');
 }
 
 /**
@@ -436,7 +439,9 @@ export function collectGenParamsFromCard(card) {
   const params = {};
   card.querySelectorAll('.gen-param-input').forEach(input => {
     const p = input.dataset.param;
-    params[p] = p === 'max_tokens' ? parseInt(input.value) : parseFloat(input.value);
+    const raw = (input.value ?? '').trim();
+    const n = p === 'max_tokens' ? parseInt(raw) : parseFloat(raw);
+    if (raw !== '' && !isNaN(n)) params[p] = n;   // blank/NaN = absent, never a JSON null (S2/S12)
   });
   return params;
 }

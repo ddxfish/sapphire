@@ -13,6 +13,17 @@ from core.chat.llm_providers.openai_compat import OpenAICompatProvider
 from core.chat.llm_providers.gemini import GeminiProvider
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rejected_memory():
+    """_rejected_params is process-wide per endpoint|model since 2026-09-20 (scout
+    F1: the per-turn provider rebuild forgot every lesson). Every test here shares
+    one fake endpoint, so start and end clean."""
+    from core.chat.llm_providers import openai_compat as oc
+    oc._REJECTED_PARAMS.clear()
+    yield
+    oc._REJECTED_PARAMS.clear()
+
+
 def _provider(model="qwen3-32b", **extra):
     return OpenAICompatProvider({"provider": "openai", "base_url": "http://localhost:1234/v1",
                                  "api_key": "test", "model": model, "display_name": "LM Studio",

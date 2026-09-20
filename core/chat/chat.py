@@ -877,12 +877,18 @@ class LLMChat:
 
             raise ConnectionError(f"Provider '{chat_primary}' failed health check - no fallback for specific provider selection")
         
-        # Auto mode - use global fallback order
+        # Auto mode - use global fallback order. Shares the pinned path's 60s
+        # health cache: Auto used to probe every candidate every turn (a
+        # BILLED call on Claude / anthropic-compat) (scout F7, 2026-09-20).
+        _hc = getattr(self, "_pinned_health_cache", None)
+        if _hc is None:
+            _hc = self._pinned_health_cache = {}
         result = get_first_available_provider(
             providers_config,
             fallback_order,
             config.LLM_REQUEST_TIMEOUT,
-            force_privacy=chat_settings.get('private_chat', False)
+            force_privacy=chat_settings.get('private_chat', False),
+            health_cache=_hc,
         )
         
         if result:

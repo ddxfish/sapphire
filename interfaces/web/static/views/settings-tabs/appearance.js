@@ -260,10 +260,11 @@ export default {
             mountScenePicker(sceneMount, {
                 current: ctx.getValue('DEFAULT_BACKGROUND') || '',
                 onSelect: (name) => {
-                    updateSettingsBatch({ DEFAULT_BACKGROUND: name }).catch(() => {});
-                    // Mirror into the page's loaded settings (already persisted
-                    // above — markChanged would flag a phantom unsaved state).
-                    ctx.settings.DEFAULT_BACKGROUND = name;
+                    // Commit into the loaded snapshot once the server confirms
+                    // (markChanged would flag a phantom unsaved state).
+                    updateSettingsBatch({ DEFAULT_BACKGROUND: name })
+                        .then(() => ctx.commit('DEFAULT_BACKGROUND', name))
+                        .catch(() => {});
                     setDefaultBackground(name);
                     const chatScene = document.getElementById('chatbg')?.dataset.scene || '';
                     applyBackground(chatScene);

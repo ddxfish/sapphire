@@ -44,6 +44,14 @@ DEFAULT_GENERATION_PARAMS = {
 from core.provider_registry import BaseProviderRegistry as _BaseRegistry
 
 
+# Template keys accepted from UI/config → class key. 'responses' was what the
+# "+ Add Provider" wizard, get_templates() and the legacy migration all used
+# for a class registered as 'openai_responses' — every manual Responses
+# provider 400'd at creation and a migrated one could never build (scouts
+# S1/F5, 2026-09-20). Configs written with the old key resolve through here.
+TEMPLATE_ALIASES = {'responses': 'openai_responses'}
+
+
 class ProviderRegistry(_BaseRegistry):
     """
     LLM provider registry — extends shared base with multi-instance,
@@ -68,12 +76,18 @@ class ProviderRegistry(_BaseRegistry):
                 'provider_class': 'claude',
                 'required_fields': ['api_key', 'model'],
                 'optional_fields': ['timeout'],
+                # Dropdown = current lineup + still-served legacy (vendor pages
+                # verified 2026-09-20). A saved id that isn't listed renders as
+                # "Other (custom)" and keeps working — dropping a row never
+                # breaks an install.
                 'model_options': {
-                    'claude-fable-5': 'Fable 5',
-                    'claude-opus-4-8': 'Opus 4.8',
-                    'claude-opus-4-7': 'Opus 4.7',
+                    'claude-fable-5-1': 'Fable 5.1',
+                    'claude-opus-5': 'Opus 5',
                     'claude-sonnet-5': 'Sonnet 5',
-                    'claude-sonnet-4-6': 'Sonnet 4.6',
+                    'claude-haiku-4-5': 'Haiku 4.5',
+                    'claude-fable-5': 'Fable 5 (legacy)',
+                    'claude-opus-4-8': 'Opus 4.8 (legacy)',
+                    'claude-sonnet-4-6': 'Sonnet 4.6 (legacy)',
                 },
                 'is_local': False,
                 'default_timeout': 10.0,
@@ -85,11 +99,14 @@ class ProviderRegistry(_BaseRegistry):
                 'required_fields': ['base_url', 'api_key', 'model'],
                 'optional_fields': ['timeout', 'reasoning_effort'],
                 'model_options': {
-                    'gpt-5.2': 'GPT-5.2 (Flagship)',
-                    'gpt-5.1': 'GPT-5.1',
-                    'gpt-5-mini': 'GPT-5 Mini',
+                    'gpt-6-astra': 'GPT-6 Astra (Flagship)',
+                    'gpt-5.6-sol': 'GPT-5.6 Sol',
+                    'gpt-5.6-terra': 'GPT-5.6 Terra (Balanced)',
+                    'gpt-5.6-luna': 'GPT-5.6 Luna (Budget)',
+                    'gpt-5.5': 'GPT-5.5',
+                    'gpt-5.4': 'GPT-5.4',
+                    'gpt-5.4-mini': 'GPT-5.4 Mini',
                     'gpt-4o': 'GPT-4o (Legacy)',
-                    'gpt-4o-mini': 'GPT-4o Mini (Legacy)',
                 },
                 'is_local': False,
                 'default_timeout': 10.0,
@@ -101,11 +118,16 @@ class ProviderRegistry(_BaseRegistry):
                 'provider_class': 'gemini',
                 'required_fields': ['api_key', 'model'],
                 'optional_fields': ['timeout', 'reasoning_effort'],
+                # gemini-2.0-* were shut down 2026-06-01; the only 3.x Pro is
+                # still preview-only.
                 'model_options': {
-                    'gemini-2.5-flash': 'Gemini 2.5 Flash (Thinking)',
-                    'gemini-2.5-pro': 'Gemini 2.5 Pro (Thinking)',
-                    'gemini-2.0-flash': 'Gemini 2.0 Flash',
-                    'gemini-2.0-flash-lite': 'Gemini 2.0 Flash Lite',
+                    'gemini-3.8-flash': 'Gemini 3.8 Flash',
+                    'gemini-3.7-flash': 'Gemini 3.7 Flash',
+                    'gemini-3.5-flash': 'Gemini 3.5 Flash',
+                    'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
+                    'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
+                    'gemini-2.5-flash': 'Gemini 2.5 Flash (legacy)',
+                    'gemini-2.5-pro': 'Gemini 2.5 Pro (legacy)',
                 },
                 'is_local': False,
                 'default_timeout': 10.0,
@@ -205,10 +227,18 @@ class ProviderRegistry(_BaseRegistry):
 
         # Determine provider class — template (custom) or provider (core)
         provider_type = config.get('template') or config.get('provider', 'openai')
+        provider_type = TEMPLATE_ALIASES.get(provider_type, provider_type)
         model = model_override or config.get('model', '')
 
-        # Auto-select Responses API for OpenAI reasoning models
-        if provider_type == 'openai' and OpenAIResponsesProvider.should_use_responses_api(model):
+        # Auto-select Responses API for OpenAI reasoning models — on OpenAI's
+        # own endpoint only. A LiteLLM / Azure / corporate gateway that exposes
+        # gpt-5.x/6 ids over chat.completions 404'd on `{base}/responses` every
+        # turn (scout F6, 2026-09-20); such a gateway picks the explicit
+        # "Responses API" template if it really speaks it.
+        base = (config.get('base_url') or '').lower()
+        openai_official = (not base) or ('api.openai.com' in base)
+        if (provider_type == 'openai' and openai_official
+                and OpenAIResponsesProvider.should_use_responses_api(model)):
             provider_type = 'openai_responses'
             logger.info(f"[AUTO-SELECT] Using Responses API for model '{model}'")
 
@@ -334,9 +364,18 @@ class ProviderRegistry(_BaseRegistry):
                                       fallback_order: List[str],
                                       request_timeout: float = 240.0,
                                       exclude: Optional[List[str]] = None,
-                                      force_privacy: bool = False) -> Optional[tuple]:
-        """Get first available provider following fallback order."""
+                                      force_privacy: bool = False,
+                                      health_cache: Optional[dict] = None,
+                                      health_ttl: float = 60.0) -> Optional[tuple]:
+        """Get first available provider following fallback order.
+
+        health_cache: {provider_key: trusted_until_epoch}. A pass is trusted for
+        health_ttl seconds — the pinned path got this in 2026-07-15, the Auto
+        path kept probing every candidate every turn (a BILLED call on Claude /
+        anthropic-compat, plus a stall on a slow cloud box) (scout F7,
+        2026-09-20). Fails are never cached: the next turn re-probes."""
         exclude = exclude or []
+        import time as _time
 
         for provider_key in fallback_order:
             if provider_key in exclude:
@@ -366,8 +405,14 @@ class ProviderRegistry(_BaseRegistry):
 
             provider = self.get_provider_by_key(provider_key, providers_config, request_timeout)
             if provider:
+                now = _time.time()
+                if health_cache is not None and now < health_cache.get(provider_key, 0):
+                    logger.info(f"Selected provider '{provider_key}' (health cached)")
+                    return (provider_key, provider)
                 try:
                     if provider.health_check():
+                        if health_cache is not None:
+                            health_cache[provider_key] = now + health_ttl
                         logger.info(f"Selected provider '{provider_key}' (healthy)")
                         return (provider_key, provider)
                     else:
@@ -428,6 +473,13 @@ class ProviderRegistry(_BaseRegistry):
         3. Explicit api_key in config (backward compat)
         4. 'not-needed' for local providers
         """
+        # Explicit override — only the Test routes set it, so a key typed into
+        # the edit form is what gets tested, not the stored one (scout F4,
+        # 2026-09-20). Never persisted: the PUT pops api_key into credentials.
+        override = (config or {}).get('api_key_override', '')
+        if override and str(override).strip():
+            return str(override).strip()
+
         # Stored credential
         try:
             from core.credentials_manager import credentials
@@ -474,12 +526,17 @@ class ProviderRegistry(_BaseRegistry):
                 self._presets = {}
         return self._presets
 
+    @staticmethod
+    def normalize_template(key: str) -> str:
+        """Canonical class key for a template name (see TEMPLATE_ALIASES)."""
+        return TEMPLATE_ALIASES.get(key, key)
+
     def get_templates(self) -> list:
         """Return available template types for '+ Add Provider' UI."""
         templates = [
             {'key': 'openai', 'name': 'OpenAI Compatible'},
             {'key': 'anthropic', 'name': 'Anthropic Compatible'},
-            {'key': 'responses', 'name': 'Responses API'},
+            {'key': 'openai_responses', 'name': 'Responses API'},
         ]
         for key, info in self._plugin_classes.items():
             templates.append({'key': key, 'name': info['display_name']})
@@ -550,12 +607,16 @@ def set_active_model(system, provider_key: str) -> tuple:
     if not target.get('enabled'):
         return False, f"Provider '{provider_key}' is not enabled"
     sm = system.llm_chat.session_manager
-    if not sm.update_chat_settings({"llm_primary": provider_key}):
+    # llm_model is a per-provider pin — the sidebar clears it on a provider
+    # switch (core-sections.js) and so must this door, or a switch to Claude
+    # keeps asking Anthropic for a Qwen model (scout S6, 2026-09-20).
+    new_settings = {"llm_primary": provider_key, "llm_model": ""}
+    if not sm.update_chat_settings(new_settings):
         return False, "Failed to save chat settings"
     from core.event_bus import publish, Events
     publish(Events.CHAT_SETTINGS_CHANGED, {
         "chat": sm._effective_chat_name(),
-        "settings": {"llm_primary": provider_key},
+        "settings": new_settings,
         "origin": None,
     })
     return True, target.get('display_name', provider_key)
@@ -632,10 +693,13 @@ def get_first_available_provider(providers_config: Dict[str, Dict[str, Any]],
                                   fallback_order: List[str],
                                   request_timeout: float = 240.0,
                                   exclude: Optional[List[str]] = None,
-                                  force_privacy: bool = False) -> Optional[tuple]:
+                                  force_privacy: bool = False,
+                                  health_cache: Optional[dict] = None,
+                                  health_ttl: float = 60.0) -> Optional[tuple]:
     """Legacy — delegates to registry."""
     return provider_registry.get_first_available_provider(
-        providers_config, fallback_order, request_timeout, exclude, force_privacy)
+        providers_config, fallback_order, request_timeout, exclude, force_privacy,
+        health_cache=health_cache, health_ttl=health_ttl)
 
 
 def get_available_providers(providers_config: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:

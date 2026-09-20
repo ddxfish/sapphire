@@ -38,6 +38,20 @@ def server_answered(exc: Exception) -> bool:
         return False
 
 
+# HTTP statuses that mean "this key/account is refused". A provider answering
+# one of these on its probe is DEAD for fallback purposes: a refused key never
+# fixes itself mid-turn, and the old any-status-is-alive verdict selected such
+# a provider every turn in Auto mode while everything behind it in the order
+# never ran (scout F2, 2026-09-20).
+AUTH_DEAD_STATUSES = {401, 402, 403}
+
+
+def http_status(exc: Exception):
+    """The HTTP status an API-client exception carries, or None."""
+    code = getattr(exc, 'status_code', None)
+    return code if isinstance(code, int) else None
+
+
 def retry_on_rate_limit(func: Callable[..., T], *args, **kwargs) -> T:
     """
     Execute a function with exponential backoff retry on rate limit errors.

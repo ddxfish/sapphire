@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated presets for common providers. These pre-fill the Add Provider form. Not providers themselves.",
+  "_comment": "Curated presets for common providers. These pre-fill the Add Provider form. Not providers themselves. suggested_models = ids verified on each vendor's own model page 2026-09-20 (Fireworks: only serverless ids — a dedicated-GPU-only id 404s on a pay-per-token key).",
   "presets": {
     "lmstudio": {
       "template": "openai",
@@ -25,18 +25,17 @@
       "base_url": "https://api.fireworks.ai/inference/v1",
       "api_key_env": "FIREWORKS_API_KEY",
       "suggested_models": [
-        {"id": "accounts/fireworks/models/deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
-        {"id": "accounts/fireworks/models/deepseek-v3p2", "name": "DeepSeek V3.2"},
-        {"id": "accounts/fireworks/models/qwen3p6-plus", "name": "Qwen3.6 Plus"},
-        {"id": "accounts/fireworks/models/qwen3-235b-a22b-thinking-2507", "name": "Qwen3 235B Thinking"},
-        {"id": "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct", "name": "Qwen3 Coder 480B"},
+        {"id": "accounts/fireworks/models/deepseek-v4p1-flash", "name": "DeepSeek V4.1 Flash"},
+        {"id": "accounts/fireworks/models/deepseek-v4-pro-0813", "name": "DeepSeek V4 Pro"},
+        {"id": "accounts/fireworks/models/kimi-k3", "name": "Kimi K3"},
+        {"id": "accounts/fireworks/models/kimi-k2p7-code", "name": "Kimi K2.7 Code"},
         {"id": "accounts/fireworks/models/kimi-k2p6", "name": "Kimi K2.6"},
-        {"id": "accounts/fireworks/models/kimi-k2-thinking", "name": "Kimi K2 Thinking"},
-        {"id": "accounts/fireworks/models/gemma-4-31b-it", "name": "Gemma 4 31B"},
-        {"id": "accounts/fireworks/models/glm-5", "name": "GLM 5"},
-        {"id": "accounts/fireworks/models/glm-4p7", "name": "GLM 4.7"},
-        {"id": "accounts/fireworks/models/minimax-m2p5", "name": "MiniMax M2.5"},
-        {"id": "accounts/fireworks/models/qwen3p5-397b-a17b", "name": "Qwen3.5 397B"}
+        {"id": "accounts/fireworks/models/glm-5p3", "name": "GLM 5.3"},
+        {"id": "accounts/fireworks/models/glm-5p3-flash", "name": "GLM 5.3 Flash"},
+        {"id": "accounts/fireworks/models/glm-5p2", "name": "GLM 5.2"},
+        {"id": "accounts/fireworks/models/qwen3p8-max", "name": "Qwen3.8 Max"},
+        {"id": "accounts/fireworks/models/minimax-m3", "name": "MiniMax M3"},
+        {"id": "accounts/fireworks/models/gpt-oss-120b", "name": "GPT-OSS 120B"}
       ],
       "config_hints": {"session_affinity": true},
       "generation_defaults": {"temperature": 0.75, "top_p": 0.9, "max_tokens": 8192}
@@ -47,11 +46,11 @@
       "base_url": "https://api.featherless.ai/v1",
       "api_key_env": "FEATHERLESS_API_KEY",
       "suggested_models": [
-        {"id": "deepseek-ai/DeepSeek-V3.2", "name": "DeepSeek V3.2"},
-        {"id": "zai-org/GLM-5", "name": "GLM 5 (744B)"},
-        {"id": "Qwen/Qwen3.5-397B-A17B", "name": "Qwen 3.5 (397B)"},
-        {"id": "MiniMaxAI/MiniMax-M2.5", "name": "MiniMax M2.5"},
-        {"id": "moonshotai/Kimi-K2.5", "name": "Kimi K2.5"},
+        {"id": "deepseek-ai/DeepSeek-V4-Pro", "name": "DeepSeek V4 Pro"},
+        {"id": "zai-org/GLM-5.3", "name": "GLM 5.3"},
+        {"id": "moonshotai/Kimi-K3", "name": "Kimi K3"},
+        {"id": "MiniMaxAI/MiniMax-M3", "name": "MiniMax M3"},
+        {"id": "Qwen/Qwen3.6-27B", "name": "Qwen 3.6 27B"},
         {"id": "meta-llama/Llama-3.3-70B-Instruct", "name": "Llama 3.3 70B"}
       ],
       "generation_defaults": {"temperature": 0.75, "top_p": 0.9, "max_tokens": 4096}
@@ -62,8 +61,8 @@
       "base_url": "https://api.deepseek.com/v1",
       "api_key_env": "DEEPSEEK_API_KEY",
       "suggested_models": [
-        {"id": "deepseek-chat", "name": "DeepSeek V3 (Chat)"},
-        {"id": "deepseek-reasoner", "name": "DeepSeek V3 (Reasoner)"}
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro (thinking)"},
+        {"id": "deepseek-flash", "name": "DeepSeek Flash (V4.1, thinking)"}
       ],
       "generation_defaults": {"temperature": 0.7, "top_p": 0.95, "max_tokens": 4096}
     },
@@ -73,9 +72,14 @@
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_env": "OPENROUTER_API_KEY",
       "suggested_models": [
-        {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4"},
-        {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
-        {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1"},
+        {"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"},
+        {"id": "anthropic/claude-sonnet-5", "name": "Claude Sonnet 5"},
+        {"id": "openai/gpt-5.6-terra", "name": "GPT-5.6 Terra"},
+        {"id": "google/gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+        {"id": "x-ai/grok-4.6", "name": "Grok 4.6"},
+        {"id": "deepseek/deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+        {"id": "moonshotai/kimi-k3", "name": "Kimi K3"},
+        {"id": "z-ai/glm-5.3", "name": "GLM 5.3"},
         {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B"}
       ],
       "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
@@ -86,10 +90,10 @@
       "base_url": "https://api.x.ai/v1",
       "api_key_env": "XAI_API_KEY",
       "suggested_models": [
-        {"id": "grok-4-1-fast-reasoning", "name": "Grok 4.1 Fast Reasoning"},
-        {"id": "grok-4-1-fast-non-reasoning", "name": "Grok 4.1 Fast"},
-        {"id": "grok-3", "name": "Grok 3"},
-        {"id": "grok-3-mini", "name": "Grok 3 Mini"}
+        {"id": "grok-4.6", "name": "Grok 4.6"},
+        {"id": "grok-4.5", "name": "Grok 4.5"},
+        {"id": "grok-4.3", "name": "Grok 4.3 (1M, cheap)"},
+        {"id": "grok-build-0.1", "name": "Grok Build 0.1 (code)"}
       ],
       "config_hints": {"strip_penalties": true},
       "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
@@ -100,9 +104,10 @@
       "base_url": "https://api.minimax.io/anthropic",
       "api_key_env": "ANTHROPIC_COMPAT_API_KEY",
       "suggested_models": [
+        {"id": "MiniMax-M3", "name": "MiniMax M3"},
         {"id": "MiniMax-M2.7", "name": "MiniMax M2.7"},
-        {"id": "MiniMax-M2.5", "name": "MiniMax M2.5"},
-        {"id": "MiniMax-M2.1", "name": "MiniMax M2.1"}
+        {"id": "MiniMax-M2.7-highspeed", "name": "MiniMax M2.7 Highspeed"},
+        {"id": "MiniMax-M2.5", "name": "MiniMax M2.5"}
       ],
       "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
     },
@@ -112,9 +117,13 @@
       "base_url": "https://api.together.xyz/v1",
       "api_key_env": "TOGETHER_API_KEY",
       "suggested_models": [
-        {"id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "name": "Llama 3.3 70B Turbo"},
-        {"id": "deepseek-ai/DeepSeek-V3", "name": "DeepSeek V3"},
-        {"id": "Qwen/Qwen2.5-72B-Instruct-Turbo", "name": "Qwen 2.5 72B Turbo"}
+        {"id": "deepseek-ai/DeepSeek-V4-Pro-0813", "name": "DeepSeek V4 Pro"},
+        {"id": "deepseek-ai/DeepSeek-V4.1-Flash", "name": "DeepSeek V4.1 Flash"},
+        {"id": "moonshotai/Kimi-K3", "name": "Kimi K3"},
+        {"id": "zai-org/GLM-5.3", "name": "GLM 5.3"},
+        {"id": "Qwen/Qwen3.7-Max", "name": "Qwen 3.7 Max"},
+        {"id": "MiniMaxAI/MiniMax-M3", "name": "MiniMax M3"},
+        {"id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "name": "Llama 3.3 70B Turbo"}
       ],
       "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
     },
@@ -124,8 +133,9 @@
       "base_url": "https://api.groq.com/openai/v1",
       "api_key_env": "GROQ_API_KEY",
       "suggested_models": [
-        {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B"},
-        {"id": "gemma2-9b-it", "name": "Gemma 2 9B"}
+        {"id": "openai/gpt-oss-120b", "name": "GPT-OSS 120B"},
+        {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B"},
+        {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B"}
       ],
       "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
     }

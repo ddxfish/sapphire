@@ -6,6 +6,7 @@ import {
   testProvider,
   refreshProviderKeyStatus
 } from '../../../shared/llm-providers.js';
+import { showToast } from '../../../shared/toast.js';
 
 let providerMetadata = {};
 
@@ -208,7 +209,12 @@ export default {
         
         // Toggle enabled state
         const newState = !isSelected;
-        await updateProvider(key, { enabled: newState });
+        try {
+          await updateProvider(key, { enabled: newState });
+        } catch (err) {
+          showToast(`Failed to update provider: ${err.message || err}`, 'error');
+          return;   // card stays as it was (scout U9: this used to reject silently)
+        }
         
         // Update settings cache
         if (!settings.LLM_PROVIDERS) settings.LLM_PROVIDERS = {};
@@ -235,9 +241,15 @@ export default {
 
         if (field === 'api_key' && !value.trim()) return;
 
-        await updateProvider(key, { [field]: value });
+        try {
+          await updateProvider(key, { [field]: value });
+        } catch (err) {
+          showToast(`Failed to save: ${err.message || err}`, 'error');
+          return;
+        }
 
         // Update local settings cache
+        if (!settings.LLM_PROVIDERS) settings.LLM_PROVIDERS = {};
         if (!settings.LLM_PROVIDERS[key]) settings.LLM_PROVIDERS[key] = {};
         settings.LLM_PROVIDERS[key][field] = value;
 

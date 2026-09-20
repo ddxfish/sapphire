@@ -59,7 +59,6 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 | `get_wikipedia` | web.py | Get Wikipedia article summary |
 | `research_topic` | web.py | Advanced multi-page research |
 | `get_site_links` | web.py | Extract navigation links from a site |
-| `ask_claude` | ai.py | Query Claude API for complex analysis |
 
 ### Images
 
@@ -223,7 +222,6 @@ TOOL MODULES:
 - web.py: web_search, get_website(url, show_image_urls?=false|true|only), get_wikipedia, research_topic, get_site_links, web_view_images(query? | url?, count?=6, page?=1, view?=true)
 - mindpalace library_tools.py: library, read_document, memory_view_image(query? + count? | document_id | image_id=img:<id>, private_key?), local_view_images(paths? | folder?, page?, count?), memory_save_image(source, topic, caption?, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
 - Image settings (Settings › Images): IMAGE_MEMORY_TURNS (default 3 — turns an already-seen image stays in the model's view), WEB_IMAGES_SAFESEARCH (default off). Image blocks ride to the model only when the provider's vision flag is on; otherwise '[image not sent: this model has no vision]'
-- ai.py: ask_claude
 - meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools]
 - scene.py: set_scene(name) — chat scene background, 'none' clears
 - toolmaker.py: tool_save, tool_read, tool_load

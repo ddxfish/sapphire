@@ -28,6 +28,7 @@ import storeTab from './settings-tabs/store-tab.js';
 
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
 import { snapScroll } from '../shared/dom-guard.js';
+import { commitInto, mergeInto } from '../shared/settings-commit.js';
 
 const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
 
@@ -50,6 +51,11 @@ let mobileMenuCleanup = null;
 let managed = false;
 let docker = false;
 let unrestricted = false;
+// U1 (2026-09-20): a slow refetch must never overwrite a newer one (two tab
+// clicks in flight), and (c)'s future bus repaint needs to know a global
+// Save is mid-flight. Both counters live here, beside the snapshot they guard.
+let _loadSeq = 0;
+let _saveInFlight = 0;
 
 export default {
     init(el) { container = el; },
@@ -68,11 +74,13 @@ export default {
 // ── Data Loading ──
 
 async function loadData() {
+    const seq = ++_loadSeq;
     try {
         const [settingsData, helpData] = await Promise.all([
             api.getAllSettings(),
             api.getSettingsHelp().catch(() => ({ help: {} }))
         ]);
+        if (seq !== _loadSeq) return;   // a newer load already landed — never paint the older blob
         settings = settingsData.settings || {};
         defaults = settingsData.defaults || {};
         overrides = settingsData.user_overrides || [];
@@ -85,6 +93,27 @@ async function loadData() {
         // custom-tools tab removed — plugin manifest settings is the one path now
     } catch (e) {
         console.warn('Settings load failed:', e);
+    }
+}
+
+// Tab-switch refetch (U1 layer a): the settings blob + provider meta only.
+// loadData()'s plugin fan-out (a dynamic import per plugin tab) is boot-weight,
+// not click-weight. Sequence-guarded like loadData; a failure keeps the old
+// snapshot (same as before, just no longer silently stale on purpose).
+async function loadSettingsOnly() {
+    const seq = ++_loadSeq;
+    try {
+        const settingsData = await api.getAllSettings();
+        if (seq !== _loadSeq) return;
+        settings = settingsData.settings || {};
+        defaults = settingsData.defaults || {};
+        overrides = settingsData.user_overrides || [];
+        managed = settingsData.managed || false;
+        docker = settingsData.docker || false;
+        unrestricted = settingsData.unrestricted || false;
+        await loadProviderMeta();
+    } catch (e) {
+        console.warn('Settings refetch failed:', e);
     }
 }
 
@@ -361,6 +390,14 @@ function createCtx() {
         renderFields, renderAccordion, renderInput, formatLabel,
         attachAccordionListeners,
         markChanged(key, value) { pendingChanges[key] = value; },
+        // Write-through for writes the tab ALREADY persisted itself (provider
+        // card PUTs, self-management toggles, dashboard name…). Reads the
+        // module variables at call time — `ctx.settings[key] = v` wrote into
+        // whatever object was current at bind time, which loadData() and a
+        // Save reassign. Commit only server-CONFIRMED values (after the awaited
+        // PUT resolved), never the value you hoped to write. U1 (b), 2026-09-20.
+        commit(key, value) { commitInto({ settings, pendingChanges }, key, value); },
+        commitMerge(mapKey, subKey, updates) { mergeInto({ settings, pendingChanges }, mapKey, subKey, updates); },
         // Source-of-truth read for unsaved state. Custom controls (anything
         // not rendered via renderFields/renderInput) should use this instead
         // of reading `settings[key]` directly — otherwise tab-switch loses
@@ -529,8 +566,7 @@ function renderInput(key, value, type) {
     }
     if (key === 'STT_FIREWORKS_MODEL') {
         const models = [
-            ['whisper-v3-turbo', 'Whisper V3 Turbo (Fast)'],
-            ['whisper-v3', 'Whisper V3 (Quality)']
+            ['whisper-v3-turbo', 'Whisper V3 Turbo']
         ];
         return `<select id="${id}" data-key="${key}">
             ${models.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -586,6 +622,44 @@ function renderAccordion(id, keys, title = 'Advanced Settings') {
 
 // ── Events ──
 
+// ONE door for every tab switch (settings-navigate event, desktop sidebar,
+// mobile menu). U1 layer (a), 2026-09-20: the three copies all repainted from
+// the snapshot taken at view entry, so a provider-card PUT, a self-management
+// toggle or the dashboard name looked reverted after a switch. Now: flush
+// typed-but-unblurred values → refetch the blob → paint. If the user clicks
+// on while the fetch is out, that click's own goToTab paints; this one yields.
+async function goToTab(tabId) {
+    flushCurrentInputs();
+    activeTab = tabId;
+    container.querySelectorAll('.settings-nav-item').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === activeTab));
+    // Auto-expand the plugin group when landing on a plugin tab
+    const pluginGroup = container.querySelector('.settings-plugin-group');
+    if (pluginGroup && pluginGroup.querySelector(`.settings-nav-item[data-tab="${tabId}"]`)) pluginGroup.open = true;
+    const meta = getTabMeta();
+    const title = container.querySelector('#stab-title');
+    const desc = container.querySelector('#stab-desc');
+    if (title) title.textContent = `${meta.icon} ${meta.name}`;
+    if (desc) desc.textContent = meta.description || '';
+    // Mobile trigger + menu stay in sync whichever door was used
+    const mobileTrigger = container.querySelector('#settings-mobile-trigger');
+    const mobileMenu = container.querySelector('#settings-mobile-menu');
+    if (mobileTrigger) {
+        const set = (sel, v) => { const n = mobileTrigger.querySelector(sel); if (n) n.textContent = v; };
+        set('.settings-mobile-icon', meta.icon);
+        set('.settings-mobile-label', meta.name);
+        set('.settings-mobile-arrow', '\u25BE');
+    }
+    if (mobileMenu) {
+        mobileMenu.querySelectorAll('.settings-mobile-option').forEach(o =>
+            o.classList.toggle('active', o.dataset.tab === activeTab));
+        mobileMenu.classList.add('hidden');
+    }
+    await loadSettingsOnly();
+    if (activeTab !== tabId) return;
+    renderTabContent();
+}
+
 let _shellNavBound = false;
 function bindShellEvents() {
     // Navigate to a specific tab programmatically (used by plugin gear icons).
@@ -597,22 +671,7 @@ function bindShellEvents() {
     if (!_shellNavBound) container.addEventListener('settings-navigate', e => {
         const tabId = e.detail?.tab;
         if (!tabId) return;
-        flushCurrentInputs();
-        activeTab = tabId;
-        container.querySelectorAll('.settings-nav-item').forEach(b =>
-            b.classList.toggle('active', b.dataset.tab === activeTab));
-        // Auto-expand plugin group if navigating to a plugin tab
-        const pluginGroup = container.querySelector('.settings-plugin-group');
-        if (pluginGroup) {
-            const isPluginTab = pluginGroup.querySelector(`.settings-nav-item[data-tab="${tabId}"]`);
-            if (isPluginTab) pluginGroup.open = true;
-        }
-        const meta = getTabMeta();
-        const title = container.querySelector('#stab-title');
-        const desc = container.querySelector('#stab-desc');
-        if (title) title.textContent = `${meta.icon} ${meta.name}`;
-        if (desc) desc.textContent = meta.description || '';
-        renderTabContent();
+        goToTab(tabId);
     });
     _shellNavBound = true;
 
@@ -620,18 +679,7 @@ function bindShellEvents() {
     container.querySelector('.settings-sidebar')?.addEventListener('click', e => {
         const btn = e.target.closest('.settings-nav-item');
         if (!btn) return;
-        flushCurrentInputs();
-        activeTab = btn.dataset.tab;
-        container.querySelectorAll('.settings-nav-item').forEach(b =>
-            b.classList.toggle('active', b.dataset.tab === activeTab));
-
-        const meta = getTabMeta();
-        const title = container.querySelector('#stab-title');
-        const desc = container.querySelector('#stab-desc');
-        if (title) title.textContent = `${meta.icon} ${meta.name}`;
-        if (desc) desc.textContent = meta.description || '';
-
-        renderTabContent();
+        goToTab(btn.dataset.tab);
     });
 
     // Mobile tab dropdown
@@ -648,30 +696,7 @@ function bindShellEvents() {
         mobileMenu.addEventListener('click', e => {
             const opt = e.target.closest('.settings-mobile-option');
             if (!opt) return;
-            flushCurrentInputs();
-            activeTab = opt.dataset.tab;
-
-            // Sync desktop sidebar
-            container.querySelectorAll('.settings-nav-item').forEach(b =>
-                b.classList.toggle('active', b.dataset.tab === activeTab));
-
-            // Update mobile trigger + header
-            const meta = getTabMeta();
-            mobileTrigger.querySelector('.settings-mobile-icon').textContent = meta.icon;
-            mobileTrigger.querySelector('.settings-mobile-label').textContent = meta.name;
-            mobileTrigger.querySelector('.settings-mobile-arrow').textContent = '\u25BE';
-
-            const title = container.querySelector('#stab-title');
-            const desc = container.querySelector('#stab-desc');
-            if (title) title.textContent = `${meta.icon} ${meta.name}`;
-            if (desc) desc.textContent = meta.description || '';
-
-            // Update menu active states
-            mobileMenu.querySelectorAll('.settings-mobile-option').forEach(o =>
-                o.classList.toggle('active', o.dataset.tab === activeTab));
-
-            mobileMenu.classList.add('hidden');
-            renderTabContent();
+            goToTab(opt.dataset.tab);
         });
 
         const outsideHandler = e => {
@@ -879,6 +904,7 @@ async function saveChanges() {
         }
     }
 
+    _saveInFlight++;
     try {
         const parsed = {};
         for (const [key, value] of Object.entries(valid)) {
@@ -906,6 +932,7 @@ async function saveChanges() {
     } catch (e) {
         ui.showToast('Save failed: ' + e.message, 'error');
     } finally {
+        _saveInFlight--;
         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
     }
 }

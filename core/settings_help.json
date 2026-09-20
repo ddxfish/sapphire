@@ -162,7 +162,7 @@
   },
   "STT_FIREWORKS_MODEL": {
     "short": "Fireworks Whisper model",
-    "long": "whisper-v3-turbo is faster and cheaper. whisper-v3 is higher quality but slower. For most voice input, turbo is more than good enough."
+    "long": "whisper-v3-turbo is the only Fireworks transcription model still served: Fireworks retired audio inference on 2026-06-10 and the whisper-v3 host now rejects valid keys, while the turbo host still answers. Fast, cheap, and more than good enough for voice input."
   },
   "STT_LANGUAGE": {
     "short": "Language code for speech recognition",

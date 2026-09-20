@@ -1,6 +1,7 @@
 # core/routes/settings.py - System status, settings, credentials, privacy, LLM provider routes
 import asyncio
 import json
+import threading
 import os
 import re
 import logging
@@ -13,6 +14,12 @@ from core.auth import require_login
 from core.api_fastapi import get_system, _apply_chat_settings
 from core.event_bus import publish, Events
 from core import prompts
+
+# The LLM provider maps are read-modify-written whole by every provider
+# route (PUT field, add, delete, reorder). Two overlapping PUTs — the UI
+# fires one per field change — deep-copied the same map and the second
+# write silently reverted the first (scouts S15/F10, 2026-09-20).
+_PROVIDER_MAP_LOCK = threading.Lock()
 from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
@@ -868,23 +875,24 @@ async def update_llm_provider(provider_key: str, request: Request, _=Depends(req
         from core.credentials_manager import credentials
         credentials.set_llm_api_key(provider_key, api_key.strip())
 
-    # Determine if core or custom
-    if provider_registry.is_core_provider(provider_key):
-        providers = settings.get('LLM_PROVIDERS', {})
-        if provider_key not in providers:
-            raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
-        providers[provider_key].update(data)
-        for prov in providers.values():
-            prov.pop('api_key', None)
-        settings.set('LLM_PROVIDERS', providers, persist=True)
-    else:
-        custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
-        if provider_key not in custom:
-            raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
-        custom[provider_key].update(data)
-        for prov in custom.values():
-            prov.pop('api_key', None)
-        settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
+    # Determine if core or custom — one lock around each read-modify-write
+    with _PROVIDER_MAP_LOCK:
+        if provider_registry.is_core_provider(provider_key):
+            providers = settings.get('LLM_PROVIDERS', {})
+            if provider_key not in providers:
+                raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
+            providers[provider_key].update(data)
+            for prov in providers.values():
+                prov.pop('api_key', None)
+            settings.set('LLM_PROVIDERS', providers, persist=True)
+        else:
+            custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
+            if provider_key not in custom:
+                raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
+            custom[provider_key].update(data)
+            for prov in custom.values():
+                prov.pop('api_key', None)
+            settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_PROVIDERS", "value": provider_key})
     return {"status": "success", "provider": provider_key}
@@ -896,8 +904,22 @@ async def update_fallback_order(request: Request, _=Depends(require_login)):
     from core.settings_manager import settings
     data = await request.json()
     order = data.get('order', [])
-    settings.set('LLM_FALLBACK_ORDER', order, persist=True)
+    with _PROVIDER_MAP_LOCK:
+        settings.set('LLM_FALLBACK_ORDER', order, persist=True)
     return {"status": "success", "order": order}
+
+
+def _probe_budget_note(probe_ok: bool, probe_s: float, configured: float) -> str:
+    """Truth strip for Test Connection: Auto and pinned chats decide on
+    health_check() with the provider's own timeout, not on the floored
+    completion the route runs. Say so when the two disagree."""
+    if not probe_ok:
+        return (" — but the health probe FAILED (refused key, wrong URL or no /models): "
+                "Auto will skip this provider; pin it per chat or fix it")
+    if configured and probe_s > configured:
+        return (f" — but the health probe took {probe_s:.1f}s and this provider's timeout is "
+                f"{configured:g}s: Auto will skip it; raise Health timeout on the card")
+    return ""
 
 
 @router.post("/api/llm/test/{provider_key}")
@@ -919,16 +941,19 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
             body = {}
         for field in ('api_key', 'base_url', 'model'):
             if body.get(field):
-                test_config[field] = body[field]
+                # A typed key must beat the stored one (get_api_key priority) —
+                # ride the explicit override slot, never the persisted field.
+                test_config['api_key_override' if field == 'api_key' else field] = body[field]
 
         # Probe budget: is_local providers default to a 0.3s health timeout —
         # right for boot fallback scans, wrong for a human-clicked Test against
         # a LAN box with a big model loaded (models.list can take seconds while
         # completions work fine). Floor it at 5s for the test only. 2026-08-06.
         try:
-            test_config['timeout'] = max(float(test_config.get('timeout') or 0), 5.0)
+            configured_timeout = float(test_config.get('timeout') or 0)
         except (TypeError, ValueError):
-            test_config['timeout'] = 5.0
+            configured_timeout = 0.0
+        test_config['timeout'] = max(configured_timeout, 5.0)
 
         providers_config[provider_key] = test_config
 
@@ -942,6 +967,17 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
 
             health = provider.test_connection()
             disabled_note = "" if was_enabled else " — note: provider is DISABLED in settings, enable it before use"
+
+            # The REAL path (Auto / pinned) gates on health_check() with the
+            # card's own timeout, not on this floored completion — measure the
+            # probe so Test can't say OK while Auto silently skips (S4/F9, 2026-09-20).
+            import time as _time
+            _t0 = _time.monotonic()
+            try:
+                probe_ok = bool(provider.health_check())
+            except Exception:
+                probe_ok = False
+            budget_note = _probe_budget_note(probe_ok, _time.monotonic() - _t0, configured_timeout)
 
             # Real-path probe: replies never call models.list — they call
             # chat_completion with the reply-path generation params. Test what
@@ -957,8 +993,7 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
                     provider.chat_completion(
                         [{"role": "user", "content": "Reply with the single word: OK"}],
                         generation_params=gen)
-                    quirk = "" if health.get('ok') else " (models.list probe failed — endpoint quirk, completions work)"
-                    return {"status": "success", "response": f"Completion OK ({model}){quirk}{disabled_note}"}
+                    return {"status": "success", "response": f"Completion OK ({model}){budget_note}{disabled_note}"}
                 except Exception as e:
                     return {"status": "error", "error": f"Completion failed — this is the call replies use: {str(e)[:160]}"}
 
@@ -1035,7 +1070,7 @@ async def test_llm_thinking(provider_key: str, request: Request, _=Depends(requi
         base['enabled'] = True
         for field in ('api_key', 'base_url', 'model', 'extra_body'):
             if body.get(field) is not None:
-                base[field] = body[field]
+                base['api_key_override' if field == 'api_key' else field] = body[field]
         if 'disable_thinking' in body:
             base['disable_thinking'] = bool(body['disable_thinking'])
 
@@ -1124,7 +1159,7 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
 
     # Validate BEFORE storing the API key — the old order persisted the key
     # first, so a 400 on template/base_url left an orphaned credential entry.
-    template = data.get('template', 'openai')
+    template = provider_registry.normalize_template(data.get('template', 'openai'))
     if template not in provider_registry._classes:
         raise HTTPException(status_code=400, detail=f"Unknown provider template '{template}'")
     base_url = (data.get('base_url') or '').strip()
@@ -1154,14 +1189,16 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
         if field in data:
             provider_config[field] = data[field]
 
-    custom[name] = provider_config
-    settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
+    with _PROVIDER_MAP_LOCK:
+        custom = settings.get('LLM_CUSTOM_PROVIDERS', {})   # re-read under the lock
+        custom[name] = provider_config
+        settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
-    # Add to fallback order
-    order = settings.get('LLM_FALLBACK_ORDER', [])
-    if name not in order:
-        order.append(name)
-        settings.set('LLM_FALLBACK_ORDER', order, persist=True)
+        # Add to fallback order
+        order = settings.get('LLM_FALLBACK_ORDER', [])
+        if name not in order:
+            order.append(name)
+            settings.set('LLM_FALLBACK_ORDER', order, persist=True)
 
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_CUSTOM_PROVIDERS", "value": name})
     return {"status": "success", "name": name, "config": provider_config}
@@ -1176,18 +1213,19 @@ async def delete_custom_provider(provider_key: str, request: Request, _=Depends(
     if provider_registry.is_core_provider(provider_key):
         raise HTTPException(status_code=400, detail="Cannot delete core providers")
 
-    custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
-    if provider_key not in custom:
-        raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
+    with _PROVIDER_MAP_LOCK:
+        custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
+        if provider_key not in custom:
+            raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
 
-    custom.pop(provider_key)
-    settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
+        custom.pop(provider_key)
+        settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
-    # Remove from fallback order
-    order = settings.get('LLM_FALLBACK_ORDER', [])
-    if provider_key in order:
-        order.remove(provider_key)
-        settings.set('LLM_FALLBACK_ORDER', order, persist=True)
+        # Remove from fallback order
+        order = settings.get('LLM_FALLBACK_ORDER', [])
+        if provider_key in order:
+            order.remove(provider_key)
+            settings.set('LLM_FALLBACK_ORDER', order, persist=True)
 
     # Clean up credentials
     try:

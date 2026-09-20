@@ -45,7 +45,6 @@
       "notepad_delete_lines",
       "notepad_insert_line",
       "search_help_docs",
-      "ask_claude",
       "get_time"
     ]
   },
@@ -68,8 +67,7 @@
       "notepad_append_lines",
       "notepad_delete_lines",
       "notepad_insert_line",
-      "search_help_docs",
-      "ask_claude"
+      "search_help_docs"
     ]
   },
   "smarthome": {
@@ -119,8 +117,7 @@
       "create_goal",
       "list_goals",
       "update_goal",
-      "delete_goal",
-      "ask_claude"
+      "delete_goal"
     ]
   }
 }

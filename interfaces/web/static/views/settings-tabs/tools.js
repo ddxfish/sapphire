@@ -160,7 +160,8 @@ export default {
                     e.target.checked = false;
                     return;
                 }
-                await save({ AI_TOOLSET_SWITCH_ENABLED: enabling });
+                await save({ AI_TOOLSET_SWITCH_ENABLED: enabling });   // throws on failure → commit is confirmed-only
+                ctx.commit('AI_TOOLSET_SWITCH_ENABLED', enabling);
                 state.toolsetEnabled = enabling;
                 rerender(wrap);
             } else if (e.target.id === 'ai-model-switch') {
@@ -170,10 +171,12 @@ export default {
                     return;
                 }
                 await save({ AI_MODEL_SWITCH_ENABLED: enabling });
+                ctx.commit('AI_MODEL_SWITCH_ENABLED', enabling);
                 state.modelEnabled = enabling;
                 rerender(wrap);
             } else if (e.target.id === 'ai-ratchet') {
                 await save({ AI_MODEL_SWITCH_RATCHET: e.target.checked });
+                ctx.commit('AI_MODEL_SWITCH_RATCHET', e.target.checked);
                 state.ratchet = e.target.checked;
             }
         });
@@ -186,6 +189,7 @@ export default {
                 if (!sel || !sel.value) return;
                 state.roster.push(sel.value);
                 await save({ AI_MODEL_SWITCH_ROSTER: state.roster });
+                ctx.commit('AI_MODEL_SWITCH_ROSTER', [...state.roster]);
                 rerender(wrap);
                 return;
             }
@@ -201,6 +205,7 @@ export default {
                 state.roster.splice(Number(del), 1);
             }
             await save({ AI_MODEL_SWITCH_ROSTER: state.roster });
+            ctx.commit('AI_MODEL_SWITCH_ROSTER', [...state.roster]);
             rerender(wrap);
         });
     }
