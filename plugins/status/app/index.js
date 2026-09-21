@@ -127,7 +127,7 @@ function renderDashboard(el, d) {
                         ${field('Chat', sess.chat)}
                         ${field('Prompt', sess.prompt)}
                         ${field('Persona', sess.persona || 'none')}
-                        ${field('LLM', `${sess.llm_primary || 'auto'}${sess.llm_model ? ' (' + sess.llm_model + ')' : ''}`)}
+                        ${field('LLM', `${sess.llm_display || sess.llm_primary || 'auto'}${(sess.llm_effective_model || sess.llm_model) ? ' (' + (sess.llm_effective_model || sess.llm_model) + ')' : ''}`)}
                         ${field('Toolset', `${sess.toolset || '?'} (${sess.function_count || 0} tools)`)}
                         ${field('Parallel / Iters', `${sess.parallel_tool_calls || 1} parallel, ${sess.max_iterations || 10} max iterations`)}
                         ${Object.entries(sess.scopes || {}).map(([k, v]) => field(`Scope: ${k}`, v === null ? 'off' : v)).join('')}
@@ -437,7 +437,7 @@ function renderDashboard(el, d) {
             ``,
             `=== Session ===`,
             `Chat: ${sess.chat} | Prompt: ${sess.prompt} | Persona: ${sess.persona || 'none'}`,
-            `LLM: ${sess.llm_primary} (${sess.llm_model || 'default'})`,
+            `LLM: ${sess.llm_display || sess.llm_primary} (${sess.llm_effective_model || sess.llm_model || 'default'})`,
             `Toolset: ${sess.toolset} (${sess.function_count} tools) | Parallel: ${sess.parallel_tool_calls || 1} | Max Iters: ${sess.max_iterations || 10}`,
             `Theme: ${sess.theme || 'default'}`,
             Object.keys(sess.scopes || {}).length ? `Scopes: ${Object.entries(sess.scopes).map(([k, v]) => `${k}=${v === null ? 'off' : v}`).join(', ')}` : '',

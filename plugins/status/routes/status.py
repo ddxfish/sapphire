@@ -462,6 +462,12 @@ def get_full_status_sync(scope=_FROM_CHAT):
             "persona": chat_settings.get("persona", ""),
             "llm_primary": _tc.get("provider") or chat_settings.get("llm_primary", "auto"),
             "llm_model": _tc.get("model") or chat_settings.get("llm_model", ""),
+            # What she should SEE (2026-09-21): the friendly name and the
+            # model that actually runs — the raw key is a birth-name fossil
+            # ("fireworksglm-5p2" after a rename to GLM 5.3) and an empty
+            # override printed as "()".
+            **_llm_display(_tc.get("provider") or chat_settings.get("llm_primary", "auto"),
+                           _tc.get("model") or chat_settings.get("llm_model", "")),
             "toolset": _tc.get("toolset") or fm.current_toolset_name,
             "function_count": len(fm._enabled_tools),
             "tool_names": sorted(t['function']['name'] for t in fm._enabled_tools),
@@ -786,3 +792,18 @@ def _check_provider_key(provider_key):
         return bool(credentials.get_llm_api_key(provider_key))
     except Exception:
         return False
+
+
+def _llm_display(key: str, override: str) -> dict:
+    """{llm_display, llm_effective_model} from the ONE resolver's helpers — no
+    probe, no provider build: 'auto' stays 'auto' (the pick happens per turn)."""
+    try:
+        from core.chat.llm_providers.resolve import display_name, providers_config
+        key = str(key or 'auto')
+        if key in ('auto', 'none'):
+            return {"llm_display": key, "llm_effective_model": override or ''}
+        conf = providers_config().get(key) or {}
+        return {"llm_display": display_name(key, conf),
+                "llm_effective_model": override or str(conf.get('model') or '')}
+    except Exception:
+        return {"llm_display": str(key or 'auto'), "llm_effective_model": override or ''}

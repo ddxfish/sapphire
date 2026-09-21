@@ -122,7 +122,7 @@
     "sapphire/discord_stt_quality.py": "sha256:69f7ac8e36ff399c1a51e2c2e80088113800141fb08217591c5bd53e38c6dde0",
     "sapphire/event_bridge.py": "sha256:f0fb76579be38ee0a9e30f486674c09fda02241439d9171eb30686afd5b61e4f",
     "sapphire/llm_bridge.py": "sha256:7daa0a9bdffea6dfafe6e77a5212ef9e34a3697589659cd9d787eca5ee22f9a2",
-    "sapphire/llm_settings.py": "sha256:ba5922731d21b859779f448278667314fb714e207eb62c1d27cab5798cf2e65b",
+    "sapphire/llm_settings.py": "sha256:b7c084bf6da01a85acad5aa454a305465778eb0cf6f787b075412f8f0c66e18e",
     "sapphire/scheduler_bridge.py": "sha256:bf55ff0aff0b91ff7e0af173b49f824166b8de19cd163730c9d60e857a43ec24",
     "sapphire/settings_bridge.py": "sha256:de0a5efc752ef806921acaf46280eb2d7ec09ffe0aca14e3625496e4983b4e0e",
     "sapphire/speech_bridge.py": "sha256:2230c0c7ab2f90ecb1565b829ed37377cd9e8b093927df03b04097e217c5809b",
@@ -243,7 +243,7 @@
     "tests/test_think_tags.py": "sha256:82cb6b034c3d5b64d33be6ee5180506bbc2939c6c2933d3008e310aea1aab112",
     "tests/test_trace_coverage.py": "sha256:05959b2a86712ed69e99dd85f32d3ee4256703c590e4f57f492089173c15f3c0",
     "tests/test_transcript_service.py": "sha256:8472b7c772d5a575f9467171dc986ff3d99e66e4b3615eeed24407b51aec4a37",
-    "tests/test_vision_bridge.py": "sha256:0b776727a80b6f59deb5290a69064d5c2937ed29c114e80ddfc9f459d18642bd",
+    "tests/test_vision_bridge.py": "sha256:6c7c025552327bdead28838f8cedc89fa7587fef7fef33798f36ca5f0df45a16",
     "tests/test_voice_addressing.py": "sha256:efe6cc1f165fbc38237f8b3ec82a6ae542983dbd971abe760a31d290b37ef371",
     "tests/test_voice_chat.py": "sha256:43e3676cb44f8dc2f2d68efff43aa9a4ca16c201d0b08d2255e1bee6407288d7",
     "tests/test_voice_conversation_e2e.py": "sha256:8c1b4f1f8dfa5d411d6beead4f3de4503f826205f52e7f7d34af17f11fdafa4b",
@@ -277,7 +277,7 @@
     "transport/discord_voice_sink.py": "sha256:4b7264633653920ff2fdd35b6d644eb0aef6d3e9fa3c4a2bd324c3b263777b0b",
     "transport/voice_occupancy.py": "sha256:fc6157ad963663b5e6a0f5070343dda891fe379ed84405db3bb55f63f896f2ec",
     "transport/voice_transport.py": "sha256:897c2719641566cc542ed05224abbf0aa2d83294ae55ec9421c1f016ef6f491c",
-    "vision/vision_bridge.py": "sha256:a873994efc5beda2b2045a4887ccfd2522f9403edf98200e8e8d132119692609",
+    "vision/vision_bridge.py": "sha256:4af240569222e638a86093cfbf30cba25ad61a35a63c0ce5b22aa554c037136c",
     "voice/auto_join_service.py": "sha256:dcc42ce73338f17328b2ee04f7a99a85a7d12e7e22f5f11d3c3540b6bd817d27",
     "voice/dave_session.py": "sha256:c90fcee45dd8274fdb8eb39cd368f1a9f140d31090dfe538855acf1e9ce48692",
     "voice/dave_voice_patches.py": "sha256:c2d1d9cad23b3ba03f5fbebd0e3e796757e6b37df4d9252e3619d03b3eda45b1",
@@ -299,5 +299,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:be06171abb167a5f1d89c576ba946f01816cb3ae79f1d5275f44407c4ecf3d38"
   },
-  "signature": "HtFEk5wkGl8hVfUIyD+QJ48/rtVrzW/hu18HuGfP47+gBCGXbo0HJeRxmhWFem4CzjdWJz7ZTbQJjBg/C+xBBg=="
+  "signature": "2qJFvAdhhGHF+7bszV1wea5UaEbN+cbC3mbU0Tylcdd8YOAzpUR5d4tdtmdmHm8/xcvgUqTTqUbLD33T/ksBAg=="
 }

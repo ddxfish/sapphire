@@ -56,9 +56,11 @@ class TestProviderGate:
                             raising=False)
         monkeypatch.setattr(config, "LLM_CUSTOM_PROVIDERS", {}, raising=False)
         from core.chat.llm_providers import provider_registry
-        sentinel = object()
+        # 2026-09-21: the seat rides the ONE resolver — a pin gets the same
+        # 60s health verdict the web chat gets, so the fake must answer it.
+        sentinel = SimpleNamespace(health_check=lambda: True, model='m')
         monkeypatch.setattr(provider_registry, "get_provider_by_key",
-                            lambda key, model_override='': sentinel)
+                            lambda key, cfg=None, timeout=240.0, model_override='': sentinel)
         assert gameroom_core._get_provider(
             "lanbox", privacy_required=True) is sentinel
 
@@ -74,15 +76,16 @@ class TestProviderGate:
         seen = {}
         sentinel = object()
 
-        def fake_first(cfg, order):
-            seen["cfg"] = cfg
-            seen["order"] = order
+        def fake_first(cfg, order, timeout=240.0, exclude=None, force_privacy=False, **kw):
+            seen["force_privacy"] = force_privacy
             return ("lanbox", sentinel)
         monkeypatch.setattr(provider_registry,
                             "get_first_available_provider", fake_first)
         got = gameroom_core._get_provider(None, privacy_required=True)
         assert got is sentinel
-        assert set(seen["cfg"]) == {"lanbox"} and seen["order"] == ["lanbox"]
+        # 2026-09-21: the ONE resolver hands the registry force_privacy
+        # (the registry filters to is_local) instead of pre-cutting the roster.
+        assert seen["force_privacy"] is True
 
 
 class TestSeatGates:

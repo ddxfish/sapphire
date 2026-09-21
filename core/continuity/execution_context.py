@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 
 import config
-from core.chat.llm_providers import get_provider_by_key, get_first_available_provider, get_generation_params
+from core.chat.llm_providers import get_generation_params
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +300,14 @@ class ExecutionContext:
         return snapshot_all_scopes()
 
     def _resolve_provider(self) -> Tuple:
-        """Select LLM provider from task settings. Returns (key, provider, model_override)."""
+        """Select LLM provider from task settings. Returns (key, provider, model_override).
+
+        Thin door onto core.chat.llm_providers.resolve — the ONE resolver
+        (2026-09-21). Privacy is settled HERE (task carrier ∨ live prompt flag
+        ∨ target chat's private_chat — see _build_prompt / executor) and handed
+        in as `private`; there is no private_chat toggle in this lane, so
+        local-only IS the guarantee. Before 2026-08-09 this lane had NO
+        privacy check at all."""
         provider_key = self.task_settings.get("provider", "auto")
         model_override = self.task_settings.get("model", "")
 
@@ -314,45 +321,18 @@ class ExecutionContext:
             provider_key = ev_provider
             model_override = str(event.get("llm_model") or "").strip()
 
-        providers_config = {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
-        requires_privacy = getattr(self, '_prompt_privacy_required', False)
-
-        if provider_key and provider_key not in ("auto", ""):
-            # Prompt-privacy gate: a privacy_required prompt never runs on a
-            # non-local provider in the continuity lane (cron/heartbeat/
-            # agents/daemons). Before 2026-08-09 this lane had NO privacy
-            # check at all — a private persona on a cloud-pinned task shipped
-            # its prompt straight out.
-            if requires_privacy:
-                from core.chat.llm_providers import PROVIDER_METADATA
-                pconf = providers_config.get(provider_key, {})
-                meta = PROVIDER_METADATA.get(provider_key, {})
-                if not pconf.get('is_local', meta.get('is_local', False)):
-                    raise ConnectionError(
-                        f"Task requires privacy (private target chat, or prompt "
-                        f"'{self.task_settings.get('prompt')}' is privacy_required); "
-                        f"provider '{provider_key}' is not marked local — task refused.")
-            provider = get_provider_by_key(
-                provider_key, providers_config,
-                config.LLM_REQUEST_TIMEOUT,
-                model_override=model_override
-            )
-            if not provider:
-                raise ConnectionError(f"Provider '{provider_key}' not available")
-            return provider_key, provider, model_override
-
-        # Auto mode — fallback order (force_privacy filters to local providers
-        # when the prompt demands it)
-        fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
-        result = get_first_available_provider(
-            providers_config, fallback_order, config.LLM_REQUEST_TIMEOUT,
-            force_privacy=requires_privacy
-        )
-        if result:
-            pk, prov = result
-            return pk, prov, model_override
-
-        raise ConnectionError("No LLM providers available")
+        from core.chat.llm_providers.resolve import resolve, PrivacyRefused
+        requires_privacy = bool(getattr(self, '_prompt_privacy_required', False))
+        try:
+            sel = resolve(provider_key, model_override, private=requires_privacy,
+                          timeout=self.task_settings.get("llm_request_timeout"))
+        except PrivacyRefused as e:
+            raise PrivacyRefused(
+                f"Task requires privacy (private target chat, or prompt "
+                f"'{self.task_settings.get('prompt')}' is privacy_required); {e}") from e
+        # Auto mode returns model='' — a pin for another provider never rides
+        # to the one auto picked (scout V4, 2026-09-21).
+        return sel.as_tuple()
 
     def _build_gen_params(self) -> Dict:
         """Build generation parameters for the resolved provider/model."""

@@ -1041,6 +1041,21 @@ def _db_watchdog_ensure():
                      daemon=True).start()
 
 
+
+def normalize_llm_pin(current: dict, patch: dict) -> dict:
+    """The S6 rule, in the funnel (2026-09-21): a provider change clears the
+    per-provider model override unless the patch sets one. Until today the
+    rule lived in three browser files and one tool, and three writers (Twilio
+    in/out, game-room apply-room-model) never got it — a stale model rode to
+    the new provider and 400'd. Returns a NEW dict; `patch` is not mutated."""
+    if 'llm_primary' in patch and 'llm_model' not in patch:
+        new_key = str(patch.get('llm_primary') or 'auto').strip() or 'auto'
+        old_key = str((current or {}).get('llm_primary') or 'auto').strip() or 'auto'
+        if new_key != old_key:
+            return {**patch, 'llm_model': ''}
+    return patch
+
+
 class ChatSessionManager:
     """
     Manages chat sessions with SQLite storage for atomic writes.
@@ -4735,6 +4750,7 @@ class ChatSessionManager:
                         f"'{expected_active}' but a stream override targets "
                         f"'{eff_name}'")
                     return False
+                settings = normalize_llm_pin(_ov.get("settings") or {}, settings)
                 ok = self.set_named_chat_settings(eff_name, settings)
                 if ok:
                     if _ov.get("settings") is not None:
@@ -4776,6 +4792,7 @@ class ChatSessionManager:
                                        f"the settings write: {err}")
                         return False
                 old_prompt = self.current_settings.get('prompt') if 'prompt' in settings else None
+                settings = normalize_llm_pin(self.current_settings, settings)
                 self.current_settings.update(settings)
                 if not self._save_current_chat():
                     # In-memory update stands (the resync latch replays it on
@@ -4795,6 +4812,35 @@ class ChatSessionManager:
         except Exception as e:
             logger.error(f"Failed to update settings: {e}")
             return False
+
+    def set_llm_pin(self, chat_name: str, primary, model: str = '', *,
+                    origin=None, validate: bool = True) -> bool:
+        """THE pin writer (2026-09-21): validates the key, ALWAYS writes the
+        pair (a key change never keeps another provider's model), picks the
+        live funnel for the chat running this turn and the by-name funnel
+        for any other, and publishes CHAT_SETTINGS_CHANGED with the real
+        origin so every tab repaints once. Tools/plugins call this; the
+        browser doors PUT through the route, which normalizes the same way."""
+        primary = str(primary or 'auto').strip() or 'auto'
+        model = str(model or '').strip()
+        if validate and primary not in ('auto', 'none'):
+            from core.chat.llm_providers.resolve import providers_config
+            if primary not in providers_config():
+                logger.warning(f"set_llm_pin refused: unknown provider '{primary}'")
+                return False
+        patch = {'llm_primary': primary, 'llm_model': model}
+        try:
+            if chat_name and chat_name == self._effective_chat_name():
+                ok = self.update_chat_settings(patch)
+            else:
+                ok = self.set_named_chat_settings(chat_name, patch)
+        except Exception as e:
+            logger.error(f"set_llm_pin failed for '{chat_name}': {e}")
+            return False
+        if ok:
+            publish(Events.CHAT_SETTINGS_CHANGED,
+                    {"chat": chat_name, "settings": patch, "origin": origin})
+        return bool(ok)
 
     def set_named_chat_settings(self, chat_name: str, patch: Dict[str, Any],
                                 touch_updated: bool = True) -> bool:
@@ -4849,6 +4895,7 @@ class ChatSessionManager:
                                        f"write: {err}")
                         return False
                 old_prompt = s.get('prompt') if 'prompt' in patch else None
+                patch = normalize_llm_pin(s, patch)
                 s.update(patch)
                 payload = json.dumps(s)
                 if row['vaulted'] and not (was_priv and not new_priv):

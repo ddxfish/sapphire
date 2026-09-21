@@ -959,7 +959,8 @@ function drawResolved(me) {
     const el = me.root?.querySelector('.gs-resolved');
     if (!el) return;
     const res = (me.seat && me.seat.resolved) || {};
-    el.textContent = res.provider ? `seat: ${res.provider}${res.model ? ' · ' + res.model : ''}` : '';
+    const who = res.display_name || res.provider;
+    el.textContent = who ? `seat: ${who}${res.model ? ' · ' + res.model : ''}` : '';
 }
 
 function drawGameSidebar(me) {

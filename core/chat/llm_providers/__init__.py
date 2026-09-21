@@ -366,8 +366,15 @@ class ProviderRegistry(_BaseRegistry):
                                       exclude: Optional[List[str]] = None,
                                       force_privacy: bool = False,
                                       health_cache: Optional[dict] = None,
-                                      health_ttl: float = 60.0) -> Optional[tuple]:
+                                      health_ttl: float = 60.0,
+                                      probe: bool = True,
+                                      require_images: bool = False) -> Optional[tuple]:
         """Get first available provider following fallback order.
+
+        probe=False returns the first candidate that constructs without a
+        health round-trip (per-image lanes, dry runs). require_images skips
+        candidates that can't see (the Discord vision auto scan, 2026-08-06:
+        'auto' = first provider that SEES, not first that constructs).
 
         health_cache: {provider_key: trusted_until_epoch}. A pass is trusted for
         health_ttl seconds — the pinned path got this in 2026-07-15, the Auto
@@ -405,6 +412,14 @@ class ProviderRegistry(_BaseRegistry):
 
             provider = self.get_provider_by_key(provider_key, providers_config, request_timeout)
             if provider:
+                if require_images:
+                    from core.chat.llm_providers.resolve import provider_sees
+                    if not provider_sees(provider):
+                        logger.debug(f"Provider '{provider_key}' skipped: does not support images")
+                        continue
+                if not probe:
+                    logger.info(f"Selected provider '{provider_key}' (unprobed)")
+                    return (provider_key, provider)
                 now = _time.time()
                 if health_cache is not None and now < health_cache.get(provider_key, 0):
                     logger.info(f"Selected provider '{provider_key}' (health cached)")
@@ -607,18 +622,10 @@ def set_active_model(system, provider_key: str) -> tuple:
     if not target.get('enabled'):
         return False, f"Provider '{provider_key}' is not enabled"
     sm = system.llm_chat.session_manager
-    # llm_model is a per-provider pin — the sidebar clears it on a provider
-    # switch (core-sections.js) and so must this door, or a switch to Claude
-    # keeps asking Anthropic for a Qwen model (scout S6, 2026-09-20).
-    new_settings = {"llm_primary": provider_key, "llm_model": ""}
-    if not sm.update_chat_settings(new_settings):
+    # ONE pin writer (2026-09-21): writes the pair (a switch to Claude never
+    # keeps asking Anthropic for a Qwen model — S6), publishes with origin.
+    if not sm.set_llm_pin(sm._effective_chat_name(), provider_key, '', origin=None):
         return False, "Failed to save chat settings"
-    from core.event_bus import publish, Events
-    publish(Events.CHAT_SETTINGS_CHANGED, {
-        "chat": sm._effective_chat_name(),
-        "settings": new_settings,
-        "origin": None,
-    })
     return True, target.get('display_name', provider_key)
 
 
@@ -695,11 +702,14 @@ def get_first_available_provider(providers_config: Dict[str, Dict[str, Any]],
                                   exclude: Optional[List[str]] = None,
                                   force_privacy: bool = False,
                                   health_cache: Optional[dict] = None,
-                                  health_ttl: float = 60.0) -> Optional[tuple]:
+                                  health_ttl: float = 60.0,
+                                  probe: bool = True,
+                                  require_images: bool = False) -> Optional[tuple]:
     """Legacy — delegates to registry."""
     return provider_registry.get_first_available_provider(
         providers_config, fallback_order, request_timeout, exclude, force_privacy,
-        health_cache=health_cache, health_ttl=health_ttl)
+        health_cache=health_cache, health_ttl=health_ttl, probe=probe,
+        require_images=require_images)
 
 
 def get_available_providers(providers_config: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:

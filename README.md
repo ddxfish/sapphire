@@ -2,7 +2,7 @@
 
 Sapphire is an agentic framework with voice that is customizable. Build your own AI persona that is a true smart home that remembers you and wakes you up in the morning. Or a wireless mic and speaker for a portable speaking work companion and researcher. Give her a phone number, WordPress, email, Discord and telegram, and long term memory. Then add heartbeats and schedules for her goals system each night. Expand with the plugin store or ask Sapphire to make her own plugins. Self-hosted.
 
-[Download Sapphire Launcher and Installer](https://github.com/ddxfish/sapphire-launcher/releases)
+Easy Install: [Download Sapphire Launcher and Installer](https://github.com/ddxfish/sapphire-launcher/releases)
 
 [![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/pCdTAnExma)
 [![YouTube](https://img.shields.io/badge/YouTube-Subscribe-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@SapphireBlueAi)

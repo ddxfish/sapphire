@@ -352,6 +352,11 @@ def _setup_outbound_chat(system, scope, to_number, prompt, origin_chat,
                     patch[_k] = origin[_k]              # and which brain (2026-07-04:
                                                         # unset fell to global default
                                                         # = claude = phone latency)
+        _to = _llm_timeout()
+        if _to > 0:
+            # Same snappy read deadline the inbound line stamps — outbound
+            # calls waited the full system timeout on a slow box (V5, 2026-09-21).
+            patch["llm_request_timeout"] = _to
         try:
             from core.chat.function_manager import scope_setting_keys
             if memory:

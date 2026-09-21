@@ -1041,7 +1041,10 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
         "persona": name,
         "chat": session_manager.active_chat_name,
         "settings": {"background": settings.get("background", ""),
-                     "motion": settings.get("motion", "")},
+                     "motion": settings.get("motion", ""),
+                     # The pin rides along so the other tab's send-button
+                     # badge and sidebar repaint (V15, 2026-09-21).
+                     **{k: settings[k] for k in ("llm_primary", "llm_model") if k in settings}},
     })
     return {"status": "success", "persona": name, "settings": settings}
 

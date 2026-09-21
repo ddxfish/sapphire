@@ -1332,13 +1332,13 @@ async def compress_chat(chat_name: str, request: Request, _=Depends(require_logi
         raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
     if chat_settings.get('private_chat'):
         # Private chat: the summarizing provider must be marked local/private-safe,
-        # same rule as the chat's own turns.
-        from core.chat.llm_providers import PROVIDER_METADATA
-        providers_config = {**dict(getattr(config, "LLM_PROVIDERS", {})),
-                            **dict(getattr(config, "LLM_CUSTOM_PROVIDERS", {}))}
-        pconf = providers_config.get(provider_key, {})
-        meta = PROVIDER_METADATA.get(provider_key, {})
-        if not pconf.get('is_local', meta.get('is_local', False)):
+        # same rule as the chat's own turns (THE is_local rule, resolve.py).
+        from core.chat.llm_providers.resolve import is_local
+        try:
+            _local = is_local(provider_key)
+        except Exception:
+            _local = False
+        if not _local:
             raise HTTPException(status_code=400,
                                 detail=f"'{chat_name}' is a private chat — compression needs a provider marked local/private-safe.")
     ok, err = compress.start_compress_job(
@@ -1598,6 +1598,21 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
                 status_code=409,
                 detail="That prompt is asleep in the locked vault — unlock it, "
                        "or pick another prompt")
+
+        if 'llm_primary' in new_settings:
+            # THE pin rule at the door (2026-09-21): an unknown key is refused
+            # loudly (the sidebar used to re-inject a deleted provider as a
+            # synthetic option and re-save it forever), and a key change
+            # carries llm_model='' so the publish below tells every tab the
+            # truth (the funnels normalize too — this keeps the event honest).
+            from core.chat.llm_providers.resolve import providers_config
+            from core.chat.history import normalize_llm_pin
+            _pk = str(new_settings.get('llm_primary') or 'auto').strip() or 'auto'
+            if _pk not in ('auto', 'none') and _pk not in providers_config():
+                raise HTTPException(status_code=400,
+                                    detail=f"Provider '{_pk}' no longer exists — pick another model")
+            new_settings = normalize_llm_pin(
+                session_manager.read_chat_settings(chat_name) or {}, new_settings)
 
         if chat_name != session_manager.get_active_chat_name():
             # Non-active chats write straight to storage — same path the Twilio

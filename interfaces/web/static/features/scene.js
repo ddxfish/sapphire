@@ -3,24 +3,51 @@ import * as api from '../api.js';
 import * as audio from '../audio.js';
 import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivacyRequired } from '../core/state.js';
 
+// Provider meta (key → {display_name, is_local}) for the badge. The tint is
+// the privacy affordance: it used to key on a hardcoded name list
+// ['lmstudio','ollama'], so a custom LAN box marked local painted ☁️ beside a
+// 🏠 sidebar (V6, 2026-09-21). Fetched once, lazily; repaints when it lands.
+let _providerMeta = null;
+let _providerMetaPending = null;
+let _lastBadge = null;
+function _loadProviderMeta() {
+    if (_providerMeta || _providerMetaPending) return;
+    _providerMetaPending = fetch('/api/llm/providers')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            _providerMeta = {};
+            for (const p of (data?.providers || [])) _providerMeta[p.key] = p;
+            if (_lastBadge) updateSendButtonLLM(_lastBadge[0], _lastBadge[1]);
+        })
+        .catch(() => { _providerMetaPending = null; });
+}
+export function setProviderMeta(list) {
+    _providerMeta = {};
+    for (const p of (list || [])) _providerMeta[p.key] = p;
+}
+
 // Call this when chat's primary LLM is known (from chat-manager, chat-settings)
 export function updateSendButtonLLM(primary, model = '') {
     const sendBtn = document.getElementById('send-btn');
     const indicator = document.getElementById('llm-indicator');
     if (!sendBtn) return;
+    _lastBadge = [primary, model];
+    if (!_providerMeta && primary && primary !== 'auto' && primary !== 'none') _loadProviderMeta();
 
     // Remove all mode classes first
     sendBtn.classList.remove('llm-local', 'llm-cloud', 'llm-auto');
     if (indicator) indicator.classList.remove('cloud');
 
-    // Detect local vs cloud — local providers have local URLs (localhost, 127.0.0.1)
-    // Default to cloud for any named provider that isn't obviously local
-    const localPatterns = ['lmstudio', 'ollama'];
-    const isLocal = localPatterns.includes(primary) || primary === 'none';
+    // Local vs cloud = the provider's is_local flag (THE rule, resolve.py);
+    // unknown key (meta not loaded yet, or a dead pin) paints cloud — the
+    // safe direction for a privacy tint.
+    const meta = (_providerMeta && _providerMeta[primary]) || null;
+    const isLocal = primary === 'none' || !!(meta && meta.is_local);
     const isCloud = !isLocal && primary !== 'auto';
 
-    // Build display name
+    // Friendly name, never the key (the key is a birth-name fossil)
     const displayName = primary === 'none' ? 'Off' :
+                       (meta && meta.display_name) ? meta.display_name :
                        primary ? primary.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Local';
 
     // Build title suffix for model
@@ -32,7 +59,7 @@ export function updateSendButtonLLM(primary, model = '') {
         if (indicator) indicator.textContent = 'Auto';
     } else if (isCloud) {
         sendBtn.classList.add('llm-cloud');
-        sendBtn.title = `Send: ${primary}${modelSuffix}`;
+        sendBtn.title = `Send: ${displayName}${modelSuffix}`;
         if (indicator) {
             indicator.textContent = displayName;
             indicator.classList.add('cloud');
@@ -40,7 +67,7 @@ export function updateSendButtonLLM(primary, model = '') {
     } else {
         // lmstudio, none, or unknown = local
         sendBtn.classList.add('llm-local');
-        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send: ${primary || 'local'}${modelSuffix}`;
+        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send: ${displayName || 'local'}${modelSuffix}`;
         if (indicator) indicator.textContent = displayName;
     }
 }

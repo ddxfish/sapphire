@@ -89,57 +89,35 @@ def side_lanes_local_only() -> bool:
 def resolve_discord_llm_provider(system, provider_key: str, model_name: str = '', *, local_only: bool | None = None):
     """Return (provider_key, provider, gen_params) for plugin-configured LLM calls.
 
-    local_only (default: the cognitive.side_lanes_local_only setting) narrows
-    the 'auto' scan to providers marked local — explicit picks are untouched."""
+    Thin door onto core.chat.llm_providers.resolve — the ONE resolver
+    (2026-09-21). local_only (default: the cognitive.side_lanes_local_only
+    setting) narrows the 'auto' scan to providers marked local; an explicit
+    pick always wins (Krem's ruling 2026-09-21). Every refusal — 'none', a
+    dead pin, no local provider — is logged by name (loud), never a silent
+    None with no reason. This never reads the operator's active WEB chat:
+    a Discord voice reply in auto mode used to run on whatever provider the
+    browser tab had selected (2026-08-06)."""
     llm = getattr(system, 'llm_chat', None)
     if llm is None:
         return None, None, None
 
-    from core.chat.llm_providers import get_generation_params, get_provider_by_key
+    from core.chat.llm_providers import get_generation_params
+    from core.chat.llm_providers.resolve import resolve, ProviderRefused
 
     primary = str(provider_key or 'auto').strip() or 'auto'
     model = str(model_name or '').strip()
-
-    if primary in ('', 'auto'):
-        # Auto = global fallback order — NEVER llm._select_provider(), which
-        # reads the operator's active WEB chat settings: a Discord voice reply
-        # in auto mode was literally running on whatever provider the browser
-        # tab had selected. Mirror the continuity executor's auto path instead.
-        # 2026-08-06.
-        import config
-        from core.chat.llm_providers import get_first_available_provider
-        providers_config = _providers_config()
-        fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
-        if local_only is None:
-            local_only = side_lanes_local_only()
-        result = get_first_available_provider(
-            providers_config, fallback_order,
-            getattr(config, 'LLM_REQUEST_TIMEOUT', 60.0),
-            force_privacy=bool(local_only))
-        if not result:
-            logger.warning('Discord LLM auto mode: no %sproviders available',
-                           'local ' if local_only else '')
-            return None, None, None
-        selected_key, provider = result
-        gen_params = get_generation_params(selected_key, provider.model, providers_config)
-        return selected_key, provider, gen_params
-
-    import config
-
-    provider = get_provider_by_key(
-        primary,
-        _providers_config(),
-        getattr(config, 'LLM_REQUEST_TIMEOUT', 60.0),
-        model_override=model or None,
-    )
-    if not provider:
-        logger.warning('Discord LLM provider %r is not available', primary)
+    if local_only is None:
+        local_only = side_lanes_local_only()
+    try:
+        sel = resolve(primary, model, private=bool(local_only) if primary == 'auto' else False)
+    except ProviderRefused as exc:
+        logger.warning('Discord LLM (%s%s): %s', primary,
+                       ' local-only' if primary == 'auto' and local_only else '', exc)
         return None, None, None
-
-    effective_model = model or provider.model
-    gen_params = get_generation_params(primary, effective_model, _providers_config())
-    gen_params['model'] = effective_model
-    return primary, provider, gen_params
+    providers_config = _providers_config()
+    gen_params = get_generation_params(sel.key, sel.effective_model, providers_config)
+    gen_params['model'] = sel.effective_model
+    return sel.key, sel.provider, gen_params
 
 
 def resolve_task_llm(
@@ -178,18 +156,17 @@ def resolve_task_llm(
             resolved_model = daemon_model or resolved_model
 
     if resolved_primary in ('', 'auto'):
+        # DRY RUN of the real resolver (Krem's ruling 2026-09-21): same
+        # privacy the text lane applies (the task carrier), no health probes,
+        # so the label names the provider the turn would actually get instead
+        # of a mirror that drifted (the old copy scanned with local_only=False
+        # while the lane used True).
         try:
-            from core.api_fastapi import get_system
-
-            selected_key, _provider, gen_params = resolve_discord_llm_provider(
-                get_system(),
-                'auto',
-                resolved_model,
-                local_only=False,     # mirror core's auto path exactly (row 57)
-            )
-            if selected_key:
-                resolved_primary = selected_key
-                resolved_model = str((gen_params or {}).get('model') or resolved_model or '')
+            from core.chat.llm_providers.resolve import resolve
+            sel = resolve('auto', resolved_model, private=bool(task.get('privacy_required')),
+                          health='skip')
+            resolved_primary = sel.key
+            resolved_model = sel.effective_model or resolved_model
         except Exception:
             logger.debug('Could not resolve auto LLM provider for debug', exc_info=True)
 

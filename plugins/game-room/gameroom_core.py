@@ -997,94 +997,47 @@ def _extract_json(text):
 
 
 def _is_local_provider(key):
-    """Mirror of core's private-chat provider check (chat.py): config
-    is_local wins, PROVIDER_METADATA fills in. Unverifiable = cloud."""
+    """THE is_local rule (core resolve.py). Unverifiable = cloud."""
     try:
-        import config
-        from core.chat.llm_providers import PROVIDER_METADATA
-        pconf = {**getattr(config, 'LLM_PROVIDERS', {}),
-                 **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}.get(key, {})
-        meta = PROVIDER_METADATA.get(key, {})
-        return bool(pconf.get('is_local', meta.get('is_local', False)))
+        from core.chat.llm_providers.resolve import is_local
+        return bool(is_local(key))
     except Exception:
         return False
 
 
-def _get_provider(provider_key=None, model='', privacy_required=False):
-    """Explicit provider by key (with optional model override), else the live
-    chat's brain, else Auto default. privacy_required=True (private session
-    chat, P3-T3) allows LOCAL providers only — refusal never falls back to
-    a cloud pick."""
-    if provider_key and provider_key != 'auto':
-        if privacy_required and not _is_local_provider(provider_key):
-            logger.warning(f'game-room: provider {provider_key!r} is not local '
-                           f'— refused for a private session')
-            return None
-        try:
-            from core.chat.llm_providers import provider_registry
-            p = provider_registry.get_provider_by_key(provider_key, model_override=model or '')
-            if p:
-                return p
-            logger.warning(f'game-room: provider {provider_key!r} unavailable, falling back to auto')
-        except Exception as e:
-            logger.warning(f'game-room: provider lookup {provider_key!r} failed: {e}')
-    if privacy_required:
-        # Local-only auto: filter the roster before picking.
-        try:
-            import config
-            from core.chat.llm_providers import provider_registry
-            providers_config = {**getattr(config, 'LLM_PROVIDERS', {}),
-                                **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
-            local_cfg = {k: v for k, v in providers_config.items()
-                         if v.get('enabled') and _is_local_provider(k)}
-            order = [k for k in getattr(config, 'LLM_FALLBACK_ORDER', list(local_cfg))
-                     if k in local_cfg] or list(local_cfg)
-            got = provider_registry.get_first_available_provider(local_cfg, order)
-            if got:
-                return got[1]
-        except Exception as e:
-            logger.warning(f'game-room: local-only provider lookup failed: {e}')
-        logger.warning('game-room: private session — no local provider available')
+def _get_provider(provider_key=None, model='', privacy_required=False, health='cached'):
+    """Explicit provider by key (with optional model override), else Auto.
+    Thin door onto core.chat.llm_providers.resolve — the ONE resolver
+    (2026-09-21). privacy_required=True (private session chat, P3-T3) allows
+    LOCAL providers only; a refusal or a dead pin is terminal (never a
+    cloud pick, never auto). This NEVER reads the operator's active web
+    chat — the old copy fell through to `llm_chat._select_provider()`, so an
+    auto-mode game session ran on whatever the browser tab had open."""
+    from core.chat.llm_providers.resolve import resolve, ProviderRefused
+    try:
+        return resolve(provider_key or 'auto', model, private=bool(privacy_required),
+                       health=health).provider
+    except ProviderRefused as e:
+        logger.warning(f'game-room: {e}')
         return None
-    try:
-        from core.api_fastapi import get_system
-        system = get_system()
-        if system is not None and getattr(system, 'llm_chat', None):
-            _key, provider, _mo = system.llm_chat._select_provider()
-            if provider:
-                return provider
-    except Exception as e:
-        logger.debug(f'game-room: _select_provider path unavailable: {e}')
-    try:
-        import config
-        from core.chat.llm_providers import provider_registry
-        providers_config = {**getattr(config, 'LLM_PROVIDERS', {}),
-                            **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
-        fallback = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config))
-        got = provider_registry.get_first_available_provider(providers_config, fallback)
-        if got:
-            return got[1]
-    except Exception as e:
-        logger.warning(f'game-room: fallback provider lookup failed: {e}')
-    return None
 
 
 def provider_info(provider_key=None, model='', privacy_required=False):
-    """Best-effort {provider, model} for display in the UI. privacy_required
-    keeps the display honest for private sessions — without it the seat
-    showed a cloud provider _call_llm would refuse to use."""
+    """Best-effort {provider, display_name, model} for the seat UI — a dry
+    run of the resolver (no health probe: every wave paid one the board
+    never asked for, S2 #11). privacy_required keeps the display honest for
+    private sessions."""
     try:
-        p = _get_provider(provider_key, model, privacy_required)
-        if p is None:
-            return {'provider': None, 'model': None}
-        key = (getattr(p, 'provider_key', None) or getattr(p, 'key', None)
-               or getattr(p, 'name', None) or provider_key or 'auto')
-        model = (getattr(p, 'model', None) or getattr(p, 'model_name', None)
-                 or getattr(p, 'default_model', None) or '')
-        return {'provider': str(key), 'model': str(model)}
+        from core.chat.llm_providers.resolve import resolve, ProviderRefused
+        try:
+            sel = resolve(provider_key or 'auto', model, private=bool(privacy_required), health='skip')
+        except ProviderRefused as e:
+            logger.debug(f'game-room: provider_info: {e}')
+            return {'provider': None, 'display_name': None, 'model': None}
+        return {'provider': sel.key, 'display_name': sel.display_name, 'model': sel.effective_model}
     except Exception as e:
         logger.debug(f'game-room: provider_info failed: {e}')
-        return {'provider': None, 'model': None}
+        return {'provider': None, 'display_name': None, 'model': None}
 
 
 def _resolve_persona_prompt(name):

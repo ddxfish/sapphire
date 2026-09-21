@@ -376,7 +376,7 @@ class TestContinuityPrivacyGate:
                           {'localbox': {'enabled': True, 'is_local': True}},
                           create=True), \
              patch.object(config, 'LLM_CUSTOM_PROVIDERS', {}, create=True), \
-             patch('core.continuity.execution_context.get_provider_by_key',
+             patch('core.chat.llm_providers.get_provider_by_key',   # resolve.py (2026-09-21)
                    return_value=provider):
             key, prov, _ = ctx._resolve_provider()
         assert key == 'localbox'
@@ -387,7 +387,7 @@ class TestContinuityPrivacyGate:
         ctx = self._ctx(True, {'prompt': 'secret', 'provider': 'auto', 'model': ''})
         with patch.object(config, 'LLM_PROVIDERS', {}, create=True), \
              patch.object(config, 'LLM_CUSTOM_PROVIDERS', {}, create=True), \
-             patch('core.continuity.execution_context.get_first_available_provider',
+             patch('core.chat.llm_providers.get_first_available_provider',   # resolve.py (2026-09-21)
                    return_value=None) as mock_first:
             with pytest.raises(ConnectionError):
                 ctx._resolve_provider()

@@ -412,7 +412,14 @@ export async function wireAIConfig(modal, t, data) {
             modelCustomField.style.display = '';
         }
     };
-    providerSel.addEventListener('change', updateModels);
+    providerSel.addEventListener('change', () => {
+        // A provider change never keeps the old model (V2, 2026-09-21): the
+        // dropdown preselected t.model and the custom box kept it.
+        t.model = '';
+        const custom = modal.querySelector('#ed-model-custom');
+        if (custom) custom.value = '';
+        updateModels();
+    });
     updateModels();
 
     // AI preview chip

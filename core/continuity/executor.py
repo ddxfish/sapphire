@@ -364,6 +364,9 @@ class ContinuityExecutor:
             "toolset": task.get("toolset", "none"),
             "provider": task.get("provider", "auto"),
             "model": task.get("model", ""),
+            # Per-chat read deadline (phone chats stamp 20s): reaches the
+            # resolver on chat_from_payload tasks (2026-09-21).
+            "llm_request_timeout": task.get("llm_request_timeout"),
             "inject_datetime": task.get("inject_datetime", False),
             "max_tool_rounds": task.get("max_tool_rounds"),
             "max_parallel_tools": task.get("max_parallel_tools"),
@@ -651,6 +654,7 @@ class ContinuityExecutor:
                           "toolset": cc.get("toolset") or cc.get("ability") or "none",
                           "provider": cc.get("llm_primary") or "auto",
                           "model": cc.get("llm_model") or "",
+                          "llm_request_timeout": cc.get("llm_request_timeout"),
                           **{k: cc[k] for k in scope_setting_keys() if k in cc}}
                 task_settings = self._extract_task_settings(merged)
             else:

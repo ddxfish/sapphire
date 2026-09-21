@@ -405,8 +405,10 @@ def _patch_provider_world(monkeypatch, made, order):
     monkeypatch.setattr(config, 'LLM_PROVIDERS', provs, raising=False)
     monkeypatch.setattr(config, 'LLM_CUSTOM_PROVIDERS', {}, raising=False)
     monkeypatch.setattr(config, 'LLM_FALLBACK_ORDER', order, raising=False)
-    monkeypatch.setattr(llm_providers, 'get_provider_by_key',
-                        lambda key, cfg, timeout, model_override=None: made.get(key))
+    # 2026-09-21: the scan lives in the ONE resolver → registry; patching the
+    # registry METHOD covers both the module wrapper and the auto scan.
+    monkeypatch.setattr(llm_providers.provider_registry, 'get_provider_by_key',
+                        lambda key, cfg=None, timeout=240.0, model_override='': made.get(key))
 
 
 def test_auto_scan_handles_property_supports_images(monkeypatch):
@@ -428,9 +430,9 @@ def test_auto_scan_skips_cloud_providers_when_side_lanes_are_local_only(monkeypa
     made = {'sighted': _PropertyVisionProvider()}
     _patch_provider_world(monkeypatch, made, ['sighted'])
     monkeypatch.setattr(VisionBridge, '_local_only', staticmethod(lambda: True))
-    monkeypatch.setattr(VisionBridge, '_provider_is_local', staticmethod(lambda key, conf: False))
-    assert VisionBridge()._resolve_house_provider({'llm_provider': 'auto'}) is None
-    monkeypatch.setattr(VisionBridge, '_provider_is_local', staticmethod(lambda key, conf: True))
+    import config
+    assert VisionBridge()._resolve_house_provider({'llm_provider': 'auto'}) is None   # not marked local
+    config.LLM_PROVIDERS['sighted']['is_local'] = True      # THE is_local rule (resolve.is_local)
     assert VisionBridge()._resolve_house_provider({'llm_provider': 'auto'}) is made['sighted']
 
 

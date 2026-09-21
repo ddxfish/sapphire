@@ -1234,8 +1234,44 @@ async def delete_custom_provider(provider_key: str, request: Request, _=Depends(
     except Exception as e:
         logger.warning(f"Failed to clear credentials for deleted provider '{provider_key}': {e}")
 
+    swept = _sweep_llm_pin(provider_key)
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_CUSTOM_PROVIDERS", "value": provider_key})
-    return {"status": "success", "name": provider_key}
+    return {"status": "success", "name": provider_key, "swept": swept}
+
+
+def _sweep_llm_pin(dead_key: str) -> dict:
+    """A deleted provider leaves no pin behind (V8/S13, 2026-09-21): chats,
+    continuity tasks and personas pinned to it go back to 'auto' (model
+    cleared with them). Before this a pinned chat raised on every turn, a
+    task failed every run and a persona re-stamped the dead key. Best
+    effort per store; counts are for the log and the toast."""
+    swept = {"chats": 0, "tasks": 0, "personas": 0}
+    try:
+        sm = get_system().llm_chat.session_manager
+        swept["chats"] = len(sm.reset_chat_scope_ref('llm_primary', dead_key, reset_to='auto') or [])
+    except Exception as e:
+        logger.warning(f"provider sweep (chats) failed for '{dead_key}': {e}")
+    try:
+        sched = getattr(get_system(), 'continuity_scheduler', None)
+        for t in (sched.list_tasks() if sched else []):
+            if str(t.get('provider') or '') == dead_key:
+                sched.update_task(t['id'], {"provider": "auto", "model": ""})
+                swept["tasks"] += 1
+    except Exception as e:
+        logger.warning(f"provider sweep (tasks) failed for '{dead_key}': {e}")
+    try:
+        from core.personas import persona_manager
+        for name, persona in list((persona_manager.get_all() or {}).items()):
+            st = dict(persona.get('settings') or {})
+            if str(st.get('llm_primary') or '') == dead_key:
+                st.update({'llm_primary': 'auto', 'llm_model': ''})
+                if persona_manager.update(name, {"settings": st}):
+                    swept["personas"] += 1
+    except Exception as e:
+        logger.warning(f"provider sweep (personas) failed for '{dead_key}': {e}")
+    if any(swept.values()):
+        logger.info(f"Provider '{dead_key}' deleted — pins reset to auto: {swept}")
+    return swept
 
 
 @router.get("/api/llm/presets")

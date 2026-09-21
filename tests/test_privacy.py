@@ -132,7 +132,7 @@ def _base_config(monkeypatch, custom=None):
 def test_pinned_cloud_provider_blocked_before_any_network_touch(monkeypatch):
     """The explicit-provider gate (chat.py) — the MORE common path than auto,
     and previously untested. Block must fire before provider construction."""
-    from core.chat import chat as chat_mod
+    import core.chat.llm_providers as chat_mod   # resolve.py looks these up at call time (2026-09-21)
     _base_config(monkeypatch)
     spy = MagicMock()
     monkeypatch.setattr(chat_mod, 'get_provider_by_key', spy)
@@ -144,7 +144,7 @@ def test_pinned_cloud_provider_blocked_before_any_network_touch(monkeypatch):
 
 
 def test_pinned_local_provider_passes_private_gate(monkeypatch):
-    from core.chat import chat as chat_mod
+    import core.chat.llm_providers as chat_mod   # resolve.py looks these up at call time (2026-09-21)
     _base_config(monkeypatch, custom={'localbox': {'enabled': True, 'is_local': True}})
     provider = MagicMock()
     provider.health_check.return_value = True
@@ -159,7 +159,7 @@ def test_auto_mode_passes_private_chat_as_force_privacy(monkeypatch):
     """The wiring: all registry-level tests pass force_privacy=True by hand.
     If a refactor drops the kwarg (default False) the whole auto-mode gate
     silently stops firing — this is the assertion that catches it."""
-    from core.chat import chat as chat_mod
+    import core.chat.llm_providers as chat_mod   # resolve.py looks these up at call time (2026-09-21)
     _base_config(monkeypatch)
     for flag in (True, False):
         spy = MagicMock(return_value=('lmstudio', MagicMock()))

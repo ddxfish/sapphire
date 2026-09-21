@@ -112,20 +112,15 @@ def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]]) -> List[Dict[
 # ── LLM plumbing ───────────────────────────────────────────────────────────
 
 def make_provider(provider_key: str, model: str = ""):
-    """One-shot provider for summarize calls (same pattern as routes/settings
-    test endpoints). Raises on unknown/unbuildable provider."""
-    import config
-    from core.chat.llm_providers import get_provider_by_key
-    providers_config = {**dict(getattr(config, "LLM_PROVIDERS", {})),
-                        **dict(getattr(config, "LLM_CUSTOM_PROVIDERS", {}))}
-    if provider_key not in providers_config:
-        raise ValueError(f"Unknown provider: {provider_key}")
-    provider = get_provider_by_key(provider_key, providers_config,
-                                   REQUEST_TIMEOUT, model_override=model or "")
-    if not provider:
-        raise ValueError(f"Could not create provider '{provider_key}' — "
-                         f"check credentials and settings")
-    return provider
+    """One-shot provider for summarize calls via the ONE resolver (2026-09-21):
+    no health probe (the summary call is the signal), the route already
+    refused auto/none and applied the private→local rule. Raises ValueError
+    on unknown/unbuildable provider."""
+    from core.chat.llm_providers.resolve import resolve, ProviderRefused
+    try:
+        return resolve(provider_key, model, timeout=REQUEST_TIMEOUT, health='skip').provider
+    except ProviderRefused as e:
+        raise ValueError(str(e)) from e
 
 
 _CHUNK_PROMPT = (

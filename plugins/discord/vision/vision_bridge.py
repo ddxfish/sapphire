@@ -170,61 +170,32 @@ class VisionBridge:
         model = str(payload.get('llm_model') or '').strip()
         timeout = float(payload.get('timeout_seconds') or 30)
         try:
-            import config
-            from core.chat.llm_providers import get_provider_by_key
+            from core.chat.llm_providers.resolve import resolve, ProviderRefused
         except Exception:
             return None
-        providers_config = {
-            **dict(getattr(config, 'LLM_PROVIDERS', {}) or {}),
-            **dict(getattr(config, 'LLM_CUSTOM_PROVIDERS', {}) or {}),
-        }
+        # ONE resolver (2026-09-21): no health probes (this runs per image),
+        # sight is a hard requirement on every tier — a blind pick degrades
+        # to filename captions, it never hops to a provider the user didn't
+        # choose; auto honors the side-lanes local-only setting (M6).
         if key and key != 'auto':
             try:
-                return get_provider_by_key(key, providers_config, timeout, model_override=model)
-            except Exception as exc:
+                return resolve(key, model, timeout=timeout, health='skip', require_images=True).provider
+            except ProviderRefused as exc:
                 logger.warning('Vision LLM provider %r unavailable: %s', key, exc)
                 return None
-
-        candidate = None
         reply_key = str(payload.get('reply_llm_provider') or '').strip().lower()
         if reply_key and reply_key != 'auto':
             try:
-                candidate = get_provider_by_key(reply_key, providers_config, timeout)
-            except Exception:
-                candidate = None
-            if candidate is not None and not self._provider_sees(candidate):
-                # A pinned reply provider that can't see degrades gracefully —
-                # never hop to a provider the user didn't pick.
-                logger.info('Vision skipped: daemon-chosen provider %s does not support images',
-                            candidate.__class__.__name__)
+                return resolve(reply_key, timeout=timeout, health='skip', require_images=True).provider
+            except ProviderRefused as exc:
+                logger.info('Vision skipped: daemon-chosen provider %r: %s', reply_key, exc)
                 return None
-        if candidate is None:
-            # Same ordering Auto mode uses (no per-provider health pings —
-            # this runs per image). Blind providers are SKIPPED, per the
-            # settings docstring: 'auto' = first registered provider that
-            # supports images — not first provider that constructs.
-            order = list(getattr(config, 'LLM_FALLBACK_ORDER', None) or providers_config.keys())
-            local_only = self._local_only()
-            for candidate_key in order:
-                conf = providers_config.get(candidate_key)
-                if not isinstance(conf, dict) or not conf.get('enabled', False):
-                    continue
-                if not conf.get('use_as_fallback', True):
-                    continue
-                if local_only and not self._provider_is_local(candidate_key, conf):
-                    continue   # M6: strangers' images never ride to a cloud model by accident
-                try:
-                    candidate = get_provider_by_key(candidate_key, providers_config, timeout)
-                except Exception:
-                    candidate = None
-                if candidate is not None and not self._provider_sees(candidate):
-                    candidate = None
-                if candidate:
-                    break
-        if candidate is None:
-            logger.info('Vision skipped: no vision-capable LLM provider available')
+        try:
+            return resolve('auto', timeout=timeout, health='skip', require_images=True,
+                           private=self._local_only()).provider
+        except ProviderRefused as exc:
+            logger.info('Vision skipped: %s', exc)
             return None
-        return candidate
 
     @staticmethod
     def _local_only() -> bool:
@@ -233,15 +204,6 @@ class VisionBridge:
             return side_lanes_local_only()
         except Exception:
             return True
-
-    @staticmethod
-    def _provider_is_local(key: str, conf: dict) -> bool:
-        try:
-            from core.chat.llm_providers import get_provider_metadata
-            fallback = bool(get_provider_metadata(key).get('is_local', False))
-        except Exception:
-            fallback = False
-        return bool(conf.get('is_local', fallback))
 
     @staticmethod
     def _provider_sees(provider) -> bool:

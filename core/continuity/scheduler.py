@@ -367,11 +367,26 @@ class ContinuityScheduler:
         except Exception:
             return False
 
+    @staticmethod
+    def _check_llm_provider(data: Dict) -> None:
+        """A task's provider must exist (2026-09-21): the editor's list was
+        the only check, so a deleted provider stayed pinned and the task
+        failed every run. Raises ValueError (routes answer 400)."""
+        if "provider" not in data:
+            return
+        p = str(data.get("provider") or "auto").strip() or "auto"
+        if p in ("auto", "none"):
+            return
+        from core.chat.llm_providers.resolve import providers_config
+        if p not in providers_config():
+            raise ValueError(f"Unknown LLM provider '{p}' — pick one from Settings › LLM")
+
     def create_task(self, data: Dict) -> Dict:
         """Create new task, returns the created task."""
         # P3-T14: the sealed-vault display mask is never a real target.
         if data.get("chat_target") == "__locked__":
             data = {k: v for k, v in data.items() if k != "chat_target"}
+        self._check_llm_provider(data)
         task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
 
         with self._lock:
@@ -476,6 +491,12 @@ class ContinuityScheduler:
             # never a real target — a round-trip edit keeps the stored name.
             if data.get("chat_target") == "__locked__":
                 data = {k: v for k, v in data.items() if k != "chat_target"}
+            self._check_llm_provider(data)
+            # The S6 rule for tasks: a provider change drops the old model
+            # unless the edit sets one (the editor kept it — V2, 2026-09-21).
+            if "provider" in data and "model" not in data \
+                    and str(data.get("provider") or "auto") != str(task.get("provider") or "auto"):
+                data = {**data, "model": ""}
 
             # Validate cron if provided
             if "schedule" in data:

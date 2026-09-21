@@ -115,7 +115,9 @@ def execute(function_name, arguments, config=None):
         # Active session
         s = data.get("session", {})
         lines.append(f"Chat: {s.get('chat', '?')} | Prompt: {s.get('prompt', '?')} | Persona: {s.get('persona') or 'none'}")
-        lines.append(f"LLM: {s.get('llm_primary', '?')} ({s.get('llm_model', 'default')}) | Toolset: {s.get('toolset', '?')} ({s.get('function_count', 0)} tools)")
+        _llm = s.get('llm_display') or s.get('llm_primary', '?')
+        _mdl = s.get('llm_effective_model') or s.get('llm_model') or 'default'
+        lines.append(f"LLM: {_llm} ({_mdl}) | Toolset: {s.get('toolset', '?')} ({s.get('function_count', 0)} tools)")
         lines.append(f"Parallel: {s.get('parallel_tool_calls', 1)} | Max iterations: {s.get('max_iterations', 10)} | Theme: {s.get('theme', 'default')}")
         if s.get('user_timezone'):
             lines.append(f"App timezone: {s['user_timezone']}")

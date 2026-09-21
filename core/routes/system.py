@@ -453,7 +453,11 @@ async def create_continuity_task(request: Request, _=Depends(require_login), sys
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     data = await request.json()
-    task_id = system.continuity_scheduler.create_task(data)
+    try:
+        task_id = system.continuity_scheduler.create_task(data)
+    except ValueError as e:
+        # Task caps and the provider check (2026-09-21) are 400s, not 500s.
+        raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "task_id": task_id}
 
 
@@ -475,7 +479,11 @@ async def update_continuity_task(task_id: str, request: Request, _=Depends(requi
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     data = await request.json()
-    if system.continuity_scheduler.update_task(task_id, data):
+    try:
+        ok = system.continuity_scheduler.update_task(task_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if ok:
         return {"status": "success"}
     else:
         raise HTTPException(status_code=404, detail="Task not found")

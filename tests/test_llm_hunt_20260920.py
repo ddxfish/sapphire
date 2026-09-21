@@ -140,9 +140,12 @@ def test_auto_mode_never_caches_a_failed_probe():
 
 
 def test_chat_auto_path_passes_the_shared_cache():
-    src = (ROOT / 'core/chat/chat.py').read_text(encoding='utf-8')
-    auto = src[src.index('# Auto mode - use global fallback order'):]
-    assert 'health_cache=_hc' in auto[:900]
+    # 2026-09-21: the resolver moved to core/chat/llm_providers/resolve.py —
+    # ONE module-level cache shared by every lane, not an LLMChat attribute.
+    src = (ROOT / 'core/chat/llm_providers/resolve.py').read_text(encoding='utf-8')
+    auto = src[src.index('def _auto('):]
+    assert "health_cache=_HEALTH_CACHE if health == 'cached' else None" in auto[:900]
+    assert 'get_first_available_provider(' not in (ROOT / 'core/chat/chat.py').read_text(encoding='utf-8')
 
 
 # ── S4/F9: Test Connection tells the truth about the probe budget ───────────
@@ -210,14 +213,15 @@ def test_responses_autoroute_is_openai_official_only():                # F6
 
 def test_switch_model_clears_the_per_provider_model_pin():            # S6
     from core.chat.llm_providers import set_active_model, provider_registry
-    sm = MagicMock(); sm.update_chat_settings.return_value = True; sm._effective_chat_name.return_value = 'c'
+    sm = MagicMock(); sm.set_llm_pin.return_value = True; sm._effective_chat_name.return_value = 'c'
     system = MagicMock(); system.llm_chat.session_manager = sm
     with patch.object(provider_registry, 'get_all_providers',
                       return_value=[{'key': 'claude', 'enabled': True, 'display_name': 'Claude'}]), \
          patch('core.event_bus.publish'):
         ok, msg = set_active_model(system, 'claude')
     assert ok and msg == 'Claude'
-    assert sm.update_chat_settings.call_args.args[0] == {'llm_primary': 'claude', 'llm_model': ''}
+    # 2026-09-21: ONE pin writer — the pair rides set_llm_pin (model cleared)
+    assert sm.set_llm_pin.call_args.args == ('c', 'claude', '')
 
 
 def test_provider_map_writes_are_locked():                             # S15/F10
