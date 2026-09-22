@@ -109,8 +109,15 @@ def test_list_voice_targets_from_connected_guilds(tmp_path):
         values = {target['value'] for target in targets}
         assert values == {'alpha:300', 'alpha:301'}
         lounge = next(target for target in targets if target['channel_id'] == '300')
-        assert lounge['member_count'] == 2
+        assert lounge['member_count'] == 2 and lounge['human_count'] == 2 and lounge['bot_connected'] is False
         assert 'Lounge (2 in channel)' in lounge['label']
+        assert await transport.list_voice_targets('nobody') == []
+        assert [t['channel_id'] for t in await transport.list_voice_targets('alpha')] == ['301', '300']
+        # the gate's filter payload comes from the guild cache, no fetch
+        assert transport.describe_voice_channel('alpha', '301') == {
+            'guild_id': '100', 'guild_name': 'Test Server', 'channel_id': '301', 'channel_name': 'AFK'}
+        assert transport.describe_voice_channel('alpha', '999') is None
+        assert transport.describe_voice_channel('nobody', '301') is None
 
     asyncio.run(run_test())
 

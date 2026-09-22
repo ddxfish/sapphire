@@ -102,16 +102,13 @@ def stop():
 
 def on_settings_saved(settings: dict):
     """Core's settings-saved hook for daemon plugins (hunt 2.13.0, row 80).
-    Rebuild the settings store IN PLACE so every service that captured it at
-    build time sees the new overlays without a restart."""
+    The store reads core live on every resolve; only construct-time scalars
+    need a nudge."""
     runtime = get_runtime()
     if not runtime:
         return
     try:
-        repo = getattr(runtime, 'channel_repository', None)
         store = getattr(runtime, 'settings_store', None)
-        if repo is not None and store is not None and hasattr(store, 'replace_from'):
-            store.replace_from(repo.load_settings_store())
         # The one construct-time scalar (row 80): the batch window.
         batching = getattr(runtime, 'batching_service', None)
         if batching is not None and store is not None and hasattr(batching, 'default_window_seconds'):

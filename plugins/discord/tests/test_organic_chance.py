@@ -1,7 +1,7 @@
 """Chance-based organic reply gating."""
 
 from plugins.discord.conversation.batching_service import BatchingService
-from plugins.discord.conversation.bot_session_service import BotSessionService
+from plugins.discord.conversation.bot_gate import BotGate
 from plugins.discord.conversation.conversation_service import ConversationService
 from plugins.discord.conversation.trigger_service import evaluate_organic_chance, evaluate_reply_trigger
 from plugins.discord.models.observations import TextMessageObservation
@@ -59,14 +59,14 @@ def _obs(**kwargs):
     return TextMessageObservation(**base)
 
 
-def _service(store, *, bot_session_service=None):
+def _service(store, *, bot_gate=None):
     return ConversationService(
         event_bridge=FakeBridge(),
         policy_service=FakePolicy(),
         prompt_context_service=FakeContext(),
         trace_repository=FakeTraceRepo(),
         settings_store=store,
-        bot_session_service=bot_session_service,
+        bot_gate=bot_gate,
     )
 
 
@@ -187,7 +187,6 @@ def test_bot_organic_requires_allowlist_then_chance(monkeypatch):
     })
     store.global_overlay.bot.update({
         'enabled': True,
-        'reply_mode': 'allowlist',
         'allowlist_ids': ['peer-bot'],
     })
     monkeypatch.setattr(
@@ -199,7 +198,7 @@ def test_bot_organic_requires_allowlist_then_chance(monkeypatch):
             'chance': 100.0,
         },
     )
-    service = _service(store, bot_session_service=BotSessionService())
+    service = _service(store, bot_gate=BotGate())
     obs = _obs(author_id='peer-bot', author_is_bot=True, username='PeerBot')
     assert service.process_batch(_batch(obs)) is True
 
@@ -212,10 +211,9 @@ def test_bot_organic_blocked_when_not_allowlisted():
     })
     store.global_overlay.bot.update({
         'enabled': True,
-        'reply_mode': 'allowlist',
         'allowlist_ids': ['other-bot'],
     })
-    service = _service(store, bot_session_service=BotSessionService())
+    service = _service(store, bot_gate=BotGate())
     obs = _obs(author_id='peer-bot', author_is_bot=True, username='PeerBot')
     assert service.process_batch(_batch(obs)) is False
     assert not service.event_bridge.payloads

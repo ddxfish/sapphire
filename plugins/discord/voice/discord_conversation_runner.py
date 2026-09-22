@@ -1,7 +1,12 @@
-"""Plugin-local conversation session manager (no core file edits).
+"""Discord voice-channel conversation sessions on core's conversation engine.
 
-Builds ConversationDriver + SpeechGate + DiscordConversationSource directly,
-mirroring ConversationManager.start_external without modifying core.
+Each live VC is one external session of core's ConversationManager (S6,
+2026-09-22): the manager builds the driver + gate (one slot pool with the phone,
+one live stream per chat, external_chats() shielding from web stop/cancel);
+this runner builds the Discord source around them, owns the addressing gate,
+the typing hint, the <<HANG UP>> drain and the per-channel voice chat, whose
+config (keep history, provider/model, toolset, prompt) comes from the
+`Discord: Voice channel` gate task.
 """
 
 from __future__ import annotations
@@ -34,16 +39,18 @@ class DiscordConversationRunner:
         playback_service=None,
         transport=None,
         settings_store=None,
-        voice_session_service=None,
+        sessions=None,
         speech_bridge=None,
         voice_transport=None,
+        gate=None,
     ):
         self.playback_service = playback_service
         self.transport = transport
         self.settings_store = settings_store
-        self.voice_session_service = voice_session_service
+        self.sessions = sessions
         self.speech_bridge = speech_bridge
         self.voice_transport = voice_transport
+        self.gate = gate
         # Wired by the container: leave_fn(account_name, channel_id) → voice_service.leave.
         self.leave_fn = None
         self._sessions: dict[str, dict] = {}
@@ -100,8 +107,8 @@ class DiscordConversationRunner:
         return {'status': 'active', 'chat_name': chat_name}
 
     def _mark_started(self, session, chat_name: str) -> None:
-        if self.voice_session_service:
-            self.voice_session_service.set_health(session.session_id, 'conversational')
+        if self.sessions:
+            self.sessions.set_health(session.session_id, 'conversational')
         logger.info(
             'Discord conversation runner started session=%s chat=%s',
             session.session_id,
@@ -118,13 +125,13 @@ class DiscordConversationRunner:
         if not system:
             return {'status': 'error', 'error': 'system_unavailable'}
 
-        settings = (
-            self.settings_store.resolve(guild_id=session.guild_id, channel_id=session.channel_id)
-            if self.settings_store
-            else None
-        )
-        if settings and not getattr(settings.voice, 'conversation_core_enabled', True):
-            return {'status': 'skipped', 'reason': 'conversation_core_disabled'}
+        settings = self.settings_store.resolve() if self.settings_store else None
+        # The gate task configures the VC chat (twilio's pattern): no task, no session.
+        task = self.gate.allowed(session.account_name, session.channel_id) if self.gate else None
+        if self.gate is not None and task is None:
+            return {'status': 'blocked', 'reason': 'no_voice_task'}
+        from plugins.discord.voice.voice_gate import VoiceGate
+        cfg = VoiceGate.config(task)
 
         bot_names = resolve_bot_names(
             settings=settings,
@@ -142,22 +149,30 @@ class DiscordConversationRunner:
             )
             if settings
             else '',
-            llm_provider=str(getattr(settings.voice, 'llm_provider', '') or '') if settings else '',
-            llm_model=str(getattr(settings.voice, 'llm_model', '') or '') if settings else '',
-            keep_history=bool(getattr(settings.voice, 'keep_chat_history', False)) if settings else False,
+            llm_provider=cfg['llm_provider'],
+            llm_model=cfg['llm_model'],
+            keep_history=cfg['keep_history'],
+            toolset=cfg['toolset'],
+            prompt=cfg['prompt'],
             )
         except Exception as exc:
             # Fail CLOSED (row 69): a VC chat that could not be isolated used to
             # start anyway on the OWNER's toolset and memory scopes.
             logger.error('Discord voice chat for %s:%s refused — %s', session.account_name, session.channel_id, exc)
             return {'status': 'error', 'error': f'voice_chat_unavailable: {exc}'}
-        driver, gate, source, frame_feed = self._build_stack(
-            system,
-            session=session,
-            chat_name=chat_name,
-            bot_names=bot_names,
-            settings=settings,
-        )
+        try:
+            driver, gate, source, frame_feed = self._build_stack(
+                system,
+                session=session,
+                chat_name=chat_name,
+                bot_names=bot_names,
+                settings=settings,
+            )
+        except RuntimeError as exc:
+            # The manager said no: every external slot taken (phone calls
+            # share the pool) or this chat already has a live stream.
+            logger.warning('Discord conversation for %s:%s refused — %s', session.account_name, session.channel_id, exc)
+            return {'status': 'error', 'error': str(exc)}
         transcribe_fn = driver._transcribe_fn
         if settings is None or getattr(settings.voice, 'turn_cues_enabled', True):
             # Turn cues (v2.9 soundscape): think-pulse 1/s during STT+LLM dead
@@ -179,9 +194,6 @@ class DiscordConversationRunner:
         with self._lock:
             if session.session_id in self._sessions:
                 return {'status': 'already_active', 'chat_name': chat_name}
-            cap = int(getattr(settings.voice, 'max_conversation_sessions', 2) if settings else 2)
-            if len(self._sessions) >= cap:
-                return {'status': 'error', 'error': 'conversation_slot_cap'}
             self._sessions[session.session_id] = {
                 'driver': driver,
                 'gate': gate,
@@ -217,12 +229,17 @@ class DiscordConversationRunner:
         except Exception as exc:
             logger.warning('Discord conversation driver reset failed: %s', exc)
         try:
+            # Release the manager's slot (idempotent: the source is already closed).
+            _get_system().get_conversation_manager().stop_external(session_id)
+        except Exception as exc:
+            logger.debug('Conversation manager release skipped: %s', exc)
+        try:
             # Session over: the ephemeral TTL counts from now (M8).
             touch_voice_chat(_get_system(), rec.get('chat_name') or '')
         except Exception as exc:
             logger.debug('Voice chat touch failed: %s', exc)
-        if self.voice_session_service:
-            self.voice_session_service.set_health(session_id, 'connected')
+        if self.sessions:
+            self.sessions.set_health(session_id, 'connected')
         return {'status': 'stopped'}
 
     def stop_all(self) -> None:
@@ -314,7 +331,7 @@ class DiscordConversationRunner:
         if not self.settings_store:
             return None
         try:
-            return self.settings_store.resolve(guild_id=rec.get('guild_id'), channel_id=rec.get('channel_id')).voice
+            return self.settings_store.resolve().voice
         except Exception:
             return None
 
@@ -450,51 +467,50 @@ class DiscordConversationRunner:
         return max(30, min(2000, value))
 
     def _build_stack(self, system, *, session, chat_name: str, bot_names: list[str], settings):
-        import config
-        from core.conversation.driver import ConversationDriver
-        from core.conversation.vad import SpeechGate
+        """One external session on core's ConversationManager: it builds the
+        driver + gate (slot cap shared with the phone, one live stream per
+        chat); the ctor wraps them in the Discord source. Raises RuntimeError
+        when the manager refuses."""
         from plugins.discord.voice.discord_frame_feed import DiscordFrameFeed
 
-        driver = ConversationDriver(
-            system,
-            chat_name=chat_name,
-            start_word='',
-            transcribe_fn=lambda _pcm: None,
-            start_word_fuzzy=float(getattr(config, 'CONVERSATION_START_WORD_FUZZY', 0.7)),
-            endpoint_silence_ms=int(getattr(config, 'CONVERSATION_ENDPOINT_SILENCE_MS', 700)),
-            min_speech_ms=int(getattr(config, 'CONVERSATION_MIN_SPEECH_MS', 200)),
-            barge_hold_ms=self._barge_hold_ms(settings),
-        )
-        driver._transcribe_fn = self._build_transcribe_fn(
-            system,
-            driver=driver,
-            settings=settings,
-            bot_names=bot_names,
-        )
-        gate = SpeechGate(threshold=float(getattr(config, 'CONVERSATION_VAD_THRESHOLD', 0.5)))
-        source = DiscordConversationSource(
-            driver,
-            gate,
-            self.playback_service,
-            account_name=session.account_name,
-            channel_id=str(session.channel_id),
-            speech_bridge=self.speech_bridge,
-            voice_transport=self.voice_transport,
-            on_reply_end=lambda: self._note_reply_end(session.session_id),
-        )
-        driver.set_sink(source)
-        frame_feed = DiscordFrameFeed(source.push_pcm)
-        original_run_turn = driver._run_turn
+        built: dict = {}
 
-        def _run_turn_with_responding_state(pcm):
-            from core.conversation.engine import RESPONDING
-            driver.engine.state = RESPONDING
-            driver.engine.barge_enabled = False
-            driver.engine._barge_ms = 0.0
-            return original_run_turn(pcm)
+        def ctor(driver, gate):
+            driver._transcribe_fn = self._build_transcribe_fn(
+                system, driver=driver, settings=settings, bot_names=bot_names,
+            )
+            source = DiscordConversationSource(
+                driver,
+                gate,
+                self.playback_service,
+                account_name=session.account_name,
+                channel_id=str(session.channel_id),
+                speech_bridge=self.speech_bridge,
+                voice_transport=self.voice_transport,
+                on_reply_end=lambda: self._note_reply_end(session.session_id),
+            )
+            original_run_turn = driver._run_turn
 
-        driver._run_turn = _run_turn_with_responding_state
-        return driver, gate, source, frame_feed
+            def _run_turn_with_responding_state(pcm):
+                from core.conversation.engine import RESPONDING
+                driver.engine.state = RESPONDING
+                driver.engine.barge_enabled = False
+                driver.engine._barge_ms = 0.0
+                return original_run_turn(pcm)
+
+            driver._run_turn = _run_turn_with_responding_state
+            built.update(driver=driver, gate=gate, source=source)
+            return source                        # the manager sets it as the driver's sink
+
+        manager = system.get_conversation_manager()
+        source = manager.start_external(
+            ctor, chat_name=chat_name, source_label='discord', session_id=session.session_id,
+            # No start word in a VC: the plugin's own addressing gate decides.
+            tuning={'barge_hold_ms': self._barge_hold_ms(settings), 'start_word': ''},
+        )
+        if source is None:
+            raise RuntimeError('conversation_refused (slot cap or chat already live)')
+        return built['driver'], built['gate'], source, DiscordFrameFeed(source.push_pcm)
 
     def _build_transcribe_fn(self, system, *, driver, settings, bot_names: list[str]) -> Callable:
         sample_rate = 16000

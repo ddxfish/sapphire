@@ -26,3 +26,10 @@ def test_typing_duration_scales_with_length():
     short = typing_duration_seconds(20, text='quick reply')
     long = typing_duration_seconds(400, text='a longer thoughtful reply ' * 10)
     assert long > short
+
+
+def test_reply_style_parses_edit_tag():
+    service = ReplyStyleService()
+    parsed = service.parse_llm_output('Hello there [edit:Hello there!]')
+    assert parsed.chunks == ['Hello there']
+    assert parsed.edit_text == 'Hello there!'

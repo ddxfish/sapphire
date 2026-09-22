@@ -37,7 +37,7 @@ def list_traces(**kwargs):
             cognitive = {
                 'voice_sessions': [
                     session.to_dict()
-                    for session in (runtime.voice_session_service.list_active(account) if runtime.voice_session_service else [])
+                    for session in (runtime.voice_sessions.list_active(account) if runtime.voice_sessions else [])
                 ],
             }
     return {

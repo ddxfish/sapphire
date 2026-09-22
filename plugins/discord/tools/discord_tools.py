@@ -497,11 +497,7 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
         return (reach, False)
     reply_style = runtime.reply_style_service if runtime else None
     settings = (
-        runtime.settings_store.resolve(
-            guild_id=str(event.get('guild_id') or ''),
-            channel_id=channel,
-            dm_id=channel if str(event.get('is_dm', '')).lower() in {'1', 'true'} else None,
-        )
+        runtime.settings_store.resolve()
         if runtime and getattr(runtime, 'settings_store', None)
         else None
     )
@@ -618,7 +614,7 @@ def discord_join_voice(*, channel: str):
     if status == 'joined':
         return (f"Joined voice channel '{channel_name}'.", True)
     if status == 'blocked':
-        return ('Voice is disabled — enable it under Settings > Discord > Voice.', False)
+        return ('Voice is off for this channel — no enabled "Discord: Voice channel" Realtime rule covers it.', False)
     return (str(result.get('reason') or 'Voice join failed'), False)
 
 

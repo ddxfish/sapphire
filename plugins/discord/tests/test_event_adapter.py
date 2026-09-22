@@ -2,9 +2,6 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from plugins.discord.conversation.media_service import MediaService
-from plugins.discord.storage.repositories.media import MediaRepository
-from plugins.discord.storage.sqlite import SQLiteService
 from plugins.discord.models.observations import TextMessageObservation, TypingObservation
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
 
@@ -43,48 +40,6 @@ class FakeGuild:
     def __init__(self, guild_id, name):
         self.id = guild_id
         self.name = name
-
-
-class FakeVisionBridge:
-    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
-        assert source_url == 'https://cdn/a.png'
-        assert media_kind == 'image'
-        assert filename == 'cat.png'
-        assert content_type == 'image/png'
-        return {
-            'summary': 'a cat picture',
-            'entities': ['cat'],
-            'tone': 'cute',
-            'ocr_text': '',
-            'confidence': 0.9,
-            'source': 'vision',
-        }
-
-
-class RaisingVisionBridge:
-    def describe_media(self, source_url, *, media_kind, settings, filename='', content_type='', reply_llm_provider=''):
-        raise RuntimeError('bridge exploded')
-
-
-class FakeSettingsStore:
-    def resolve(self, **_kwargs):
-        return SimpleNamespace(media=SimpleNamespace(enabled=True, image_understanding_enabled=True))
-
-
-class FakeDisabledSettingsStore:
-    def resolve(self, **_kwargs):
-        return SimpleNamespace(media=SimpleNamespace(enabled=True, image_understanding_enabled=False))
-
-
-class FakeMediaGloballyDisabledSettingsStore:
-    def resolve(self, **_kwargs):
-        return SimpleNamespace(media=SimpleNamespace(enabled=False, image_understanding_enabled=True))
-
-
-def _sqlite(tmp_path):
-    sqlite = SQLiteService(tmp_path / 'event-adapter.sqlite3')
-    sqlite.start()
-    return sqlite
 
 
 def _message_with_image():
@@ -163,172 +118,31 @@ def test_adapt_dm_typing_event():
     assert obs.guild_id == ''
 
 
-def test_adapt_message_records_media_without_observation_row(tmp_path):
-    sqlite = _sqlite(tmp_path)
-    media_service = MediaService(
-        media_repository=MediaRepository(sqlite),
-        vision_bridge=FakeVisionBridge(),
-    )
-    adapter = DiscordEventAdapter(
-        message_repository=FakeMessageRepo(),
-        trace_repository=FakeTraceRepo(),
-        media_service=media_service,
-        settings_store=FakeSettingsStore(),
-    )
-    message = _message_with_image()
+class FakeImagesStore:
+    def __init__(self, enabled=True):
+        self.enabled = enabled
 
-    obs = adapter.adapt_message_event('alpha', 99, message)
-
-    assert isinstance(obs, TextMessageObservation)
-    stored = media_service.media_repository.get_by_message('111')
-    assert len(stored) == 1
-    assert stored[0]['interpretation']['summary'] == 'a cat picture'
-
-    # Observation writes were removed (tier-2 strip) — media lives only in media_repository.
-    rows = sqlite.connection().execute(
-        "SELECT payload_json FROM observations WHERE observation_type = 'media_observation'"
-    ).fetchall()
-    assert rows == []
+    def resolve(self, **_kwargs):
+        return SimpleNamespace(media=SimpleNamespace(images_in_enabled=self.enabled, max_images=4))
 
 
-def test_adapt_message_records_media_detected_trace(tmp_path):
-    sqlite = SQLiteService(tmp_path / 'detected-trace.sqlite3')
-    sqlite.start()
-    trace_repo = FakeTraceRepo()
-    adapter = DiscordEventAdapter(
-        message_repository=FakeMessageRepo(),
-        trace_repository=trace_repo,
-        media_service=MediaService(
-            media_repository=MediaRepository(sqlite),
-            vision_bridge=FakeVisionBridge(),
-        ),
-        settings_store=FakeSettingsStore(),
-    )
+def test_adapt_then_fetch_images_off_loop_when_images_in_is_on():
+    from plugins.discord.conversation.images import ImageLane
+    calls = []
+    lane = ImageLane(fetch=lambda url: (calls.append(url) or (b'PNG', 'image/png')))
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo(),
+                                  image_lane=lane, settings_store=FakeImagesStore(True))
+    obs = adapter.adapt_message_event('alpha', 99, _message_with_image(), fetch_images=False)
+    assert isinstance(obs, TextMessageObservation) and obs.attachments and calls == []     # C2: nothing fetched inline
+    assert adapter.fetch_images(obs) == 1 and calls == ['https://cdn/a.png']
+    assert lane.cached('https://cdn/a.png') == (b'PNG', 'image/png')
 
+
+def test_images_off_means_no_fetch():
+    from plugins.discord.conversation.images import ImageLane
+    calls = []
+    lane = ImageLane(fetch=lambda url: (calls.append(url) or (b'PNG', 'image/png')))
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo(),
+                                  image_lane=lane, settings_store=FakeImagesStore(False))
     obs = adapter.adapt_message_event('alpha', 99, _message_with_image())
-
-    assert isinstance(obs, TextMessageObservation)
-    assert _trace_details(trace_repo, 'media_detected') == [{
-        'message_id': '111',
-        'channel_id': '22',
-        'media_kind': 'image',
-        'filename': 'cat.png',
-    }]
-
-
-def test_adapt_message_records_media_fallback_trace_when_image_understanding_disabled(tmp_path):
-    sqlite = SQLiteService(tmp_path / 'disabled-fallback-trace.sqlite3')
-    sqlite.start()
-    trace_repo = FakeTraceRepo()
-    media_service = MediaService(
-        media_repository=MediaRepository(sqlite),
-        vision_bridge=FakeVisionBridge(),
-    )
-    adapter = DiscordEventAdapter(
-        message_repository=FakeMessageRepo(),
-        trace_repository=trace_repo,
-        media_service=media_service,
-        settings_store=FakeDisabledSettingsStore(),
-    )
-
-    obs = adapter.adapt_message_event('alpha', 99, _message_with_image())
-
-    assert isinstance(obs, TextMessageObservation)
-    assert _trace_details(trace_repo, 'media_fallback_used') == [{
-        'message_id': '111',
-        'channel_id': '22',
-        'media_kind': 'image',
-        'source': 'metadata',
-        'reason': 'image_understanding_disabled',
-    }]
-
-
-def test_adapt_message_records_media_failure_and_fallback_traces_when_vision_raises(tmp_path):
-    sqlite = SQLiteService(tmp_path / 'failed-fallback-trace.sqlite3')
-    sqlite.start()
-    trace_repo = FakeTraceRepo()
-    media_service = MediaService(
-        media_repository=MediaRepository(sqlite),
-        vision_bridge=RaisingVisionBridge(),
-    )
-    adapter = DiscordEventAdapter(
-        message_repository=FakeMessageRepo(),
-        trace_repository=trace_repo,
-        media_service=media_service,
-        settings_store=FakeSettingsStore(),
-    )
-
-    obs = adapter.adapt_message_event('alpha', 99, _message_with_image())
-
-    assert isinstance(obs, TextMessageObservation)
-    assert _trace_details(trace_repo, 'media_fallback_used') == [{
-        'message_id': '111',
-        'channel_id': '22',
-        'media_kind': 'image',
-        'source': 'fallback',
-        'reason': 'vision_error',
-    }]
-    assert _trace_details(trace_repo, 'media_interpretation_failed') == [{
-        'message_id': '111',
-        'channel_id': '22',
-        'media_kind': 'image',
-        'error_type': 'RuntimeError',
-        'error_message': 'bridge exploded',
-    }]
-
-
-def test_adapt_message_skips_media_pipeline_when_media_disabled(tmp_path):
-    sqlite = SQLiteService(tmp_path / 'media-disabled.sqlite3')
-    sqlite.start()
-    trace_repo = FakeTraceRepo()
-    media_service = MediaService(
-        media_repository=MediaRepository(sqlite),
-        vision_bridge=FakeVisionBridge(),
-    )
-    adapter = DiscordEventAdapter(
-        message_repository=FakeMessageRepo(),
-        trace_repository=trace_repo,
-        media_service=media_service,
-        settings_store=FakeMediaGloballyDisabledSettingsStore(),
-    )
-
-    obs = adapter.adapt_message_event('alpha', 99, _message_with_image())
-
-    assert isinstance(obs, TextMessageObservation)
-    assert media_service.media_repository.get_by_message('111') == []
-    rows = sqlite.connection().execute(
-        "SELECT payload_json FROM observations WHERE observation_type = 'media_observation'"
-    ).fetchall()
-    assert rows == []
-    assert _trace_details(trace_repo, 'media_detected') == []
-    assert _trace_details(trace_repo, 'media_fallback_used') == []
-    assert _trace_details(trace_repo, 'media_interpretation_failed') == []
-
-
-def test_adapt_message_can_defer_media_interpretation(tmp_path):
-    # C2 (hunt 2026-09-12): the transport adapts on the daemon loop with
-    # interpret_media=False and runs interpret_media() on a worker thread, so
-    # the attachment fetch + vision call never block the loop.
-    sqlite = _sqlite(tmp_path)
-    media_service = MediaService(
-        media_repository=MediaRepository(sqlite),
-        vision_bridge=FakeVisionBridge(),
-    )
-    adapter = DiscordEventAdapter(
-        message_repository=FakeMessageRepo(),
-        trace_repository=FakeTraceRepo(),
-        media_service=media_service,
-        settings_store=FakeSettingsStore(),
-    )
-
-    obs = adapter.adapt_message_event('alpha', 99, _message_with_image(), interpret_media=False)
-
-    assert isinstance(obs, TextMessageObservation)
-    assert obs.attachments
-    assert media_service.media_repository.get_by_message('111') == []
-
-    adapter.interpret_media(obs)
-
-    stored = media_service.media_repository.get_by_message('111')
-    assert len(stored) == 1
-    assert stored[0]['interpretation']['summary'] == 'a cat picture'
+    assert isinstance(obs, TextMessageObservation) and calls == [] and lane.cached('https://cdn/a.png') is None

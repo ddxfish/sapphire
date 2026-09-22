@@ -47,8 +47,15 @@ def ensure_discord_voice_chat_settings(
     llm_provider: str = '',
     llm_model: str = '',
     keep_history: bool = False,
+    toolset: str = '',
+    prompt: str = '',
 ) -> None:
-    """Ensure discord VC chats use Kokoro TTS voice + voice-mode prompt context."""
+    """Ensure discord VC chats use Kokoro TTS voice + voice-mode prompt context.
+
+    `toolset` / `prompt` come from the gate task (S6): a task naming a REAL
+    toolset (not '' / 'none') sets the chat's toolset every session start —
+    the task is the owner's explicit config; a task prompt lands as the
+    chat's prompt. Anything blank leaves the chat's own values alone."""
     llm = getattr(system, 'llm_chat', None)
     sm = getattr(llm, 'session_manager', None) if llm else None
     if sm is None:
@@ -94,11 +101,17 @@ def ensure_discord_voice_chat_settings(
             for key in scope_keys:
                 updates[key] = chat_name
             updates['discord_voice_isolated'] = True
+    task_toolset = str(toolset or '').strip()
+    if task_toolset and task_toolset != 'none' and str(settings.get('toolset') or '') != task_toolset:
+        updates['toolset'] = task_toolset
+    task_prompt = str(prompt or '').strip()
+    if task_prompt and str(settings.get('prompt') or '') != task_prompt:
+        updates['prompt'] = task_prompt
     # Ephemeral marker (see VOICE_CHAT_TTL_MINUTES). Re-stamped on every session
     # start (here) and end (touch_voice_chat) so the TTL always means "after her
     # last conversation there". Flipping the toggle on un-marks the chat at the
-    # next join; nothing already reaped comes back. Per-guild/channel overlays
-    # make this a per-server choice (keep the home server's, reap strangers').
+    # next join; nothing already reaped comes back. The gate task's
+    # keep_chat_history makes this a per-task choice.
     if keep_history:
         if settings.get('ephemeral_source') == CHAT_PREFIX:
             updates['ephemeral_source'] = ''
@@ -248,6 +261,8 @@ def ensure_voice_chat(
     llm_provider: str = '',
     llm_model: str = '',
     keep_history: bool = False,
+    toolset: str = '',
+    prompt: str = '',
 ) -> str:
     """Create the per-VC chat in llm_chat if missing. Returns stored chat_name."""
     chat_name = resolve_voice_chat_name(system, guild_id, channel_id)
@@ -266,6 +281,8 @@ def ensure_voice_chat(
                     llm_provider=llm_provider,
                     llm_model=llm_model,
                     keep_history=keep_history,
+                    toolset=toolset,
+                    prompt=prompt,
                 )
                 return chat_name
         except Exception:
@@ -284,5 +301,7 @@ def ensure_voice_chat(
         llm_provider=llm_provider,
         llm_model=llm_model,
         keep_history=keep_history,
+        toolset=toolset,
+        prompt=prompt,
     )
     return chat_name

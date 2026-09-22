@@ -4,16 +4,10 @@ from __future__ import annotations
 
 
 def reload_settings(runtime):
-    if not runtime:
+    """The effective settings (read live from core on every resolve)."""
+    if not runtime or not getattr(runtime, 'settings_store', None):
         return None
-    if getattr(runtime, 'channel_repository', None):
-        fresh = runtime.channel_repository.load_settings_store()
-        current = getattr(runtime, 'settings_store', None)
-        if current is not None and hasattr(current, 'replace_from'):
-            current.replace_from(fresh)      # in place: every service holds this object (row 44)
-        else:
-            runtime.settings_store = fresh
-    return runtime.settings_store.resolve() if runtime.settings_store else None
+    return runtime.settings_store.resolve()
 
 
 def connected_accounts(runtime) -> list[str]:

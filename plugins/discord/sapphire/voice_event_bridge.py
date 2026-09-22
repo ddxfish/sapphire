@@ -14,11 +14,11 @@ class VoiceEventBridge:
     def __init__(
         self,
         *,
-        voice_session_repository=None,
+        sessions=None,
         trace_repository=None,
         conversation_runner=None,
     ):
-        self.voice_session_repository = voice_session_repository
+        self.sessions = sessions
         self.trace_repository = trace_repository
         self.conversation_runner = conversation_runner
         self._stop = threading.Event()
@@ -95,16 +95,14 @@ class VoiceEventBridge:
             self._trace('voice_conversation_turn_end', 'Conversation turn finished', payload)
 
     def _session_for_chat(self, chat_name: str):
-        if not self.voice_session_repository:
+        if not self.sessions:
             return None
         parsed = parse_voice_chat_name(chat_name)
         if not parsed:
             return None
         guild_id, channel_id = parsed
-        finder = getattr(self.voice_session_repository, 'get_active_by_guild_channel', None)
-        if callable(finder):
-            return finder(guild_id, channel_id)
-        return None
+        finder = getattr(self.sessions, 'get_by_guild_channel', None)
+        return finder(guild_id, channel_id) if callable(finder) else None
 
     def _trace(self, trace_type: str, message: str, payload: dict) -> None:
         if not self.trace_repository:

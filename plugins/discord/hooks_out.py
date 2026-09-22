@@ -174,6 +174,13 @@ class DiscordAPI:
             lambda t: t.send_message_sync(cid, text, reply_to_message_id=reply_to, account_name=account),
             lambda t: t.send_message_async(cid, text, reply_to_message_id=reply_to, account_name=account))
 
+    def edit_message(self, channel_id, message_id, text, account=None) -> dict:
+        """Edit one of the bot's own messages (a typo fix, an afterthought)."""
+        return self._write(
+            lambda tr: tr.edit_message_sync(str(channel_id), str(message_id), str(text), account_name=account),
+            lambda tr: tr._execution.edit_message(str(channel_id), str(message_id), str(text), account_name=account),
+        )
+
     def react(self, channel_id, message_id, emoji, account=None) -> dict:
         cid, mid = str(channel_id), str(message_id)
         return self._write(

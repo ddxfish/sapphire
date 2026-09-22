@@ -55,7 +55,7 @@ def register_slash_commands(client, account_name: str) -> bool:
         if status == 'joined':
             await ctx.respond(f'Joined **{target.name}**.')
         elif status == 'blocked':
-            await ctx.respond('Voice is disabled in plugin settings (Discord > Voice).')
+            await ctx.respond('Voice is off for this channel — no enabled "Discord: Voice channel" Realtime rule covers it.')
         else:
             await ctx.respond(f"Could not join: {result.get('reason') or status}")
 

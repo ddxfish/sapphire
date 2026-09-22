@@ -142,43 +142,6 @@ function textarea(id, label, value, help = '') {
   </div>`;
 }
 
-function llmProviderBlockHtml({
-  prefix,
-  label,
-  help,
-  providerField,
-  modelField,
-  providerValue = 'auto',
-  modelValue = '',
-  autoLabel = 'Auto (continuity task)',
-}) {
-  const provider = providerValue || 'auto';
-  return `
-    <div class="dcg-row">
-      <div>
-        <label for="${prefix}-primary">${esc(label)}</label>
-        ${help ? `<div class="dcg-help">${help}</div>` : ''}
-      </div>
-      <select class="dcg-select" id="${prefix}-primary" data-field="${providerField}">
-        <option value="auto" ${provider === 'auto' ? 'selected' : ''}>${esc(autoLabel)}</option>
-        ${provider !== 'auto' ? `<option value="${esc(provider)}" selected>${esc(provider)}</option>` : ''}
-      </select>
-    </div>
-    <div class="dcg-row" id="${prefix}-model-row" style="display:none">
-      <div>
-        <label for="${prefix}-model-select">Model</label>
-        <div class="dcg-help">Leave default to use the provider's configured model.</div>
-      </div>
-      <select class="dcg-select" id="${prefix}-model-select"></select>
-    </div>
-    <div class="dcg-row" id="${prefix}-model-custom-row" style="display:none">
-      <div><label for="${prefix}-model-custom">Model name</label></div>
-      <input class="dcg-input" id="${prefix}-model-custom" type="text" placeholder="model id">
-    </div>
-    <input type="hidden" id="${prefix}-model-field" data-field="${modelField}" value="${esc(modelValue || '')}">
-  `;
-}
-
 function renderShell(container, data) {
   const schema = data.schema || [];
   const values = data.values || {};
@@ -190,16 +153,8 @@ function renderShell(container, data) {
     ? `<div class="dcg-notice">Daemon is offline (${esc(daemonState)}). Enable the plugin under Settings → Plugins, then reload it. You do not add a separate daemon — this plugin starts one automatically when enabled.</div>`
     : `<div class="dcg-notice" style="border-color:var(--success)">Daemon is running (${esc(daemonState)}).</div>`;
 
-  const replyProvider = values['cognitive.llm_primary'] || 'auto';
-  const replyModel = values['cognitive.llm_model'] || '';
-  const voiceProvider = values['voice.llm_provider'] || '';
-  const voiceModel = values['voice.llm_model'] || '';
-  const visionProvider = values['media.vision_llm_provider'] || '';
-  const visionModel = values['media.vision_llm_model'] || '';
   const ignoredChannels = values['channel.ignored_channels'] || [];
   const allowlistIds = values['bot.allowlist_ids'] || [];
-  const joinTargets = values['voice.join_targets'] || [];
-  const sentimentBackend = values['reaction.sentiment_backend'] || 'vader';
 
   container.innerHTML = `
     <style>${DCG_STYLES}</style>
@@ -243,65 +198,6 @@ function renderShell(container, data) {
 
   // Custom widget sections — mounted into renderer slots on the tab that owns
   // their settings (this was the always-visible pile below the schema form).
-  const modelsSection = `
-      <div class="dcg-section">
-        <h4>Language Models</h4>
-        ${llmProviderBlockHtml({
-          prefix: 'dcg-llm',
-          label: 'Reply LLM',
-          help: 'Override for Discord text and voice replies. Daemon chooses (default) = the model the daemon task already uses.',
-          providerField: 'cognitive.llm_primary',
-          modelField: 'cognitive.llm_model',
-          providerValue: replyProvider,
-          modelValue: replyModel,
-          autoLabel: 'Daemon chooses (default)',
-        })}
-        ${llmProviderBlockHtml({
-          prefix: 'dcg-voice-llm',
-          label: 'Voice LLM',
-          help: 'Override for live voice-channel replies. A fast non-thinking model keeps turns snappy. Default leaves the voice chat on its own settings. Takes effect on next /voice join.',
-          providerField: 'voice.llm_provider',
-          modelField: 'voice.llm_model',
-          providerValue: voiceProvider || 'auto',
-          modelValue: voiceModel,
-          autoLabel: 'Voice chat default',
-        })}
-      </div>
-  `;
-
-  const visionLlmSection = `
-      <div class="dcg-section">
-        <h4>Vision LLM</h4>
-        ${llmProviderBlockHtml({
-          prefix: 'dcg-vision-llm',
-          label: 'Vision LLM',
-          help: 'Override for describing images posted in chat — same credentials as your registered providers, no separate vision key. Daemon chooses (default) = the same model her replies use; if that model can\'t see images, captions fall back to filenames rather than calling a provider you didn\'t pick.',
-          providerField: 'media.vision_llm_provider',
-          modelField: 'media.vision_llm_model',
-          providerValue: visionProvider || 'auto',
-          modelValue: visionModel,
-          autoLabel: 'Daemon chooses (default)',
-        })}
-      </div>
-  `;
-
-  const socialSentimentSection = `
-      <div class="dcg-section">
-        <h4>Reaction sentiment</h4>
-        <p class="dcg-help">Chooses emoji for autonomous reactions from message tone. VADER is lightweight and loads instantly. Twitter RoBERTa uses more CPU and memory (downloads a transformer model on first use) but is more accurate on informal chat, slang, and emoji-heavy messages.</p>
-        <div class="dcg-row">
-          <div>
-            <label for="dcg-sentiment-backend">Sentiment engine</label>
-          </div>
-          <select class="dcg-select" id="dcg-sentiment-backend" data-field="reaction.sentiment_backend">
-            <option value="vader" ${sentimentBackend === 'vader' ? 'selected' : ''}>VADER (lightweight)</option>
-            <option value="twitter_roberta" ${sentimentBackend === 'twitter_roberta' ? 'selected' : ''}>Twitter RoBERTa (more accurate)</option>
-          </select>
-        </div>
-        <div class="dcg-help" style="margin-top:4px">Twitter RoBERTa requires <code>pip install transformers torch</code>. If missing, reactions fall back to keyword heuristics.</div>
-      </div>
-  `;
-
   const allowlistSection = `
       <div class="dcg-section">
         <h4>Ignored channels</h4>
@@ -319,7 +215,7 @@ function renderShell(container, data) {
       </div>
       <div class="dcg-section">
         <h4>Allowlisted Bots</h4>
-        <div class="dcg-help">Bots Remmi may debate or interact with (see Conversation → bot reply mode). Loaded from servers your bot is in — enable <strong>Server Members Intent</strong> in the Discord Developer Portal if the list is empty.</div>
+        <div class="dcg-help">Bots she may answer (Bot-to-bot replies must be on). Loaded from servers your bot is in — enable <strong>Server Members Intent</strong> in the Discord Developer Portal if the list is empty.</div>
         <div id="dcg-bot-allowlist-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
         <div class="dcg-target-toolbar">
           <button type="button" class="dcg-btn" id="dcg-bot-allowlist-refresh">Refresh from Discord</button>
@@ -334,21 +230,17 @@ function renderShell(container, data) {
       </div>
   `;
 
-  const voiceJoinSection = `
+  const voiceChannelsSection = `
       <div class="dcg-section">
-        <h4>Auto-Join Voice Channels</h4>
-        <div class="dcg-help">Voice channels to auto-join when someone is in them, and leave when empty. Polled every ~15s while the daemon runs.</div>
-        <div id="dcg-voice-target-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
+        <h4>Voice channels</h4>
+        <div class="dcg-help">Voice is a Realtime rule: Settings → Continuity → Realtime → <strong>Discord: Voice channel</strong> names the bot; its filter says which voice channels the rule covers (server or channel name, or an id from the list below — no filter = all of them), <strong>Auto-join</strong> is opt-in per rule, and its persona, model and toolset run the voice chat. She joins on <code>/voice join</code> or her join tool, and leaves on &lt;&lt;HANG UP&gt;&gt;, <code>/voice leave</code>, or when the channel empties.</div>
         <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-voice-target-refresh">Refresh from Discord</button>
-          <button type="button" class="dcg-btn" id="dcg-voice-target-select-all">Select all</button>
-          <button type="button" class="dcg-btn" id="dcg-voice-target-clear">Clear all</button>
-          <span class="dcg-help" id="dcg-voice-target-status"></span>
+          <button type="button" class="dcg-btn" id="dcg-voice-channels-refresh">Refresh from Discord</button>
+          <span class="dcg-help" id="dcg-voice-channels-status"></span>
         </div>
-        <div id="dcg-voice-target-picker" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Connect a bot, then click Refresh to load voice channels.</p>
+        <div id="dcg-voice-channels-list" class="dcg-target-picker">
+          <p class="dcg-help" style="margin:0">Connect a bot, then click Refresh to list voice channels.</p>
         </div>
-        <textarea class="dcg-textarea" id="voice.join_targets" data-field="voice.join_targets" style="display:none" aria-hidden="true">${esc(joinTargets.join('\n'))}</textarea>
       </div>
   `;
 
@@ -382,7 +274,7 @@ function renderShell(container, data) {
       </div>
       <div class="dcg-section">
         <h4>LLM Debug</h4>
-        <p class="dcg-help">Last 10 LLM-related events — successful exchanges and policy rejections. Shows configured vs resolved model, prompt breakdown, delivery edits, and why blocked messages never reached the AI.</p>
+        <p class="dcg-help">Last 10 LLM-related events — successful exchanges and policy rejections. Shows the task's model, the prompt breakdown, and why blocked messages never reached the AI.</p>
         <div class="dcg-target-toolbar">
           <button type="button" class="dcg-btn" id="dcg-debug-refresh">Refresh now</button>
           <button type="button" class="dcg-btn" id="dcg-debug-clear">Clear</button>
@@ -394,15 +286,11 @@ function renderShell(container, data) {
       </div>
   `;
 
-  // Slot order within a tab = array order; a tab named here that no manifest
-  // field uses (Models) is created by the renderer.
+  // Slot order within a tab = array order.
   const slots = [
-    { tab: 'Models', mount: (el) => { el.innerHTML = modelsSection; } },
     { tab: 'Conversation', mount: (el) => { el.innerHTML = allowlistSection; } },
-    { tab: 'Social', mount: (el) => { el.innerHTML = socialSentimentSection; } },
-    { tab: 'Voice', mount: (el) => { el.innerHTML = voiceJoinSection; } },
+    { tab: 'Voice', mount: (el) => { el.innerHTML = voiceChannelsSection; } },
     { tab: 'Voice', mount: (el) => { el.innerHTML = voicePromptSection; } },
-    { tab: 'Media', mount: (el) => { el.innerHTML = visionLlmSection; } },
     { tab: 'Debug', mount: (el) => { el.innerHTML = debugSection; } },
   ];
 
@@ -430,191 +318,7 @@ function renderShell(container, data) {
   initTracesPanel(container, data.traces || null);
   initIgnoredChannelPicker(container, ignoredChannels);
   initBotAllowlistPicker(container, allowlistIds);
-  initVoiceTargetPicker(container, joinTargets);
-  initLlmProviderBlocks(container, {
-    reply: {
-      prefix: 'dcg-llm',
-      providerKey: replyProvider,
-      modelName: replyModel,
-      autoLabel: 'Daemon chooses (default)',
-    },
-    voice: {
-      prefix: 'dcg-voice-llm',
-      providerKey: voiceProvider || 'auto',
-      modelName: voiceModel,
-      autoLabel: 'Voice chat default',
-    },
-    vision: {
-      prefix: 'dcg-vision-llm',
-      providerKey: visionProvider || 'auto',
-      modelName: visionModel,
-      autoLabel: 'Daemon chooses (default)',
-    },
-  });
-}
-
-let _LLM_PROVIDERS = [];
-let _LLM_METADATA = {};
-
-async function loadLlmProviders() {
-  const response = await fetch('/api/llm/providers');
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  const data = await response.json();
-  _LLM_PROVIDERS = data.providers || [];
-  _LLM_METADATA = data.metadata || {};
-  return data;
-}
-
-function llmProviderOptionsHtml(selected = 'auto', autoLabel = 'Auto (continuity task)') {
-  const options = [`<option value="auto" ${selected === 'auto' ? 'selected' : ''}>${esc(autoLabel)}</option>`];
-  for (const provider of _LLM_PROVIDERS) {
-    const key = provider.key || provider.display_name || '';
-    if (!key) continue;
-    // A disabled provider pinned here makes EVERY reply die silently
-    // (explicit pins have no fallback). Mark it and block fresh selection;
-    // the stored value stays selectable so an existing pin remains visible.
-    const off = provider.enabled === false;
-    const label = (provider.display_name || key) + (off ? ' — DISABLED in LLM settings' : '');
-    const disabledAttr = off && key !== selected ? ' disabled' : '';
-    options.push(`<option value="${esc(key)}" ${key === selected ? 'selected' : ''}${disabledAttr}>${esc(label)}</option>`);
-  }
-  return options.join('');
-}
-
-function llmBlockElements(container, prefix) {
-  return {
-    primary: container.querySelector(`#${prefix}-primary`),
-    modelRow: container.querySelector(`#${prefix}-model-row`),
-    modelCustomRow: container.querySelector(`#${prefix}-model-custom-row`),
-    modelSelect: container.querySelector(`#${prefix}-model-select`),
-    modelCustom: container.querySelector(`#${prefix}-model-custom`),
-    modelField: container.querySelector(`#${prefix}-model-field`),
-  };
-}
-
-function readLlmBlockValues(container, prefix) {
-  const els = llmBlockElements(container, prefix);
-  if (!els.primary || !els.modelField) {
-    return { provider: 'auto', model: '' };
-  }
-  syncLlmModelField(container, prefix);
-  return {
-    provider: els.primary.value || 'auto',
-    model: els.modelField.value || '',
-  };
-}
-
-function updateLlmModelSelector(container, prefix, providerKey, currentModel) {
-  const els = llmBlockElements(container, prefix);
-  if (!els.modelField) return;
-
-  if (els.modelRow) els.modelRow.style.display = 'none';
-  if (els.modelCustomRow) els.modelCustomRow.style.display = 'none';
-
-  if (!providerKey || providerKey === 'auto') {
-    els.modelField.value = '';
-    return;
-  }
-
-  const meta = _LLM_METADATA[providerKey];
-  const conf = _LLM_PROVIDERS.find((item) => item.key === providerKey);
-  const modelOptions = meta?.model_options || {};
-  const optionKeys = Object.keys(modelOptions);
-
-  if (optionKeys.length > 0 && els.modelSelect && els.modelRow) {
-    const defaultModel = conf?.model || '';
-    const defaultLabel = defaultModel
-      ? `Default (${modelOptions[defaultModel] || defaultModel})`
-      : 'Default';
-    let html = `<option value="">${esc(defaultLabel)}</option>`;
-    html += optionKeys.map((key) => (
-      `<option value="${esc(key)}" ${key === currentModel ? 'selected' : ''}>${esc(modelOptions[key])}</option>`
-    )).join('');
-    if (currentModel && !modelOptions[currentModel]) {
-      html += `<option value="${esc(currentModel)}" selected>${esc(currentModel)}</option>`;
-    }
-    els.modelSelect.innerHTML = html;
-    els.modelField.value = currentModel || '';
-    els.modelRow.style.display = '';
-    return;
-  }
-
-  if (els.modelCustom && els.modelCustomRow) {
-    els.modelCustom.value = currentModel || '';
-    els.modelField.value = currentModel || '';
-    els.modelCustomRow.style.display = '';
-  }
-}
-
-function syncLlmModelField(container, prefix) {
-  const els = llmBlockElements(container, prefix);
-  if (!els.primary || !els.modelField) return;
-  const provider = els.primary.value || 'auto';
-  if (provider === 'auto') {
-    els.modelField.value = '';
-    return;
-  }
-  if (els.modelRow && els.modelRow.style.display !== 'none' && els.modelSelect) {
-    els.modelField.value = els.modelSelect.value || '';
-    return;
-  }
-  if (els.modelCustom) {
-    els.modelField.value = (els.modelCustom.value || '').trim();
-  }
-}
-
-function initLlmProviderBlock(container, { prefix, providerKey, modelName, onProviderChange, autoLabel }) {
-  const els = llmBlockElements(container, prefix);
-  if (!els.primary) return;
-
-  const applyProvider = (key, model) => {
-    els.primary.innerHTML = llmProviderOptionsHtml(key || 'auto', autoLabel || undefined);
-    if (key && key !== 'auto') {
-      els.primary.value = key;
-      // Provider list unavailable (fetch failed) — keep the STORED key as a
-      // real option instead of letting a blank select read back as 'auto'
-      // and reset the pin on the next save (scout finding, 2026-08-05).
-      if (els.primary.value !== key) {
-        els.primary.insertAdjacentHTML('beforeend', `<option value="${esc(key)}" selected>${esc(key)}</option>`);
-        els.primary.value = key;
-      }
-    }
-    updateLlmModelSelector(container, prefix, els.primary.value, model || '');
-  };
-
-  loadLlmProviders()
-    .then(() => applyProvider(providerKey || 'auto', modelName || ''))
-    .catch((err) => {
-      console.warn(`[discord_cognitive] LLM provider list unavailable for ${prefix}:`, err);
-      applyProvider(providerKey || 'auto', modelName || '');
-    });
-
-  els.primary.addEventListener('change', () => {
-    if (onProviderChange) onProviderChange();
-    updateLlmModelSelector(container, prefix, els.primary.value, '');
-  });
-
-  els.modelSelect?.addEventListener('change', (event) => {
-    if (els.modelField) els.modelField.value = event.target.value || '';
-    if (onProviderChange) onProviderChange();
-  });
-
-  els.modelCustom?.addEventListener('input', (event) => {
-    if (els.modelField) els.modelField.value = (event.target.value || '').trim();
-    if (onProviderChange) onProviderChange();
-  });
-}
-
-function initLlmProviderBlocks(container, blocks) {
-  initLlmProviderBlock(container, { ...blocks.reply });
-  if (blocks.voice) {
-    initLlmProviderBlock(container, { ...blocks.voice });
-  }
-  if (blocks.vision) {
-    initLlmProviderBlock(container, { ...blocks.vision });
-  }
+  initVoiceChannelList(container);
 }
 
 const ignoredChannelCatalog = {};
@@ -640,22 +344,10 @@ function formatDebugTimestamp(ts) {
   }
 }
 
-function formatLlmSummary(llm, prompt) {
+function formatLlmSummary(llm) {
   const resolved = llm || {};
   const configured = [resolved.configured_primary, resolved.configured_model].filter(Boolean).join(' / ') || 'auto';
-  const resolvedLabel = [resolved.resolved_primary, resolved.resolved_model].filter(Boolean).join(' / ') || configured;
-  const eventOverride = resolved.event_primary
-    ? ` · event override: ${resolved.event_primary}${resolved.event_model ? ` / ${resolved.event_model}` : ''}`
-    : '';
-  const taskLabel = resolved.task_name ? ` · task: ${resolved.task_name}` : '';
-  if (resolvedLabel !== configured && configured !== 'auto') {
-    return `configured ${configured} → resolved ${resolvedLabel}${eventOverride}${taskLabel}`;
-  }
-  if (resolvedLabel !== 'auto') {
-    return `resolved ${resolvedLabel}${eventOverride}${taskLabel}`;
-  }
-  const fallback = [prompt?.llm_primary, prompt?.llm_model].filter(Boolean).join(' / ');
-  return fallback ? `configured ${fallback}${taskLabel}` : `auto${taskLabel}`;
+  return resolved.task_name ? `${configured} · task: ${resolved.task_name}` : configured;
 }
 
 function renderDebugEntries(listEl, entries) {
@@ -677,7 +369,7 @@ function renderDebugEntries(listEl, entries) {
       entry.channel_name || entry.channel_id,
     ].filter(Boolean).join(' · ');
     const latency = timing.latency_ms != null ? `${timing.latency_ms} ms` : '—';
-    const modelSummary = formatLlmSummary(entry.llm, prompt);
+    const modelSummary = formatLlmSummary(entry.llm);
 
     if (entry.kind === 'rejection') {
       return `
@@ -694,11 +386,7 @@ Reason: ${esc(rejection.reason || 'blocked')}${Object.keys(rejection.detail || {
         </details>`;
     }
 
-    const typoLine = delivery.typo_applied
-      ? `Typo sent → corrected after ${Number(delivery.edit_delay_seconds || 0).toFixed(1)}s (${esc(delivery.edit_kind || 'edit')})`
-      : 'No human-like typo edit';
     const sentText = delivery.sent_text || (response.parsed_chunks || [])[0] || '';
-    const correctedText = delivery.corrected_text || sentText;
     const history = prompt.recent_history || '';
     const hints = (prompt.reply_hints || []).join('\n\n');
     return `
@@ -717,8 +405,7 @@ Reason: ${esc(rejection.reason || 'blocked')}${Object.keys(rejection.detail || {
         <div class="dcg-debug-block">${esc(response.raw || '—')}</div>
         ${(response.parsed_chunks || []).length > 1 ? `<div class="dcg-debug-label">Parsed chunks</div><div class="dcg-debug-block">${esc((response.parsed_chunks || []).join('\n---\n'))}</div>` : ''}
         <div class="dcg-debug-label">Delivery</div>
-        <div class="dcg-debug-block">${esc(typoLine)}
-${delivery.typo_applied ? `\nSent: ${esc(sentText)}\nCorrected: ${esc(correctedText)}` : `\nSent: ${esc(sentText)}`}
+        <div class="dcg-debug-block">Sent: ${esc(sentText)}
 ${response.strip_think_tags != null ? `\nThink tags stripped: ${response.strip_think_tags ? 'yes' : 'no'}` : ''}
 ${delivery.quote_reply_to ? `\nQuote-reply to: ${esc(delivery.quote_reply_to)}` : ''}
 Chunks sent: ${Number(delivery.chunks_sent) || 0}</div>
@@ -1150,120 +837,21 @@ function initBotAllowlistPicker(container, selectedIds) {
   }
 }
 
-const voiceTargetCatalog = {};
-let voiceTargetSelection = new Set();
-
-function voiceTargetLabel(value) {
-  return voiceTargetCatalog[value]?.label || value;
-}
-
-function syncVoiceTargetsField(container) {
-  const hidden = fieldByData(container, 'voice.join_targets');
-  if (hidden) {
-    hidden.value = [...voiceTargetSelection].sort().join('\n');
-  }
-}
-
-function renderVoiceTargetChips(container) {
-  const box = container.querySelector('#dcg-voice-target-chips');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!voiceTargetSelection.size) {
-    box.innerHTML = '<span class="dcg-help">None selected</span>';
-    return;
-  }
-  [...voiceTargetSelection].sort().forEach((value) => {
-    const chip = document.createElement('span');
-    chip.className = 'dcg-target-chip';
-    const text = document.createElement('span');
-    text.textContent = voiceTargetLabel(value);
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Remove');
-    btn.textContent = '×';
-    btn.addEventListener('click', () => {
-      voiceTargetSelection.delete(value);
-      const cb = checkboxByDataValue(container, 'dcg-voice-target-picker', value);
-      if (cb) cb.checked = false;
-      renderVoiceTargetChips(container);
-      syncVoiceTargetsField(container);
-    });
-    chip.appendChild(text);
-    chip.appendChild(btn);
-    box.appendChild(chip);
-  });
-}
-
-function renderVoiceTargetPicker(container, targets) {
-  const box = container.querySelector('#dcg-voice-target-picker');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!targets.length) {
-    box.innerHTML = '<p class="dcg-help" style="margin:0">No voice channels found. Connect a bot and ensure the daemon is running.</p>';
-    return;
-  }
-  const groups = {};
-  targets.forEach((target) => {
-    voiceTargetCatalog[target.value] = target;
-    const key = `${target.account}|${target.guild_id}`;
-    if (!groups[key]) {
-      groups[key] = { title: `${target.account} · ${target.guild_name}`, items: [] };
-    }
-    groups[key].items.push(target);
-  });
-  Object.values(groups).forEach((group) => {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'dcg-target-group';
-    const title = document.createElement('div');
-    title.className = 'dcg-target-group-title';
-    title.textContent = group.title;
-    groupEl.appendChild(title);
-    group.items.forEach((target) => {
-      const label = document.createElement('label');
-      label.className = 'dcg-target-option';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset.value = target.value;
-      cb.checked = voiceTargetSelection.has(target.value);
-      cb.addEventListener('change', () => {
-        if (cb.checked) voiceTargetSelection.add(target.value);
-        else voiceTargetSelection.delete(target.value);
-        renderVoiceTargetChips(container);
-        syncVoiceTargetsField(container);
-      });
-      const span = document.createElement('span');
-      const count = Number(target.member_count || 0);
-      span.textContent = count ? `${target.channel_name} (${count} in channel)` : target.channel_name;
-      label.appendChild(cb);
-      label.appendChild(span);
-      groupEl.appendChild(label);
-    });
-    box.appendChild(groupEl);
-  });
-}
-
-async function loadVoiceTargetPicker(container) {
-  const status = container.querySelector('#dcg-voice-target-status');
-  const refreshBtn = container.querySelector('#dcg-voice-target-refresh');
+async function loadVoiceChannelList(container) {
+  const status = container.querySelector('#dcg-voice-channels-status');
+  const list = container.querySelector('#dcg-voice-channels-list');
+  const refreshBtn = container.querySelector('#dcg-voice-channels-refresh');
+  if (!list) return;
   if (refreshBtn) refreshBtn.disabled = true;
   if (status) status.textContent = 'Loading…';
   try {
-    let data;
-    try {
-      data = await api('voice/targets');
-    } catch (err) {
-      if (!/404|not found/i.test(String(err.message))) throw err;
-      data = await api('channels/text?channel_type=voice');
-    }
+    const data = await api('voice/targets');
     if (data.error && !data.targets?.length) throw new Error(data.error);
-    renderVoiceTargetPicker(container, data.targets || []);
-    const count = (data.targets || []).length;
-    if (status) {
-      status.textContent = count
-        ? `${count} voice channel${count === 1 ? '' : 's'} available`
-        : (data.error || 'No connected bots');
-    }
-    renderVoiceTargetChips(container);
+    const targets = data.targets || [];
+    list.innerHTML = targets.length
+      ? targets.map((t) => `<div class="dcg-row"><span>${esc(t.label || t.channel_name || t.value)}</span><code>${esc(t.channel_id || t.value)}</code></div>`).join('')
+      : '<p class="dcg-help" style="margin:0">No voice channels visible to the connected bots.</p>';
+    if (status) status.textContent = `${targets.length} voice channel${targets.length === 1 ? '' : 's'}`;
   } catch (err) {
     if (status) status.textContent = err.message || 'Failed to load voice channels';
   } finally {
@@ -1271,36 +859,13 @@ async function loadVoiceTargetPicker(container) {
   }
 }
 
-function initVoiceTargetPicker(container, selectedTargets) {
-  voiceTargetSelection = new Set((selectedTargets || []).map((line) => String(line).trim()).filter(Boolean));
-  syncVoiceTargetsField(container);
-  renderVoiceTargetChips(container);
-
-  container.querySelector('#dcg-voice-target-refresh')?.addEventListener('click', () => loadVoiceTargetPicker(container));
-  container.querySelector('#dcg-voice-target-select-all')?.addEventListener('click', () => {
-    container.querySelectorAll('#dcg-voice-target-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = true;
-      voiceTargetSelection.add(cb.dataset.value);
-    });
-    renderVoiceTargetChips(container);
-    syncVoiceTargetsField(container);
-  });
-  container.querySelector('#dcg-voice-target-clear')?.addEventListener('click', () => {
-    voiceTargetSelection.clear();
-    container.querySelectorAll('#dcg-voice-target-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = false;
-    });
-    renderVoiceTargetChips(container);
-    syncVoiceTargetsField(container);
-  });
-
+function initVoiceChannelList(container) {
+  container.querySelector('#dcg-voice-channels-refresh')?.addEventListener('click', () => loadVoiceChannelList(container));
   if (container.querySelector('.dcg-notice')?.textContent?.includes('Daemon is running')) {
-    loadVoiceTargetPicker(container);
+    loadVoiceChannelList(container);
   }
 }
 
-// Voice prompt keeps the '' sentinel convention: matching the built-in default
-// stores blank so the plugin default can evolve without stale copies.
 function normalizedVoicePrompt(container) {
   const field = fieldByData(container, 'voice.conversation_prompt_template');
   if (!field) return '';
@@ -1312,23 +877,9 @@ function normalizedVoicePrompt(container) {
 
 // Flat dotted keys owned by the slot-mounted widget sections.
 function customSectionValues(container) {
-  const reply = readLlmBlockValues(container, 'dcg-llm');
-  // Voice block was missing here — voice.llm_provider/llm_model never saved
-  // from the UI (found during the 2026-08-05 slot conversion). ensure_voice_chat
-  // treats ''/'auto' as hands-off, so persisting 'auto' is safe.
-  const voice = readLlmBlockValues(container, 'dcg-voice-llm');
-  const vision = readLlmBlockValues(container, 'dcg-vision-llm');
   const flat = {
-    'cognitive.llm_primary': reply.provider,
-    'cognitive.llm_model': reply.model,
-    'voice.llm_provider': voice.provider,
-    'voice.llm_model': voice.model,
-    'media.vision_llm_provider': vision.provider,
-    'media.vision_llm_model': vision.model,
-    'reaction.sentiment_backend': container.querySelector('#dcg-sentiment-backend')?.value || 'vader',
     'channel.ignored_channels': [...ignoredChannelSelection].sort(),
     'bot.allowlist_ids': [...botAllowlistSelection].sort(),
-    'voice.join_targets': [...voiceTargetSelection].sort(),
     'voice.conversation_prompt_template': normalizedVoicePrompt(container),
   };
   return flat;
@@ -1374,7 +925,7 @@ function registerTab() {
     id: PLUGIN_NAME,
     name: 'Discord',
     icon: '🎮',
-    helpText: 'Discord bot accounts, conversation behavior, social reactions, delivery quirks, safety, media, and voice settings. Greetings live on the Discord: Greetings / All interactions daemon tasks.',
+    helpText: 'Discord bot accounts, conversation behavior, reactions, safety, media, and voice settings. Greetings live on the Discord: Greetings / All interactions daemon tasks.',
 
     load: () => loadPanelData(),
 
@@ -1382,7 +933,7 @@ function registerTab() {
       try {
         renderShell(container, data || {});
       } catch (err) {
-        console.error('[discord_cognitive] settings render failed:', err);
+        console.error('[discord] settings render failed:', err);
         container.innerHTML = `<p style="color:var(--error)">Failed to render settings: ${esc(err.message)}</p>`;
       }
     },
@@ -1395,13 +946,7 @@ function registerTab() {
       // mount threw), refuse; the settings page surfaces this as
       // "Save failed: …" instead of a lying success toast.
       const box = container.querySelector('#dcg-schema-form');
-      // Guard EVERY slot customSectionValues reads, not just the reply LLM —
-      // a failed Media/Voice slot mount returns fabricated
-      // {provider:'auto'} values that would overwrite explicit pins on save.
-      // Residual of the 2026-08-05 wipe-guard class.
-      const slotPrefixes = ['dcg-llm', 'dcg-voice-llm', 'dcg-vision-llm'];
-      const missing = slotPrefixes.filter((p) => !container.querySelector(`#${p}-primary`));
-      if (!box || missing.length) {
+      if (!box) {
         throw new Error('Discord panel is still loading — wait a moment and save again.');
       }
       const schemaValues = _SCHEMA.length ? readSettingsForm(box, _SCHEMA) : {};

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import time
 
-from plugins.discord.models.settings import SettingsOverlay, SettingsStore
 
 
 class ChannelRepository:
@@ -71,31 +68,3 @@ class ChannelRepository:
             (user_id,),
         ).fetchone()
         return dict(row) if row else None
-
-    def save_settings_override(self, scope_type: str, scope_id: str, overlay: SettingsOverlay) -> None:
-        conn = self.sqlite_service.connection()
-        conn.execute(
-            '''
-            INSERT INTO settings_overrides (scope_type, scope_id, payload_json, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(scope_type, scope_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at
-            ''',
-            (scope_type, scope_id, json.dumps(overlay.to_dict()), time.time()),
-        )
-        conn.commit()
-
-    def load_settings_store(self) -> SettingsStore:
-        conn = self.sqlite_service.connection()
-        rows = conn.execute('SELECT scope_type, scope_id, payload_json FROM settings_overrides').fetchall()
-        payload = {'global': {}, 'guilds': {}, 'channels': {}, 'dms': {}}
-        for row in rows:
-            data = json.loads(row['payload_json'])
-            if row['scope_type'] == 'global':
-                payload['global'] = data
-            elif row['scope_type'] == 'guild':
-                payload['guilds'][row['scope_id']] = data
-            elif row['scope_type'] == 'channel':
-                payload['channels'][row['scope_id']] = data
-            elif row['scope_type'] == 'dm':
-                payload['dms'][row['scope_id']] = data
-        return SettingsStore.from_dict(payload)

@@ -20,16 +20,14 @@ def deliver_gif_and_reaction(
     gif_service = getattr(runtime, 'gif_service', None)
     transport = getattr(runtime, 'transport', None)
     trace_repository = getattr(runtime, 'trace_repository', None)
-    reaction_service = getattr(runtime, 'reaction_service', None)
 
     if not transport or not reply_style:
         return
 
     message_id = str(message_id or '')
     reaction = parsed.reaction
-    if reaction_service:
-        reaction = reaction_service.maybe_react(parsed) or reaction
-    if reaction and trigger_message_id:
+    reaction_on = bool(getattr(getattr(settings, 'reaction', None), 'enabled', True))
+    if reaction and trigger_message_id and reaction_on:
         transport.add_reaction_sync(
             channel_id,
             trigger_message_id,

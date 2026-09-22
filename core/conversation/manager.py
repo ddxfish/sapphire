@@ -93,7 +93,11 @@ class ConversationManager:
             self.system,
             chat_name=chat_name,
             tts_split=tts_split,
-            start_word=str(getattr(config, "CONVERSATION_START_WORD", "")),
+            # A surface may pin its own start word — "" for a Discord voice
+            # channel, where everything said is already addressed by the plugin's
+            # own gate (S6, 2026-09-22). Absent from tuning = the global setting.
+            start_word=(str(t["start_word"]) if "start_word" in t
+                        else str(getattr(config, "CONVERSATION_START_WORD", ""))),
             start_word_fuzzy=float(getattr(config, "CONVERSATION_START_WORD_FUZZY", 0.7)),
             endpoint_silence_ms=int(t.get("endpoint_silence_ms") or
                                     getattr(config, "CONVERSATION_ENDPOINT_SILENCE_MS", 700)),

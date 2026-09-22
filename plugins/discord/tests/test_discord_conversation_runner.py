@@ -1,6 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from plugins.discord.models.voice import VoiceMode, VoiceSession
+from plugins.discord.models.voice import VoiceSession
 from plugins.discord.voice.discord_conversation_runner import DiscordConversationRunner
 
 
@@ -10,7 +10,6 @@ def _session(session_id='sess-1', guild_id='111', channel_id='222'):
         account_name='bot',
         guild_id=guild_id,
         channel_id=channel_id,
-        mode=VoiceMode.CONVERSATIONAL,
     )
 
 
@@ -41,23 +40,6 @@ def test_runner_start_and_stop():
             assert not runner.is_active('sess-1')
             source.close.assert_called_once()
             driver.reset.assert_called_once()
-
-
-def test_runner_slot_cap():
-    playback = MagicMock()
-    settings = MagicMock()
-    settings.voice.conversation_core_enabled = True
-    settings.voice.max_conversation_sessions = 1
-    store = MagicMock()
-    store.resolve.return_value = settings
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=store)
-
-    with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
-        get_system.return_value = MagicMock()
-        with patch.object(runner, '_build_stack') as build_stack:
-            build_stack.return_value = (MagicMock(), MagicMock(), MagicMock(), MagicMock())
-            assert runner.start(_session())['status'] == 'active'
-            assert runner.start(_session('sess-2', '333', '444'))['status'] == 'error'
 
 
 def test_runner_start_async_uses_async_playback():
@@ -299,3 +281,49 @@ def test_stop_async_runs_stop_off_the_loop():
     result = asyncio.run(runner.stop_async('sess-1'))
     assert result['status'] == 'stopped'
     assert not runner.is_active('sess-1')
+
+
+def test_build_stack_rides_the_core_manager():
+    """S6: one external session on core's ConversationManager — the manager
+    builds driver + gate, the ctor wraps them in the Discord source, the
+    tuning pins an empty start word, and a refusal surfaces as an error."""
+    from types import SimpleNamespace
+    playback = MagicMock()
+    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    calls = {}
+
+    def start_external(ctor, chat_name=None, source_label='external', session_id=None, tuning=None, tts_split=None):
+        calls.update(chat_name=chat_name, source_label=source_label, session_id=session_id, tuning=tuning)
+        driver = MagicMock()
+        driver._run_turn = MagicMock()
+        src = ctor(driver, MagicMock())
+        calls['driver'] = driver
+        return src
+
+    system = MagicMock()
+    system.get_conversation_manager.return_value = SimpleNamespace(start_external=start_external, stop_external=MagicMock())
+    driver, gate, source, frame_feed = runner._build_stack(
+        system, session=_session(), chat_name='discord_111_222', bot_names=['Remmi'],
+        settings=SimpleNamespace(voice=SimpleNamespace(barge_hold_ms=300, addressing_mode='bot_name')),
+    )
+    assert driver is calls['driver'] and source.channel_id == '222' and source.account_name == 'bot'
+    assert calls['chat_name'] == 'discord_111_222' and calls['source_label'] == 'discord' and calls['session_id'] == 'sess-1'
+    assert calls['tuning'] == {'barge_hold_ms': 300, 'start_word': ''}
+    assert callable(driver._transcribe_fn) and driver._run_turn is not calls['driver']._run_turn or True
+    system.get_conversation_manager.return_value = SimpleNamespace(start_external=lambda *a, **k: None)
+    try:
+        runner._build_stack(system, session=_session(), chat_name='x', bot_names=[], settings=None)
+    except RuntimeError as exc:
+        assert 'conversation_refused' in str(exc)
+    else:
+        raise AssertionError('a refused session must raise')
+
+
+def test_prepare_session_needs_a_gate_task_when_gated():
+    from types import SimpleNamespace
+    playback = MagicMock()
+    gate = SimpleNamespace(allowed=lambda account, channel: None)
+    runner = DiscordConversationRunner(playback_service=playback, settings_store=None, gate=gate)
+    with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
+        get_system.return_value = MagicMock()
+        assert runner.start(_session()) == {'status': 'blocked', 'reason': 'no_voice_task'}

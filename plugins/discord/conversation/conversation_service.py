@@ -5,7 +5,7 @@ import time
 from plugins.discord.conversation.trigger_service import evaluate_organic_chance, evaluate_reply_trigger
 from plugins.discord.conversation.name_match import bot_names_for_account
 from plugins.discord.conversation.gif_service import build_gif_reply_hint
-from plugins.discord.conversation.media_prompt import build_reply_content
+from plugins.discord.conversation.images import image_urls
 from plugins.discord.conversation.typing_indicator import (
     human_pause_seconds,
     inter_chunk_pause_seconds,
@@ -27,17 +27,15 @@ class ConversationService:
         policy_service,
         prompt_context_service,
         trace_repository,
-        media_service=None,
+        image_lane=None,
         reply_style_service=None,
-        delivery_style_service=None,
-        edit_history_service=None,
         transport=None,
         gif_service=None,
         reaction_service=None,
         settings_store=None,
         trace_service=None,
         account_repository=None,
-        bot_session_service=None,
+        bot_gate=None,
         mention_map_service=None,
         llm_debug_service=None,
     ):
@@ -46,21 +44,17 @@ class ConversationService:
         self.prompt_context_service = prompt_context_service
         self.trace_repository = trace_repository
         self.reply_style_service = reply_style_service
-        self.delivery_style_service = delivery_style_service
-        self.edit_history_service = edit_history_service
         self.transport = transport
         self.gif_service = gif_service
         self.reaction_service = reaction_service
         self.settings_store = settings_store
         self.trace_service = trace_service
         self.account_repository = account_repository
-        self.bot_session_service = bot_session_service
+        self.bot_gate = bot_gate
         self.mention_map_service = mention_map_service
         self.llm_debug_service = llm_debug_service
         self._pending: dict[str, dict] = {}
-        # Image-IN lane (Wave F): the container never handed this over, so
-        # _payload_images always returned [] in production (row 14).
-        self.media_service = media_service
+        self.image_lane = image_lane
 
     def process_batch(self, batch) -> bool:
         trigger = batch.observations[-1]
@@ -72,11 +66,7 @@ class ConversationService:
             if getattr(candidate, 'mentioned', False):
                 trigger = candidate
                 break
-        settings = self.settings_store.resolve(
-            guild_id=trigger.guild_id,
-            channel_id=trigger.channel_id,
-            dm_id=trigger.channel_id if trigger.is_dm else None,
-        ) if self.settings_store else None
+        settings = self.settings_store.resolve() if self.settings_store else None
         trigger_eval = evaluate_reply_trigger(
             trigger,
             settings,
@@ -118,33 +108,10 @@ class ConversationService:
                 detail=trigger_eval,
             )
             return False
+        author_is_bot = bool(getattr(trigger, 'author_is_bot', False))
         bot_organic_candidate = False
-        if self.bot_session_service and settings:
-            channel_settings = getattr(settings, 'channel', None)
-            name_match_enabled = bool(getattr(channel_settings, 'name_match_enabled', False))
-            bot_names = bot_names_for_account(
-                trigger.account_name,
-                transport=self.transport,
-                account_repository=self.account_repository,
-            )
-            # Open debate windows from ANY human message in the batch — the
-            # gate only evaluates the trigger, but the human who tagged the
-            # bots is often an earlier observation in the same batch.
-            for prior in batch.observations:
-                if prior is trigger or getattr(prior, 'author_is_bot', False):
-                    continue
-                if getattr(prior, 'mentioned', False):
-                    self.bot_session_service.evaluate(
-                        prior, settings, respond_trigger=True,
-                        bot_names=bot_names, name_match_enabled=name_match_enabled,
-                    )
-            bot_decision = self.bot_session_service.evaluate(
-                trigger,
-                settings,
-                respond_trigger=bool(trigger_eval['respond_trigger']),
-                bot_names=bot_names,
-                name_match_enabled=name_match_enabled,
-            )
+        if self.bot_gate and settings:
+            bot_decision = self.bot_gate.evaluate(trigger, settings)
             if not bot_decision.get('allowed'):
                 self._maybe_execute_silent_reaction(
                     trigger, settings, world_state,
@@ -155,21 +122,21 @@ class ConversationService:
                         'message_id': trigger.message_id,
                         'author_id': trigger.author_id,
                     })
-                self.trace_repository.record_trace('event_dropped', 'Bot session gate blocked message', bot_decision)
+                self.trace_repository.record_trace('event_dropped', 'Bot gate blocked message', bot_decision)
                 self._record_debug_rejection(
                     trigger,
                     reason=str(bot_decision.get('reason') or 'bot_blocked'),
-                    stage='bot_session',
+                    stage='bot_gate',
                     detail=bot_decision,
                 )
                 return False
-            bot_organic_candidate = bool(bot_decision.get('organic_candidate'))
+            bot_organic_candidate = author_is_bot
         respond = bool(trigger_eval['respond_trigger']) or bool(trigger.is_dm) \
             or str(trigger_eval.get('reply_mode', '')) == 'all'
         organic_reply = False
         # Chance-based organic replies: default mode only, channel messages that
         # did not address her. DMs always reply. Mentions/name match bypass.
-        # Bot organic rolls run only after bot session marks a candidate.
+        # Bot organic rolls only for bots the bot gate let through.
         if (
             not respond
             and str(trigger_eval.get('reply_mode', '')) == 'default'
@@ -235,7 +202,7 @@ class ConversationService:
         except Exception:
             pass
         context = self.prompt_context_service.build(batch)
-        reply_content = build_reply_content(trigger.clean_content, context.get('media') or [])
+        reply_content = self._reply_content(trigger)
         mention_map = {}
         if self.mention_map_service:
             mention_map = self.mention_map_service.build_for_channel(
@@ -314,22 +281,10 @@ class ConversationService:
         if hints:
             payload['reply_hints'] = hints
             payload['reply_instructions'] = '\n\n'.join(hints)
-        if self.edit_history_service:
-            edit_hint = self.edit_history_service.build_prompt_hint(trigger.account_name, trigger.channel_id)
-            if edit_hint:
-                hints = list(payload.get('reply_hints') or [])
-                hints.append(edit_hint)
-                payload['reply_hints'] = hints
-                payload['reply_instructions'] = '\n\n'.join(hints)
-        if settings:
-            from plugins.discord.sapphire.llm_settings import llm_event_fields
-
-            payload.update(llm_event_fields(settings))
         payload['_debug_prompt_context'] = {
             'source': 'discord_message',
             'reason': intention.reason,
             'batch_size': batch.message_count,
-            'edit_history_hint': context.get('edit_history_hint') or '',
         }
         accepted = self.event_bridge.emit_discord_message(payload)
         if not accepted:
@@ -338,6 +293,8 @@ class ConversationService:
             self.trace_repository.record_trace('event_dropped', 'No Sapphire task accepted event', {'message_id': trigger.message_id})
             self._record_debug_rejection(trigger, reason='no_daemon_task', stage='daemon')
             return False
+        if self.bot_gate:
+            self.bot_gate.note_reply(trigger.account_name, trigger.channel_id, author_is_bot=author_is_bot)
         self._sweep_pending()
         self._pending[trigger.message_id] = {
             'channel_id': trigger.channel_id,
@@ -418,11 +375,7 @@ class ConversationService:
         account_name = str((event_data or {}).get('account', '') or '')
         channel_id = str((event_data or {}).get('channel_id', '') or '')
         guild_id = str((event_data or {}).get('guild_id', '') or '')
-        settings = self.settings_store.resolve(
-            guild_id=guild_id,
-            channel_id=channel_id,
-            dm_id=channel_id if str(event_data.get('is_dm', '')).lower() in {'true', '1'} else None,
-        ) if self.settings_store else None
+        settings = self.settings_store.resolve() if self.settings_store else None
         delivery = settings.channel if settings else None
         strip_thinking = delivery.strip_think_tags if delivery else True
         proactive_kind = str((event_data or {}).get('proactive_kind') or '').strip()
@@ -478,21 +431,12 @@ class ConversationService:
             return {'status': 'empty'}
 
         trigger_content = str((event_data or {}).get('content', ''))
-        if self.delivery_style_service:
-            plan = self.delivery_style_service.plan_delivery(
-                parsed=parsed,
-                raw_text=response_text or '',
-                event_data=event_data or {},
-                settings=settings,
-                trigger_content=trigger_content,
-            )
-            chunks = plan.chunks
-            reply_to_default = plan.reply_to_message_id
-            edit_plan = plan
-        else:
-            chunks = parsed.chunks
-            reply_to_default = None
-            edit_plan = None
+        chunks = list(parsed.chunks)
+        # Quote the message she is answering (first chunk only) — a
+        # reply_planned handler may clear or change it; scheduled posts never quote.
+        reply_to_default = ''
+        if not proactive_kind:
+            reply_to_default = str((event_data or {}).get('reply_to_message_id') or '').strip() or message_id
 
         # S0 door: add-ons may reshape the reply before it goes out (worker
         # thread). A handler can reorder/rewrite chunks, pick the quote target,
@@ -501,15 +445,14 @@ class ConversationService:
             'account': account_name, 'guild_id': guild_id, 'channel_id': channel_id,
             'message_id': message_id, 'proactive_kind': proactive_kind,
             'is_dm': str((event_data or {}).get('is_dm', '')).lower() in {'true', '1'},
+            'trigger_content': trigger_content,
             'chunks': list(chunks), 'quote_reply': reply_to_default,
-            'reaction': parsed.reaction or '', 'delay_s': 0.0,
+            'reaction': parsed.reaction or '', 'edit_text': parsed.edit_text or '', 'delay_s': 0.0,
         })
         hook_chunks = [str(c) for c in (plan_ev.metadata.get('chunks') or []) if str(c).strip()]
         if hook_chunks:
             chunks = hook_chunks
-        quote_from_hook = plan_ev.metadata.get('quote_reply') != reply_to_default
-        if quote_from_hook:
-            reply_to_default = plan_ev.metadata.get('quote_reply')
+        reply_to_first = str(plan_ev.metadata.get('quote_reply') or '')
         hook_reaction = str(plan_ev.metadata.get('reaction') or '')
         try:
             hook_delay = max(0.0, min(30.0, float(plan_ev.metadata.get('delay_s') or 0.0)))
@@ -532,23 +475,10 @@ class ConversationService:
                     typing_duration_seconds(len(chunk), text=chunk),
                     account_name=account_name or None,
                 )
-            reply_to = None
-            if index == 0 and not proactive_kind:
-                if edit_plan is not None or quote_from_hook:
-                    # The delivery plan (or a reply_planned handler) decided
-                    # ('' = deliberately unquoted).
-                    # The old None-fallback below re-quoted every reply and
-                    # made the smart-quote heuristic and its toggle dead.
-                    reply_to = reply_to_default or None
-                else:
-                    raw_reply_to = str(event_data.get('reply_to_message_id') or '').strip()
-                    if not raw_reply_to and message_id and not str(message_id).startswith('task-followup-'):
-                        raw_reply_to = message_id
-                    reply_to = raw_reply_to or None
             send_result = self.transport.send_message_sync(
                 channel_id,
                 chunk,
-                reply_to_message_id=reply_to,
+                reply_to_message_id=(reply_to_first or None) if index == 0 else None,
                 account_name=account_name or None,
                 guild_id=guild_id or None,
             )
@@ -561,13 +491,6 @@ class ConversationService:
                 break
             if send_result.get('messages'):
                 sent_message_ids.extend(str(item.get('message_id', '')) for item in send_result['messages'])
-            if self.bot_session_service and send_result.get('messages'):
-                last_sent = send_result['messages'][-1]
-                self.bot_session_service.record_sent_message(
-                    account_name,
-                    channel_id,
-                    str(last_sent.get('message_id', '')),
-                )
 
         # A failed chunk send breaks the loop above. If NOTHING landed, say so —
         # falling through to 'sent' made the daemon log "reply delivered" over a
@@ -588,50 +511,11 @@ class ConversationService:
                     'error': (result[-1].get('error') or 'send failed'),
                     'chunks': 0}
 
-        if edit_plan and edit_plan.edit_text and sent_message_ids and self.transport:
-            edit_index = min(edit_plan.edit_chunk_index, len(sent_message_ids) - 1)
-            target_message_id = sent_message_ids[edit_index]
-            original_text = chunks[edit_index] if edit_index < len(chunks) else ''
-            if edit_plan.edit_delay > 0:
-                time.sleep(edit_plan.edit_delay)
-            edit_result = self.transport.edit_message_sync(
-                channel_id,
-                target_message_id,
-                edit_plan.edit_text,
-                account_name=account_name or None,
-            )
-            if edit_result.get('status') != 'error' and self.edit_history_service:
-                self.edit_history_service.record(
-                    account_name,
-                    channel_id,
-                    message_id=target_message_id,
-                    before=original_text,
-                    after=edit_plan.edit_text,
-                    kind='auto_typo' if original_text != edit_plan.edit_text else 'edit',
-                )
-                self.trace_repository.record_trace('delivery_edit', 'Applied post-send message edit', {
-                    'message_id': target_message_id,
-                    'channel_id': channel_id,
-                })
-            delivery_debug = {
-                'typo_applied': original_text != edit_plan.edit_text and bool(edit_plan.edit_text),
-                'sent_text': original_text,
-                'corrected_text': edit_plan.edit_text,
-                'edit_delay_seconds': float(edit_plan.edit_delay or 0.0),
-                'edit_kind': 'auto_typo' if original_text != edit_plan.edit_text else 'edit',
-                'quote_reply_to': str(reply_to_default or ''),
-                'chunks_sent': len(sent_message_ids),
-            }
-        else:
-            delivery_debug = {
-                'typo_applied': False,
-                'sent_text': chunks[0] if chunks else '',
-                'corrected_text': chunks[0] if chunks else '',
-                'edit_delay_seconds': 0.0,
-                'edit_kind': '',
-                'quote_reply_to': str(reply_to_default or '') if edit_plan is not None else '',
-                'chunks_sent': len(sent_message_ids),
-            }
+        delivery_debug = {
+            'sent_text': chunks[0] if chunks else '',
+            'quote_reply_to': reply_to_first,
+            'chunks_sent': len(sent_message_ids),
+        }
         # S0 door: what actually landed (worker thread).
         hooks_out.fire('discord_reply_sent', {
             'account': account_name, 'guild_id': guild_id, 'channel_id': channel_id,
@@ -649,11 +533,10 @@ class ConversationService:
                 strip_think_tags=strip_thinking,
                 delivery=delivery_debug,
             )
-        reaction = hook_reaction or parsed.reaction
-        if self.reaction_service:
-            reaction = self.reaction_service.maybe_react(parsed) or reaction
-        if reaction and not proactive_kind:
-            self.transport.add_reaction_sync(channel_id, message_id, reaction, account_name=account_name or None)
+        # A reply_planned handler's reaction lands here; the model's own
+        # [react:] tag rides deliver_gif_and_reaction (gated by reaction.enabled).
+        if hook_reaction and hook_reaction != (parsed.reaction or '') and not proactive_kind:
+            self.transport.add_reaction_sync(channel_id, message_id, hook_reaction, account_name=account_name or None)
         from plugins.discord.daemon import get_runtime
 
         deliver_gif_and_reaction(
@@ -674,37 +557,21 @@ class ConversationService:
         return {'status': 'sent',
                 'chunks': len([r for r in result if r.get('status') != 'error'])}
 
-    _PAYLOAD_IMAGE_MAX = 4
-
     def _payload_images(self, trigger, settings) -> list[dict]:
-        media = getattr(settings, 'media', None) if settings else None
-        if not media or not getattr(media, 'enabled', False) or not getattr(media, 'image_understanding_enabled', False):
-            return []
-        service = getattr(self, 'media_service', None)
-        bridge = getattr(service, 'vision_bridge', None) if service else None
-        # Cache-only: process_batch runs ON the daemon loop; a fetch here
-        # froze the gateway for every account (broadsword H5). The caption
-        # lane already pulled these bytes off-loop — read its cache.
-        fetch = getattr(bridge, 'cached_bytes', None)
-        if not callable(fetch) or not getattr(trigger, 'attachments', None):
-            return []
-        import base64
-        out: list[dict] = []
-        try:
-            artifacts = service.detect_artifacts(trigger.message_id, trigger.channel_id, trigger.account_name, trigger.attachments)
-        except Exception:
-            return []
-        for artifact in artifacts:
-            if artifact.media_kind not in ('image', 'gif') or not artifact.source_url:
-                continue
-            hit = fetch(artifact.source_url)   # the caption lane's bytes (10 MB cap, no redirects) or None
-            if not hit or not hit[0]:
-                continue
-            data, media_type = hit
-            out.append({'data': base64.b64encode(data).decode('ascii'), 'media_type': str(media_type or 'image/png')})
-            if len(out) >= self._PAYLOAD_IMAGE_MAX:
-                break
-        return out
+        """Cache only — process_batch runs ON the daemon loop (broadsword H5)."""
+        lane = getattr(self, 'image_lane', None)
+        return lane.payload_images(trigger, settings) if lane else []
+
+    @staticmethod
+    def _reply_content(trigger) -> str:
+        text = str(getattr(trigger, 'clean_content', '') or '')
+        if text.strip():
+            return text
+        # Never emit an empty content field: core's event formatter falls back
+        # to the raw JSON payload — routing metadata in her prompt (2026-08-06).
+        if image_urls(getattr(trigger, 'attachments', None)):
+            return '[The user sent an image with no caption.]'
+        return '[The user sent a message with no text — an attachment, sticker, or embed.]'
 
     def _dm_within_budget(self, trigger, settings) -> bool:
         """safety.dm_daily_budget (M19): DM messages per person per day she

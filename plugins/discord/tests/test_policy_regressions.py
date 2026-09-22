@@ -1,26 +1,7 @@
 from plugins.discord.conversation.policy_service import PolicyService
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
-from plugins.discord.models.intentions import ReplyMessageIntention, SpeakVoiceIntention
-from plugins.discord.models.settings import EffectiveSettings, SafetySettings, VoiceSettings
-
-
-def test_high_irritability_blocks_voice_speak():
-    policy = PolicyService()
-    settings = EffectiveSettings(
-        voice=VoiceSettings(enabled=True, speaking_enabled=True, mode='conversational'),
-    )
-    intention = SpeakVoiceIntention(
-        intention_type='speak_voice',
-        account_name='alpha',
-        channel_id='vc1',
-        message_id='',
-        reason='approved_reply',
-        text='hello',
-    )
-    decision = policy.evaluate_voice_speak(intention, settings)
-    assert decision['allowed'] is True
-    settings.voice.enabled = False   # the one switch (the emergency twin was removed, broadsword H4)
-    assert policy.evaluate_voice_speak(intention, settings)['allowed'] is False
+from plugins.discord.models.intentions import ReplyMessageIntention
+from plugins.discord.models.settings import EffectiveSettings, SafetySettings
 
 
 def test_no_double_send_when_tool_already_replied():

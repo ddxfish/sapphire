@@ -1,10 +1,4 @@
 from plugins.discord.observability.llm_debug_service import LlmDebugService
-from plugins.discord.sapphire.llm_settings import resolve_task_llm
-
-
-class _Loader:
-    def get_enabled_daemon_task(self, event_name, account=None):
-        return {'provider': 'claude', 'model': 'claude-sonnet-5', 'name': 'Discord Reply'}
 
 
 def test_llm_debug_keeps_last_ten_and_records_typo_delivery():
@@ -21,8 +15,8 @@ def test_llm_debug_keeps_last_ten_and_records_typo_delivery():
             raw_text=f'reply {index}',
             parsed_chunks=[f'reply {index}'],
             status='sent',
-            task={'name': 'Discord Reply', 'provider': 'auto', 'model': ''},
-            event_data={'account': 'bot', 'llm_primary': 'claude', 'llm_model': 'claude-sonnet-5'},
+            task={'name': 'Discord Reply', 'provider': 'claude', 'model': 'claude-sonnet-5'},
+            event_data={'account': 'bot'},
             delivery={
                 'typo_applied': index == 11,
                 'sent_text': 'teh' if index == 11 else f'reply {index}',
@@ -38,7 +32,7 @@ def test_llm_debug_keeps_last_ten_and_records_typo_delivery():
     assert len(entries) == 10
     assert entries[0]['message_id'] == 'msg-11'
     assert entries[0]['delivery']['typo_applied'] is True
-    assert entries[0]['llm']['event_primary'] == 'claude'
+    assert entries[0]['llm'] == {'configured_primary': 'claude', 'configured_model': 'claude-sonnet-5', 'task_name': 'Discord Reply', 'task_id': ''}
     assert entries[-1]['message_id'] == 'msg-2'
 
 
@@ -58,17 +52,3 @@ def test_llm_debug_records_policy_rejection():
     assert len(entries) == 1
     assert entries[0]['kind'] == 'rejection'
     assert entries[0]['rejection']['reason'] == 'cooldown'
-
-
-def test_resolve_task_llm_uses_event_override_and_daemon_task():
-    resolved = resolve_task_llm(
-        {'provider': 'auto', 'model': '', 'name': 'Discord Reply'},
-        {'account': 'bot', 'llm_primary': 'openai', 'llm_model': 'gpt-4o'},
-        plugin_loader=_Loader(),
-    )
-    assert resolved['configured_primary'] == 'auto'
-    assert resolved['event_primary'] == 'openai'
-    assert resolved['event_model'] == 'gpt-4o'
-    assert resolved['resolved_primary'] == 'openai'
-    assert resolved['resolved_model'] == 'gpt-4o'
-    assert resolved['task_name'] == 'Discord Reply'

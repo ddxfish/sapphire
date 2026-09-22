@@ -113,10 +113,7 @@ def resolve_voice_conversation_context(chat_name: str) -> str:
             from plugins.discord.daemon import get_runtime
             runtime = get_runtime()
             if runtime and runtime.settings_store:
-                settings = runtime.settings_store.resolve(
-                    guild_id=guild_id,
-                    channel_id=channel_id,
-                )
+                settings = runtime.settings_store.resolve()
                 prompt_template = str(
                     getattr(settings.voice, 'conversation_prompt_template', '') or ''
                 )

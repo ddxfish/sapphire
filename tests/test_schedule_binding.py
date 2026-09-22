@@ -107,7 +107,13 @@ def test_discord_manifest_has_no_proactive_legs_left():
     keys = {s["key"] for s in caps["settings"] if "key" in s}
     assert not any(k.startswith(("proactive.", "presence.", "profile.")) for k in keys)
     sources = {s["name"]: s for s in caps["daemon"]["event_sources"]}
-    assert set(sources) == {"discord_message", "discord_greetings", "discord_all"}
+    assert set(sources) == {"discord_message", "discord_greetings", "discord_all", "discord_voice"}
+    assert sources["discord_voice"].get("realtime") is True
+    # S6.1: the voice rule picks its channels with daemon filter rows (blank = all), auto-join is opt-in.
+    voice = sources["discord_voice"]
+    assert [f["key"] for f in voice["task_fields"]] == ["account", "auto_join", "keep_chat_history"]
+    assert next(f for f in voice["task_fields"] if f["key"] == "auto_join")["default"] is False
+    assert {"guild_name", "channel_name", "guild_name_not", "channel_name_not", "guild_id", "channel_id"} == {f["key"] for f in voice["filter_fields"]}
     for name in ("discord_greetings", "discord_all"):
         fields = {f["key"]: f for f in sources[name]["task_fields"]}
         assert {"account", "channels", "greeting_time", "goodnight_time"} <= set(fields)

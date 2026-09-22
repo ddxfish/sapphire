@@ -1,42 +1,22 @@
 from __future__ import annotations
 
-import re
-
 from plugins.discord.conversation.transcript_service import format_recent_history
 
 
 class PromptContextService:
-    def __init__(
-        self,
-        *,
-        message_repository,
-        media_service=None,
-        trace_service=None,
-        edit_history_service=None,
-    ):
+    """The reply's context: the channel transcript, keyed to the trigger's identity."""
+
+    def __init__(self, *, message_repository):
         self.message_repository = message_repository
-        self.media_service = media_service
-        self.trace_service = trace_service
-        self.edit_history_service = edit_history_service
 
     def build(self, batch, trigger=None) -> dict:
         # One identity for the whole turn: the reply gates key off the newest
-        # ADDRESSED message, but this used to build profile facts, recall and
-        # the transcript exclusion from observations[-1] — Bob's stored notes
-        # labelled with Alice's name (hunt 2.13.0, row 15).
+        # ADDRESSED message, so the transcript exclusion does too — not
+        # observations[-1] (hunt 2.13.0, row 15).
         last = trigger or getattr(batch, 'trigger', None) or batch.observations[-1]
-        transcript_rows = self.message_repository.get_recent_messages(last.account_name, last.channel_id, limit=20)
-        media_by_message = {}
-        if self.media_service:
-            message_ids = [str(row.get('message_id') or '') for row in transcript_rows]
-            media_by_message = self.media_service.build_context_map(message_ids)
-        transcript = format_recent_history(
-            transcript_rows,
-            media_by_message,
-            exclude_message_id=last.message_id,
-        )
-        context = {
-            'recent_history': transcript,
+        rows = self.message_repository.get_recent_messages(last.account_name, last.channel_id, limit=20)
+        return {
+            'recent_history': format_recent_history(rows, exclude_message_id=last.message_id),
             'channel_id': last.channel_id,
             'channel_name': last.channel_name,
             'guild_name': last.guild_name,
@@ -44,90 +24,3 @@ class PromptContextService:
             'author_id': last.author_id,
             'attachments': last.attachments,
         }
-        if self.edit_history_service:
-            edit_hint = self.edit_history_service.build_prompt_hint(last.account_name, last.channel_id)
-            if edit_hint:
-                context['edit_history_hint'] = edit_hint
-        if self.media_service:
-            media_context = []
-            media_message_id = self._media_context_message_id(batch)
-            if media_message_id:
-                media_context = self.media_service.build_context(media_message_id)
-            if media_context:
-                context['media'] = media_context
-            if self.trace_service and media_context:
-                self.trace_service.record_media_interpreted({
-                    'message_id': media_message_id,
-                    'artifacts': len(media_context),
-                })
-        return context
-
-    def _media_context_message_id(self, batch) -> str:
-        last = batch.observations[-1]
-        if last.attachments:
-            return last.message_id
-
-        reply_to = str(getattr(last, 'reply_to_message_id', '') or '')
-        if reply_to and self.media_service and self.media_service.message_has_media(reply_to):
-            return reply_to
-
-        recent_media_message = self._most_recent_media_message(batch.observations[:-1])
-        if recent_media_message:
-            if self._is_explicit_media_follow_up(last.clean_content):
-                return recent_media_message.message_id
-            if reply_to == recent_media_message.message_id:
-                return recent_media_message.message_id
-
-        if self._is_explicit_media_follow_up(last.clean_content) and self.media_service:
-            return self.media_service.get_recent_media_message_id(last.channel_id)
-
-        return ''
-
-    def _most_recent_media_message(self, observations) -> object | None:
-        for observation in reversed(observations):
-            if getattr(observation, 'attachments', None):
-                return observation
-        return None
-
-    def _is_explicit_media_follow_up(self, text: str) -> bool:
-        normalized = ' '.join((text or '').lower().split())
-        if not normalized:
-            return False
-
-        explicit_phrases = (
-            'what is this image',
-            'what is this gif',
-            'what is this picture',
-            'what is this photo',
-            'what is in this image',
-            'what is in this picture',
-            'what is in this photo',
-            'what does this image show',
-            'what does this picture show',
-            'what does this photo show',
-            'describe this image',
-            'describe this picture',
-            'describe this photo',
-            'describe this gif',
-            'can you see the image',
-            'can you see this image',
-            'can you see the picture',
-            'can you see this picture',
-            'can you see the photo',
-            'can you see this photo',
-            'can you see the gif',
-            'can you see this gif',
-            'do you see the image',
-            'do you see this image',
-            'do you see the picture',
-            'do you see this picture',
-        )
-        if any(phrase in normalized for phrase in explicit_phrases):
-            return True
-
-        if re.search(r'\b(can|do) you see\b', normalized):
-            return any(token in normalized for token in (
-                'image', 'picture', 'photo', 'gif', ' pic', 'this', 'that', 'it',
-            ))
-
-        return False

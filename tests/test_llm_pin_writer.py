@@ -167,8 +167,6 @@ def test_no_resolver_copies_remain():
     checks = {
         'core/chat/chat.py': ['get_first_available_provider(', 'PROVIDER_METADATA'],
         'core/continuity/execution_context.py': ['get_first_available_provider(', 'PROVIDER_METADATA'],
-        'plugins/discord/sapphire/llm_settings.py': ['get_first_available_provider', 'get_provider_by_key'],
-        'plugins/discord/vision/vision_bridge.py': ['_provider_is_local', 'get_provider_by_key', 'LLM_FALLBACK_ORDER'],
         'plugins/game-room/gameroom_core.py': ['system.llm_chat._select_provider()', 'get_first_available_provider', '_is_local_provider(key):\n    """Mirror'],
         'core/chat/compress.py': ['get_provider_by_key'],
         'core/routes/chat.py': ['PROVIDER_METADATA'],

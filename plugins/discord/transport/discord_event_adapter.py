@@ -14,7 +14,7 @@ class DiscordEventAdapter:
         message_repository,
         channel_repository=None,
         trace_repository=None,
-        media_service=None,
+        image_lane=None,
         settings_store=None,
         mention_map_service=None,
         llm_debug_service=None,
@@ -22,7 +22,7 @@ class DiscordEventAdapter:
         self.message_repository = message_repository
         self.channel_repository = channel_repository
         self.trace_repository = trace_repository
-        self.media_service = media_service
+        self.image_lane = image_lane
         self.settings_store = settings_store
         self.mention_map_service = mention_map_service
         self.llm_debug_service = llm_debug_service
@@ -33,7 +33,7 @@ class DiscordEventAdapter:
         self_user_id: int | str | None,
         message,
         *,
-        interpret_media: bool = True,
+        fetch_images: bool = True,
     ) -> TextMessageObservation | None:
         author_id = str(getattr(message.author, 'id', ''))
         if self_user_id is not None and author_id == str(self_user_id):
@@ -79,11 +79,7 @@ class DiscordEventAdapter:
         # still stored and counted as activity. The doc says "fully ignored…
         # dropped before batching".
         if self.settings_store:
-            settings = self.settings_store.resolve(
-                guild_id=observation.guild_id,
-                channel_id=observation.channel_id,
-                dm_id=observation.channel_id if observation.is_dm else None,
-            )
+            settings = self.settings_store.resolve()
             if is_channel_ignored(observation.account_name, observation.channel_id, settings):
                 if self.trace_repository:
                     self.trace_repository.record_trace('event_dropped', 'Ignored channel', {
@@ -100,14 +96,10 @@ class DiscordEventAdapter:
             self.channel_repository.upsert_user(observation.author_id, observation.username, observation.display_name)
         if self.message_repository:
             self.message_repository.save_message(observation)
-        if interpret_media:
-            self.interpret_media(observation)
+        if fetch_images:
+            self.fetch_images(observation)
         if self.settings_store:
-            settings = self.settings_store.resolve(
-                guild_id=observation.guild_id,
-                channel_id=observation.channel_id,
-                dm_id=observation.channel_id if observation.is_dm else None,
-            )
+            settings = self.settings_store.resolve()
         if self.mention_map_service:
             self.mention_map_service.update_from_discord_message(account_name, message, observation)
         if self.trace_repository:
@@ -161,65 +153,11 @@ class DiscordEventAdapter:
             self.trace_repository.record_trace('typing_observed', 'Observed typing signal', asdict(observation))
         return observation
 
-    def interpret_media(self, observation: TextMessageObservation) -> None:
-        """Detect, describe, and store the message's attachments.
-
-        Blocking: fetches the attachment (up to 3 tries with sleeps) and
-        calls the vision model. It used to run inline in on_message on the
-        daemon loop — every account, voice feed, and the flush loop froze
-        for the duration (hunt 2026-09-12, C2). The transport now calls it
-        on a worker thread after adapt_message_event(interpret_media=False);
-        the inline default keeps single-threaded callers (tests) unchanged.
-        """
-        if self.media_service and observation.attachments:
-            media_settings = None
-            media_enabled = True
-            image_understanding_enabled = True
-            if self.settings_store:
-                media_settings = self.settings_store.resolve(
-                    guild_id=observation.guild_id,
-                    channel_id=observation.channel_id,
-                    dm_id=observation.channel_id if observation.is_dm else None,
-                )
-                media_config = getattr(media_settings, 'media', None)
-                media_enabled = bool(getattr(media_config, 'enabled', True))
-                image_understanding_enabled = bool(getattr(media_config, 'image_understanding_enabled', True))
-            if media_enabled:
-                for artifact in self.media_service.detect_artifacts(
-                    observation.message_id,
-                    observation.channel_id,
-                    observation.account_name,
-                    observation.attachments,
-                ):
-                    if self.trace_repository:
-                        self.trace_repository.record_trace('media_detected', 'Detected media attachment', {
-                            'message_id': observation.message_id,
-                            'channel_id': observation.channel_id,
-                            'media_kind': artifact.media_kind,
-                            'filename': artifact.filename,
-                        })
-                    stored = self.media_service.store_and_interpret(
-                        artifact,
-                        settings=media_settings,
-                        image_understanding_enabled=image_understanding_enabled,
-                    )
-                    interpretation = stored.interpretation or {}
-                    source = interpretation.get('source', '')
-                    fallback = interpretation.get('fallback') or {}
-                    if self.trace_repository and source in {'fallback', 'metadata'}:
-                        self.trace_repository.record_trace('media_fallback_used', 'Used fallback media interpretation', {
-                            'message_id': observation.message_id,
-                            'channel_id': observation.channel_id,
-                            'media_kind': stored.media_kind,
-                            'source': source,
-                            'reason': fallback.get('reason') or ('image_understanding_disabled' if not image_understanding_enabled else 'metadata_only'),
-                        })
-                    if self.trace_repository and fallback.get('error_type'):
-                        self.trace_repository.record_trace('media_interpretation_failed', 'Media interpretation failed', {
-                            'message_id': observation.message_id,
-                            'channel_id': observation.channel_id,
-                            'media_kind': stored.media_kind,
-                            'error_type': fallback.get('error_type'),
-                            'error_message': fallback.get('error_message', ''),
-                        })
-
+    def fetch_images(self, observation: TextMessageObservation) -> int:
+        """Pull the message's images into the lane's cache. Blocking (network):
+        the transport calls it on a worker thread after adapt_message_event(
+        fetch_images=False) — hunt C2: this used to run inline on the daemon loop."""
+        if not self.image_lane or not observation.attachments:
+            return 0
+        settings = self.settings_store.resolve() if self.settings_store else None
+        return self.image_lane.fetch(observation, settings)

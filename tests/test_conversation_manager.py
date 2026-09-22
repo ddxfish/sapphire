@@ -210,3 +210,19 @@ def test_operator_stop_leaves_external_sessions_alive():
     assert mgr.active is False
     assert set(mgr.external) == {"call"}     # the phone call never broke stride
     built[0][1].close.assert_not_called()
+
+
+def test_build_driver_honours_a_tuning_start_word():
+    """A surface may pin its own start word through tuning — "" for a Discord
+    voice channel (its plugin gate decides who is addressed); absent = the
+    global CONVERSATION_START_WORD (S6, 2026-09-22)."""
+    from unittest.mock import patch
+    import config
+    system = _system_with_real_handoff()
+    mgr = ConversationManager(system, gate=MagicMock())
+    with patch("core.conversation.manager.ConversationDriver") as driver_cls:
+        mgr._build_driver(chat_name="discord_1_2", tuning={"start_word": "", "barge_hold_ms": 300})
+        assert driver_cls.call_args.kwargs["start_word"] == ""
+        assert driver_cls.call_args.kwargs["barge_hold_ms"] == 300
+        mgr._build_driver(chat_name="call", tuning={"barge_hold_ms": 90})
+        assert driver_cls.call_args.kwargs["start_word"] == str(getattr(config, "CONVERSATION_START_WORD", ""))

@@ -1,15 +1,15 @@
 from unittest.mock import MagicMock
 
-from plugins.discord.models.voice import VoiceMode, VoiceSession
+from plugins.discord.models.voice import VoiceSession
 from plugins.discord.sapphire.voice_event_bridge import VoiceEventBridge
 from plugins.discord.sapphire.voice_chat import voice_chat_name
 
 
-class FakeRepo:
+class FakeSessions:
     def __init__(self, session):
         self.session = session
 
-    def get_active_by_guild_channel(self, guild_id, channel_id):
+    def get_by_guild_channel(self, guild_id, channel_id):
         if self.session.guild_id == guild_id and self.session.channel_id == channel_id:
             return self.session
         return None
@@ -21,11 +21,10 @@ def test_voice_turn_start_records_trace():
         account_name='bot',
         guild_id='111',
         channel_id='222',
-        mode=VoiceMode.CONVERSATIONAL,
     )
     traces = []
     bridge = VoiceEventBridge(
-        voice_session_repository=FakeRepo(session),
+        sessions=FakeSessions(session),
         trace_repository=MagicMock(record_trace=lambda t, m, p: traces.append((t, p))),
     )
     chat = voice_chat_name('111', '222')

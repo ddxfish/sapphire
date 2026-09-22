@@ -131,7 +131,7 @@ def test_voice_join_blocked_reports_settings(monkeypatch):
 
     asyncio.run(bot.groups[0].commands['join'](ctx, None))
 
-    assert 'disabled' in ctx.responses[0].lower()
+    assert 'voice channel' in ctx.responses[0].lower() and 'rule' in ctx.responses[0].lower()
 
 
 def test_voice_leave_disconnects_guild_connections(monkeypatch):

@@ -11,16 +11,14 @@ logger = logging.getLogger(__name__)
 from plugins.discord import hooks_out
 from plugins.discord.conversation.policy_service import PolicyService
 from plugins.discord.conversation.batching_service import BatchingService
-from plugins.discord.conversation.bot_session_service import BotSessionService
+from plugins.discord.conversation.bot_gate import BotGate
 from plugins.discord.conversation.conversation_service import ConversationService
 from plugins.discord.conversation.mention_map_service import MentionMapService
 from plugins.discord.conversation.message_pipeline_service import MessagePipelineService
 from plugins.discord.conversation.gif_service import GifService
-from plugins.discord.conversation.media_service import MediaService
+from plugins.discord.conversation.images import ImageLane
 from plugins.discord.conversation.prompt_context_service import PromptContextService
-from plugins.discord.conversation.delivery_style_service import DeliveryStyleService
-from plugins.discord.conversation.edit_history_service import EditHistoryService
-from plugins.discord.conversation.reaction_service import ReactionService
+from plugins.discord.conversation.reactions import Reactions
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.greetings import GreetingsClock
 from plugins.discord.models.settings import SettingsStore
@@ -32,31 +30,25 @@ from plugins.discord.runtime.retention_service import RetentionService
 from plugins.discord.runtime.lifecycle import LifecycleManager
 from plugins.discord.runtime.scheduler_loop import SchedulerLoop
 from plugins.discord.sapphire.event_bridge import SapphireEventBridge
-from plugins.discord.sapphire.llm_bridge import SapphireLlmBridge
 from plugins.discord.sapphire.scheduler_bridge import SapphireSchedulerBridge
 from plugins.discord.sapphire.settings_bridge import SapphireSettingsBridge
 from plugins.discord.sapphire.speech_bridge import SapphireSpeechBridge
 from plugins.discord.storage.repositories.accounts import AccountRepository
 from plugins.discord.storage.repositories.channels import ChannelRepository
-from plugins.discord.storage.repositories.media import MediaRepository
 from plugins.discord.storage.repositories.messages import MessageRepository
 from plugins.discord.storage.repositories.traces import TraceRepository
-from plugins.discord.storage.repositories.voice_sessions import VoiceSessionRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
 from plugins.discord.transport.discord_transport import DiscordTransport
 from plugins.discord.transport.voice_transport import VoiceTransport
-from plugins.discord.voice.voice_execution_service import VoiceExecutionService
-from plugins.discord.voice.voice_perception_service import VoicePerceptionService
+from plugins.discord.voice.voice_gate import VoiceGate
 from plugins.discord.voice.voice_service import VoiceService
-from plugins.discord.voice.voice_turn_taking_service import VoiceTurnTakingService
-from plugins.discord.voice.voice_session_service import VoiceSessionService
+from plugins.discord.voice.voice_sessions import VoiceSessions
 from plugins.discord.voice.auto_join_service import VoiceAutoJoinService
 from plugins.discord.voice.discord_conversation_runner import DiscordConversationRunner
 from plugins.discord.sapphire.voice_event_bridge import VoiceEventBridge
 from plugins.discord.voice.voice_streaming_playback_service import VoiceStreamingPlaybackService
 from plugins.discord.voice.voice_listener_service import VoiceListenerService
-from plugins.discord.voice.voice_conversation_service import VoiceConversationService
 
 
 @dataclass
@@ -79,10 +71,7 @@ class RuntimeContainer:
         self.message_repository = None
         self.trace_repository = None
         self.presence_repository = None
-        self.media_repository = None
-        self.voice_session_repository = None
         self.event_bridge = None
-        self.llm_bridge = None
         self.scheduler_bridge = None
         self._connect_backoff = {}
         self._last_voice_reap = 0.0
@@ -94,21 +83,16 @@ class RuntimeContainer:
         self.policy_service = None
         self.prompt_context_service = None
         self.reply_style_service = None
-        self.delivery_style_service = None
-        self.edit_history_service = None
         self.reaction_service = None
         self.gif_service = None
         self.conversation_service = None
-        self.media_service = None
+        self.image_lane = None
         self.greetings = None
         self.mention_map_service = None
         self.voice_transport = None
-        self.voice_session_service = None
-        self.voice_perception_service = None
-        self.voice_execution_service = None
-        self.voice_turn_taking_service = None
+        self.voice_sessions = None
+        self.voice_gate = None
         self.voice_listener_service = None
-        self.voice_conversation_service = None
         self.voice_service = None
         self.voice_auto_join_service = None
         self.trace_service = None
@@ -122,8 +106,7 @@ class RuntimeContainer:
         await self.lifecycle.stop(self)
 
     def build_settings_store(self) -> None:
-        # Global layer lives in core plugin settings (read live at resolve time);
-        # this store only carries guild/channel/dm overlays once repositories load.
+        # Core's plugin settings, read live on every resolve (no overlays since S6).
         self.settings_store = SettingsStore()
 
     def build_repositories(self) -> None:
@@ -138,24 +121,16 @@ class RuntimeContainer:
             sqlite_service=self.sqlite_service, trace_repository=self.trace_repository,
             forget_service=self.forget_service,
         )
-        self.media_repository = MediaRepository(self.sqlite_service)
-        self.voice_session_repository = VoiceSessionRepository(self.sqlite_service)
-        self.settings_store = self.channel_repository.load_settings_store()
 
     def build_bridges(self) -> None:
         self.event_bridge = SapphireEventBridge(self.plugin_loader, llm_debug_service=self.llm_debug_service)
-        self.llm_bridge = SapphireLlmBridge(self.plugin_loader)
         self.scheduler_bridge = SapphireSchedulerBridge(self.plugin_loader)
+        self.voice_gate = VoiceGate(self.plugin_loader)
         self.settings_bridge = SapphireSettingsBridge(self.plugin_loader, self.plugin_name)
         self.speech_bridge = SapphireSpeechBridge(self.plugin_loader)
 
     def build_media_and_clock(self) -> None:
-        self.media_service = MediaService(
-            media_repository=self.media_repository,
-            llm_bridge=self.llm_bridge,
-            trace_repository=self.trace_repository,
-            scheduler_bridge=self.scheduler_bridge,
-        )
+        self.image_lane = ImageLane()
         # S1 (2026-09-22): the greetings clock replaced the proactive family.
         # Times live on the Greetings / All interactions daemon tasks; the
         # clock fires them into the task through core's fire_task.
@@ -172,26 +147,7 @@ class RuntimeContainer:
 
     def build_voice(self) -> None:
         self.voice_transport = VoiceTransport(discord_transport=self.transport)
-        self.voice_turn_taking_service = VoiceTurnTakingService()
-        self.voice_session_service = VoiceSessionService(
-            voice_session_repository=self.voice_session_repository,
-            trace_repository=self.trace_repository,
-        )
-        self.voice_perception_service = VoicePerceptionService(
-            voice_session_repository=self.voice_session_repository,
-            speech_bridge=self.speech_bridge,
-            trace_repository=self.trace_repository,
-            settings_store=self.settings_store,
-        )
-        self.voice_execution_service = VoiceExecutionService(
-            speech_bridge=self.speech_bridge,
-            voice_transport=self.voice_transport,
-            policy_service=self.policy_service,
-            turn_taking_service=self.voice_turn_taking_service,
-            trace_repository=self.trace_repository,
-            trace_service=self.trace_service,
-            settings_store=self.settings_store,
-        )
+        self.voice_sessions = VoiceSessions(trace_repository=self.trace_repository)
         self.voice_streaming_playback_service = VoiceStreamingPlaybackService(
             voice_transport=self.voice_transport,
         )
@@ -199,49 +155,39 @@ class RuntimeContainer:
             playback_service=self.voice_streaming_playback_service,
             transport=self.transport,
             settings_store=self.settings_store,
-            voice_session_service=self.voice_session_service,
+            sessions=self.voice_sessions,
             speech_bridge=self.speech_bridge,
             voice_transport=self.voice_transport,
-        )
-        self.voice_conversation_service = VoiceConversationService(
-            voice_execution_service=self.voice_execution_service,
-            voice_session_repository=self.voice_session_repository,
-            settings_store=self.settings_store,
-            reply_style_service=self.reply_style_service,
-            trace_repository=self.trace_repository,
-            llm_debug_service=self.llm_debug_service,
+            gate=self.voice_gate,
         )
         self.voice_listener_service = VoiceListenerService(
             voice_transport=self.voice_transport,
-            voice_perception_service=self.voice_perception_service,
-            voice_conversation_service=self.voice_conversation_service,
-            voice_turn_taking_service=self.voice_turn_taking_service,
             conversation_runner=self.discord_conversation_runner,
-            voice_session_service=self.voice_session_service,
+            speech_bridge=self.speech_bridge,
             settings_store=self.settings_store,
+            trace_repository=self.trace_repository,
         )
         self.voice_event_bridge = VoiceEventBridge(
-            voice_session_repository=self.voice_session_repository,
+            sessions=self.voice_sessions,
             trace_repository=self.trace_repository,
             conversation_runner=self.discord_conversation_runner,
         )
         self.voice_service = VoiceService(
             voice_transport=self.voice_transport,
-            voice_session_service=self.voice_session_service,
-            voice_perception_service=self.voice_perception_service,
-            voice_execution_service=self.voice_execution_service,
+            sessions=self.voice_sessions,
+            gate=self.voice_gate,
             voice_listener_service=self.voice_listener_service,
-            settings_store=self.settings_store,
-            channel_repository=self.channel_repository,
             trace_repository=self.trace_repository,
             loop=self.loop,
         )
         self.voice_auto_join_service = VoiceAutoJoinService(
             transport=self.transport,
             voice_service=self.voice_service,
-            settings_store=self.settings_store,
+            gate=self.voice_gate,
             trace_service=self.trace_service,
         )
+        # Every leave (hang-up, /voice leave, the tool, auto) reaches the latch.
+        self.voice_service.on_leave = self.voice_auto_join_service.note_leave
         from plugins.discord.voice.voice_deps import voice_receive_error
 
         hint = voice_receive_error()
@@ -351,7 +297,7 @@ class RuntimeContainer:
 
         # <<HANG UP>> sentinel: the runner leaves through the same door as
         # /voice leave and the leave tool (session closed, listener stopped,
-        # summary, disconnect).
+        # disconnect).
         def _leave_voice(account_name: str, channel_id: str) -> dict:
             from plugins.discord.models.intentions import LeaveVoiceIntention
             return self.voice_service.leave(LeaveVoiceIntention(
@@ -372,22 +318,19 @@ class RuntimeContainer:
             mention_map_service=self.mention_map_service,
         )
         self.mention_map_service.set_transport(self.transport)
+        if self.voice_gate is not None:
+            self.voice_gate.describe = self.transport.describe_voice_channel
         self.policy_service = PolicyService()
-        self.bot_session_service = BotSessionService()
+        self.bot_gate = BotGate()
         self.reply_style_service = ReplyStyleService()
-        self.delivery_style_service = DeliveryStyleService()
-        self.edit_history_service = EditHistoryService()
-        self.reaction_service = ReactionService(
-            message_repository=self.message_repository,
-            trace_repository=self.trace_repository,
-        )
+        self.reaction_service = Reactions(trace_repository=self.trace_repository)
         self.gif_service = GifService(trace_repository=self.trace_repository)
         self.build_media_and_clock()
         self.event_adapter = DiscordEventAdapter(
             message_repository=self.message_repository,
             channel_repository=self.channel_repository,
             trace_repository=self.trace_repository,
-            media_service=self.media_service,
+            image_lane=self.image_lane,
             settings_store=self.settings_store,
             mention_map_service=self.mention_map_service,
             llm_debug_service=self.llm_debug_service,
@@ -400,28 +343,21 @@ class RuntimeContainer:
             _batch_window = 8.0
         self.batching_service = BatchingService(
             default_window_seconds=max(1.0, _batch_window))
-        self.prompt_context_service = PromptContextService(
-            message_repository=self.message_repository,
-            media_service=self.media_service,
-            trace_service=self.trace_service,
-            edit_history_service=self.edit_history_service,
-        )
+        self.prompt_context_service = PromptContextService(message_repository=self.message_repository)
         self.conversation_service = ConversationService(
             event_bridge=self.event_bridge,
             policy_service=self.policy_service,
             prompt_context_service=self.prompt_context_service,
             trace_repository=self.trace_repository,
-            media_service=self.media_service,        # image-IN lane was never wired (row 14)
+            image_lane=self.image_lane,
             reply_style_service=self.reply_style_service,
-            delivery_style_service=self.delivery_style_service,
-            edit_history_service=self.edit_history_service,
             transport=self.transport,
             gif_service=self.gif_service,
             reaction_service=self.reaction_service,
             settings_store=self.settings_store,
             trace_service=self.trace_service,
             account_repository=self.account_repository,
-            bot_session_service=self.bot_session_service,
+            bot_gate=self.bot_gate,
             mention_map_service=self.mention_map_service,
             llm_debug_service=self.llm_debug_service,
         )

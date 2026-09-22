@@ -1,214 +1,97 @@
-"""Voice subsystem facade coordinating transport, sessions, and modes."""
+"""Voice subsystem facade: join / leave / listen, gated by the voice task (S6)."""
 
 from __future__ import annotations
 
 import logging
 
-from plugins.discord.models.intentions import JoinVoiceIntention, LeaveVoiceIntention, SpeakVoiceIntention
-from plugins.discord.models.voice import VoiceMode
+from plugins.discord.models.intentions import JoinVoiceIntention, LeaveVoiceIntention
 
 logger = logging.getLogger(__name__)
 
 
 class VoiceService:
-    def __init__(
-        self,
-        *,
-        voice_transport,
-        voice_session_service,
-        voice_perception_service,
-        voice_execution_service,
-        voice_listener_service=None,
-        settings_store=None,
-        channel_repository=None,
-        trace_repository=None,
-        loop=None,
-    ):
+    def __init__(self, *, voice_transport, sessions, gate=None, voice_listener_service=None, trace_repository=None, loop=None,
+                 on_leave=None):
         self.voice_transport = voice_transport
-        self.voice_session_service = voice_session_service
-        self.voice_perception_service = voice_perception_service
-        self.voice_execution_service = voice_execution_service
+        self.sessions = sessions
+        self.gate = gate
+        # on_leave(account, channel_id, reason): every leave, whatever asked for it — the auto-join latch.
+        self.on_leave = on_leave
         self.voice_listener_service = voice_listener_service
-        self.settings_store = settings_store
-        self.channel_repository = channel_repository
         self.trace_repository = trace_repository
         self.loop = loop
 
-    def _reload_settings_from_storage(self) -> None:
-        if self.channel_repository:
-            self.settings_store = self.channel_repository.load_settings_store()
-
-    def _start_listener(self, session) -> dict | None:
-        if not self.voice_listener_service:
-            return None
-        return self.voice_listener_service.start(session, loop=self.loop)
-
-    async def _start_listener_async(self, session) -> dict | None:
-        if not self.voice_listener_service:
-            return None
-        return await self.voice_listener_service.start_async(session, loop=self.loop)
-
-    def _stop_listener(self, account_name: str, channel_id: str) -> dict | None:
-        if not self.voice_listener_service:
-            return None
-        return self.voice_listener_service.stop(account_name, channel_id)
-
-    async def _stop_listener_async(self, account_name: str, channel_id: str) -> dict | None:
-        if not self.voice_listener_service:
-            return None
-        return await self.voice_listener_service.stop_async(account_name, channel_id)
-
-    def _resolve_listener_session(self, account_name: str, channel_id: str, *, guild_id: str = ''):
-        self._reload_settings_from_storage()
-        settings = self.settings_store.resolve(
-            guild_id=guild_id,
-            channel_id=channel_id,
-        ) if self.settings_store else None
-        if settings and not settings.voice.enabled:
-            return None, {'status': 'skipped', 'reason': 'voice_disabled'}
-        mode = settings.voice.mode if settings else VoiceMode.LISTEN_ONLY.value
-        logger.debug(
-            'Voice session resolve %s:%s guild=%s mode=%s speaking=%s',
-            account_name,
-            channel_id,
-            guild_id,
-            mode,
-            getattr(settings.voice, 'speaking_enabled', False) if settings else False,
-        )
-        session = self.voice_session_service.get_active_session(account_name, channel_id)
-        if not session:
-            session = self.voice_session_service.start_session(
-                account_name,
-                guild_id,
-                channel_id,
-                mode=mode,
-            )
-        elif settings:
-            session = self.voice_session_service.start_session(
-                account_name,
-                guild_id or session.guild_id,
-                channel_id,
-                mode=mode,
-            )
-        return session, None
+    def _blocked(self, account_name: str, channel_id: str) -> dict | None:
+        if self.gate is not None and not self.gate.allowed(account_name, channel_id):
+            return {'status': 'blocked', 'reason': 'no_voice_task'}
+        return None
 
     def ensure_listener(self, account_name: str, channel_id: str, *, guild_id: str = '') -> dict:
-        """Ensure an active session and voice listener for a connected channel."""
-        session, blocked = self._resolve_listener_session(account_name, channel_id, guild_id=guild_id)
-        if blocked:
+        if (blocked := self._blocked(account_name, channel_id)):
             return blocked
-        listener = self._start_listener(session)
-        return listener or {'status': 'no_listener'}
+        session = self.sessions.start(account_name, guild_id, channel_id)
+        if not self.voice_listener_service:
+            return {'status': 'no_listener'}
+        return self.voice_listener_service.start(session, loop=self.loop)
 
     async def ensure_listener_async(self, account_name: str, channel_id: str, *, guild_id: str = '') -> dict:
-        """Async ensure for daemon event loop contexts."""
-        session, blocked = self._resolve_listener_session(account_name, channel_id, guild_id=guild_id)
-        if blocked:
+        if (blocked := self._blocked(account_name, channel_id)):
             return blocked
-        listener = await self._start_listener_async(session)
-        return listener or {'status': 'no_listener'}
+        session = self.sessions.start(account_name, guild_id, channel_id)
+        if not self.voice_listener_service:
+            return {'status': 'no_listener'}
+        return await self.voice_listener_service.start_async(session, loop=self.loop)
 
     def join(self, intention: JoinVoiceIntention) -> dict:
-        self._reload_settings_from_storage()
-        settings = self.settings_store.resolve(
-            guild_id=intention.guild_id,
-            channel_id=intention.channel_id,
-        ) if self.settings_store else None
-        if settings and not settings.voice.enabled:
-            return {'status': 'blocked', 'reason': 'voice_disabled'}
-        transport_result = self.voice_transport.connect_sync(
-            intention.account_name,
-            intention.guild_id,
-            intention.channel_id,
-        )
+        if (blocked := self._blocked(intention.account_name, intention.channel_id)):
+            return blocked
+        transport_result = self.voice_transport.connect_sync(intention.account_name, intention.guild_id, intention.channel_id)
         if transport_result.get('status') == 'error':
-            return {
-                'status': 'error',
-                'reason': transport_result.get('error', 'voice_connect_failed'),
-                'transport': transport_result,
-            }
-        mode = intention.mode or (settings.voice.mode if settings else VoiceMode.LISTEN_ONLY.value)
-        session = self.voice_session_service.start_session(
-            intention.account_name,
-            intention.guild_id,
-            intention.channel_id,
-            mode=mode,
-        )
-        listener = self._start_listener(session)
+            return {'status': 'error', 'reason': transport_result.get('error', 'voice_connect_failed'), 'transport': transport_result}
+        session = self.sessions.start(intention.account_name, intention.guild_id, intention.channel_id)
         payload = {'status': 'joined', 'transport': transport_result, 'session': session.to_dict()}
-        if listener:
-            payload['listener'] = listener
+        if self.voice_listener_service:
+            payload['listener'] = self.voice_listener_service.start(session, loop=self.loop)
         return payload
 
     async def join_async(self, intention: JoinVoiceIntention) -> dict:
-        self._reload_settings_from_storage()
-        settings = self.settings_store.resolve(
-            guild_id=intention.guild_id,
-            channel_id=intention.channel_id,
-        ) if self.settings_store else None
-        if settings and not settings.voice.enabled:
-            return {'status': 'blocked', 'reason': 'voice_disabled'}
-        transport_result = await self.voice_transport.connect_async(
-            intention.account_name,
-            intention.guild_id,
-            intention.channel_id,
-        )
+        if (blocked := self._blocked(intention.account_name, intention.channel_id)):
+            return blocked
+        transport_result = await self.voice_transport.connect_async(intention.account_name, intention.guild_id, intention.channel_id)
         if transport_result.get('status') == 'error':
-            return {
-                'status': 'error',
-                'reason': transport_result.get('error', 'voice_connect_failed'),
-                'transport': transport_result,
-            }
-        mode = intention.mode or (settings.voice.mode if settings else VoiceMode.LISTEN_ONLY.value)
-        session = self.voice_session_service.start_session(
-            intention.account_name,
-            intention.guild_id,
-            intention.channel_id,
-            mode=mode,
-        )
-        listener = await self._start_listener_async(session)
+            return {'status': 'error', 'reason': transport_result.get('error', 'voice_connect_failed'), 'transport': transport_result}
+        session = self.sessions.start(intention.account_name, intention.guild_id, intention.channel_id)
         payload = {'status': 'joined', 'transport': transport_result, 'session': session.to_dict()}
-        if listener:
-            payload['listener'] = listener
+        if self.voice_listener_service:
+            payload['listener'] = await self.voice_listener_service.start_async(session, loop=self.loop)
         return payload
 
     def leave(self, intention: LeaveVoiceIntention) -> dict:
-        session = None
-        if intention.session_id:
-            session = self.voice_session_service.close_session(intention.session_id)
-        elif intention.channel_id:
-            active = self.voice_session_service.get_active_session(intention.account_name, intention.channel_id)
-            if active:
-                session = self.voice_session_service.close_session(active.session_id)
+        session = self.sessions.get(intention.account_name, intention.channel_id)
+        if session:
+            self.sessions.close(session.session_id)
         # Listener first, then the socket: stopping after the disconnect raised
         # on "not connected" before the sink could clean up (row 37).
-        self._stop_listener(intention.account_name, intention.channel_id)
+        if self.voice_listener_service:
+            self.voice_listener_service.stop(intention.account_name, intention.channel_id)
         transport_result = self.voice_transport.disconnect_sync(intention.account_name, intention.channel_id)
-        summary = {}
-        if session:
-            summary = self.voice_session_service.summarize_session(session.session_id)
-        return {'status': 'left', 'transport': transport_result, 'summary': summary}
+        self._note_leave(intention)
+        return {'status': 'left', 'transport': transport_result}
 
     async def leave_async(self, intention: LeaveVoiceIntention) -> dict:
-        session = None
-        if intention.session_id:
-            session = self.voice_session_service.close_session(intention.session_id)
-        elif intention.channel_id:
-            active = self.voice_session_service.get_active_session(intention.account_name, intention.channel_id)
-            if active:
-                session = self.voice_session_service.close_session(active.session_id)
-        transport_result = await self.voice_transport.disconnect_async(intention.account_name, intention.channel_id)
-        await self._stop_listener_async(intention.account_name, intention.channel_id)
-        summary = {}
+        session = self.sessions.get(intention.account_name, intention.channel_id)
         if session:
-            summary = self.voice_session_service.summarize_session(session.session_id)
-        return {'status': 'left', 'transport': transport_result, 'summary': summary}
+            self.sessions.close(session.session_id)
+        transport_result = await self.voice_transport.disconnect_async(intention.account_name, intention.channel_id)
+        if self.voice_listener_service:
+            await self.voice_listener_service.stop_async(intention.account_name, intention.channel_id)
+        self._note_leave(intention)
+        return {'status': 'left', 'transport': transport_result}
 
-    def speak(self, intention: SpeakVoiceIntention) -> dict:
-        return self.voice_execution_service.execute(intention)
-
-    def process_audio(self, session_id: str, audio_bytes: bytes, **kwargs) -> dict:
-        settings = self.settings_store.resolve() if self.settings_store else None
-        if settings and not settings.voice.transcription_enabled and not settings.voice.enabled:
-            return {'status': 'blocked', 'reason': 'transcription_disabled'}
-        return self.voice_perception_service.process_audio(session_id, audio_bytes=audio_bytes, **kwargs)
+    def _note_leave(self, intention: LeaveVoiceIntention) -> None:
+        if not callable(self.on_leave):
+            return
+        try:
+            self.on_leave(intention.account_name, str(intention.channel_id), str(intention.reason or ''))
+        except Exception:
+            logger.debug('on_leave hook failed', exc_info=True)

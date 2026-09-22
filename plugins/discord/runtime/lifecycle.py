@@ -16,7 +16,6 @@ class LifecycleManager:
             container.sqlite_service.start()
             container.health.mark('starting', 'Loading repositories')
             container.build_repositories()
-            self._close_stale_voice_sessions(container, 'boot')
             container.health.mark('starting', 'Building Sapphire bridges')
             container.build_bridges()
             from plugins.discord.voice.pycord_patches import apply_pycord_voice_patches
@@ -96,7 +95,6 @@ class LifecycleManager:
                     )
                 except Exception:
                     logger.exception('Voice disconnect failed for %s', item)
-        self._close_stale_voice_sessions(container, 'shutdown')
         try:
             from plugins.discord.voice import voice_workers
             voice_workers.shutdown()
@@ -114,22 +112,6 @@ class LifecycleManager:
         except Exception:
             logger.exception('Storage close failed')
         container.health.mark('stopped', 'Runtime stopped')
-
-    @staticmethod
-    def _close_stale_voice_sessions(container, phase: str) -> None:
-        """Nothing is in a voice channel before the transport exists or after
-        it closes: every 'active' voice_sessions row at these two moments is a
-        leftover (crash, kill, or a disconnect that never reached leave())."""
-        repo = getattr(container, 'voice_session_repository', None)
-        if repo is None:
-            return
-        try:
-            count = repo.close_stale_sessions()
-        except Exception:
-            logger.exception('Stale voice session sweep failed (%s)', phase)
-            return
-        if count:
-            logger.info('[DISCORD] closed %d stale voice session row(s) at %s', count, phase)
 
     async def _connect_stored_accounts(self, container) -> None:
         if not container.transport or not container.account_repository:

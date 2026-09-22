@@ -5,7 +5,7 @@ from pathlib import Path
 
 from plugins.discord.models.settings import VoiceSettings, SettingsOverlay
 from plugins.discord.voice.auto_join_service import VoiceAutoJoinService
-from plugins.discord.vision.vision_bridge import VisionBridge
+from plugins.discord.conversation.images import ImageLane
 
 PLUGIN = Path(__file__).resolve().parent.parent
 
@@ -25,18 +25,13 @@ class _Repo:
     def __init__(self, channels):
         self._channels = channels
 
-    def list_active_sessions(self, account_name):
+    def list_active(self, account_name):
         return [_Session(c) for c in self._channels]
-
-
-class _SessionService:
-    def __init__(self, channels):
-        self.voice_session_repository = _Repo(channels)
 
 
 class _Voice:
     def __init__(self, channels):
-        self.voice_session_service = _SessionService(channels)
+        self.sessions = _Repo(channels)
         self.leaves = []
 
     def leave(self, intention):
@@ -47,48 +42,41 @@ class _Voice:
         return self.leave(intention)
 
 
-class _Settings:
-    def __init__(self, enabled):
-        self.voice = type('V', (), {'enabled': enabled, 'join_targets': ['alpha:vc1']})()
+class _NoGate:
+    def tasks(self, account_name):
+        return []
 
-
-class _Store:
-    def __init__(self, settings):
-        self._s = settings
-
-    def resolve(self, **_kw):
-        return self._s
+    def allowed(self, account_name, channel_id):
+        return None
 
 
 def test_h4_voice_off_leaves_every_live_channel_sync_and_async():
+    # S6: "voice off" = no enabled Discord: Voice channel task for the bot.
     voice = _Voice(['vc1', 'vc2'])
-    svc = VoiceAutoJoinService(transport=object(), voice_service=voice,
-                               settings_store=_Store(_Settings(enabled=False)))
-    out = svc.tick('alpha')
+    svc = VoiceAutoJoinService(transport=object(), voice_service=voice, gate=_NoGate())
+    out = asyncio.run(svc.tick_async('alpha'))
     assert [i.channel_id for i in voice.leaves] == ['vc1', 'vc2']
-    assert all(i.reason == 'voice_disabled' for i in voice.leaves)
+    assert all(i.reason == 'no_voice_task' for i in voice.leaves)
     assert len(out) == 2
 
     voice2 = _Voice(['vc7'])
-    svc2 = VoiceAutoJoinService(transport=object(), voice_service=voice2,
-                                settings_store=_Store(_Settings(enabled=False)))
+    svc2 = VoiceAutoJoinService(transport=object(), voice_service=voice2, gate=_NoGate())
     asyncio.run(svc2.tick_async('alpha'))
     assert [i.channel_id for i in voice2.leaves] == ['vc7']
 
 
 def test_h4_voice_off_with_nothing_live_is_a_quiet_noop():
     voice = _Voice([])
-    svc = VoiceAutoJoinService(transport=object(), voice_service=voice,
-                               settings_store=_Store(_Settings(enabled=False)))
-    assert svc.tick('alpha') == []
+    svc = VoiceAutoJoinService(transport=object(), voice_service=voice, gate=_NoGate())
+    assert asyncio.run(svc.tick_async('alpha')) == []
     assert voice.leaves == []
 
 
 def test_h4_emergency_switch_is_gone_and_old_stores_still_load():
-    assert not hasattr(VoiceSettings(), 'emergency_disabled')
+    assert not hasattr(VoiceSettings(), 'emergency_disabled') and not hasattr(VoiceSettings(), 'enabled')
     assert 'emergency_disabled' not in _src('plugin.json')
     for rel in ('voice/auto_join_service.py', 'voice/voice_service.py', 'voice/voice_listener_service.py',
-                'voice/voice_conversation_service.py', 'conversation/policy_service.py'):
+                'conversation/policy_service.py'):
         assert 'emergency_disabled' not in _src(rel), rel
     # a settings.json written before the removal still loads — unknown keys drop
     overlay = SettingsOverlay.from_dict({'voice': {'enabled': True, 'emergency_disabled': True}})
@@ -97,30 +85,28 @@ def test_h4_emergency_switch_is_gone_and_old_stores_still_load():
 
 # ── H5: the payload lane reads the caption lane's bytes, never fetches ─────
 
-def test_h5_vision_bridge_caches_fetched_bytes_and_cached_bytes_never_fetches():
+def test_h5_payload_lane_reads_the_cache_and_never_fetches():
+    from types import SimpleNamespace
     calls = []
 
     def fake_fetch(url):
         calls.append(url)
         return b'PNGDATA', 'image/png'
 
-    bridge = VisionBridge(fetch_bytes=fake_fetch)
-    assert bridge.fetch_bytes('https://cdn/x.png') == (b'PNGDATA', 'image/png')
-    assert bridge.fetch_bytes('https://cdn/x.png') == (b'PNGDATA', 'image/png')
+    lane = ImageLane(fetch=fake_fetch)
+    settings = SimpleNamespace(media=SimpleNamespace(images_in_enabled=True, max_images=4))
+    obs = SimpleNamespace(attachments=[{'url': 'https://cdn/x.png', 'content_type': 'image/png', 'filename': 'x.png'},
+                                       {'url': 'https://cdn/never.png', 'content_type': 'image/png', 'filename': 'n.png'}])
+    assert lane.payload_images(obs, settings) == []                 # nothing cached → nothing, no fetch
+    assert calls == []
+    assert lane.fetch(SimpleNamespace(attachments=obs.attachments[:1]), settings) == 1
+    assert lane.fetch(SimpleNamespace(attachments=obs.attachments[:1]), settings) == 1   # cached: no refetch
     assert calls == ['https://cdn/x.png']
-    assert bridge.cached_bytes('https://cdn/x.png') == (b'PNGDATA', 'image/png')
-    assert bridge.cached_bytes('https://cdn/never.png') is None
-    assert calls == ['https://cdn/x.png'], 'cached_bytes must not fetch'
-    for i in range(12):
-        bridge.fetch_bytes(f'https://cdn/{i}.png')
-    assert len(bridge._bytes_cache) == 8
-
-
-def test_h5_payload_images_use_the_cache_only():
+    out = lane.payload_images(obs, settings)
+    assert len(out) == 1 and out[0]['media_type'] == 'image/png' and calls == ['https://cdn/x.png']
     src = _src('conversation/conversation_service.py')
     body = src[src.index('def _payload_images('):src.index('def _dm_within_budget(')]
-    assert "getattr(bridge, 'cached_bytes', None)" in body
-    assert "getattr(bridge, 'fetch_bytes', None)" not in body
+    assert 'payload_images(' in body and 'fetch' not in body
 
 
 # ── H6: ignored channels are dropped before anything observes them ─────────
@@ -132,10 +118,3 @@ def test_h6_ignore_check_runs_before_observation():
     assert body.count("record_trace('event_dropped', 'Ignored channel'") == 1
 
 
-# ── H7: a voice session summary is a record, not a scheduled post ──────────
-
-def test_h7_summarize_session_schedules_nothing():
-    src = _src('voice/voice_session_service.py')
-    body = src[src.index('def summarize_session('):]
-    assert 'create_task(' not in body
-    assert "'voice_follow_up'" not in body

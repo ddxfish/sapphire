@@ -478,6 +478,11 @@ function _renderTaskFields(modal) {
     });
 }
 
+// The filter-row widgets, shared with the Realtime editor: a non-phone realtime
+// rule (Discord: Voice channel, 2026-09-22) picks its channels with the same
+// rows a daemon uses.
+export { _buildFilterRows as buildFilterRows, _readFilterRows as readFilterRows, _wireFilterRows as wireFilterRows };
+
 function _esc(str) {
     if (!str) return '';
     const div = document.createElement('div');

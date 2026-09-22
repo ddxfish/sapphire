@@ -39,7 +39,7 @@ class LlmDebugService:
         if not callable(getter):
             return True
         try:
-            value = (getter('discord') or {}).get('cognitive.llm_debug_enabled', False)
+            value = (getter('discord') or {}).get('debug.llm_debug_enabled', False)
         except Exception:
             return False
         if isinstance(value, bool):
@@ -79,9 +79,14 @@ class LlmDebugService:
         self._index[entry_id] = entry
 
     def _resolve_llm(self, task: dict | None, event_data: dict | None) -> dict[str, str]:
-        from plugins.discord.sapphire.llm_settings import resolve_task_llm
-
-        return resolve_task_llm(task, event_data, plugin_loader=self.plugin_loader)
+        """The daemon task's provider/model IS the brain (S0 retired the payload override)."""
+        task = dict(task or {})
+        return {
+            'configured_primary': str(task.get('provider') or 'auto').strip() or 'auto',
+            'configured_model': str(task.get('model') or '').strip(),
+            'task_name': str(task.get('name') or ''),
+            'task_id': str(task.get('id') or ''),
+        }
 
     def record_rejection(
         self,
@@ -156,9 +161,6 @@ class LlmDebugService:
                 'recent_history': str(payload.get('recent_history') or ''),
                 'reply_hints': list(payload.get('reply_hints') or []),
                 'reply_instructions': str(payload.get('reply_instructions') or ''),
-                'edit_history_hint': _preview(str(extra.get('edit_history_hint') or '')),
-                'llm_primary': str(payload.get('llm_primary') or ''),
-                'llm_model': str(payload.get('llm_model') or ''),
                 'batch_size': int(payload.get('batch_size') or extra.get('batch_size') or 0),
             },
             'response': {
@@ -194,8 +196,6 @@ class LlmDebugService:
         channel_id: str,
         prompt: str,
         user_text: str,
-        llm_primary: str = '',
-        llm_model: str = '',
     ) -> str:
         entry_id = f'voice-{session_id}-{uuid.uuid4().hex[:8]}'
         now = time.time()
@@ -222,9 +222,6 @@ class LlmDebugService:
                 'recent_history': '',
                 'reply_hints': [],
                 'reply_instructions': '',
-                'edit_history_hint': '',
-                'llm_primary': llm_primary,
-                'llm_model': llm_model,
                 'batch_size': 0,
             },
             'response': {
@@ -247,7 +244,7 @@ class LlmDebugService:
                 'response_at': None,
                 'latency_ms': None,
             },
-            'llm': self._resolve_llm({}, {'llm_primary': llm_primary, 'llm_model': llm_model}),
+            'llm': self._resolve_llm({}, {}),
         }
         with self._lock:
             self._append_entry(entry)
@@ -280,14 +277,7 @@ class LlmDebugService:
                 'parsed_chunks': list(parsed_chunks or []),
                 'strip_think_tags': strip_think_tags,
             }
-            entry['llm'] = self._resolve_llm(
-                task,
-                event_data or {
-                    'llm_primary': (entry.get('prompt') or {}).get('llm_primary'),
-                    'llm_model': (entry.get('prompt') or {}).get('llm_model'),
-                    'account': entry.get('account'),
-                },
-            )
+            entry['llm'] = self._resolve_llm(task, event_data)
             if task:
                 entry['task'] = {
                     'name': str((task or {}).get('name') or ''),

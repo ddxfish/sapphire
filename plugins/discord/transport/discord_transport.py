@@ -138,16 +138,16 @@ class DiscordTransport:
                 if not self._event_adapter:
                     return
                 observation = self._event_adapter.adapt_message_event(
-                    name, state.get('bot_id') or None, message, interpret_media=False,
+                    name, state.get('bot_id') or None, message, fetch_images=False,
                 )
                 if not observation:
                     return
                 if observation.attachments:
-                    # Fetch + vision call off the daemon loop (hunt C2): only
+                    # Image fetch off the daemon loop (hunt C2): only
                     # THIS message waits; other accounts, voice, and the flush
                     # loop keep running. py-cord runs each event as its own
                     # task, so awaiting here blocks nothing else.
-                    await asyncio.to_thread(self._event_adapter.interpret_media, observation)
+                    await asyncio.to_thread(self._event_adapter.fetch_images, observation)
                 if self._message_pipeline:
                     self._message_pipeline.handle_message(observation)
 
@@ -357,11 +357,12 @@ class DiscordTransport:
         except Exception:
             logger.debug('Guild member chunk skipped for %s', getattr(guild, 'id', ''), exc_info=True)
 
-    async def list_voice_targets(self) -> list[dict]:
-        """List voice channels from connected guilds for auto-join target selection."""
+    async def list_voice_targets(self, account_name: str | None = None) -> list[dict]:
+        """Voice channels of connected guilds (one bot, or all) with occupancy —
+        the auto-join tick's roster and the Settings picker."""
         targets: list[dict] = []
         for name, state in sorted(self._accounts.items()):
-            if state.get('state') != 'connected':
+            if state.get('state') != 'connected' or (account_name and name != account_name):
                 continue
             client = state.get('client')
             if not client:
@@ -395,11 +396,28 @@ class DiscordTransport:
                         'channel_id': channel_id,
                         'channel_name': channel_name,
                         'member_count': member_count,
+                        'human_count': int(occupancy.get('human_count') or 0),
+                        'bot_connected': bool(occupancy.get('bot_connected')),
                         'value': f'{name}:{channel_id}',
                         'label': f'{name} · {guild_name} · {channel_name} ({member_count} in channel)',
                     })
         targets.sort(key=lambda item: (item['account'].lower(), item['guild_name'].lower(), item['channel_name'].lower()))
         return targets
+
+    def list_voice_targets_sync(self, account_name: str | None = None) -> list[dict]:
+        return self._run_on_loop(self.list_voice_targets(account_name), timeout=60)
+
+    def describe_voice_channel(self, account_name: str, channel_id: str) -> dict | None:
+        """Guild-cache lookup of one voice channel (no fetch, safe from any
+        thread): the voice gate's filter payload."""
+        client = self.get_client(account_name)
+        cid = str(channel_id or '').strip()
+        for guild in (getattr(client, 'guilds', []) or []) if client else []:
+            for channel in getattr(guild, 'voice_channels', []) or []:
+                if str(getattr(channel, 'id', '') or '') == cid:
+                    return {'guild_id': str(getattr(guild, 'id', '') or ''), 'guild_name': str(getattr(guild, 'name', '') or ''),
+                            'channel_id': cid, 'channel_name': str(getattr(channel, 'name', '') or '')}
+        return None
 
     def get_voice_channel_state_sync(self, account_name: str, channel_id: str) -> dict:
         try:

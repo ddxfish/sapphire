@@ -344,49 +344,6 @@ def test_continuity_event_payload_override_is_retired(monkeypatch):
     assert (key, override) == ('claude', 'task-model')
 
 
-def test_discord_side_lane_none_is_loud_not_mute(monkeypatch, caplog):
-    from types import SimpleNamespace
-    from plugins.discord.sapphire import llm_settings as ls
-    by_key = MagicMock(); monkeypatch.setattr(lp, 'get_provider_by_key', by_key)
-    with caplog.at_level('WARNING'):
-        assert ls.resolve_discord_llm_provider(SimpleNamespace(llm_chat=object()), 'none') == (None, None, None)
-    assert 'llm_primary=none' in caplog.text and not by_key.called
-
-
-def test_discord_explicit_pick_always_wins_over_side_lane_local_only(monkeypatch):
-    # Ruling 2026-09-21: local_only narrows AUTO only; an explicit cloud pick runs.
-    from types import SimpleNamespace
-    from plugins.discord.sapphire import llm_settings as ls
-    monkeypatch.setattr(lp, 'get_provider_by_key', MagicMock(return_value=_prov('m')))
-    monkeypatch.setattr(lp, 'get_generation_params', MagicMock(return_value={'temperature': 0.5}))
-    key, prov, gen = ls.resolve_discord_llm_provider(SimpleNamespace(llm_chat=object()), 'claude', local_only=True)
-    assert key == 'claude' and gen['model'] == 'm'
-
-
-def test_discord_debug_label_is_a_probe_free_dry_run(monkeypatch):
-    from plugins.discord.sapphire.llm_settings import resolve_task_llm
-    first = MagicMock(return_value=('lanbox', _prov('qwen')))
-    monkeypatch.setattr(lp, 'get_first_available_provider', first)
-    out = resolve_task_llm({'provider': 'auto', 'model': '', 'privacy_required': True}, {})
-    kw = first.call_args.kwargs
-    assert kw['probe'] is False and kw['health_cache'] is None and kw['force_privacy'] is True
-    assert out['resolved_primary'] == 'lanbox' and out['resolved_model'] == 'qwen'
-
-
-def test_vision_explicit_blind_pick_degrades_instead_of_describing(monkeypatch):
-    import config
-    from plugins.discord.vision.vision_bridge import VisionBridge
-    config.LLM_PROVIDERS['blind'] = {'enabled': True}
-    config.LLM_PROVIDERS['sighted'] = {'enabled': True}
-    made = {'blind': _prov(sees=False), 'sighted': _prov(sees=True)}
-    monkeypatch.setattr(lp.provider_registry, 'get_provider_by_key',
-                        lambda key, cfg=None, timeout=240.0, model_override='': made.get(key))
-    assert VisionBridge()._resolve_house_provider({'llm_provider': 'blind'}) is None
-    assert VisionBridge()._resolve_house_provider({'llm_provider': 'sighted', 'llm_model': 'v'}) is made['sighted']
-    for p in made.values():
-        assert p.health_check.call_count == 0                       # per-image lane never probes
-
-
 def test_game_seat_never_reads_the_operators_web_chat(monkeypatch):
     import sys
     plugin_dir = str(ROOT / 'plugins' / 'game-room')

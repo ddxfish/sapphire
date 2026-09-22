@@ -30,28 +30,24 @@ class StorageBundle:
 
 
 def _bundle_from_runtime(runtime) -> StorageBundle:
-    stored = runtime.channel_repository.load_settings_store()
-    settings_store = stored.merge_store(runtime.settings_store or SettingsStore())
     return StorageBundle(
         sqlite_service=runtime.sqlite_service,
         account_repository=runtime.account_repository,
         channel_repository=runtime.channel_repository,
         trace_repository=runtime.trace_repository,
-        settings_store=settings_store,
+        settings_store=runtime.settings_store or SettingsStore(),
         owns_sqlite=False,
         transport=runtime.transport,
     )
 
 
 def _bundle_from_sqlite(sqlite: SQLiteService) -> StorageBundle:
-    channel_repository = ChannelRepository(sqlite)
-    settings_store = channel_repository.load_settings_store()
     return StorageBundle(
         sqlite_service=sqlite,
         account_repository=AccountRepository(sqlite),
-        channel_repository=channel_repository,
+        channel_repository=ChannelRepository(sqlite),
         trace_repository=TraceRepository(sqlite),
-        settings_store=settings_store,
+        settings_store=SettingsStore(),
         owns_sqlite=True,
         transport=None,
     )

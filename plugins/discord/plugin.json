@@ -2,9 +2,9 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.29.0",
+  "version": "1.33.0",
   "min_core_version": "2.13.0",
-  "description": "Discord bot \u2014 accounts, conversation, media understanding, and voice. Greetings ride the Discord: Greetings / All interactions daemon tasks; people memory and the other personality modules live in the discord-personality plugin.",
+  "description": "Discord bot \u2014 accounts, conversation, images in and out, and voice channels on Sapphire's conversation engine. Chat, greetings and voice are daemon tasks (Discord: Chat only / Greetings / All interactions; Realtime: Discord: Voice channel); personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83c\udfae",
@@ -231,6 +231,62 @@
               "help": "Local HH:MM. Blank = no goodnight post."
             }
           ]
+        },
+        {
+          "name": "discord_voice",
+          "label": "Discord: Voice channel",
+          "description": "Gate: an enabled rule turns voice ON for the channels its filter covers (no filter = every voice channel the bot can see). She joins on /voice join or her join tool \u2014 or on her own when Auto-join is on and someone is in the channel \u2014 converses live on Sapphire's conversation engine (this rule's persona, provider, model and toolset configure the voice chat), and leaves on <<HANG UP>>, /voice leave, or when the channel empties. Never fires a one-shot reply.",
+          "realtime": true,
+          "filter_fields": [
+            {
+              "key": "guild_name",
+              "label": "server name"
+            },
+            {
+              "key": "channel_name",
+              "label": "voice channel name"
+            },
+            {
+              "key": "guild_name_not",
+              "label": "exclude server name"
+            },
+            {
+              "key": "channel_name_not",
+              "label": "exclude voice channel name"
+            },
+            {
+              "key": "guild_id",
+              "label": "server ID (advanced)"
+            },
+            {
+              "key": "channel_id",
+              "label": "voice channel ID (advanced)"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot joins."
+            },
+            {
+              "key": "auto_join",
+              "type": "boolean",
+              "label": "Auto-join when someone is in the channel",
+              "default": false,
+              "help": "OFF (default): she only joins when asked (/voice join, her join tool). ON: she walks into a covered channel when a human is there and leaves when it empties. A channel she left on purpose (<<HANG UP>>, /voice leave) is not rejoined until it has emptied once."
+            },
+            {
+              "key": "keep_chat_history",
+              "type": "boolean",
+              "label": "Keep voice chat history",
+              "default": false,
+              "help": "OFF (default): each channel's voice chat is deleted 30 minutes after her last session there (strangers' transcripts don't pile up). ON: the chat persists."
+            }
+          ]
         }
       ]
     },
@@ -264,11 +320,6 @@
         "method": "GET",
         "path": "settings",
         "handler": "api/settings.py:get_settings"
-      },
-      {
-        "method": "POST",
-        "path": "settings",
-        "handler": "api/settings.py:save_settings"
       },
       {
         "method": "GET",
@@ -346,34 +397,12 @@
     ],
     "settings": [
       {
-        "key": "cognitive.llm_primary",
-        "type": "string",
-        "label": "Reply LLM provider",
-        "default": "auto",
-        "hidden": true
-      },
-      {
-        "key": "cognitive.llm_model",
-        "type": "string",
-        "label": "Reply LLM model",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "cognitive.llm_debug_enabled",
+        "key": "debug.llm_debug_enabled",
         "type": "boolean",
         "label": "LLM debug ring",
         "default": false,
         "tab": "Debug",
         "help": "Keep the last 10 prompts and replies in memory for the Debug panel \u2014 full prompts, other people's messages included. Off = nothing retained. Clear it from the panel any time."
-      },
-      {
-        "key": "cognitive.side_lanes_local_only",
-        "type": "boolean",
-        "label": "Side lanes: local providers only",
-        "default": true,
-        "tab": "Debug",
-        "help": "ON (default): greetings, goodnights and image captions on 'auto' pick only providers marked local in Settings \u203a LLM \u2014 server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick always wins."
       },
       {
         "key": "channel.reply_mode",
@@ -486,53 +515,7 @@
         "label": "Bot-to-bot replies",
         "default": true,
         "tab": "Conversation",
-        "help": "ON (default): messages from other bots can get replies, governed by Bot reply mode. OFF: bot messages are always ignored. Humans are unaffected."
-      },
-      {
-        "key": "bot.reply_mode",
-        "type": "string",
-        "label": "Bot reply mode",
-        "default": "allowlist",
-        "tab": "Conversation",
-        "options": [
-          {
-            "label": "Never reply to bots",
-            "value": "never"
-          },
-          {
-            "label": "Allowlist only",
-            "value": "allowlist"
-          },
-          {
-            "label": "Only when a bot @mentions",
-            "value": "mentions_only"
-          }
-        ],
-        "help": "Which bots can get a reply \u2014 a bot must always address her (@mention, name, or replying to her last message). Never: ignore all bots. Allowlist (default): only bots checked in Allowlisted Bots below. Mentions only: any bot that addresses her."
-      },
-      {
-        "key": "bot.session_human_window_seconds",
-        "type": "number",
-        "label": "Human debate window (seconds)",
-        "default": 300,
-        "tab": "Conversation",
-        "help": "After a human addresses her, bots may volley reply-chains freely for this many seconds (a debate window). Minimum 60. Direct @mentions/name calls are always allowed regardless."
-      },
-      {
-        "key": "bot.session_silence_seconds",
-        "type": "number",
-        "label": "Session silence timeout (seconds)",
-        "default": 150,
-        "tab": "Conversation",
-        "help": "A bot debate goes quiet after this many seconds without a volley \u2014 reply-chains stop until a human re-opens the window. Minimum 30."
-      },
-      {
-        "key": "bot.session_safety_max_exchanges",
-        "type": "number",
-        "label": "Safety cap (exchanges)",
-        "default": 20,
-        "tab": "Conversation",
-        "help": "Hard stop per debate: after this many replies to bots in a channel, further bot replies are blocked until a human re-engages her (which starts a fresh debate)."
+        "help": "ON (default): messages from bots in the Allowlisted Bots list are treated like anyone else's \u2014 a mention gets a reply, the rest roll the bot organic chance; after 5 bot-triggered replies in a row in one channel she waits for a human to speak. OFF: bot messages are always ignored."
       },
       {
         "key": "bot.allowlist_ids",
@@ -542,26 +525,12 @@
         "hidden": true
       },
       {
-        "key": "bot.proactive_enabled",
-        "type": "boolean",
-        "label": "Bot proactive",
-        "default": false,
-        "hidden": true
-      },
-      {
-        "key": "bot.proactive_cooldown_hours",
-        "type": "number",
-        "label": "Bot proactive cooldown (hours)",
-        "default": 12,
-        "hidden": true
-      },
-      {
         "key": "reaction.enabled",
         "type": "boolean",
-        "label": "Reactions enabled",
+        "label": "LLM reaction tags",
         "default": true,
         "tab": "Social",
-        "help": "Let her react to messages with emoji on her own (sentiment-based). OFF: no autonomous reactions \u2014 reactions she writes into a reply herself still go through."
+        "help": "ON (default): a [react:emoji] tag she writes into a reply lands as a reaction on the message she answered. OFF: the tag is stripped and ignored."
       },
       {
         "key": "reaction.silent_enabled",
@@ -569,14 +538,7 @@
         "label": "Autonomous silent reactions",
         "default": true,
         "tab": "Social",
-        "help": "React with an emoji without replying."
-      },
-      {
-        "key": "reaction.sentiment_backend",
-        "type": "string",
-        "label": "Sentiment backend",
-        "default": "vader",
-        "hidden": true
+        "help": "React with an emoji without replying \u2014 one roll per message she reads; the emoji follows the message's tone (a small word list, no model)."
       },
       {
         "key": "reaction.reaction_chance",
@@ -584,7 +546,7 @@
         "label": "Reaction chance (%)",
         "default": 10.0,
         "tab": "Social",
-        "help": "Chance (0-100%) she silently reacts to an incoming message with an emoji. Messages she isn't going to answer use a fixed 5% roll instead. 0 = never."
+        "help": "Chance (0-100%) she silently reacts to a message she reads. 0 = never."
       },
       {
         "key": "reaction.reaction_cooldown_seconds",
@@ -593,78 +555,6 @@
         "default": 30,
         "tab": "Social",
         "help": "Minimum seconds between her self-initiated reactions in the same channel. 0 = no cooldown."
-      },
-      {
-        "key": "reaction.react_on_reply_path",
-        "type": "boolean",
-        "label": "React on reply path",
-        "default": true,
-        "tab": "Social",
-        "help": "ON (default): she may also react to messages she's answering. OFF: react only to messages she's leaving alone."
-      },
-      {
-        "key": "reaction.read_only_enabled",
-        "type": "boolean",
-        "label": "Read-only reactions",
-        "default": true,
-        "tab": "Social",
-        "help": "React even on messages that will not get a reply."
-      },
-      {
-        "key": "delivery.message_edits_enabled",
-        "type": "boolean",
-        "label": "Message edits",
-        "default": true,
-        "tab": "Social",
-        "help": "Master switch for editing her own messages after sending \u2014 typo fixes, [edit:] corrections, and random afterthoughts. OFF: messages are never edited once sent."
-      },
-      {
-        "key": "delivery.auto_typo_enabled",
-        "type": "boolean",
-        "label": "Auto typos",
-        "default": false,
-        "tab": "Social",
-        "help": "Occasionally send a typo, then fix it with an edit."
-      },
-      {
-        "key": "delivery.auto_typo_chance",
-        "type": "number",
-        "label": "Auto typo chance (%)",
-        "default": 12.0,
-        "tab": "Social",
-        "help": "Chance (0-100%) a reply goes out with a common misspelling, then gets edited to the fix seconds later. Skipped when answering a question; needs Message edits ON."
-      },
-      {
-        "key": "delivery.auto_typo_delay_min",
-        "type": "number",
-        "label": "Typo fix delay min (seconds)",
-        "default": 2.0,
-        "tab": "Social",
-        "help": "Shortest wait (seconds) before the typo-fix edit lands. Values under 0.5 are treated as 0.5."
-      },
-      {
-        "key": "delivery.auto_typo_delay_max",
-        "type": "number",
-        "label": "Typo fix delay max (seconds)",
-        "default": 6.0,
-        "tab": "Social",
-        "help": "Longest wait (seconds) before the typo-fix edit. If set below the min, the two swap."
-      },
-      {
-        "key": "delivery.quote_reply_enabled",
-        "type": "boolean",
-        "label": "Smart quote-replies",
-        "default": true,
-        "tab": "Social",
-        "help": "ON (default): quote-reply when context calls for it \u2014 always for questions, usually in busy channels, rarely in DMs, never on jokes or images. OFF: plain messages, no quote header."
-      },
-      {
-        "key": "delivery.post_send_edit_enabled",
-        "type": "boolean",
-        "label": "Random post-send edits",
-        "default": true,
-        "tab": "Social",
-        "help": "About 4% of replies get a human touch after sending: a subtle typo fixed by edit, or an afterthought ('lol', 'actually') edited in 2-5 seconds later. Needs Message edits ON."
       },
       {
         "key": "safety.allow_direct_messages",
@@ -731,68 +621,22 @@
         "help": "Hour (0-23, server local) quiet hours end. Example: start 22, end 7 covers overnight."
       },
       {
-        "key": "media.enabled",
+        "key": "media.images_in_enabled",
         "type": "boolean",
-        "label": "Media pipeline",
+        "label": "Images in",
         "default": false,
         "tab": "Media",
-        "help": "ON: images and GIFs posted in chat are detected, stored, and described by the Vision LLM below so her replies can reference them. OFF: attachments are ignored. Does not affect GIF replies."
+        "help": "ON: images posted in chat ride into her reply as pictures when the daemon task's model can see images (fetched off the gateway, 10 MB each, no captioning). OFF (default): attachments are ignored. Does not affect GIF replies."
       },
       {
-        "key": "media.image_understanding_enabled",
-        "type": "boolean",
-        "label": "Image understanding",
-        "default": false,
-        "tab": "Media",
-        "help": "Caption images/GIFs with the vision endpoint so replies can reference them."
-      },
-      {
-        "key": "media.vision_llm_provider",
-        "type": "string",
-        "label": "Vision LLM provider",
-        "default": "auto",
-        "hidden": true
-      },
-      {
-        "key": "media.vision_llm_model",
-        "type": "string",
-        "label": "Vision LLM model",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "media.vision_timeout_seconds",
+        "key": "media.max_images",
         "type": "number",
-        "label": "Vision timeout (seconds)",
-        "default": 30,
+        "label": "Max images per message",
+        "default": 4,
+        "min": 1,
+        "max": 10,
         "tab": "Media",
-        "help": "How long to wait for the vision model before giving up (default 30). On timeout the image gets a filename-only description."
-      },
-      {
-        "key": "media.vision_gif_mode",
-        "type": "string",
-        "label": "Vision GIF mode",
-        "default": "first_frame",
-        "tab": "Media",
-        "options": [
-          {
-            "label": "First frame",
-            "value": "first_frame"
-          },
-          {
-            "label": "Whole GIF (raw)",
-            "value": "sampled_frames"
-          }
-        ],
-        "help": "First frame (default): the GIF's first frame is sent to the vision model as a PNG \u2014 works everywhere. Whole GIF sends the raw animated file as-is; only useful if your endpoint accepts animated GIFs."
-      },
-      {
-        "key": "media.vision_debug_enabled",
-        "type": "boolean",
-        "label": "Vision debug logging",
-        "default": false,
-        "tab": "Media",
-        "help": "Logs every vision call (provider detection, request start/success/failure) to Traces and the app log. OFF (default): only fallbacks and errors are traced."
+        "help": "How many of one message's images she gets to see."
       },
       {
         "key": "media.gif_enabled",
@@ -859,91 +703,12 @@
         "help": "Safety level for GIF search results: Off (unfiltered) to High (strictest). Applies the same direction on Klipy, Giphy, and Tenor."
       },
       {
-        "key": "voice.enabled",
-        "type": "boolean",
-        "label": "Voice",
-        "help": "Let her join voice channels",
-        "default": false,
-        "tab": "Voice"
-      },
-      {
-        "key": "voice.mode",
-        "type": "string",
-        "label": "Voice mode",
-        "help": "What she does in a channel",
-        "default": "listen_only",
-        "tab": "Voice",
-        "options": [
-          {
-            "label": "Listen only",
-            "value": "listen_only"
-          },
-          {
-            "label": "Transcribe only",
-            "value": "transcribe_only"
-          },
-          {
-            "label": "Summarize only",
-            "value": "summarize_only"
-          },
-          {
-            "label": "Conversational",
-            "value": "conversational"
-          }
-        ]
-      },
-      {
-        "key": "voice.transcription_enabled",
-        "type": "boolean",
-        "label": "Transcription",
-        "help": "Archive what she hears as text",
-        "default": false,
-        "tab": "Voice"
-      },
-      {
-        "key": "voice.speaking_enabled",
-        "type": "boolean",
-        "label": "Speaking",
-        "help": "Let her talk back out loud",
-        "default": false,
-        "tab": "Voice"
-      },
-      {
         "key": "voice.turn_cues_enabled",
         "type": "boolean",
         "label": "Turn cues",
         "help": "Tick while she thinks, ding on barge-in",
         "default": true,
         "tab": "Voice"
-      },
-      {
-        "key": "voice.keep_chat_history",
-        "type": "boolean",
-        "label": "Keep voice chat history",
-        "help": "Off = a voice channel's chat is deleted 30 min after her last session there",
-        "default": false,
-        "tab": "Voice"
-      },
-      {
-        "key": "voice.llm_provider",
-        "type": "string",
-        "label": "Voice LLM provider",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "voice.llm_model",
-        "type": "string",
-        "label": "Voice LLM model",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "voice.join_targets",
-        "type": "list",
-        "label": "Auto-join voice channels",
-        "default": [],
-        "hidden": true
       },
       {
         "key": "voice.conversation_prompt_template",
@@ -957,35 +722,8 @@
         "type": "number",
         "label": "Min silence (seconds)",
         "default": 1.5,
-        "hidden": true
-      },
-      {
-        "key": "voice.speak_cooldown_seconds",
-        "type": "number",
-        "label": "Speak cooldown (seconds)",
-        "default": 2.0,
-        "hidden": true
-      },
-      {
-        "key": "voice.rolling_summary_seconds",
-        "type": "number",
-        "label": "Rolling summary (seconds)",
-        "default": 0,
-        "hidden": true
-      },
-      {
-        "key": "voice.streaming_playback_enabled",
-        "type": "boolean",
-        "label": "Streaming playback",
-        "default": true,
-        "hidden": true
-      },
-      {
-        "key": "voice.conversation_core_enabled",
-        "type": "boolean",
-        "label": "Core conversation engine",
-        "default": true,
-        "hidden": true
+        "tab": "Voice",
+        "help": "Silence that ends an utterance before it is transcribed (seconds)."
       },
       {
         "key": "voice.addressing_mode",
@@ -1036,13 +774,6 @@
         "help": "How long you must keep talking over her before she stops. A click or thump can't hold this long; a word can",
         "default": 250,
         "tab": "Voice"
-      },
-      {
-        "key": "voice.max_conversation_sessions",
-        "type": "number",
-        "label": "Max conversation sessions",
-        "default": 2,
-        "hidden": true
       },
       {
         "key": "retention.enabled",

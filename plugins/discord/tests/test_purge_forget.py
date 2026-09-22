@@ -165,14 +165,14 @@ def test_pending_payloads_expire_and_clear_returns_the_payload(monkeypatch):
 
 
 def test_reacted_messages_memory_is_bounded():
-    from plugins.discord.conversation import reaction_service as rsvc
+    from plugins.discord.conversation import reactions as rsvc
     from plugins.discord.models.intentions import AddReactionIntention
 
-    service = rsvc.ReactionService()
+    service = rsvc.Reactions()
     for i in range(rsvc.REACTED_MESSAGES_CAP + 50):
         intention = AddReactionIntention(intention_type='add_reaction', account_name='bot', channel_id='c',
                                          message_id=str(i), reason='r', emoji='x')
-        service._record_silent_reaction(intention, result={}, delay=0.0)
+        service._record(intention, result={}, delay=0.0)
     assert len(service._reacted_messages) == rsvc.REACTED_MESSAGES_CAP
     assert ('bot', 'c', '0') not in service._reacted_messages
     assert ('bot', 'c', str(rsvc.REACTED_MESSAGES_CAP + 49)) in service._reacted_messages
@@ -203,7 +203,7 @@ def test_debug_ring_is_opt_in_and_clearable():
             self.on = on
 
         def get_plugin_settings(self, name):
-            return {'cognitive.llm_debug_enabled': self.on}
+            return {'debug.llm_debug_enabled': self.on}
 
     off = LlmDebugService(limit=5, plugin_loader=Loader(False))
     off.record_prompt({'message_id': 'm1', 'account': 'bot', 'content': 'hello'})

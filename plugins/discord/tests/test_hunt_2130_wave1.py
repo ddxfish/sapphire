@@ -110,11 +110,11 @@ def test_source_stale_generation_gates_feed_finish_wait():
 
 
 # ── row 14: the image-IN lane is wired ─────────────────────────────────────
-def test_conversation_service_accepts_media_service_and_container_passes_it():
+def test_conversation_service_accepts_the_image_lane_and_container_passes_it():
     from plugins.discord.conversation.conversation_service import ConversationService
-    assert 'media_service' in inspect.signature(ConversationService.__init__).parameters
+    assert 'image_lane' in inspect.signature(ConversationService.__init__).parameters
     src = (ROOT / 'plugins/discord/runtime/container.py').read_text(encoding='utf-8')
-    assert 'media_service=self.media_service,        # image-IN lane was never wired (row 14)' in src
+    assert 'image_lane=self.image_lane,' in src
 
 
 # ── row 24: the listen-only lane does not leak ─────────────────────────────
@@ -150,16 +150,6 @@ def test_prompt_context_uses_trigger_identity():
     alice, bob = obs('alice', 'm1'), obs('bob', 'm2')
     ctx = svc.build(SimpleNamespace(observations=[alice, bob]), trigger=alice)
     assert ctx['author_id'] == 'alice'
-
-
-# ── row 44: the settings store reloads in place ────────────────────────────
-def test_settings_store_replace_from_keeps_identity():
-    from plugins.discord.models.settings import SettingsStore
-    a, b = SettingsStore(), SettingsStore()
-    b.global_overlay.channel.update({'reply_mode': 'all'})
-    same = a.replace_from(b)
-    assert same is a
-    assert a.resolve().channel.reply_mode == 'all'
 
 
 # ── row 10: source tripwire for the one-liner ──────────────────────────────

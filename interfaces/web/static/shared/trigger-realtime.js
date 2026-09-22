@@ -10,6 +10,7 @@
 // explicit) and exposes Mind scopes so a caller with tools reaches an ISOLATED
 // scope, never the owner's default.
 import { fetchAIConfigData } from './trigger-editor/ai-config.js';
+import { buildFilterRows, readFilterRows, wireFilterRows } from './trigger-editor/trigger-event.js';
 import { fetchEventSources, createTask, updateTask, deleteTask } from './continuity-api.js';
 import { fetchChatList, createChat } from '../api.js';
 import { getInitData } from './init-data.js';
@@ -26,6 +27,62 @@ function _esc(s) { const d = document.createElement('div'); d.textContent = s ??
 // (Twilio: 'account' → the number). label + dynamic endpoint come from there.
 function _subSourceField(source) {
     return (source?.task_fields || []).find(f => f.type === 'select' && f.dynamic) || null;
+}
+
+// The phone-shaped blocks (callers, where-it-runs, greeting, phone note, public
+// line, elevation) belong to a source that declares an `ephemeral` task field —
+// the Twilio gate. Every OTHER realtime source (Discord: Voice channel, S6
+// 2026-09-22) gets its own declared task_fields rendered generically instead,
+// plus the session's prompt / tools / provider / model.
+function _phoneStyle(source) {
+    return (source?.task_fields || []).some(f => f.key === 'ephemeral');
+}
+
+// The source's remaining task_fields (everything but the sub-source picker).
+function _extraFields(source) {
+    const sub = _subSourceField(source);
+    return (source?.task_fields || []).filter(f => f !== sub);
+}
+
+function _renderExtraFields(container, source, tc) {
+    const fields = _extraFields(source);
+    if (!fields.length) { container.innerHTML = ''; return; }
+    let html = '';
+    for (const f of fields) {
+        const val = tc[f.key] ?? f.default ?? '';
+        const help = f.help ? ` <span class="help-tip" data-tip="${_esc(f.help)}">?</span>` : '';
+        const req = f.required ? ' <span style="color:var(--error)">*</span>' : '';
+        if (f.type === 'boolean') {
+            html += `<div class="sched-checkbox"><label><input type="checkbox" data-rt-field="${_esc(f.key)}" ${val ? 'checked' : ''}> ${_esc(f.label || f.key)}${help}</label></div>`;
+        } else if (f.type === 'select' && f.options) {
+            const opts = f.options.map(o => {
+                const ov = typeof o === 'string' ? o : o.value;
+                const ol = typeof o === 'string' ? o : (o.label || o.value);
+                return `<option value="${_esc(ov)}" ${String(val) === String(ov) ? 'selected' : ''}>${_esc(ol)}</option>`;
+            }).join('');
+            html += `<div class="sched-field"><label>${_esc(f.label || f.key)}${req}${help}</label><select data-rt-field="${_esc(f.key)}">${opts}</select></div>`;
+        } else if (f.type === 'number') {
+            html += `<div class="sched-field"><label>${_esc(f.label || f.key)}${req}${help}</label>
+                <input type="number" data-rt-field="${_esc(f.key)}" value="${_esc(String(val))}" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''}></div>`;
+        } else {
+            const widget = f.widget || 'text';
+            html += `<div class="sched-field"><label>${_esc(f.label || f.key)}${req}${help}</label>
+                <input type="${widget === 'password' ? 'password' : widget === 'time' ? 'time' : 'text'}" data-rt-field="${_esc(f.key)}" data-required="${f.required ? '1' : ''}" data-label="${_esc(f.label || f.key)}"
+                    value="${_esc(String(val))}" ${f.placeholder ? `placeholder="${_esc(f.placeholder)}"` : ''}></div>`;
+        }
+    }
+    container.innerHTML = html;
+}
+
+function _readExtraFields(container) {
+    const out = {};
+    container.querySelectorAll('[data-rt-field]').forEach(el => {
+        const key = el.dataset.rtField;
+        if (el.type === 'checkbox') out[key] = el.checked;
+        else if (el.type === 'number') out[key] = el.value ? Number(el.value) : null;
+        else out[key] = el.value.trim();
+    });
+    return out;
 }
 
 export async function openRealtimeEditor(task, refresh) {
@@ -94,7 +151,13 @@ export async function openRealtimeEditor(task, refresh) {
                     <label id="rt-subsource-label">Endpoint</label>
                     <select id="rt-subsource"></select>
                 </div>
-                <div class="sched-field">
+                <div id="rt-extra-fields"></div>
+                <div class="sched-field" id="rt-filter-block" style="display:none">
+                    <label>Where <span class="sched-preview" id="rt-filter-preview"></span> <span class="help-tip" data-tip="Which channels this rule covers. No rows = every one the bot can see. Every row must match · comma = any · keys take _not / _contains. Two rules on one bot: the more specific filter wins.">?</span></label>
+                    <div id="rt-filter-rows" class="filter-rows"></div>
+                    <button type="button" class="btn-sm" id="rt-filter-add" style="margin-top:6px">+ Add filter</button>
+                </div>
+                <div class="sched-field rt-phone-only">
                     <label>Callers</label>
                     <div style="${RADROW}">
                         <label style="${RADLBL}"><input type="radio" name="rt-callers" value="anyone" ${callersMode === 'anyone' ? 'checked' : ''}> anyone</label>
@@ -105,8 +168,8 @@ export async function openRealtimeEditor(task, refresh) {
 
                 <hr class="sched-divider" style="margin-top:16px">
                 <div class="sched-field">
-                    <label>Where the session runs</label>
-                    <div style="${RADROW}">
+                    <label id="rt-route-label">Where the session runs</label>
+                    <div style="${RADROW}" class="rt-phone-only" id="rt-route-row">
                         <label style="${RADLBL}"><input type="radio" name="rt-route" value="saved" ${!ephemeral ? 'checked' : ''}> a saved chat</label>
                         <label style="${RADLBL}"><input type="radio" name="rt-route" value="ephemeral" ${ephemeral ? 'checked' : ''}> per caller chat history</label>
                     </div>
@@ -124,7 +187,7 @@ export async function openRealtimeEditor(task, refresh) {
                     </div>
 
                     <div id="rt-ephemeral" style="display:${ephemeral ? 'block' : 'none'}">
-                        <div class="sched-field">
+                        <div class="sched-field rt-phone-only">
                             <label>Keep chat for (minutes after last call)</label>
                             <input type="number" id="rt-ttl" value="${_esc(String(tc.ephemeral_minutes ?? 10))}" min="0">
                         </div>
@@ -133,7 +196,7 @@ export async function openRealtimeEditor(task, refresh) {
                             <div class="sched-field"><label>Tools</label><select id="rt-toolset">${toolsetOpts(t.toolset || 'none')}</select></div>
                             <div class="sched-field"><label>Provider</label><select id="rt-provider">${providerOpts(t.provider)}</select></div>
                             <div class="sched-field"><label>Model</label><input type="text" id="rt-model" value="${_esc(t.model || '')}" placeholder="Provider default"></div>
-                            <div class="sched-field"><label>Voice <span class="help-tip" data-tip="TTS voice for this rule's calls (greeting + replies). Default = the global voice.">?</span></label><select id="rt-voice"><option value="">Default voice</option></select></div>
+                            <div class="sched-field rt-phone-only"><label>Voice <span class="help-tip" data-tip="TTS voice for this rule's calls (greeting + replies). Default = the global voice.">?</span></label><select id="rt-voice"><option value="">Default voice</option></select></div>
                         </div>
                         <details style="margin-top:4px"><summary class="text-muted" style="cursor:pointer;font-size:var(--font-sm)">🧠 Mind — memory &amp; knowledge scopes</summary>
                             <div class="text-muted" style="font-size:var(--font-sm);margin:4px 0">Only matters if you grant tools. Pick an isolated scope so a caller never touches your default memory.</div>
@@ -142,21 +205,21 @@ export async function openRealtimeEditor(task, refresh) {
                     </div>
                 </div>
 
-                <div class="sched-field">
+                <div class="sched-field rt-phone-only">
                     <label>Greeting <span class="help-tip" data-tip="Spoken when the session connects.">?</span></label>
                     <textarea id="rt-greeting" rows="2" placeholder="Hi, you've reached Sapphire…">${_esc(tc.greeting || '')}</textarea>
                 </div>
-                <div class="sched-field">
+                <div class="sched-field rt-phone-only">
                     <label>Phone context <span class="help-tip" data-tip="A per-turn note she sees so she knows it's a live call — invisible to the caller, never saved (rides the ghost rail). Use {caller} for the number. Leave blank for a sensible default.">?</span></label>
                     <textarea id="rt-phone-note" rows="2" placeholder="You're on a phone call with {caller}. Voice transcription — reply briefly, spoken aloud, no markdown.">${_esc(tc.phone_note || '')}</textarea>
                 </div>
-                <div class="sched-checkbox">
+                <div class="sched-checkbox rt-phone-only">
                     <label><input type="checkbox" id="rt-public" ${tc.public_line === false ? '' : 'checked'}> Public line — apply safety rails <span class="help-tip" data-tip="Appends the conduct rails from Settings > Plugins > Twilio Voice (bait defense, stranger posture — the 'don't repeat stuff' text). Uncheck for a trusted line like your own number, so she can be fully herself.">?</span></label>
                 </div>
-                <div class="sched-checkbox">
+                <div class="sched-checkbox rt-phone-only">
                     <label><input type="checkbox" id="rt-allow-elev" ${tc.allow_elevation ? 'checked' : ''}> Allow toolset elevation by passphrase <span class="help-tip" data-tip="A caller on this rule can unlock tools by speaking the passphrase (&quot;switch toolset, the key is alligator three&quot;). Word part fuzzy for voice transcription, number exact. 3 tries per call; elevation ends at hangup.">?</span></label>
                 </div>
-                <div id="rt-elev-fields" style="display:${tc.allow_elevation ? 'block' : 'none'};margin:2px 0 8px 22px">
+                <div id="rt-elev-fields" class="rt-phone-only" style="display:${tc.allow_elevation ? 'block' : 'none'};margin:2px 0 8px 22px">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                         <div class="sched-field">
                             <label>Passphrase <span class="help-tip" data-tip="Use a word + a number (e.g. alligator3) — the number must be heard exactly, which is what makes it hard to guess.">?</span></label>
@@ -222,8 +285,46 @@ export async function openRealtimeEditor(task, refresh) {
     const subField = modal.querySelector('#rt-subsource-field');
     const subLabel = modal.querySelector('#rt-subsource-label');
     const subSel = modal.querySelector('#rt-subsource');
+    const extraBox = modal.querySelector('#rt-extra-fields');
+    const currentSource = () => sources.find(s => s.name === modal.querySelector('#rt-source').value);
+    // Phone-style sources keep the caller / routing / greeting blocks; any
+    // other realtime source shows its own declared fields and the session
+    // config (prompt / tools / provider / model) with no routing choice.
+    function syncShape() {
+        const src = currentSource();
+        const phone = _phoneStyle(src);
+        modal.querySelectorAll('.rt-phone-only').forEach(el => {
+            if (el.id === 'rt-elev-fields') el.style.display = (phone && modal.querySelector('#rt-allow-elev').checked) ? 'block' : 'none';
+            else el.style.display = phone ? '' : 'none';
+        });
+        _renderExtraFields(extraBox, src, tc.source === src?.name ? tc : {});
+        // Daemon-style filter rows say WHERE a non-phone rule applies (the phone
+        // keeps its Callers sugar). The first build seeds from the saved rule; a
+        // source flip keeps what has been typed.
+        const filterBlock = modal.querySelector('#rt-filter-block');
+        const fields = (!phone && src?.filter_fields?.length) ? src.filter_fields : null;
+        filterBlock.style.display = fields ? '' : 'none';
+        if (fields) {
+            const seed = filterBlock.dataset.built
+                ? readFilterRows(modal, '#rt-filter-rows', { partial: true })
+                : ((tc.source === src?.name && tc.filter) || {});
+            buildFilterRows(modal, '#rt-filter-rows', seed, fields);
+            filterBlock.dataset.built = '1';
+        }
+        if (!phone) {
+            modal.querySelector('#rt-route-label').textContent = 'The session';
+            modal.querySelector('#rt-saved').style.display = 'none';
+            modal.querySelector('#rt-ephemeral').style.display = 'block';
+        } else {
+            modal.querySelector('#rt-route-label').textContent = 'Where the session runs';
+            const eph = modal.querySelector('input[name="rt-route"]:checked').value === 'ephemeral';
+            modal.querySelector('#rt-saved').style.display = eph ? 'none' : 'block';
+            modal.querySelector('#rt-ephemeral').style.display = eph ? 'block' : 'none';
+        }
+    }
     async function syncSubSource(preselect) {
-        const src = sources.find(s => s.name === modal.querySelector('#rt-source').value);
+        const src = currentSource();
+        syncShape();
         const sf = _subSourceField(src);
         if (!sf) { subField.style.display = 'none'; subSel.dataset.key = ''; return; }
         subField.style.display = 'block';
@@ -246,6 +347,7 @@ export async function openRealtimeEditor(task, refresh) {
         } catch { subSel.innerHTML = '<option value="">Could not load options</option>'; }
     }
     modal.querySelector('#rt-source').addEventListener('change', () => syncSubSource(null));
+    wireFilterRows(modal, '#rt-filter-rows', '#rt-filter-add', '#rt-filter-preview');   // before the first build (preview stamp)
     const initSub = _subSourceField(sources.find(s => s.name === curSource));
     await syncSubSource(initSub ? tc[initSub.key] : null);
 
@@ -374,6 +476,38 @@ export async function openRealtimeEditor(task, refresh) {
         const subVal = subSel.value;
         if (subKey && !subVal) { alert(`${subLabel.textContent} is required`); return; }
 
+        const phone = _phoneStyle(currentSource());
+        const extra = _readExtraFields(extraBox);
+        for (const el of extraBox.querySelectorAll('[data-required="1"]')) {
+            if (!String(el.value || '').trim()) { alert(`${el.dataset.label} is required`); return; }
+        }
+        if (!phone) {
+            // A non-phone realtime source: its own fields + the session config.
+            const filter = readFilterRows(modal, '#rt-filter-rows');
+            const trigger_config = { source, filter: Object.keys(filter).length ? filter : null, ...extra };
+            if (subKey) trigger_config[subKey] = subVal;
+            const scopeFields = scopeContainer ? readScopeSettingsFromDom(scopeContainer, { missingValue: 'none' }) : {};
+            const data = {
+                name, type: 'daemon', emoji: emojiBtn.textContent.trim() || '⚡',
+                initial_message: '', trigger_config,
+                schedule: '0 0 31 2 *', chance: 100, active_hours_start: null, active_hours_end: null,
+                chat_target: '',
+                prompt: modal.querySelector('#rt-prompt').value || 'default',
+                toolset: modal.querySelector('#rt-toolset').value || 'none',
+                provider: modal.querySelector('#rt-provider').value || 'auto',
+                model: modal.querySelector('#rt-model').value.trim() || '',
+                persona: '',
+                voice: '', context_limit: 0, max_parallel_tools: 0, max_tool_rounds: 0, max_runs: 0,
+                ...scopeFields,
+            };
+            try {
+                if (isEdit) await updateTask(t.id, data);
+                else await createTask(data);
+                close(); refresh?.();
+            } catch (e) { showToast('Save failed', 'error'); }
+            return;
+        }
+
         const callersOnly = modal.querySelector('input[name="rt-callers"]:checked').value === 'only';
         const callerList = modal.querySelector('#rt-callers-list').value.trim();
         const filter = (callersOnly && callerList) ? { caller: callerList } : null;
@@ -400,6 +534,7 @@ export async function openRealtimeEditor(task, refresh) {
             ephemeral_minutes: eph ? (parseInt(modal.querySelector('#rt-ttl').value) || 0) : 10,
         };
         if (subKey) trigger_config[subKey] = subVal;
+        Object.assign(trigger_config, extra);
 
         // Vault hunt U1: while the vault is sealed a private target serves
         // as '__locked__' — the synthetic option above keeps it selected so

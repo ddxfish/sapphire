@@ -56,38 +56,6 @@ def make_obs():
     )
 
 
-def test_emit_reply_includes_vision_description_in_content():
-    batch_service = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
-    obs = make_obs()
-    obs.attachments = [{'url': 'https://cdn/a.png', 'filename': 'cat.png', 'content_type': 'image/png'}]
-    obs.clean_content = ''
-    obs.content = ''
-    batch_service.add_message(obs)
-    batch = batch_service.flush_ready(now=10.0)[0]
-    bridge = FakeBridge()
-    media_context = [{
-        'media_kind': 'image',
-        'source_url': 'https://cdn/a.png',
-        'interpretation': {
-            'summary': 'A cat on a windowsill.',
-            'source': 'vision',
-        },
-    }]
-    service = ConversationService(
-        event_bridge=bridge,
-        policy_service=FakePolicy(),
-        prompt_context_service=FakeContext({'recent_history': [], 'media': media_context}),
-        trace_repository=FakeTraceRepo(),
-        settings_store=SettingsStore(),
-    )
-
-    emitted = service.process_batch(batch)
-
-    assert emitted is True
-    assert 'automated vision description' in bridge.payloads[0]['content']
-    assert 'A cat on a windowsill.' in bridge.payloads[0]['content']
-
-
 def test_emit_reply_intention_for_batch():
     batch_service = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
     batch_service.add_message(make_obs())

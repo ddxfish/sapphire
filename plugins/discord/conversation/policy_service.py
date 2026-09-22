@@ -18,13 +18,3 @@ class PolicyService:
             return {'allowed': False, 'reason': 'cooldown'}
         self._last_reply_at[key] = now
         return {'allowed': True, 'reason': 'allowed'}
-
-    def evaluate_voice_speak(self, intention, settings) -> dict:
-        voice = settings.voice
-        if not voice.enabled:
-            return {'allowed': False, 'reason': 'voice_disabled'}
-        if not voice.speaking_enabled and intention.reason != 'explicit_command':
-            return {'allowed': False, 'reason': 'speaking_disabled'}
-        if voice.mode in {'listen_only', 'transcribe_only', 'summarize_only'} and intention.reason != 'explicit_command':
-            return {'allowed': False, 'reason': f'mode_{voice.mode}'}
-        return {'allowed': True, 'reason': 'allowed'}

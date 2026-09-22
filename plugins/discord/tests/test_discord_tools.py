@@ -297,7 +297,7 @@ def test_discord_join_voice_blocked_points_at_settings(monkeypatch):
     msg, ok = tools.execute('discord_join_voice', {'channel': 'voice chat 1'})
 
     assert ok is False
-    assert 'disabled' in msg.lower()
+    assert 'voice channel' in msg.lower() and 'rule' in msg.lower()
 
 
 def test_discord_join_voice_unresolved_channel_errors(monkeypatch):

@@ -53,7 +53,7 @@ Scheduler tick exceptions are logged and **do not** crash the daemon.
 Every ~15 seconds per connected account:
 
 - **Proactive coordinator** — evaluates greeting/outreach/goodnight intentions, task follow-ups, presence updates
-- **Voice auto-join** — joins/leaves configured voice channels based on occupancy (skipped during sleep)
+- **Voice auto-join** — opt-in per `Discord: Voice channel` rule (`auto_join`): joins covered voice channels when someone is there, leaves any covered channel when it empties; a deliberate leave (<<HANG UP>>, /voice leave, the tool) latches the channel until it has emptied once
 
 Sapphire continuity cron jobs (hourly/15-min) also trigger proactive pathways — see [Scheduled jobs](#scheduled-jobs).
 

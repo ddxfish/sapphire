@@ -41,7 +41,7 @@ def operator_summary(**kwargs):
         'trace_summary': runtime.trace_service.summary() if runtime.trace_service else {},
         'voice_sessions': [
             session.to_dict()
-            for session in (runtime.voice_session_service.list_active(account) if runtime.voice_session_service and account else [])
+            for session in (runtime.voice_sessions.list_active(account) if runtime.voice_sessions and account else [])
         ],
         'connected_accounts': runtime.transport.list_connected() if runtime.transport else [],
     }
