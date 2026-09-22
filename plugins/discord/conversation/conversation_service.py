@@ -103,7 +103,6 @@ class ConversationService:
         trace_service=None,
         cognitive_orchestrator=None,
         account_repository=None,
-        sleep_service=None,
         bot_session_service=None,
         mention_map_service=None,
         llm_debug_service=None,
@@ -126,7 +125,6 @@ class ConversationService:
         self.trace_service = trace_service
         self.cognitive_orchestrator = cognitive_orchestrator
         self.account_repository = account_repository
-        self.sleep_service = sleep_service
         self.bot_session_service = bot_session_service
         self.mention_map_service = mention_map_service
         self.llm_debug_service = llm_debug_service
@@ -160,30 +158,6 @@ class ConversationService:
             account_repository=self.account_repository,
         )
         trigger.name_matched = trigger_eval['name_matched']
-        if self.sleep_service and settings:
-            sleep_gate = self.sleep_service.evaluate_reply_gate(
-                trigger,
-                settings,
-                respond_trigger=bool(trigger_eval['respond_trigger']),
-                mentioned=bool(trigger_eval['mentioned']),
-            )
-            if not sleep_gate.get('allow'):
-                if self.trace_service:
-                    self.trace_service.record_policy_rejection(sleep_gate.get('reason', 'sleep'), {
-                        'channel_id': trigger.channel_id,
-                        'message_id': trigger.message_id,
-                    })
-                self.trace_repository.record_trace('event_dropped', 'Sleep schedule blocked reply', sleep_gate)
-                self._record_debug_rejection(
-                    trigger,
-                    reason=str(sleep_gate.get('reason') or 'sleep'),
-                    stage='sleep',
-                    detail=sleep_gate,
-                )
-                return False
-            sleep_wake_hint = sleep_gate.get('hint')
-        else:
-            sleep_wake_hint = None
         if trigger.is_dm and not bool(getattr(getattr(settings, 'safety', None), 'allow_direct_messages', True)):
             self.trace_repository.record_trace('event_dropped', 'Direct messages disabled', {
                 'message_id': trigger.message_id,
@@ -533,8 +507,6 @@ class ConversationService:
         follow_up_hints = list(getattr(trigger, 'follow_up_hints', []) or [])
         if self.mention_map_service:
             hints.append(self.mention_map_service.mention_format_hint())
-        if sleep_wake_hint:
-            hints.append(sleep_wake_hint)
         if settings:
             gif_hint = build_gif_reply_hint(settings)
             if gif_hint:
@@ -1111,8 +1083,6 @@ class ConversationService:
 
     def _maybe_execute_silent_reaction(self, trigger, settings, world_state: dict, *, read_only: bool = False, reply_planned: bool = False) -> bool:
         if not self.reaction_service or not self.transport or not settings:
-            return False
-        if self.sleep_service and self.sleep_service.should_drop_observation(trigger, settings):
             return False
         intention = self.reaction_service.evaluate_silent(
             trigger,

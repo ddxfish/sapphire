@@ -7,19 +7,6 @@ from typing import Any
 
 
 @dataclass
-class PresenceSettings:
-    status: str = 'online'
-    activity: str = ''
-    quiet_status: str = 'idle'
-    sleep_activity: str = 'custom: sleeping'
-    cycling_enabled: bool = False
-    cycle_interval_seconds: int = 300
-    activity_presets: list = field(default_factory=list)
-    activities_custom: list = field(default_factory=list)
-    situation_presence_enabled: bool = False
-
-
-@dataclass
 class BotInteractionSettings:
     enabled: bool = True
     reply_mode: str = 'allowlist'  # never | allowlist | mentions_only | all
@@ -27,8 +14,6 @@ class BotInteractionSettings:
     session_human_window_seconds: int = 300
     session_silence_seconds: int = 150
     session_safety_max_exchanges: int = 20
-    proactive_enabled: bool = False
-    proactive_cooldown_hours: int = 12
 
 
 @dataclass
@@ -36,51 +21,12 @@ class SafetySettings:
     allow_direct_messages: bool = False   # M19: a stranger's DM is an outside line — opt in per install
     dm_daily_budget: int = 30             # DM messages per person per day she will answer (0 = unlimited)
     tools_stay_in_server: bool = True     # H3: inside a server event her tools reach only that server
-    quiet_hours_enabled: bool = False
-    quiet_hours_start: int = 0
-    quiet_hours_end: int = 0
     rate_limit_seconds: int = 30
-    proactive_cooldown_hours: int = 6
-
-
-@dataclass
-class ProactiveSettings:
-    greeting_enabled: bool = False
-    greeting_utc_hour: int = 9  # server local hour (legacy field name)
-    greeting_targets: list = field(default_factory=list)
-    greeting_message: str = ''
-    greeting_fallback: str = 'Good morning!'
-    greeting_use_llm: bool = True
-    greeting_model_provider: str = ''
-    greeting_model_name: str = ''
-    greeting_max_tokens: int = 180
-    birthday_wish_fallback: str = 'Happy birthday! 🎂'
-    birthday_use_llm: bool = True
-    birthday_wish_spread_end_hour: int = 20
-    outreach_enabled: bool = False
-    outreach_stale_minutes: int = 120
-    outreach_cooldown_hours: int = 6
-    greeting_outreach_lead_hours: int = 2
-    sleep_schedule_enabled: bool = False
-    sleep_utc_hour: int = 22  # server local hour (legacy field name)
-    goodnight_message: str = ''
-    goodnight_fallback: str = 'Goodnight everyone!'
-    goodnight_use_llm: bool = True
-    goodnight_model_provider: str = ''
-    goodnight_model_name: str = ''
-    goodnight_max_tokens: int = 180
-    sleep_buffered_reply_max: int = 3
-    forced_wake_mention_threshold: int = 2
-    forced_wake_minutes: int = 30
 
 
 @dataclass
 class ProfileSettings:
     enabled: bool = True
-    birthday_capture_enabled: bool = True
-    birthday_followups_enabled: bool = True
-    birthday_bulk_enabled: bool = True
-    birthday_bulk_threshold: int = 2
     # Opt-in ambient chat → fact distill (plugin-local; not Sapphire core Mind).
     ambient_distill_enabled: bool = False
     ambient_distill_interval_hours: float = 1.0
@@ -217,13 +163,11 @@ class CognitiveSettings:
 
 @dataclass
 class EffectiveSettings:
-    presence: PresenceSettings = field(default_factory=PresenceSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     profile: ProfileSettings = field(default_factory=ProfileSettings)
     media: MediaSettings = field(default_factory=MediaSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
     retention: RetentionSettings = field(default_factory=RetentionSettings)
-    proactive: ProactiveSettings = field(default_factory=ProactiveSettings)
     cognitive: CognitiveSettings = field(default_factory=CognitiveSettings)
     bot: BotInteractionSettings = field(default_factory=BotInteractionSettings)
     reaction: ReactionSettings = field(default_factory=ReactionSettings)
@@ -238,13 +182,11 @@ class EffectiveSettings:
 
 @dataclass
 class SettingsOverlay:
-    presence: dict[str, Any] = field(default_factory=dict)
     safety: dict[str, Any] = field(default_factory=dict)
     profile: dict[str, Any] = field(default_factory=dict)
     media: dict[str, Any] = field(default_factory=dict)
     voice: dict[str, Any] = field(default_factory=dict)
     retention: dict[str, Any] = field(default_factory=dict)
-    proactive: dict[str, Any] = field(default_factory=dict)
     cognitive: dict[str, Any] = field(default_factory=dict)
     bot: dict[str, Any] = field(default_factory=dict)
     reaction: dict[str, Any] = field(default_factory=dict)

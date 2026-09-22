@@ -26,19 +26,13 @@ from plugins.discord.conversation.delivery_style_service import DeliveryStyleSer
 from plugins.discord.conversation.edit_history_service import EditHistoryService
 from plugins.discord.conversation.reaction_service import ReactionService
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
-from plugins.discord.memory.birthday_service import BirthdayService
+from plugins.discord.greetings import GreetingsClock
 from plugins.discord.memory.distill_service import DistillService
 from plugins.discord.memory.interest_service import InterestService
 from plugins.discord.memory.lore_service import LoreService
 from plugins.discord.memory.memory_service import MemoryService
 from plugins.discord.memory.milestone_service import MilestoneService
 from plugins.discord.memory.profile_service import ProfileService
-from plugins.discord.proactive.greeting_service import GreetingService
-from plugins.discord.proactive.outreach_service import OutreachService
-from plugins.discord.proactive.proactive_message_service import ProactiveMessageService
-from plugins.discord.proactive.proactive_coordinator import ProactiveCoordinator
-from plugins.discord.proactive.proactive_executor import ProactiveExecutor
-from plugins.discord.proactive.sleep_service import SleepService
 from plugins.discord.models.settings import SettingsStore
 from plugins.discord.observability.cognition_debug_service import CognitionDebugService
 from plugins.discord.observability.llm_debug_service import LlmDebugService
@@ -61,8 +55,6 @@ from plugins.discord.storage.repositories.media import MediaRepository
 from plugins.discord.storage.repositories.memory import MemoryRepository
 from plugins.discord.storage.repositories.messages import MessageRepository
 from plugins.discord.storage.repositories.milestones import MilestoneRepository
-from plugins.discord.storage.repositories.presence import PresenceRepository
-from plugins.discord.storage.repositories.proactive import ProactiveRepository
 from plugins.discord.storage.repositories.profile_buffers import ProfileBufferRepository
 from plugins.discord.storage.repositories.profiles import ProfileRepository
 from plugins.discord.storage.repositories.tasks import TaskRepository
@@ -70,7 +62,6 @@ from plugins.discord.storage.repositories.traces import TraceRepository
 from plugins.discord.storage.repositories.voice_sessions import VoiceSessionRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
-from plugins.discord.transport.discord_presence import DiscordPresenceService
 from plugins.discord.transport.discord_transport import DiscordTransport
 from plugins.discord.transport.voice_transport import VoiceTransport
 from plugins.discord.voice.voice_execution_service import VoiceExecutionService
@@ -142,16 +133,9 @@ class RuntimeContainer:
         self.lore_repository = None
         self.interest_repository = None
         self.profile_buffer_repository = None
-        self.proactive_repository = None
-        self.greeting_service = None
-        self.outreach_service = None
-        self.sleep_service = None
         self.media_service = None
-        self.presence_service = None
-        self.proactive_executor = None
+        self.greetings = None
         self.mention_map_service = None
-        self.proactive_message_service = None
-        self.proactive_coordinator = None
         self.voice_transport = None
         self.voice_session_service = None
         self.voice_perception_service = None
@@ -197,8 +181,6 @@ class RuntimeContainer:
             sqlite_service=self.sqlite_service, trace_repository=self.trace_repository,
             forget_service=self.forget_service,
         )
-        self.proactive_repository = ProactiveRepository(self.sqlite_service)
-        self.presence_repository = PresenceRepository(self.sqlite_service)
         self.media_repository = MediaRepository(self.sqlite_service)
         self.voice_session_repository = VoiceSessionRepository(self.sqlite_service)
         self.settings_store = self.channel_repository.load_settings_store()
@@ -223,9 +205,6 @@ class RuntimeContainer:
         )
         self.cognitive_orchestrator = CognitiveOrchestrator(
             world_model_service=self.world_model_service,
-            greeting_service=None,
-            outreach_service=None,
-            sleep_service=None,
             trace_service=self.trace_service,
         )
         self.memory_service = MemoryService(
@@ -254,78 +233,25 @@ class RuntimeContainer:
             sqlite_service=self.sqlite_service,
             trace_repository=self.trace_repository,
         )
-        self.birthday_service = BirthdayService(
-            profile_repository=self.profile_repository,
-            trace_repository=self.trace_repository,
-        )
 
-    def build_proactive(self) -> None:
-        self.sleep_service = SleepService(
-            proactive_repository=self.proactive_repository,
-            trace_repository=self.trace_repository,
-        )
-        self.greeting_service = GreetingService(
-            proactive_repository=self.proactive_repository,
-            trace_repository=self.trace_repository,
-            sleep_service=self.sleep_service,
-        )
-        self.outreach_service = OutreachService(
-            proactive_repository=self.proactive_repository,
-            trace_repository=self.trace_repository,
-            message_repository=self.message_repository,
-            interest_service=self.interest_service,
-            channel_situation_service=self.channel_situation_service,
-            profile_service=self.profile_service,
-            cognition_debug_service=self.cognition_debug_service,
-        )
+    def build_media_and_clock(self) -> None:
         self.media_service = MediaService(
             media_repository=self.media_repository,
             llm_bridge=self.llm_bridge,
             trace_repository=self.trace_repository,
             scheduler_bridge=self.scheduler_bridge,
         )
-        self.presence_service = DiscordPresenceService()
-        self.proactive_message_service = ProactiveMessageService(
+        # S1 (2026-09-22): the greetings clock replaced the proactive family.
+        # Times live on the Greetings / All interactions daemon tasks; the
+        # clock fires them into the task through core's fire_task.
+        get_state = getattr(self.plugin_loader, 'get_plugin_state', None)
+        self.greetings = GreetingsClock(
+            plugin_loader=self.plugin_loader,
+            transport=self.transport,
             message_repository=self.message_repository,
             channel_repository=self.channel_repository,
-            transport=self.transport,
             account_repository=self.account_repository,
-            trace_repository=self.trace_repository,
-        )
-        self.proactive_executor = ProactiveExecutor(
-            transport=self.transport,
-            greeting_service=self.greeting_service,
-            outreach_service=self.outreach_service,
-            sleep_service=self.sleep_service,
-            presence_service=self.presence_service,
-            presence_repository=self.presence_repository,
-            world_model_service=self.world_model_service,
-            gif_service=self.gif_service,
-            settings_store=self.settings_store,
-            trace_repository=self.trace_repository,
-            event_bridge=self.event_bridge,
-            proactive_message_service=self.proactive_message_service,
-            channel_repository=self.channel_repository,
-            mention_map_service=self.mention_map_service,
-            birthday_service=self.birthday_service,
-        )
-        if self.cognitive_orchestrator:
-            self.cognitive_orchestrator.greeting_service = self.greeting_service
-            self.cognitive_orchestrator.outreach_service = self.outreach_service
-            self.cognitive_orchestrator.sleep_service = self.sleep_service
-            self.cognitive_orchestrator.birthday_service = self.birthday_service
-        self.proactive_coordinator = ProactiveCoordinator(
-            settings_store=self.settings_store,
-            greeting_service=self.greeting_service,
-            outreach_service=self.outreach_service,
-            sleep_service=self.sleep_service,
-            presence_service=self.presence_service,
-            profile_service=self.profile_service,
-            proactive_executor=self.proactive_executor,
-            policy_service=self.policy_service,
-            cognitive_orchestrator=self.cognitive_orchestrator,
-            transport=self.transport,
-            trace_repository=self.trace_repository,
+            state=get_state(self.plugin_name) if callable(get_state) else None,
         )
         self.scheduler.set_tick_handler(self._scheduler_tick)
 
@@ -403,7 +329,6 @@ class RuntimeContainer:
             voice_service=self.voice_service,
             settings_store=self.settings_store,
             trace_service=self.trace_service,
-            sleep_service=self.sleep_service,
         )
         from plugins.discord.voice.voice_deps import voice_receive_error
 
@@ -415,16 +340,12 @@ class RuntimeContainer:
         if not self.transport:
             return
         await self._reconcile_accounts()
+        if self.greetings:
+            try:
+                await asyncio.to_thread(self.greetings.tick)
+            except Exception:
+                logger.exception("Greetings clock tick failed")
         for account_name in self.transport.list_connected():
-            if self.proactive_coordinator:
-                try:
-                    await self.proactive_coordinator.tick_async(account_name)
-                except Exception:
-                    # Was the only unguarded await in the tick: one presence
-                    # failure skipped voice auto-join AND the VC reaper for
-                    # every later account, 15 s at a time (live on dev
-                    # 2026-09-15 for 7.5 min — hunt 2.13.0, row 41).
-                    logger.exception("Proactive tick failed for %s", account_name)
             if self.voice_auto_join_service:
                 try:
                     await self.voice_auto_join_service.tick_async(account_name)
@@ -488,7 +409,7 @@ class RuntimeContainer:
         if not self.account_repository or not self.scheduler_bridge:
             return
         import time
-        selected = self.scheduler_bridge.active_daemon_accounts('discord_message')
+        selected = self.scheduler_bridge.selected_accounts()
         connected = set(self.transport.list_connected())
         for name in connected - selected:
             try:
@@ -550,17 +471,14 @@ class RuntimeContainer:
             trace_repository=self.trace_repository,
         )
         self.gif_service = GifService(trace_repository=self.trace_repository)
-        self.build_proactive()
+        self.build_media_and_clock()
         self.event_adapter = DiscordEventAdapter(
             message_repository=self.message_repository,
             trace_repository=self.trace_repository,
             world_model_service=self.world_model_service,
             media_service=self.media_service,
-            sleep_service=self.sleep_service,
-            proactive_repository=self.proactive_repository,
             settings_store=self.settings_store,
             commitment_service=self.commitment_service,
-            birthday_service=self.birthday_service,
             mention_map_service=self.mention_map_service,
             distill_service=self.distill_service,
             channel_situation_service=self.channel_situation_service,
@@ -602,7 +520,6 @@ class RuntimeContainer:
             trace_service=self.trace_service,
             cognitive_orchestrator=self.cognitive_orchestrator,
             account_repository=self.account_repository,
-            sleep_service=self.sleep_service,
             bot_session_service=self.bot_session_service,
             mention_map_service=self.mention_map_service,
             llm_debug_service=self.llm_debug_service,
@@ -621,8 +538,6 @@ class RuntimeContainer:
         self.build_voice()
 
     async def _on_account_connected(self, account_name: str) -> None:
-        if self.proactive_coordinator:
-            try:
-                await self.proactive_coordinator.apply_presence_now_async(account_name, force=True)
-            except Exception:
-                logger.exception("Initial presence apply failed for %s", account_name)
+        # Presence is the discord-personality plugin's job now (its presence
+        # module sets it on the next tick); the host connects plain online.
+        logger.debug('[DISCORD] account %s connected', account_name)

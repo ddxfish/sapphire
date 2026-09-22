@@ -448,7 +448,7 @@ function _renderTaskFields(modal) {
             const widget = f.widget || 'text';
             html += `<div class="sched-field">
                 <label>${_esc(f.label || f.key)}${req}${help}</label>
-                <input type="${widget === 'password' ? 'password' : 'text'}" id="ed-tf-${f.key}" data-task-field="${f.key}"
+                <input type="${widget === 'password' ? 'password' : widget === 'time' ? 'time' : 'text'}" id="ed-tf-${f.key}" data-task-field="${f.key}"
                     value="${_esc(String(val))}" ${f.placeholder ? `placeholder="${_esc(f.placeholder)}"` : ''}></div>`;
         }
     }

@@ -67,3 +67,38 @@ def dispatch(hook: str, event) -> list[str]:
         except Exception:
             logger.exception('[PERSONALITY] %s.%s failed', name, hook)
     return handled
+
+
+# ── the host's doors, reachable outside a hook event too ─────────────────────
+_loader = None
+
+
+def set_loader(loader) -> None:
+    """The daemon's start() hands core's plugin_loader in (fire_task, state)."""
+    global _loader
+    _loader = loader
+
+
+def loader():
+    if _loader is not None:
+        return _loader
+    try:
+        from core.plugin_loader import plugin_loader
+        return plugin_loader
+    except Exception:
+        return None
+
+
+def api():
+    """The Discord host's facade (plugins/discord/hooks_out.DiscordAPI) — the one
+    host module an add-on may import: it IS the public door, not transport."""
+    from plugins.discord.hooks_out import api as host_api
+    return host_api()
+
+
+def state():
+    """This plugin's durable key-value state (core PluginState) — the daily
+    latches live here so a restart cannot double post."""
+    ld = loader()
+    get_state = getattr(ld, 'get_plugin_state', None) if ld else None
+    return get_state(PLUGIN) if callable(get_state) else None

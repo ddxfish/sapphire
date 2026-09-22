@@ -39,37 +39,3 @@ def test_bot_username_no_longer_filtered_by_policy():
         'channel_id': 'c1',
     })()
     assert policy.evaluate_text_observation(observation)['allowed'] is True
-
-
-def test_scheduled_task_follow_up_bypasses_proactive_cooldown():
-    policy = PolicyService()
-    settings = EffectiveSettings(safety=SafetySettings(proactive_cooldown_hours=6))
-    channel_id = 'c1'
-    normal = ReplyMessageIntention(
-        intention_type='reply_message',
-        account_name='alpha',
-        channel_id=channel_id,
-        message_id='',
-        reason='wake_reply',
-        prompt='wake up',
-    )
-    assert policy.evaluate_proactive_intention(normal, settings)['allowed'] is True
-    blocked = ReplyMessageIntention(
-        intention_type='reply_message',
-        account_name='alpha',
-        channel_id=channel_id,
-        message_id='',
-        reason='wake_reply',
-        prompt='again',
-    )
-    assert policy.evaluate_proactive_intention(blocked, settings)['allowed'] is False
-    reminder = ReplyMessageIntention(
-        intention_type='reply_message',
-        account_name='alpha',
-        channel_id=channel_id,
-        message_id='',
-        reason='task:reminder_follow_up',
-        prompt='drink water',
-        metadata={'task_id': 9},
-    )
-    assert policy.evaluate_proactive_intention(reminder, settings)['allowed'] is True

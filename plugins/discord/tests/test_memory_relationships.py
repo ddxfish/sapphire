@@ -5,14 +5,11 @@ from plugins.discord.memory.interest_service import InterestService, extract_top
 from plugins.discord.memory.lore_service import LoreService
 from plugins.discord.memory.milestone_service import MilestoneService, DEFAULT_RETURN_GAP_SECONDS
 from plugins.discord.memory.profile_service import ProfileService
-from plugins.discord.proactive.outreach_service import OutreachService
-from plugins.discord.proactive.proactive_message_service import _outreach_instructions
 from plugins.discord.models.settings import SettingsStore
 from plugins.discord.storage.repositories.interests import InterestRepository
 from plugins.discord.storage.repositories.lore import LoreRepository
 from plugins.discord.storage.repositories.messages import MessageRepository
 from plugins.discord.storage.repositories.milestones import MilestoneRepository
-from plugins.discord.storage.repositories.proactive import ProactiveRepository
 from plugins.discord.storage.repositories.profiles import ProfileRepository
 from plugins.discord.storage.sqlite import SQLiteService
 from plugins.discord.runtime.retention_service import RetentionService
@@ -186,43 +183,6 @@ def test_build_context_includes_lore_milestones_interests(tmp_path):
     assert 'Deploy day' in hint
     assert 'Alice' in hint
     assert 'Topics they talk about' in hint
-
-
-def test_outreach_uses_interest_metadata(tmp_path):
-    stack = _stack(tmp_path)
-    messages = MessageRepository(stack['sqlite'])
-
-    class _Obs:
-        message_id = 'm1'
-        channel_id = 'c1'
-        author_id = 'u1'
-        clean_content = 'coding all day'
-        created_at = 1.0
-
-    messages.save_message(_Obs())
-    stack['interest_service'].observe_message('alpha', 'u1', 'coding all day')
-
-    outreach = OutreachService(
-        proactive_repository=ProactiveRepository(stack['sqlite']),
-        channel_last_activity={'alpha:c1': 0.0},
-        message_repository=messages,
-        interest_service=stack['interest_service'],
-    )
-    store = SettingsStore()
-    store.global_overlay.proactive.update(
-        outreach_enabled=True,
-        outreach_stale_minutes=60,
-        outreach_cooldown_hours=1,
-        greeting_targets=['alpha:c1'],
-        greeting_utc_hour=9,
-    )
-    from datetime import datetime
-    now = datetime(2026, 6, 30, 14, 0)
-    intentions = outreach.evaluate('alpha', store.resolve(), now=now, now_ts=now.timestamp())
-    assert len(intentions) == 1
-    assert 'coding' in (intentions[0].metadata.get('interest_topics') or [])
-    text = _outreach_instructions(intentions[0])
-    assert 'coding' in text
 
 
 def test_forget_user_clears_milestones_and_interests(tmp_path):

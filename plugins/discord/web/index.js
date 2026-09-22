@@ -192,21 +192,15 @@ function renderShell(container, data) {
 
   const replyProvider = values['cognitive.llm_primary'] || 'auto';
   const replyModel = values['cognitive.llm_model'] || '';
-  const greetingProvider = values['proactive.greeting_model_provider'] || '';
-  const greetingModel = values['proactive.greeting_model_name'] || '';
-  const goodnightProvider = values['proactive.goodnight_model_provider'] || '';
-  const goodnightModel = values['proactive.goodnight_model_name'] || '';
   const distillProvider = values['profile.distill_model_provider'] || '';
   const distillModel = values['profile.distill_model_name'] || '';
   const voiceProvider = values['voice.llm_provider'] || '';
   const voiceModel = values['voice.llm_model'] || '';
   const visionProvider = values['media.vision_llm_provider'] || '';
   const visionModel = values['media.vision_llm_model'] || '';
-  const greetingTargets = values['proactive.greeting_targets'] || [];
   const ignoredChannels = values['channel.ignored_channels'] || [];
   const allowlistIds = values['bot.allowlist_ids'] || [];
   const joinTargets = values['voice.join_targets'] || [];
-  const activityPresets = values['presence.activity_presets'] || [];
   const sentimentBackend = values['reaction.sentiment_backend'] || 'vader';
 
   container.innerHTML = `
@@ -263,24 +257,6 @@ function renderShell(container, data) {
           providerValue: replyProvider,
           modelValue: replyModel,
           autoLabel: 'Daemon chooses (default)',
-        })}
-        ${llmProviderBlockHtml({
-          prefix: 'dcg-greeting-llm',
-          label: 'Greeting model provider',
-          help: 'LLM for morning greetings. Defaults to Reply LLM when unset.',
-          providerField: 'proactive.greeting_model_provider',
-          modelField: 'proactive.greeting_model_name',
-          providerValue: greetingProvider || replyProvider,
-          modelValue: greetingModel || replyModel,
-        })}
-        ${llmProviderBlockHtml({
-          prefix: 'dcg-goodnight-llm',
-          label: 'Goodnight model provider',
-          help: 'LLM for goodnight messages. Defaults to Greeting provider, then Reply LLM.',
-          providerField: 'proactive.goodnight_model_provider',
-          modelField: 'proactive.goodnight_model_name',
-          providerValue: goodnightProvider || greetingProvider || replyProvider,
-          modelValue: goodnightModel || greetingModel || replyModel,
         })}
         ${llmProviderBlockHtml({
           prefix: 'dcg-distill-llm',
@@ -410,28 +386,10 @@ function renderShell(container, data) {
       </div>
   `;
 
-  const greetingSection = `
-      <div class="dcg-section">
-        <h4>Greeting Channels</h4>
-        <div class="dcg-help">Channels for morning greetings, quiet outreach, and goodnight. Loaded from connected servers — check the ones you want.</div>
-        <div id="dcg-target-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-target-refresh">Refresh from Discord</button>
-          <button type="button" class="dcg-btn" id="dcg-target-select-all">Select all</button>
-          <button type="button" class="dcg-btn" id="dcg-target-clear">Clear all</button>
-          <span class="dcg-help" id="dcg-target-status"></span>
-        </div>
-        <div id="dcg-target-picker" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Connect a bot, then click Refresh to load servers and channels.</p>
-        </div>
-        <textarea class="dcg-textarea" id="proactive.greeting_targets" data-field="proactive.greeting_targets" style="display:none" aria-hidden="true">${esc(greetingTargets.join('\n'))}</textarea>
-      </div>
-  `;
-
   const allowlistSection = `
       <div class="dcg-section">
         <h4>Ignored channels</h4>
-        <p class="dcg-help">Fully ignore these text channels: no replies, reactions, ambient learning from them, or proactive messages. Uses the same channel list as Greeting Channels. Save after changing.</p>
+        <p class="dcg-help">Fully ignore these text channels: no replies, reactions, ambient learning from them, or scheduled posts. Save after changing.</p>
         <div id="dcg-ignore-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
         <div class="dcg-target-toolbar">
           <button type="button" class="dcg-btn" id="dcg-ignore-refresh">Refresh from Discord</button>
@@ -478,17 +436,6 @@ function renderShell(container, data) {
       </div>
   `;
 
-  const presenceSection = `
-      <div class="dcg-section">
-        <h4>Presence Activity Presets</h4>
-        <div class="dcg-help">Checked presets are included in the rotation pool when cycling is enabled (Presence tab). Reload plugin after changing presets file on disk.</div>
-        <div id="dcg-presence-preset-picker" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Loading presets…</p>
-        </div>
-        <textarea class="dcg-textarea" id="presence.activity_presets" data-field="presence.activity_presets" style="display:none" aria-hidden="true">${esc(activityPresets.join('\n'))}</textarea>
-      </div>
-  `;
-
   const voicePromptSection = `
       <div class="dcg-section">
         <h4>Voice Conversation Prompt</h4>
@@ -498,28 +445,6 @@ function renderShell(container, data) {
           values['voice.conversation_prompt_template'] || voicePromptDefault,
           'System instructions for conversational voice mode. Placeholders: {primary} = bot name, {alias_line} = alias suffix (empty when none). Clear and save to restore the built-in default.',
         )}
-      </div>
-  `;
-
-  const proactiveTestSection = `
-      <div class="dcg-section">
-        <div class="dcg-proactive-test" style="padding:12px;border:1px solid var(--border);border-radius:8px">
-          <strong>Test proactive pathways</strong>
-          <div class="dcg-help" style="margin:6px 0 10px">
-            Manually fire morning greeting, goodnight, or quiet outreach to connected greeting channels.
-            Shows schedule diagnostics so you can see why the automatic cron may have skipped (wrong hour, no targets, daemon offline, etc.).
-          </div>
-          <label style="display:block;margin:8px 0;font-size:0.92em">
-            <input type="checkbox" id="dcg-proactive-dry-run"> Dry run (preview message only — do not post to Discord)
-          </label>
-          <div class="dcg-target-toolbar" style="margin:8px 0">
-            <button type="button" class="dcg-btn" id="dcg-test-greeting">Test morning greeting</button>
-            <button type="button" class="dcg-btn" id="dcg-test-goodnight">Test goodnight</button>
-            <button type="button" class="dcg-btn" id="dcg-test-outreach">Test quiet outreach</button>
-            <button type="button" class="dcg-btn" id="dcg-refresh-proactive-diag">Refresh diagnostics</button>
-          </div>
-          <pre id="dcg-proactive-test-output" class="dcg-help" style="white-space:pre-wrap;max-height:280px;overflow:auto;margin:8px 0 0;font-size:0.82em"></pre>
-        </div>
       </div>
   `;
 
@@ -571,9 +496,6 @@ function renderShell(container, data) {
     { tab: 'Models', mount: (el) => { el.innerHTML = modelsSection; } },
     { tab: 'Conversation', mount: (el) => { el.innerHTML = allowlistSection; } },
     { tab: 'Social', mount: (el) => { el.innerHTML = socialSentimentSection; } },
-    { tab: 'Proactive', mount: (el) => { el.innerHTML = greetingSection; } },
-    { tab: 'Proactive', mount: (el) => { el.innerHTML = proactiveTestSection; } },
-    { tab: 'Presence', mount: (el) => { el.innerHTML = presenceSection; } },
     { tab: 'Voice', mount: (el) => { el.innerHTML = voiceJoinSection; } },
     { tab: 'Voice', mount: (el) => { el.innerHTML = voicePromptSection; } },
     { tab: 'Media', mount: (el) => { el.innerHTML = visionLlmSection; } },
@@ -596,7 +518,6 @@ function renderShell(container, data) {
     trace_count: (data.traces?.traces || []).length,
   }, null, 2);
 
-  bindProactiveTestPanel(container);
   const voicePromptField = fieldByData(container, 'voice.conversation_prompt_template');
   if (voicePromptField && voicePromptDefault) {
     voicePromptField.dataset.defaultTemplate = voicePromptDefault;
@@ -607,29 +528,15 @@ function renderShell(container, data) {
   initDebugPanel(container, data.llmDebug?.entries || []);
   initCognitionPanel(container, data.cognitionDebug || null);
   initTracesPanel(container, data.traces || null);
-  initGreetingTargetPicker(container, greetingTargets);
   initIgnoredChannelPicker(container, ignoredChannels);
   initBotAllowlistPicker(container, allowlistIds);
   initVoiceTargetPicker(container, joinTargets);
-  initPresencePresetPicker(container, activityPresets);
   initLlmProviderBlocks(container, {
     reply: {
       prefix: 'dcg-llm',
       providerKey: replyProvider,
       modelName: replyModel,
       autoLabel: 'Daemon chooses (default)',
-    },
-    greeting: {
-      prefix: 'dcg-greeting-llm',
-      providerKey: greetingProvider || replyProvider,
-      modelName: greetingModel || replyModel,
-      inheritsReply: !greetingProvider,
-    },
-    goodnight: {
-      prefix: 'dcg-goodnight-llm',
-      providerKey: goodnightProvider || greetingProvider || replyProvider,
-      modelName: goodnightModel || greetingModel || replyModel,
-      inheritsGreeting: !goodnightProvider,
     },
     distill: {
       prefix: 'dcg-distill-llm',
@@ -655,8 +562,6 @@ function renderShell(container, data) {
 let _LLM_PROVIDERS = [];
 let _LLM_METADATA = {};
 const _llmInheritState = {
-  greetingInheritsReply: false,
-  goodnightInheritsGreeting: false,
   distillInheritsReply: false,
 };
 
@@ -770,24 +675,6 @@ function syncLlmModelField(container, prefix) {
 }
 
 function syncInheritedLlmBlocks(container) {
-  if (_llmInheritState.greetingInheritsReply) {
-    const reply = readLlmBlockValues(container, 'dcg-llm');
-    const greeting = llmBlockElements(container, 'dcg-greeting-llm');
-    if (greeting.primary) {
-      greeting.primary.innerHTML = llmProviderOptionsHtml(reply.provider);
-      greeting.primary.value = reply.provider;
-      updateLlmModelSelector(container, 'dcg-greeting-llm', reply.provider, reply.model);
-    }
-  }
-  if (_llmInheritState.goodnightInheritsGreeting) {
-    const greeting = readLlmBlockValues(container, 'dcg-greeting-llm');
-    const goodnight = llmBlockElements(container, 'dcg-goodnight-llm');
-    if (goodnight.primary) {
-      goodnight.primary.innerHTML = llmProviderOptionsHtml(greeting.provider);
-      goodnight.primary.value = greeting.provider;
-      updateLlmModelSelector(container, 'dcg-goodnight-llm', greeting.provider, greeting.model);
-    }
-  }
   if (_llmInheritState.distillInheritsReply) {
     const reply = readLlmBlockValues(container, 'dcg-llm');
     const distill = llmBlockElements(container, 'dcg-distill-llm');
@@ -828,53 +715,25 @@ function initLlmProviderBlock(container, { prefix, providerKey, modelName, onPro
   els.primary.addEventListener('change', () => {
     if (onProviderChange) onProviderChange();
     updateLlmModelSelector(container, prefix, els.primary.value, '');
-    if (prefix === 'dcg-greeting-llm') {
-      syncInheritedLlmBlocks(container);
-    }
   });
 
   els.modelSelect?.addEventListener('change', (event) => {
     if (els.modelField) els.modelField.value = event.target.value || '';
-    if (prefix === 'dcg-greeting-llm') {
-      _llmInheritState.greetingInheritsReply = false;
-      syncInheritedLlmBlocks(container);
-    } else if (onProviderChange) {
-      onProviderChange();
-    }
+    if (onProviderChange) onProviderChange();
   });
 
   els.modelCustom?.addEventListener('input', (event) => {
     if (els.modelField) els.modelField.value = (event.target.value || '').trim();
-    if (prefix === 'dcg-greeting-llm') {
-      _llmInheritState.greetingInheritsReply = false;
-      syncInheritedLlmBlocks(container);
-    } else if (onProviderChange) {
-      onProviderChange();
-    }
+    if (onProviderChange) onProviderChange();
   });
 }
 
 function initLlmProviderBlocks(container, blocks) {
-  _llmInheritState.greetingInheritsReply = !!blocks.greeting?.inheritsReply;
-  _llmInheritState.goodnightInheritsGreeting = !!blocks.goodnight?.inheritsGreeting;
   _llmInheritState.distillInheritsReply = !!blocks.distill?.inheritsReply;
 
   initLlmProviderBlock(container, {
     ...blocks.reply,
     onProviderChange: () => syncInheritedLlmBlocks(container),
-  });
-  initLlmProviderBlock(container, {
-    ...blocks.greeting,
-    onProviderChange: () => {
-      _llmInheritState.greetingInheritsReply = false;
-      syncInheritedLlmBlocks(container);
-    },
-  });
-  initLlmProviderBlock(container, {
-    ...blocks.goodnight,
-    onProviderChange: () => {
-      _llmInheritState.goodnightInheritsGreeting = false;
-    },
   });
   if (blocks.distill) {
     initLlmProviderBlock(container, {
@@ -892,25 +751,11 @@ function initLlmProviderBlocks(container, blocks) {
   }
 }
 
-// Inheritance blanking on the flat dotted keyspace: when a proactive block
+// Inheritance blanking on the flat dotted keyspace: when the distill block
 // matches what it would inherit anyway, store '' so it keeps following.
 function applyProactiveLlmInheritance(flat) {
   const replyProvider = flat['cognitive.llm_primary'] || 'auto';
   const replyModel = flat['cognitive.llm_model'] || '';
-
-  if ((flat['proactive.greeting_model_provider'] || 'auto') === replyProvider
-    && (flat['proactive.greeting_model_name'] || '') === replyModel) {
-    flat['proactive.greeting_model_provider'] = '';
-    flat['proactive.greeting_model_name'] = '';
-  }
-
-  const greetingProvider = flat['proactive.greeting_model_provider'] || replyProvider;
-  const greetingModel = flat['proactive.greeting_model_name'] || replyModel;
-  if ((flat['proactive.goodnight_model_provider'] || greetingProvider) === greetingProvider
-    && (flat['proactive.goodnight_model_name'] || greetingModel) === greetingModel) {
-    flat['proactive.goodnight_model_provider'] = '';
-    flat['proactive.goodnight_model_name'] = '';
-  }
 
   if ((flat['profile.distill_model_provider'] || 'auto') === replyProvider
     && (flat['profile.distill_model_name'] || '') === replyModel) {
@@ -919,17 +764,12 @@ function applyProactiveLlmInheritance(flat) {
   }
 }
 
-const greetingTargetCatalog = {};
-let greetingTargetSelection = new Set();
 const ignoredChannelCatalog = {};
 let ignoredChannelSelection = new Set();
-/** Cached proactive/targets rows for Memory lore dropdowns: account -> targets[] */
+/** Cached channels/text rows for Memory lore dropdowns: account -> targets[] */
 const loreTargetsByAccount = {};
 const loreGuildNames = {};
 const loreChannelNames = {};
-const presencePresetCatalog = {};
-let presencePresetSelection = new Set();
-let presencePresetDefaults = [];
 
 // ── LLM debug panel (Debug tab slot) ──
 
@@ -1101,7 +941,6 @@ function renderCognitionPanel(panelEl, flagsEl, data) {
       settings.relationship_policy_enabled
         ? `relationship ${settings.relationship_policy_strength || 'normal'}`
         : 'relationship off',
-      settings.situation_presence_enabled ? 'presence bias on' : 'presence bias off',
     ];
     flagsEl.textContent = `Flags: ${flags.join(' · ')}`;
   }
@@ -1109,7 +948,7 @@ function renderCognitionPanel(panelEl, flagsEl, data) {
   const intentions = data?.intentions || [];
   const gates = data?.gates || [];
     if (!situations.length && !intentions.length && !gates.length) {
-    panelEl.innerHTML = '<p class="dcg-help" style="margin:0">No cognition events yet. If she is asleep, unaddressed chat is dropped before scoring — @mention her, disable sleep for the channel, or wait until wake. Then Refresh.</p>';
+    panelEl.innerHTML = '<p class="dcg-help" style="margin:0">No cognition events yet. Chat with her, then Refresh.</p>';
     return;
   }
   const sitHtml = situations.length
@@ -1221,7 +1060,7 @@ function renderTracesPanel(listEl, summaryEl, filterEl, data) {
     });
   }
   if (!traces.length) {
-    listEl.innerHTML = '<p class="dcg-help" style="margin:0">No traces yet — chat or wait for proactive/cron activity while the daemon runs.</p>';
+    listEl.innerHTML = '<p class="dcg-help" style="margin:0">No traces yet — chat or wait for cron activity while the daemon runs.</p>';
     return;
   }
   listEl.innerHTML = traces.slice(0, 40).map((t) => {
@@ -1681,7 +1520,7 @@ function initMemoryBrowser(container, accounts) {
     }
     if (loreTargetsStatus) loreTargetsStatus.textContent = 'Loading servers…';
     try {
-      const data = await api('proactive/targets');
+      const data = await api('channels/text');
       if (data.error && !(data.targets || []).length) throw new Error(data.error);
       const all = data.targets || [];
       const byAccount = {};
@@ -1891,10 +1730,6 @@ function initMemoryBrowser(container, accounts) {
   }
 }
 
-function greetingTargetLabel(value) {
-  return greetingTargetCatalog[value]?.label || value;
-}
-
 function fieldByData(container, fieldId) {
   return [...container.querySelectorAll('[data-field]')].find((el) => el.dataset.field === fieldId) || null;
 }
@@ -1904,143 +1739,8 @@ function checkboxByDataValue(container, pickerId, value) {
     .find((el) => el.dataset.value === value) || null;
 }
 
-function syncGreetingTargetsField(container) {
-  const hidden = fieldByData(container, 'proactive.greeting_targets');
-  if (hidden) {
-    hidden.value = [...greetingTargetSelection].sort().join('\n');
-  }
-}
-
-function renderGreetingTargetChips(container) {
-  const box = container.querySelector('#dcg-target-chips');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!greetingTargetSelection.size) {
-    box.innerHTML = '<span class="dcg-help">None selected</span>';
-    return;
-  }
-  [...greetingTargetSelection].sort().forEach((value) => {
-    const chip = document.createElement('span');
-    chip.className = 'dcg-target-chip';
-    const text = document.createElement('span');
-    text.textContent = greetingTargetLabel(value);
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Remove');
-    btn.textContent = '×';
-    btn.addEventListener('click', () => {
-      greetingTargetSelection.delete(value);
-      const cb = checkboxByDataValue(container, 'dcg-target-picker', value);
-      if (cb) cb.checked = false;
-      renderGreetingTargetChips(container);
-      syncGreetingTargetsField(container);
-    });
-    chip.appendChild(text);
-    chip.appendChild(btn);
-    box.appendChild(chip);
-  });
-}
-
-function renderGreetingTargetPicker(container, targets) {
-  const box = container.querySelector('#dcg-target-picker');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!targets.length) {
-    box.innerHTML = '<p class="dcg-help" style="margin:0">No text channels found. Connect a bot and ensure the daemon is running.</p>';
-    return;
-  }
-  const groups = {};
-  targets.forEach((target) => {
-    greetingTargetCatalog[target.value] = target;
-    const key = `${target.account}|${target.guild_id}`;
-    if (!groups[key]) {
-      groups[key] = { title: `${target.account} · ${target.guild_name}`, items: [] };
-    }
-    groups[key].items.push(target);
-  });
-  Object.values(groups).forEach((group) => {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'dcg-target-group';
-    const title = document.createElement('div');
-    title.className = 'dcg-target-group-title';
-    title.textContent = group.title;
-    groupEl.appendChild(title);
-    group.items.forEach((target) => {
-      const label = document.createElement('label');
-      label.className = 'dcg-target-option';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset.value = target.value;
-      cb.checked = greetingTargetSelection.has(target.value);
-      cb.addEventListener('change', () => {
-        if (cb.checked) greetingTargetSelection.add(target.value);
-        else greetingTargetSelection.delete(target.value);
-        renderGreetingTargetChips(container);
-        syncGreetingTargetsField(container);
-      });
-      const span = document.createElement('span');
-      span.textContent = `#${target.channel_name}`;
-      label.appendChild(cb);
-      label.appendChild(span);
-      groupEl.appendChild(label);
-    });
-    box.appendChild(groupEl);
-  });
-}
-
-async function loadGreetingTargetPicker(container) {
-  const status = container.querySelector('#dcg-target-status');
-  const refreshBtn = container.querySelector('#dcg-target-refresh');
-  if (refreshBtn) refreshBtn.disabled = true;
-  if (status) status.textContent = 'Loading…';
-  try {
-    const data = await api('proactive/targets');
-    if (data.error && !data.targets?.length) throw new Error(data.error);
-    renderGreetingTargetPicker(container, data.targets || []);
-    const count = (data.targets || []).length;
-    if (status) {
-      status.textContent = count
-        ? `${count} channel${count === 1 ? '' : 's'} available`
-        : (data.error || 'No connected bots');
-    }
-    renderGreetingTargetChips(container);
-  } catch (err) {
-    if (status) status.textContent = err.message || 'Failed to load channels';
-  } finally {
-    if (refreshBtn) refreshBtn.disabled = false;
-  }
-}
-
-function initGreetingTargetPicker(container, selectedTargets) {
-  greetingTargetSelection = new Set((selectedTargets || []).map((line) => String(line).trim()).filter(Boolean));
-  syncGreetingTargetsField(container);
-  renderGreetingTargetChips(container);
-
-  container.querySelector('#dcg-target-refresh')?.addEventListener('click', () => loadGreetingTargetPicker(container));
-  container.querySelector('#dcg-target-select-all')?.addEventListener('click', () => {
-    container.querySelectorAll('#dcg-target-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = true;
-      greetingTargetSelection.add(cb.dataset.value);
-    });
-    renderGreetingTargetChips(container);
-    syncGreetingTargetsField(container);
-  });
-  container.querySelector('#dcg-target-clear')?.addEventListener('click', () => {
-    greetingTargetSelection.clear();
-    container.querySelectorAll('#dcg-target-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = false;
-    });
-    renderGreetingTargetChips(container);
-    syncGreetingTargetsField(container);
-  });
-
-  if (container.querySelector('.dcg-notice')?.textContent?.includes('Daemon is running')) {
-    loadGreetingTargetPicker(container);
-  }
-}
-
 function ignoredChannelLabel(value) {
-  return ignoredChannelCatalog[value]?.label || greetingTargetCatalog[value]?.label || value;
+  return ignoredChannelCatalog[value]?.label || value;
 }
 
 function syncIgnoredChannelsField(container) {
@@ -2091,7 +1791,6 @@ function renderIgnoredChannelPicker(container, targets) {
   const groups = {};
   targets.forEach((target) => {
     ignoredChannelCatalog[target.value] = target;
-    greetingTargetCatalog[target.value] = greetingTargetCatalog[target.value] || target;
     const key = `${target.account}|${target.guild_id}`;
     if (!groups[key]) {
       groups[key] = { title: `${target.account} · ${target.guild_name}`, items: [] };
@@ -2134,7 +1833,7 @@ async function loadIgnoredChannelPicker(container) {
   if (refreshBtn) refreshBtn.disabled = true;
   if (status) status.textContent = 'Loading…';
   try {
-    const data = await api('proactive/targets');
+    const data = await api('channels/text');
     if (data.error) throw new Error(data.error);
     renderIgnoredChannelPicker(container, data.targets || []);
     if (status) {
@@ -2404,7 +2103,7 @@ async function loadVoiceTargetPicker(container) {
       data = await api('voice/targets');
     } catch (err) {
       if (!/404|not found/i.test(String(err.message))) throw err;
-      data = await api('proactive/targets?channel_type=voice');
+      data = await api('channels/text?channel_type=voice');
     }
     if (data.error && !data.targets?.length) throw new Error(data.error);
     renderVoiceTargetPicker(container, data.targets || []);
@@ -2450,300 +2149,6 @@ function initVoiceTargetPicker(container, selectedTargets) {
   }
 }
 
-function syncPresencePresetsField(container) {
-  const hidden = fieldByData(container, 'presence.activity_presets');
-  if (hidden) {
-    hidden.value = [...presencePresetSelection].sort().join('\n');
-  }
-}
-
-function renderPresencePresetPicker(container, presets, defaultIds) {
-  presencePresetDefaults = [...(defaultIds || [])].sort();
-  const box = container.querySelector('#dcg-presence-preset-picker');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!presets.length) {
-    box.innerHTML = '<p class="dcg-help" style="margin:0">No presets available.</p>';
-    return;
-  }
-  if (!presencePresetSelection.size && defaultIds?.length) {
-    defaultIds.forEach((id) => presencePresetSelection.add(id));
-    syncPresencePresetsField(container);
-  }
-  presets.forEach((preset) => {
-    presencePresetCatalog[preset.id] = preset;
-    const label = document.createElement('label');
-    label.className = 'dcg-target-option';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.dataset.presetId = preset.id;
-    cb.checked = presencePresetSelection.has(preset.id);
-    cb.addEventListener('change', () => {
-      if (cb.checked) presencePresetSelection.add(preset.id);
-      else presencePresetSelection.delete(preset.id);
-      syncPresencePresetsField(container);
-    });
-    const text = document.createElement('span');
-    text.textContent = `${preset.label} (${preset.value || 'clear'})`;
-    label.appendChild(cb);
-    label.appendChild(text);
-    box.appendChild(label);
-  });
-}
-
-async function loadPresencePresetPicker(container) {
-  const box = container.querySelector('#dcg-presence-preset-picker');
-  if (!box) return;
-  try {
-    const data = await api('presence/presets');
-    renderPresencePresetPicker(container, data.presets || [], data.default_enabled_ids || []);
-  } catch (err) {
-    box.innerHTML = `<p class="dcg-help" style="margin:0">${esc(err.message || 'Failed to load presets')}</p>`;
-  }
-}
-
-function initPresencePresetPicker(container, selectedPresets) {
-  presencePresetSelection = new Set((selectedPresets || []).map((line) => String(line).trim()).filter(Boolean));
-  syncPresencePresetsField(container);
-  loadPresencePresetPicker(container);
-}
-
-function renderAccounts(container, accounts) {
-  const list = container.querySelector('#dcg-accounts');
-  if (!list) return;
-  if (!accounts.length) {
-    list.innerHTML = '<p class="dcg-help">No bot accounts configured yet.</p>';
-    return;
-  }
-  list.innerHTML = accounts.map((a) => `
-    <div class="dcg-account" data-account="${esc(a.name)}">
-      <div>
-        <strong>${esc(a.bot_name || a.name)}</strong>
-        <span class="dcg-badge ${a.connected ? 'dcg-badge-ok' : 'dcg-badge-off'}">${a.connected ? 'connected' : (a.state === 'error' ? 'connect error' : a.state || 'disconnected')}</span>
-        <div class="dcg-help">${esc(a.name)}${a.last_error ? ` — ${esc(a.last_error)}` : ''}</div>
-        <div class="dcg-help dcg-test-result" data-name="${esc(a.name)}"></div>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button type="button" class="dcg-btn dcg-test-account" data-name="${esc(a.name)}">Test</button>
-        <button type="button" class="dcg-btn dcg-btn-danger dcg-del-account" data-name="${esc(a.name)}">Remove</button>
-      </div>
-    </div>
-  `).join('');
-  list.querySelectorAll('.dcg-test-account').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const out = list.querySelector(`.dcg-test-result[data-name="${CSS.escape(btn.dataset.name)}"]`);
-      btn.disabled = true;
-      if (out) out.textContent = 'Testing token against Discord…';
-      try {
-        const result = await api(`accounts/${encodeURIComponent(btn.dataset.name)}/test`, { method: 'POST' });
-        const suffix = result.reconnect
-          ? ' — token OK, retrying connection…'
-          : ' (token check only — the badge shows connection state)';
-        const okText = `✓ ${result.message}${suffix}`;
-        if (out) out.textContent = result.success ? okText : `✗ ${result.error || 'Test failed'}`;
-        if (result.success) {
-          const refreshed = await api('accounts');
-          renderAccounts(container, refreshed.accounts || []);
-          const fresh = container.querySelector(`.dcg-test-result[data-name="${CSS.escape(btn.dataset.name)}"]`);
-          if (fresh) fresh.textContent = okText;
-          if (result.reconnect) {
-            setTimeout(async () => {
-              try {
-                const again = await api('accounts');
-                renderAccounts(container, again.accounts || []);
-              } catch (e) { /* next manual refresh will catch up */ }
-            }, 4000);
-          }
-        }
-      } catch (e) {
-        if (out) out.textContent = `✗ ${e.message}`;
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  });
-  list.querySelectorAll('.dcg-del-account').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirm(`Remove bot "${btn.dataset.name}"?`)) return;
-      btn.disabled = true;
-      try {
-        await api(`accounts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
-        const refreshed = await api('accounts');
-        renderAccounts(container, refreshed.accounts || []);
-        if (refreshed.accounts?.some((a) => a.connected)) {
-          loadGreetingTargetPicker(container);
-          loadVoiceTargetPicker(container);
-        }
-      } catch (e) {
-        alert(e.message);
-        btn.disabled = false;
-      }
-    });
-  });
-}
-
-function formatProactiveDiagnostics(data) {
-  if (!data || data.error) {
-    const err = data?.error || 'unknown';
-    const daemon = data?.daemon_running === false ? ' (daemon offline)' : '';
-    return `Diagnostics unavailable: ${err}${daemon}`;
-  }
-  const lines = [
-    `Server time: ${data.server_time}`,
-    `Connected accounts: ${(data.connected_accounts || []).join(', ') || '(none)'}`,
-    `Greeting targets: ${(data.greeting_targets || []).join(', ') || '(none)'}`,
-    '',
-    `Morning greeting — enabled=${data.greeting?.enabled}, would_fire_now=${data.greeting?.would_fire_now}, scheduled=${data.greeting?.scheduled_intentions}`,
-  ];
-  for (const hint of data.greeting?.hints || []) lines.push(`  • ${hint}`);
-  lines.push('');
-  lines.push(`Goodnight — enabled=${data.goodnight?.enabled}, would_fire_now=${data.goodnight?.would_fire_now}, scheduled=${data.goodnight?.scheduled_intentions}`);
-  for (const hint of data.goodnight?.hints || []) lines.push(`  • ${hint}`);
-  lines.push('');
-  lines.push(`Quiet outreach — enabled=${data.outreach?.enabled}, would_fire_now=${data.outreach?.would_fire_now}, scheduled=${data.outreach?.scheduled_intentions}`);
-  for (const hint of data.outreach?.hints || []) lines.push(`  • ${hint}`);
-  if (data.channels?.length) {
-    lines.push('');
-    lines.push('Per-channel sleep state:');
-    for (const row of data.channels) {
-      const st = row.sleep_state || {};
-      lines.push(
-        `  ${row.account_name}:${row.channel_id} connected=${row.connected} asleep=${st.is_asleep || 0} goodnight_sent=${st.goodnight_sent || 0}`,
-      );
-    }
-  }
-  return lines.join('\n');
-}
-
-function formatProactiveTestResult(data) {
-  const lines = [formatProactiveDiagnostics(data.diagnostics)];
-  lines.push('');
-  if (data.error) {
-    lines.push(`Test error: ${data.error}`);
-    if (data.hint) lines.push(data.hint);
-    return lines.join('\n');
-  }
-  lines.push(`Test: ${data.kind} dry_run=${data.dry_run} queued=${data.sent ?? 0}`);
-  for (const row of data.results || []) {
-    const preview = row.preview ? ` preview="${row.preview.slice(0, 120)}${row.preview.length > 120 ? '…' : ''}"` : '';
-    // 'sent' from the pipeline means "a continuity task ACCEPTED the event" —
-    // the LLM runs async and can still fail. Say what's true; the internal
-    // status value stays 'sent' (coordinator follow-ups key on it).
-    // delivery='static' = the fallback TEXT posted because no daemon task took
-    // the event — this used to read "queued" for exactly that failure (row 18).
-    const shown = row.status === 'sent'
-      ? (row.delivery === 'static'
-          ? 'posted the STATIC fallback text — no daemon task accepted the event (see hints above)'
-          : 'queued (LLM runs async — watch the channel)')
-      : (row.status || 'unknown');
-    lines.push(`  ${row.account_name}:${row.channel_id} → ${shown}${row.reason ? ` (${row.reason})` : ''}${preview}`);
-  }
-  lines.push('Note: preview text is the static fallback — the live message is LLM-written and may differ.');
-  return lines.join('\n');
-}
-
-async function refreshProactiveDiagnostics(container) {
-  const output = container.querySelector('#dcg-proactive-test-output');
-  if (!output) return;
-  output.textContent = 'Loading diagnostics…';
-  try {
-    const data = await api('proactive/diagnostics');
-    output.textContent = formatProactiveDiagnostics(data);
-  } catch (err) {
-    output.textContent = `Diagnostics failed: ${err.message}`;
-  }
-}
-
-async function runProactiveTest(container, kind) {
-  const output = container.querySelector('#dcg-proactive-test-output');
-  const dryRun = !!container.querySelector('#dcg-proactive-dry-run')?.checked;
-  if (!output) return;
-  output.textContent = `Running ${kind} test…`;
-  try {
-    const data = await api('proactive/test', {
-      method: 'POST',
-      body: JSON.stringify({ kind, dry_run: dryRun, reset_sleep_state: !dryRun }),
-    });
-    output.textContent = formatProactiveTestResult(data);
-  } catch (err) {
-    output.textContent = `Test failed: ${err.message}`;
-  }
-}
-
-function bindProactiveTestPanel(container) {
-  const refreshBtn = container.querySelector('#dcg-refresh-proactive-diag');
-  const greetingBtn = container.querySelector('#dcg-test-greeting');
-  const goodnightBtn = container.querySelector('#dcg-test-goodnight');
-  const outreachBtn = container.querySelector('#dcg-test-outreach');
-  if (refreshBtn) refreshBtn.addEventListener('click', () => refreshProactiveDiagnostics(container));
-  if (greetingBtn) greetingBtn.addEventListener('click', () => runProactiveTest(container, 'greeting'));
-  if (goodnightBtn) goodnightBtn.addEventListener('click', () => runProactiveTest(container, 'goodnight'));
-  if (outreachBtn) outreachBtn.addEventListener('click', () => runProactiveTest(container, 'outreach'));
-  refreshProactiveDiagnostics(container);
-}
-
-function bindAccounts(container) {
-  const form = container.querySelector('#dcg-add-form');
-  const toggle = container.querySelector('#dcg-add-toggle');
-  toggle?.addEventListener('click', () => {
-    form.style.display = form.style.display === 'none' ? 'block' : 'none';
-  });
-  container.querySelector('#dcg-acc-test')?.addEventListener('click', async () => {
-    const token = container.querySelector('#dcg-acc-token')?.value?.trim();
-    const status = container.querySelector('#dcg-acc-status');
-    const btn = container.querySelector('#dcg-acc-test');
-    if (!token) {
-      status.textContent = 'Paste a token to test.';
-      status.className = 'dcg-status dcg-status-err';
-      return;
-    }
-    btn.disabled = true;
-    status.textContent = 'Testing token against Discord…';
-    status.className = 'dcg-status';
-    try {
-      const result = await api('accounts/test', { method: 'POST', body: JSON.stringify({ token }) });
-      status.textContent = result.success ? `✓ ${result.message}` : `✗ ${result.error || 'Test failed'}`;
-      status.className = `dcg-status ${result.success ? 'dcg-status-ok' : 'dcg-status-err'}`;
-    } catch (e) {
-      status.textContent = `✗ ${e.message}`;
-      status.className = 'dcg-status dcg-status-err';
-    } finally {
-      btn.disabled = false;
-    }
-  });
-  container.querySelector('#dcg-acc-save')?.addEventListener('click', async () => {
-    const name = container.querySelector('#dcg-acc-name')?.value?.trim();
-    const token = container.querySelector('#dcg-acc-token')?.value?.trim();
-    const status = container.querySelector('#dcg-acc-status');
-    const btn = container.querySelector('#dcg-acc-save');
-    if (!name || !token) {
-      status.textContent = 'Name and token required.';
-      status.className = 'dcg-status dcg-status-err';
-      return;
-    }
-    btn.disabled = true;
-    status.textContent = 'Saving…';
-    try {
-      await api('accounts', {
-        method: 'POST',
-        body: JSON.stringify({ account_name: name, token }),
-      });
-      status.textContent = 'Account saved.';
-      status.className = 'dcg-status dcg-status-ok';
-      const refreshed = await api('accounts');
-      renderAccounts(container, refreshed.accounts || []);
-      form.style.display = 'none';
-      container.querySelector('#dcg-acc-name').value = '';
-      container.querySelector('#dcg-acc-token').value = '';
-    } catch (e) {
-      status.textContent = e.message;
-      status.className = 'dcg-status dcg-status-err';
-    } finally {
-      btn.disabled = false;
-    }
-  });
-}
-
 // Voice prompt keeps the '' sentinel convention: matching the built-in default
 // stores blank so the plugin default can evolve without stale copies.
 function normalizedVoicePrompt(container) {
@@ -2758,8 +2163,6 @@ function normalizedVoicePrompt(container) {
 // Flat dotted keys owned by the slot-mounted widget sections.
 function customSectionValues(container) {
   const reply = readLlmBlockValues(container, 'dcg-llm');
-  const greeting = readLlmBlockValues(container, 'dcg-greeting-llm');
-  const goodnight = readLlmBlockValues(container, 'dcg-goodnight-llm');
   const distill = readLlmBlockValues(container, 'dcg-distill-llm');
   // Voice block was missing here — voice.llm_provider/llm_model never saved
   // from the UI (found during the 2026-08-05 slot conversion). ensure_voice_chat
@@ -2769,10 +2172,6 @@ function customSectionValues(container) {
   const flat = {
     'cognitive.llm_primary': reply.provider,
     'cognitive.llm_model': reply.model,
-    'proactive.greeting_model_provider': greeting.provider,
-    'proactive.greeting_model_name': greeting.model,
-    'proactive.goodnight_model_provider': goodnight.provider,
-    'proactive.goodnight_model_name': goodnight.model,
     'profile.distill_model_provider': distill.provider,
     'profile.distill_model_name': distill.model,
     'voice.llm_provider': voice.provider,
@@ -2780,17 +2179,9 @@ function customSectionValues(container) {
     'media.vision_llm_provider': vision.provider,
     'media.vision_llm_model': vision.model,
     'reaction.sentiment_backend': container.querySelector('#dcg-sentiment-backend')?.value || 'vader',
-    'proactive.greeting_targets': [...greetingTargetSelection].sort(),
     'channel.ignored_channels': [...ignoredChannelSelection].sort(),
     'bot.allowlist_ids': [...botAllowlistSelection].sort(),
     'voice.join_targets': [...voiceTargetSelection].sort(),
-    // Selection equal to the shipped defaults stores as [] ("follow
-    // defaults") — same sentinel the voice prompt uses. Otherwise a fresh
-    // install pins today's default presets forever on first save.
-    'presence.activity_presets': (() => {
-      const picked = [...presencePresetSelection].sort();
-      return picked.join('\n') === presencePresetDefaults.join('\n') ? [] : picked;
-    })(),
     'voice.conversation_prompt_template': normalizedVoicePrompt(container),
   };
   applyProactiveLlmInheritance(flat);
@@ -2839,7 +2230,7 @@ function registerTab() {
     id: PLUGIN_NAME,
     name: 'Discord',
     icon: '🎮',
-    helpText: 'Discord bot accounts, conversation behavior, social reactions, delivery quirks, proactive scheduling, safety, media, and voice settings.',
+    helpText: 'Discord bot accounts, conversation behavior, social reactions, delivery quirks, safety, media, and voice settings. Greetings live on the Discord: Greetings / All interactions daemon tasks.',
 
     load: () => loadPanelData(),
 
@@ -2861,10 +2252,10 @@ function registerTab() {
       // "Save failed: …" instead of a lying success toast.
       const box = container.querySelector('#dcg-schema-form');
       // Guard EVERY slot customSectionValues reads, not just the reply LLM —
-      // a failed Media/Voice/Proactive slot mount returns fabricated
+      // a failed Media/Voice slot mount returns fabricated
       // {provider:'auto'} values that would overwrite explicit pins on save.
       // Residual of the 2026-08-05 wipe-guard class.
-      const slotPrefixes = ['dcg-llm', 'dcg-greeting-llm', 'dcg-goodnight-llm', 'dcg-distill-llm', 'dcg-voice-llm', 'dcg-vision-llm'];
+      const slotPrefixes = ['dcg-llm', 'dcg-distill-llm', 'dcg-voice-llm', 'dcg-vision-llm'];
       const missing = slotPrefixes.filter((p) => !container.querySelector(`#${p}-primary`));
       if (!box || missing.length) {
         throw new Error('Discord panel is still loading — wait a moment and save again.');

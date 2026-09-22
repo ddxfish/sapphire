@@ -1,4 +1,4 @@
-"""Proactive and task-follow-up intention orchestration."""
+"""Task-follow-up intention orchestration (the proactive legs left in S1, 2026-09-22)."""
 
 from __future__ import annotations
 
@@ -27,31 +27,15 @@ class CognitiveOrchestrator:
         self,
         *,
         world_model_service=None,
-        greeting_service=None,
-        outreach_service=None,
-        sleep_service=None,
-        birthday_service=None,
         trace_service=None,
         channel_situation_service=None,
     ):
         self.world_model_service = world_model_service
-        self.greeting_service = greeting_service
-        self.outreach_service = outreach_service
-        self.sleep_service = sleep_service
-        self.birthday_service = birthday_service
         self.trace_service = trace_service
         self.channel_situation_service = channel_situation_service
 
     def evaluate_proactive(self, account_name: str, settings, *, now, now_ts: float) -> list:
         intentions = []
-        if self.greeting_service:
-            intentions.extend(self.greeting_service.evaluate(account_name, settings, now=now))
-        if self.outreach_service:
-            intentions.extend(self.outreach_service.evaluate(account_name, settings, now=now, now_ts=now_ts))
-        if self.sleep_service:
-            intentions.extend(self.sleep_service.evaluate_goodnight(account_name, settings, now=now))
-        if self.birthday_service:
-            intentions.extend(self.birthday_service.evaluate_wishes(account_name, settings, now=now))
         if getattr(settings.cognitive, 'task_follow_up_enabled', True):
             intentions.extend(self.evaluate_task_intentions(account_name, settings))
         return intentions

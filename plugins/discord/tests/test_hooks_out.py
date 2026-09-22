@@ -253,7 +253,7 @@ def test_tick_fires_per_connected_account_off_the_loop():
             get_client=lambda name: SimpleNamespace(guilds=[SimpleNamespace(id=11), SimpleNamespace(id=22)]),
         ),
         scheduler=SimpleNamespace(interval_seconds=15.0),
-        proactive_coordinator=None, voice_auto_join_service=None,
+        greetings=None, voice_auto_join_service=None,
         _reconcile_accounts=_noop, _reap_voice_chats=_noop,
     )
     fake._tick_payload = lambda name: RuntimeContainer._tick_payload(fake, name)

@@ -2,9 +2,9 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.26.0",
+  "version": "1.27.0",
   "min_core_version": "2.13.0",
-  "description": "Discord cognitive agent \u2014 bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
+  "description": "Discord bot \u2014 accounts, conversation, memory, media understanding, and voice. Greetings ride the Discord: Greetings / All interactions daemon tasks; personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83c\udfae",
@@ -42,8 +42,8 @@
       "event_sources": [
         {
           "name": "discord_message",
-          "label": "Discord Message",
-          "description": "New message received in a Discord channel",
+          "label": "Discord: Chat only",
+          "description": "Replies to messages on the selected bot (filters below). This task's provider, persona, toolset and scopes are the brain.",
           "filter_fields": [
             {
               "key": "mentioned",
@@ -101,6 +101,134 @@
               "label": "Auto-reply in channel",
               "default": true,
               "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
+            }
+          ]
+        },
+        {
+          "name": "discord_greetings",
+          "label": "Discord: Greetings",
+          "description": "Daily good-morning / goodnight posts written by this task (its Instructions set the tone). No message replies. One post per channel per day.",
+          "filter_fields": [],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot this daemon listens on. Only bots selected by an enabled daemon task are connected."
+            },
+            {
+              "key": "channels",
+              "type": "string",
+              "label": "Channels (ids, comma-separated)",
+              "required": true,
+              "placeholder": "123456789012345678, 234567890123456789",
+              "help": "Text channel ids the daily posts go to. In Discord: Settings \u2192 Advanced \u2192 Developer Mode, then right-click a channel \u2192 Copy Channel ID."
+            },
+            {
+              "key": "greeting_time",
+              "type": "string",
+              "widget": "time",
+              "label": "Good-morning time",
+              "default": "",
+              "help": "Local HH:MM. Blank = no morning post. Fires once per channel per day inside a five-minute window after the time; a late boot never greets."
+            },
+            {
+              "key": "goodnight_time",
+              "type": "string",
+              "widget": "time",
+              "label": "Goodnight time",
+              "default": "",
+              "help": "Local HH:MM. Blank = no goodnight post."
+            }
+          ]
+        },
+        {
+          "name": "discord_all",
+          "label": "Discord: All interactions",
+          "description": "Chat replies AND the daily greetings in one task \u2014 Sapphire's whole presence on this bot. Leave the times blank for replies only.",
+          "filter_fields": [
+            {
+              "key": "mentioned",
+              "label": "bot was @mentioned (True/False)"
+            },
+            {
+              "key": "guild_name",
+              "label": "server name"
+            },
+            {
+              "key": "channel_name",
+              "label": "channel name"
+            },
+            {
+              "key": "username",
+              "label": "sender username"
+            },
+            {
+              "key": "content_contains",
+              "label": "keyword in message"
+            },
+            {
+              "key": "channel_name_not",
+              "label": "exclude channel name"
+            },
+            {
+              "key": "guild_name_not",
+              "label": "exclude server name"
+            },
+            {
+              "key": "username_not",
+              "label": "exclude username"
+            },
+            {
+              "key": "guild_id",
+              "label": "server ID (advanced)"
+            },
+            {
+              "key": "channel_id",
+              "label": "channel ID (advanced)"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot this daemon listens on. Only bots selected by an enabled daemon task are connected."
+            },
+            {
+              "key": "auto_reply",
+              "type": "boolean",
+              "label": "Auto-reply in channel",
+              "default": true,
+              "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
+            },
+            {
+              "key": "channels",
+              "type": "string",
+              "label": "Channels (ids, comma-separated)",
+              "required": false,
+              "placeholder": "123456789012345678, 234567890123456789",
+              "help": "Text channel ids the daily posts go to. In Discord: Settings \u2192 Advanced \u2192 Developer Mode, then right-click a channel \u2192 Copy Channel ID."
+            },
+            {
+              "key": "greeting_time",
+              "type": "string",
+              "widget": "time",
+              "label": "Good-morning time",
+              "default": "",
+              "help": "Local HH:MM. Blank = no morning post. Fires once per channel per day inside a five-minute window after the time; a late boot never greets."
+            },
+            {
+              "key": "goodnight_time",
+              "type": "string",
+              "widget": "time",
+              "label": "Goodnight time",
+              "default": "",
+              "help": "Local HH:MM. Blank = no goodnight post."
             }
           ]
         }
@@ -204,8 +332,8 @@
       },
       {
         "method": "GET",
-        "path": "proactive/targets",
-        "handler": "api/channels.py:list_proactive_targets"
+        "path": "channels/text",
+        "handler": "api/channels.py:list_text_channels"
       },
       {
         "method": "GET",
@@ -216,11 +344,6 @@
         "method": "GET",
         "path": "bots/allowlist",
         "handler": "api/channels.py:list_bot_allowlist_candidates"
-      },
-      {
-        "method": "GET",
-        "path": "presence/presets",
-        "handler": "api/presence.py:list_presets"
       },
       {
         "method": "GET",
@@ -236,16 +359,6 @@
         "method": "GET",
         "path": "voice/auto-join",
         "handler": "api/voice.py:auto_join_status"
-      },
-      {
-        "method": "GET",
-        "path": "proactive/diagnostics",
-        "handler": "api/proactive.py:proactive_diagnostics"
-      },
-      {
-        "method": "POST",
-        "path": "proactive/test",
-        "handler": "api/proactive.py:test_proactive"
       },
       {
         "method": "GET",
@@ -279,30 +392,6 @@
       }
     ],
     "schedule": [
-      {
-        "name": "morning_greeting",
-        "cron": "0 9 * * *",
-        "time_setting": "proactive.greeting_utc_hour",
-        "handler": "schedule/morning_greeting.py",
-        "description": "Morning greetings + wake replay, once daily at the greeting hour (bound to Proactive > greeting hour)"
-      },
-      {
-        "name": "quiet_outreach",
-        "cron": "*/15 * * * *",
-        "enabled": false,
-        "enabled_setting": "proactive.outreach_enabled",
-        "handler": "schedule/quiet_outreach.py",
-        "description": "Conversation starters when configured channels go quiet (checks every 15 min, only while Outreach is on)"
-      },
-      {
-        "name": "sleep_goodnight",
-        "cron": "0 22 * * *",
-        "enabled": false,
-        "time_setting": "proactive.sleep_utc_hour",
-        "enabled_setting": "proactive.sleep_schedule_enabled",
-        "handler": "schedule/sleep_goodnight.py",
-        "description": "Goodnight messages once daily at the sleep hour (bound to Proactive > sleep hour, only while the sleep schedule is on)"
-      },
       {
         "name": "retention_purge",
         "cron": "30 4 * * *",
@@ -342,38 +431,6 @@
         "default": true,
         "tab": "Tasks",
         "help": "\"Remind me in 5 minutes to\u2026\" queues a task and @mentions them when due."
-      },
-      {
-        "key": "profile.birthday_capture_enabled",
-        "type": "boolean",
-        "label": "Learn birthdays",
-        "default": true,
-        "tab": "Tasks",
-        "help": "Capture birthdays mentioned in chat onto user profiles."
-      },
-      {
-        "key": "profile.birthday_followups_enabled",
-        "type": "boolean",
-        "label": "Birthday wishes",
-        "default": true,
-        "tab": "Tasks",
-        "help": "Wish users a happy birthday on the day."
-      },
-      {
-        "key": "profile.birthday_bulk_enabled",
-        "type": "boolean",
-        "label": "Bulk birthday message",
-        "default": true,
-        "tab": "Tasks",
-        "help": "One combined message when several birthdays land on the same day."
-      },
-      {
-        "key": "profile.birthday_bulk_threshold",
-        "type": "number",
-        "label": "Bulk birthday threshold",
-        "default": 2,
-        "tab": "Tasks",
-        "help": "Combine into one message at this many same-day birthdays."
       },
       {
         "key": "cognitive.llm_primary",
@@ -445,9 +502,18 @@
         "tab": "Cognition",
         "help": "How strongly relationship scores reshape social chances.",
         "options": [
-          {"label": "Subtle", "value": "subtle"},
-          {"label": "Normal", "value": "normal"},
-          {"label": "Bold", "value": "bold"}
+          {
+            "label": "Subtle",
+            "value": "subtle"
+          },
+          {
+            "label": "Normal",
+            "value": "normal"
+          },
+          {
+            "label": "Bold",
+            "value": "bold"
+          }
         ]
       },
       {
@@ -480,7 +546,7 @@
         "label": "LLM debug ring",
         "default": false,
         "tab": "Cognition",
-        "help": "Keep the last 10 prompts and replies in memory for the Debug panel — full prompts, other people's messages included. Off = nothing retained. Clear it from the panel any time."
+        "help": "Keep the last 10 prompts and replies in memory for the Debug panel \u2014 full prompts, other people's messages included. Off = nothing retained. Clear it from the panel any time."
       },
       {
         "key": "cognitive.side_lanes_local_only",
@@ -488,15 +554,7 @@
         "label": "Side lanes: local providers only",
         "default": true,
         "tab": "Cognition",
-        "help": "ON (default): greetings, goodnights, ambient distill and image captions on 'auto' pick only providers marked local in Settings › LLM — server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick always wins."
-      },
-      {
-        "key": "presence.situation_presence_enabled",
-        "type": "boolean",
-        "label": "Situation-aware presence",
-        "default": false,
-        "tab": "Presence",
-        "help": "OFF (default): presence from sleep/quiet/cycling presets. ON: bias awake status/activity from the primary greeting channel's situation (sleep and quiet hours still override)."
+        "help": "ON (default): greetings, goodnights, ambient distill and image captions on 'auto' pick only providers marked local in Settings \u203a LLM \u2014 server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick always wins."
       },
       {
         "key": "profile.distill_model_provider",
@@ -804,302 +862,12 @@
         "help": "About 4% of replies get a human touch after sending: a subtle typo fixed by edit, or an afterthought ('lol', 'actually') edited in 2-5 seconds later. Needs Message edits ON."
       },
       {
-        "key": "proactive.greeting_enabled",
-        "type": "boolean",
-        "label": "Morning greetings",
-        "default": false,
-        "tab": "Proactive",
-        "help": "ON: posts a morning greeting to each Greeting Channel at the greeting hour, written through the normal persona pipeline. OFF (default): no morning posts."
-      },
-      {
-        "key": "proactive.greeting_utc_hour",
-        "type": "number",
-        "label": "Greeting hour",
-        "default": 9,
-        "min": 0,
-        "max": 23,
-        "tab": "Proactive",
-        "help": "Hour (0-23) in Sapphire's configured timezone (Settings > Identity) — the same clock the Triggers page uses — when the morning greeting posts. Also the sleep-schedule wake hour and the start of the birthday-wish window."
-      },
-      {
-        "key": "proactive.greeting_use_llm",
-        "type": "boolean",
-        "label": "AI-generated greeting",
-        "default": true,
-        "tab": "Proactive",
-        "help": "ON (default): the AI writes each greeting, guided by the Greeting instructions. OFF: posts the Greeting instructions text verbatim (or the fallback if blank)."
-      },
-      {
-        "key": "proactive.greeting_message",
-        "type": "textarea",
-        "label": "Greeting instructions",
-        "default": "",
-        "tab": "Proactive",
-        "rows": 3,
-        "help": "With AI-generated greeting ON: instructions guiding the AI's greeting (blank = built-in default). With it OFF: this exact text is posted instead."
-      },
-      {
-        "key": "proactive.greeting_fallback",
-        "type": "string",
-        "label": "Greeting fallback",
-        "default": "Good morning!",
-        "tab": "Proactive",
-        "help": "Posted as-is when the AI can't generate a greeting, or when AI-generated greeting is OFF and no instructions are set."
-      },
-      {
-        "key": "proactive.outreach_enabled",
-        "type": "boolean",
-        "label": "Quiet outreach",
-        "default": false,
-        "tab": "Proactive",
-        "help": "Start a conversation when configured channels go quiet."
-      },
-      {
-        "key": "proactive.outreach_stale_minutes",
-        "type": "number",
-        "label": "Outreach after quiet (minutes)",
-        "default": 120,
-        "tab": "Proactive",
-        "help": "Minutes of channel silence before she may start a conversation in a Greeting Channel. Checked every 15 minutes; skipped during sleep and just before the greeting hour."
-      },
-      {
-        "key": "proactive.sleep_schedule_enabled",
-        "type": "boolean",
-        "label": "Sleep schedule",
-        "default": false,
-        "tab": "Proactive",
-        "help": "ON: posts a goodnight at the sleep hour, then sleeps until the greeting hour \u2014 presence shows sleeping, non-mention chat is ignored, and mentions are buffered (enough mentions force a temporary wake). OFF (default): always awake."
-      },
-      {
-        "key": "proactive.sleep_utc_hour",
-        "type": "number",
-        "label": "Sleep hour",
-        "default": 22,
-        "min": 0,
-        "max": 23,
-        "tab": "Proactive",
-        "help": "Hour (0-23) in Sapphire's configured timezone when sleep starts; runs until the greeting hour (wraps past midnight). Set equal to the greeting hour to disable the window."
-      },
-      {
-        "key": "proactive.goodnight_use_llm",
-        "type": "boolean",
-        "label": "AI-generated goodnight",
-        "default": true,
-        "tab": "Proactive",
-        "help": "ON (default): the AI writes the goodnight, guided by the Goodnight instructions. OFF: posts the Goodnight instructions text verbatim (or the fallback if blank)."
-      },
-      {
-        "key": "proactive.goodnight_message",
-        "type": "textarea",
-        "label": "Goodnight instructions",
-        "default": "",
-        "tab": "Proactive",
-        "rows": 3,
-        "help": "With AI-generated goodnight ON: instructions guiding the AI's goodnight (blank = built-in default). With it OFF: this exact text is posted instead."
-      },
-      {
-        "key": "proactive.goodnight_fallback",
-        "type": "string",
-        "label": "Goodnight fallback",
-        "default": "Goodnight everyone!",
-        "tab": "Proactive",
-        "help": "Posted as-is when the AI can't generate a goodnight, or when AI-generated goodnight is OFF and no instructions are set."
-      },
-      {
-        "key": "proactive.forced_wake_mention_threshold",
-        "type": "number",
-        "label": "Forced-wake mentions",
-        "default": 2,
-        "tab": "Proactive",
-        "help": "Mentions while asleep that force a wake-up."
-      },
-      {
-        "key": "proactive.forced_wake_minutes",
-        "type": "number",
-        "label": "Forced-wake window (minutes)",
-        "default": 30,
-        "tab": "Proactive",
-        "help": "How long she stays awake and answers after repeated mentions wake her during sleep (default 30). Afterwards she sleeps again until the greeting hour."
-      },
-      {
-        "key": "proactive.birthday_wish_spread_end_hour",
-        "type": "number",
-        "label": "Birthday wish spread end hour",
-        "default": 20,
-        "min": 0,
-        "max": 23,
-        "tab": "Proactive",
-        "help": "Birthday wishes post at a per-person random time between the greeting hour and this hour (0-23, server local) instead of all at once."
-      },
-      {
-        "key": "proactive.greeting_targets",
-        "type": "list",
-        "label": "Greeting channels",
-        "default": [],
-        "hidden": true
-      },
-      {
-        "key": "proactive.greeting_model_provider",
-        "type": "string",
-        "label": "Greeting model provider",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "proactive.greeting_model_name",
-        "type": "string",
-        "label": "Greeting model",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "proactive.goodnight_model_provider",
-        "type": "string",
-        "label": "Goodnight model provider",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "proactive.goodnight_model_name",
-        "type": "string",
-        "label": "Goodnight model",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "proactive.birthday_wish_fallback",
-        "type": "string",
-        "label": "Birthday fallback",
-        "default": "Happy birthday! \ud83c\udf82",
-        "hidden": true
-      },
-      {
-        "key": "proactive.birthday_use_llm",
-        "type": "boolean",
-        "label": "AI birthday wishes",
-        "default": true,
-        "hidden": true
-      },
-      {
-        "key": "proactive.outreach_cooldown_hours",
-        "type": "number",
-        "label": "Outreach cooldown (hours)",
-        "default": 6,
-        "hidden": true
-      },
-      {
-        "key": "proactive.greeting_outreach_lead_hours",
-        "type": "number",
-        "label": "Outreach lead (hours)",
-        "default": 2,
-        "hidden": true
-      },
-      {
-        "key": "proactive.sleep_buffered_reply_max",
-        "type": "number",
-        "label": "Wake replay max",
-        "default": 3,
-        "tab": "Proactive",
-        "help": "On waking (at the greeting hour), answer up to this many mentions she slept through, per channel. 0 = don't answer missed pings."
-      },
-      {
-        "key": "presence.status",
-        "type": "string",
-        "label": "Awake status",
-        "default": "online",
-        "tab": "Presence",
-        "options": [
-          {
-            "label": "Online",
-            "value": "online"
-          },
-          {
-            "label": "Idle",
-            "value": "idle"
-          },
-          {
-            "label": "Do not disturb",
-            "value": "dnd"
-          },
-          {
-            "label": "Invisible",
-            "value": "invisible"
-          }
-        ],
-        "help": "Discord status shown while awake: Online, Idle, Do Not Disturb, or Invisible."
-      },
-      {
-        "key": "presence.activity",
-        "type": "string",
-        "label": "Default activity",
-        "default": "",
-        "tab": "Presence",
-        "help": "Activity line under the bot's name while awake \u2014 'playing: chess', 'listening: lo-fi', 'watching: the server', 'competing: trivia', or plain text for a custom status. Empty = none. Ignored while cycling is on."
-      },
-      {
-        "key": "presence.quiet_status",
-        "type": "string",
-        "label": "Quiet / sleep status",
-        "default": "idle",
-        "tab": "Presence",
-        "options": [
-          {
-            "label": "Online",
-            "value": "online"
-          },
-          {
-            "label": "Idle",
-            "value": "idle"
-          },
-          {
-            "label": "Do not disturb",
-            "value": "dnd"
-          },
-          {
-            "label": "Invisible",
-            "value": "invisible"
-          }
-        ],
-        "help": "Status shown during quiet hours and while asleep."
-      },
-      {
-        "key": "presence.cycling_enabled",
-        "type": "boolean",
-        "label": "Cycle activities",
-        "default": false,
-        "tab": "Presence",
-        "help": "ON: while awake, rotate a random activity from the checked presets plus Custom activities every cycle interval. OFF (default): keep the single Default activity."
-      },
-      {
-        "key": "presence.cycle_interval_seconds",
-        "type": "number",
-        "label": "Cycle interval (seconds)",
-        "default": 300,
-        "tab": "Presence",
-        "help": "Seconds between activity changes while cycling. Minimum 60."
-      },
-      {
-        "key": "presence.activities_custom",
-        "type": "list",
-        "label": "Custom activities",
-        "default": [],
-        "tab": "Presence",
-        "help": "Extra activities added to the cycling pool alongside the checked presets. Same format as Default activity; enter '-' for a no-activity turn."
-      },
-      {
-        "key": "presence.activity_presets",
-        "type": "list",
-        "label": "Activity presets",
-        "default": [],
-        "hidden": true
-      },
-      {
         "key": "safety.allow_direct_messages",
         "type": "boolean",
         "label": "Allow DMs",
         "default": false,
         "tab": "Safety",
-        "help": "OFF (default): she won't reply to direct messages — anyone who shares a server can DM a bot, so it is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM)."
+        "help": "OFF (default): she won't reply to direct messages \u2014 anyone who shares a server can DM a bot, so it is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM)."
       },
       {
         "key": "safety.dm_daily_budget",
@@ -1115,7 +883,7 @@
         "label": "Tools stay in the server",
         "default": true,
         "tab": "Safety",
-        "help": "ON (default): while she is replying inside a Discord server, her Discord tools can only read or post in THAT server — a message in one server can't make her post into another, or into someone's DMs. From your own chats she can reach any channel. OFF: no reach limit inside events."
+        "help": "ON (default): while she is replying inside a Discord server, her Discord tools can only read or post in THAT server \u2014 a message in one server can't make her post into another, or into someone's DMs. From your own chats she can reach any channel. OFF: no reach limit inside events."
       },
       {
         "key": "safety.rate_limit_seconds",

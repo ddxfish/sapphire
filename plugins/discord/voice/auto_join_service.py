@@ -5,18 +5,17 @@ from __future__ import annotations
 import logging
 
 from plugins.discord.models.intentions import JoinVoiceIntention, LeaveVoiceIntention
-from plugins.discord.proactive.greeting_service import parse_target
+from plugins.discord.conversation.ignored_channels import parse_target
 
 logger = logging.getLogger(__name__)
 
 
 class VoiceAutoJoinService:
-    def __init__(self, *, transport, voice_service, settings_store=None, trace_service=None, sleep_service=None):
+    def __init__(self, *, transport, voice_service, settings_store=None, trace_service=None):
         self.transport = transport
         self.voice_service = voice_service
         self.settings_store = settings_store
         self.trace_service = trace_service
-        self.sleep_service = sleep_service
         self._last_errors: dict[str, str] = {}
         self._last_idle_log: dict[str, str] = {}
 
@@ -26,8 +25,6 @@ class VoiceAutoJoinService:
             return {'enabled': False, 'reason': 'no_settings', 'targets': []}
         if not settings.voice.enabled:
             return {'enabled': False, 'reason': 'voice_disabled', 'targets': []}
-        if self._voice_blocked_for_sleep(account_name, settings):
-            return {'enabled': False, 'reason': 'sleeping', 'targets': []}
         targets = settings.voice.join_targets or []
         if not targets:
             return {'enabled': True, 'reason': 'no_targets', 'targets': []}
@@ -88,7 +85,6 @@ class VoiceAutoJoinService:
         if not self.transport or not self.voice_service:
             return []
 
-        sleeping = self._voice_blocked_for_sleep(account_name, settings)
 
         results: list[dict] = []
         for entry in targets:
@@ -98,7 +94,7 @@ class VoiceAutoJoinService:
             channel_id = parsed[1]
             key = f'{account_name}:{channel_id}'
             state = self._fetch_state_sync(account_name, channel_id)
-            result = self._evaluate_state_sync(account_name, channel_id, key, state, sleeping=sleeping)
+            result = self._evaluate_state_sync(account_name, channel_id, key, state)
             if result is not None:
                 results.append(result)
         return results
@@ -119,7 +115,6 @@ class VoiceAutoJoinService:
         if not self.transport or not self.voice_service:
             return []
 
-        sleeping = self._voice_blocked_for_sleep(account_name, settings)
 
         results: list[dict] = []
         for entry in targets:
@@ -129,17 +124,12 @@ class VoiceAutoJoinService:
             channel_id = parsed[1]
             key = f'{account_name}:{channel_id}'
             state = await self._fetch_state_async(account_name, channel_id)
-            result = await self._evaluate_state_async(account_name, channel_id, key, state, sleeping=sleeping)
+            result = await self._evaluate_state_async(account_name, channel_id, key, state)
             if result is not None:
                 results.append(result)
         return results
 
-    def _voice_blocked_for_sleep(self, account_name: str, settings) -> bool:
-        if not self.sleep_service:
-            return False
-        return self.sleep_service.voice_blocked_for_sleep(account_name, settings)
-
-    def _evaluate_state_sync(self, account_name: str, channel_id: str, key: str, state: dict, *, sleeping: bool = False):
+    def _evaluate_state_sync(self, account_name: str, channel_id: str, key: str, state: dict):
         if state.get('status') == 'error':
             error = str(state.get('error') or 'unknown')
             self._last_errors[key] = error
@@ -154,11 +144,6 @@ class VoiceAutoJoinService:
         self._last_errors.pop(key, None)
         humans = int(state.get('human_count') or 0)
         bot_connected = bool(state.get('bot_connected'))
-
-        if sleeping:
-            if bot_connected:
-                return self._leave(account_name, channel_id, state)
-            return None
 
         if humans > 0 and not bot_connected:
             result = self._join(account_name, channel_id, state, humans)
@@ -175,7 +160,7 @@ class VoiceAutoJoinService:
         self._log_idle(account_name, channel_id, key, state, humans, bot_connected)
         return None
 
-    async def _evaluate_state_async(self, account_name: str, channel_id: str, key: str, state: dict, *, sleeping: bool = False):
+    async def _evaluate_state_async(self, account_name: str, channel_id: str, key: str, state: dict):
         if state.get('status') == 'error':
             error = str(state.get('error') or 'unknown')
             self._last_errors[key] = error
@@ -190,11 +175,6 @@ class VoiceAutoJoinService:
         self._last_errors.pop(key, None)
         humans = int(state.get('human_count') or 0)
         bot_connected = bool(state.get('bot_connected'))
-
-        if sleeping:
-            if bot_connected:
-                return await self._leave_async(account_name, channel_id)
-            return None
 
         if humans > 0 and not bot_connected:
             result = await self._join_async(account_name, channel_id, state, humans)

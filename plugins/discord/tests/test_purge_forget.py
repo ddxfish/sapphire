@@ -208,14 +208,14 @@ def test_overlay_values_are_coerced_to_field_types():
         'safety': {'rate_limit_seconds': '45', 'allow_direct_messages': 'false'},
         'profile': {'ambient_distill_interval_hours': '0.5'},
         'voice': {'addressing_aliases': 'sapph, saphire', 'follow_up_seconds': 'nope'},
-        'presence': {'activity_presets': '["a", "b"]'},
+        'channel': {'ignored_channels': '["a", "b"]'},
     }})
     s = store.resolve()
     assert s.safety.rate_limit_seconds == 45 and s.safety.allow_direct_messages is False
     assert s.profile.ambient_distill_interval_hours == 0.5
     assert s.voice.addressing_aliases == ['sapph', 'saphire']
     assert s.voice.follow_up_seconds == 20.0                    # unparseable → default stands
-    assert s.presence.activity_presets == ['a', 'b']
+    assert s.channel.ignored_channels == ['a', 'b']
 
 
 def test_memory_test_route_only_ever_writes_scratch_users():

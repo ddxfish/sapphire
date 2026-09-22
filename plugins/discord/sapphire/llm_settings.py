@@ -38,28 +38,6 @@ def _providers_config() -> dict[str, Any]:
     }
 
 
-def proactive_llm_from_settings(settings, *, kind: str = 'greeting') -> tuple[str, str]:
-    """Resolve proactive LLM provider/model, inheriting from Reply LLM when unset."""
-    proactive = getattr(settings, 'proactive', None)
-    cognitive_primary, cognitive_model = cognitive_llm_from_settings(settings)
-    if proactive is None:
-        return cognitive_primary, cognitive_model
-
-    greeting_provider = str(getattr(proactive, 'greeting_model_provider', '') or '').strip()
-    greeting_model = str(getattr(proactive, 'greeting_model_name', '') or '').strip()
-    goodnight_provider = str(getattr(proactive, 'goodnight_model_provider', '') or '').strip()
-    goodnight_model = str(getattr(proactive, 'goodnight_model_name', '') or '').strip()
-
-    # Provider and model inherit as a PAIR: a greeting provider with a blank
-    # model used to inherit the Reply LLM's MODEL id and ship it to the other
-    # provider — 400 on the wire, cooldown already burned (hunt 2.13.0, row 28).
-    if kind == 'goodnight' and goodnight_provider:
-        return goodnight_provider, goodnight_model
-    if greeting_provider:
-        return greeting_provider, greeting_model
-    return cognitive_primary, cognitive_model
-
-
 def distill_llm_from_settings(settings) -> tuple[str, str]:
     """Resolve ambient-distill LLM, inheriting from Reply LLM when unset."""
     profile = getattr(settings, 'profile', None)

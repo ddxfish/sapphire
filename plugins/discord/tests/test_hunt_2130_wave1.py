@@ -63,56 +63,6 @@ def test_user_hour_follows_config_timezone(monkeypatch):
     assert user_hour(now) == now.hour
 
 
-# ── rows 17 + 21: greeting evaluate — durable cooldown, read-only diagnostics ──
-def _greeting_settings(now):
-    from plugins.discord.lib.server_time import user_hour
-    from plugins.discord.models.settings import SettingsStore
-    store = SettingsStore()
-    store.global_overlay.proactive.update({
-        'greeting_enabled': True,
-        'greeting_utc_hour': user_hour(now),
-        'greeting_targets': ['alpha:c1'],
-    })
-    return store.resolve()
-
-
-def test_greeting_respects_durable_cooldown():
-    from plugins.discord.proactive.greeting_service import GreetingService
-    now = datetime(2026, 6, 30, 9, 0)
-    repo = MagicMock()
-    repo.cooldown_elapsed.return_value = False
-    svc = GreetingService(proactive_repository=repo, sleep_service=MagicMock())
-    assert svc.evaluate('alpha', _greeting_settings(now), now=now) == []
-    repo.cooldown_elapsed.return_value = True
-    assert len(svc.evaluate('alpha', _greeting_settings(now), now=now)) == 1
-
-
-def test_greeting_evaluate_wake_false_is_read_only():
-    from plugins.discord.proactive.greeting_service import GreetingService
-    now = datetime(2026, 6, 30, 9, 0)
-    repo = MagicMock()
-    repo.cooldown_elapsed.return_value = True
-    sleep = MagicMock()
-    svc = GreetingService(proactive_repository=repo, sleep_service=sleep)
-    svc.evaluate('alpha', _greeting_settings(now), now=now, wake=False)
-    sleep.wake_channel.assert_not_called()
-    svc.evaluate('alpha', _greeting_settings(now), now=now)
-    sleep.wake_channel.assert_called_once_with('alpha', 'c1')
-
-
-# ── row 7: wake replay commits AFTER the sends ─────────────────────────────
-def test_drain_wake_buffer_commit_false_leaves_rows_pending():
-    from plugins.discord.proactive.sleep_service import SleepService
-    repo = MagicMock()
-    repo.list_buffered.return_value = [{'id': 7, 'message_id': 'm1', 'content': 'hey', 'author_id': 'u1'}]
-    svc = SleepService(proactive_repository=repo)
-    intentions = svc.drain_wake_buffer('alpha', 'c1', max_replies=3, commit=False)
-    assert len(intentions) == 1
-    repo.mark_buffered_processed.assert_not_called()
-    assert svc.commit_wake_drain('alpha', 'c1') == 1
-    repo.mark_buffered_processed.assert_called_once_with([7])
-
-
 # ── rows 9 + 29: reach fails closed; memory reads carry the origin filter ──
 def test_reach_error_fails_closed_without_guild_id():
     from plugins.discord.tools import discord_tools as dt
@@ -154,19 +104,6 @@ def test_discord_memory_denies_authorless_event():
         assert 'scheduled post' in text
 
 
-# ── row 28: provider/model inherit as a pair ───────────────────────────────
-def test_proactive_llm_inherits_as_a_pair():
-    from plugins.discord.sapphire.llm_settings import proactive_llm_from_settings
-    settings = SimpleNamespace(
-        cognitive=SimpleNamespace(llm_primary='claude', llm_model='claude-sonnet-5'),
-        proactive=SimpleNamespace(greeting_model_provider='fireworks', greeting_model_name='',
-                                  goodnight_model_provider='', goodnight_model_name='x'),
-    )
-    with patch('plugins.discord.sapphire.llm_settings.cognitive_llm_from_settings', return_value=('claude', 'claude-sonnet-5')):
-        assert proactive_llm_from_settings(settings, kind='greeting') == ('fireworks', '')
-        assert proactive_llm_from_settings(settings, kind='goodnight') == ('fireworks', '')
-
-
 # ── row 27: an unknown account never becomes "the first bot" ───────────────
 def test_state_for_account_refuses_unknown_name():
     from plugins.discord.transport.discord_execution import DiscordExecution
@@ -179,7 +116,7 @@ def test_state_for_account_refuses_unknown_name():
 
 # ── row 43: a typo'd target is loud ────────────────────────────────────────
 def test_parse_target_warns_on_bad_entry(caplog):
-    from plugins.discord.proactive.targets import parse_target
+    from plugins.discord.conversation.ignored_channels import parse_target
     with caplog.at_level(logging.WARNING):
         assert parse_target('justachannelid') is None
     assert 'not account:channel_id' in caplog.text
@@ -255,59 +192,13 @@ def test_prompt_context_uses_trigger_identity():
 def test_settings_store_replace_from_keeps_identity():
     from plugins.discord.models.settings import SettingsStore
     a, b = SettingsStore(), SettingsStore()
-    b.global_overlay.proactive.update({'greeting_enabled': True})
+    b.global_overlay.channel.update({'reply_mode': 'all'})
     same = a.replace_from(b)
     assert same is a
-    assert a.resolve().proactive.greeting_enabled is True
+    assert a.resolve().channel.reply_mode == 'all'
 
 
-# ── rows 5 + 18: honest delivery results ───────────────────────────────────
-def _executor(send_result):
-    from plugins.discord.proactive.proactive_executor import ProactiveExecutor
-    ex = ProactiveExecutor.__new__(ProactiveExecutor)
-    ex.transport = SimpleNamespace(
-        send_message_sync=lambda *a, **k: send_result,
-        channel_reach_sync=lambda c, account_name=None: {},
-    )
-    ex.event_bridge = None
-    ex.settings_store = None
-    ex.proactive_message_service = None
-    ex.trace_repository = None
-    ex.channel_repository = None
-    ex.greeting_service = None
-    ex._resolve_message_text = lambda intention, account_name=None: 'Good morning!'
-    ex._human_task_follow_up_text = lambda intention, payload: 'reminder'
-    return ex
-
-
-def test_direct_follow_up_reports_send_failure():
-    from plugins.discord.models.intentions import ReplyMessageIntention
-    ex = _executor({'status': 'error', 'error': '403'})
-    intention = ReplyMessageIntention(intention_type='reply_message', account_name='bot', channel_id='c1',
-                                      message_id='', reason='r', prompt='p', metadata={'task_id': 1})
-    result = ex._send_task_follow_up_direct(intention, {}, marker='m', reason='event_not_accepted')
-    assert result['status'] == 'error'
-
-
-def test_static_fallback_is_labelled_static():
-    from plugins.discord.models.intentions import GreetChannelIntention
-    ex = _executor({'status': 'sent', 'messages': ['1']})
-    intention = GreetChannelIntention(intention_type='greet_channel', account_name='bot', channel_id='c1',
-                                      message_id='', reason='morning_greeting', prompt='', metadata={})
-    result = ex._send_text(intention, marker='greeting')
-    assert result['status'] == 'sent' and result['delivery'] == 'static'
-
-
-# ── rows 10 + 17 + 19 + 42: source tripwires for the one-liners ────────────
+# ── row 10: source tripwire for the one-liner ──────────────────────────────
 def test_source_tripwires():
     listener = (ROOT / 'plugins/discord/voice/voice_listener_service.py').read_text(encoding='utf-8')
     assert 'interrupt_active_turn(session.session_id)\n            else:' not in listener       # row 10
-    diag = (ROOT / 'plugins/discord/proactive/diagnostics.py').read_text(encoding='utf-8')
-    assert 'GOODNIGHT_MINUTES' not in diag                                                       # row 19
-    assert 'evaluate(account, settings, now=now, wake=False)' in diag                            # row 17
-    assert 'if reset_sleep_state and not dry_run' in diag                                        # row 17
-    outreach = (ROOT / 'plugins/discord/schedule/quiet_outreach.py').read_text(encoding='utf-8')
-    assert 'execute_proactive(runtime, intention, settings)' in outreach                        # row 42
-    web = (ROOT / 'plugins/discord/web/index.js').read_text(encoding='utf-8')
-    assert 'reset_sleep_state: !dryRun' in web                                                   # row 17
-    assert "row.delivery === 'static'" in web                                                    # row 18

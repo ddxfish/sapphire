@@ -16,7 +16,6 @@ from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrat
 from plugins.discord.memory.distill_service import DistillService
 from plugins.discord.models.observations import TextMessageObservation
 from plugins.discord.models.settings import SettingsStore
-from plugins.discord.presence.presence_service import DiscordPresenceService
 
 
 class FakeTraceRepo:
@@ -235,24 +234,6 @@ def test_distill_near_duplicate_jaccard():
     )
 
 
-def test_situation_presence_override():
-    store = SettingsStore()
-    store.global_overlay.presence.update({
-        'situation_presence_enabled': True,
-        'status': 'online',
-        'activity': 'playing: chess',
-        'cycling_enabled': False,
-    })
-    settings = store.resolve()
-    service = DiscordPresenceService()
-    heated = ChannelSituation(vibe='heated', heat=0.9)
-    choice = service.select_presence(
-        settings, asleep=False, forced_wake=False, local_hour=14, situation=heated,
-    )
-    assert choice['status'] == 'dnd'
-    assert choice['situation_vibe'] == 'heated'
-
-
 def test_task_follow_up_skips_heated_channel():
     class FakeWorld:
         def list_due_tasks(self, account_name, now_ts=None, limit=10):
@@ -339,57 +320,3 @@ def test_stale_argue_keyword_does_not_heat_channel():
     assert situation.argue_hits == 0
     allowed, _reason = service.outreach_allowed(situation)
     assert allowed is True
-
-
-def test_human_task_follow_up_text_natural():
-    from plugins.discord.proactive.proactive_executor import ProactiveExecutor
-    from plugins.discord.models.intentions import ReplyMessageIntention
-
-    executor = ProactiveExecutor()
-    intention = ReplyMessageIntention(
-        intention_type='reply_message',
-        account_name='alpha',
-        channel_id='c1',
-        message_id='m-task',
-        reason='commitment_follow_up',
-        prompt='INTERNAL DO NOT DUMP',
-        metadata={'task_type': 'commitment_follow_up'},
-    )
-    text = executor._human_task_follow_up_text(intention, {
-        'author_id': 'u99',
-        'commitment': 'ship the hotfix',
-        'when_label': 'Thursday',
-    })
-    assert 'u99' in text
-    assert 'Thursday' in text
-    assert 'hotfix' in text
-    assert 'INTERNAL' not in text
-
-
-def test_human_task_follow_up_text_scrubs_links_and_pings():
-    # H2 (hunt 2026-09-12): the direct fallback posted a user's reminder text
-    # verbatim as the bot — "@everyone claim free nitro at evil.example".
-    from plugins.discord.proactive.proactive_executor import ProactiveExecutor
-    from plugins.discord.models.intentions import ReplyMessageIntention
-
-    executor = ProactiveExecutor()
-    intention = ReplyMessageIntention(
-        intention_type='reply_message',
-        account_name='alpha',
-        channel_id='c1',
-        message_id='task-followup-1',
-        reason='task:1',
-        prompt='',
-        metadata={'task_type': 'reminder_follow_up'},
-    )
-    text = executor._human_task_follow_up_text(intention, {
-        'author_id': 'u99',
-        'reminder': '@everyone claim free nitro at https://evil.example/x <@&123> @here',
-        'when_label': 'in 2 minutes',
-    })
-    assert 'Reminder' in text
-    assert '<@u99>' in text
-    assert 'https://' not in text
-    assert '@everyone' not in text
-    assert '@here' not in text
-    assert '<@&123>' not in text

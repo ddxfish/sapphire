@@ -2237,7 +2237,8 @@ class PluginLoader:
         task whose own greeting_time just passed, and nobody else's. The
         task's source must be one this plugin declared (when `plugin` is
         given); the answer routes to that plugin's reply handler. Scheduler
-        rules still apply: enabled, account match, filter. Realtime gates
+        rules still apply: enabled, account match. The task's MESSAGE filter
+        does not — the clock fires a task, not a message. Realtime gates
         refuse (they are switches, not tasks)."""
         if not self._scheduler:
             return {"success": False, "error": "no scheduler"}
@@ -2254,7 +2255,7 @@ class PluginLoader:
         data = payload if isinstance(payload, str) else json.dumps(payload)
         with self._lock:
             handler = self._reply_handlers.get(owner)
-        return self._scheduler.fire_event_task(task_id, data, reply_callback=handler)
+        return self._scheduler.fire_event_task(task_id, data, reply_callback=handler, skip_filter=True)
 
     def emit_daemon_event(self, source_name: str, event_data: str):
         """Emit an event from a daemon plugin, triggering matching tasks.

@@ -31,7 +31,7 @@ def _list_targets(**kwargs):
     return {'targets': targets, 'connected': bool(targets), 'channel_type': channel_type}
 
 
-def list_proactive_targets(**kwargs):
+def list_text_channels(**kwargs):
     return _list_targets(**kwargs)
 
 

@@ -310,7 +310,7 @@ def memory_test(**kwargs):
         channel_id = str(body.get('channel_id') or '').strip()
         if not channel_id:
             return {'error': 'channel_id required'}
-        topics, hint = runtime.outreach_service._interest_context(account_name, channel_id) if runtime.outreach_service else ([], '')
+        topics, hint = [], ''    # quiet outreach retired (S1, 2026-09-22)
         return {'kind': kind, 'topics': topics, 'outreach_hint': hint}
 
     if kind == 'context_preview':

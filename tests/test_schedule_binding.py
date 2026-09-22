@@ -59,18 +59,38 @@ def test_sched_task_def_binds_hour_and_switch():
     assert d["enabled"] is False
 
 
-def test_discord_manifest_schedules_are_bound():
-    caps = json.loads(MANIFEST.read_text(encoding="utf-8"))["capabilities"]
-    settings = {s["key"]: s for s in caps["settings"] if "key" in s}
-    by_name = {s["name"]: s for s in caps["schedule"]}
-    # Gated polls: off by default, bound to the feature switch.
+# The Discord plugin's own proactive schedule legs left with the proactive
+# family (S1, 2026-09-22 — greetings ride the daemon task's own clock now).
+# The binding contract they proved lives on against a fixture manifest.
+FIXTURE = {
+    "settings": [
+        {"key": "proactive.outreach_enabled", "type": "boolean", "default": False},
+        {"key": "proactive.sleep_schedule_enabled", "type": "boolean", "default": False},
+        {"key": "profile.ambient_distill_enabled", "type": "boolean", "default": False},
+        {"key": "proactive.greeting_utc_hour", "type": "number", "default": 9},
+        {"key": "proactive.sleep_utc_hour", "type": "number", "default": 22},
+    ],
+    "schedule": [
+        {"name": "morning_greeting", "cron": "0 9 * * *", "time_setting": "proactive.greeting_utc_hour", "handler": "h.py"},
+        {"name": "quiet_outreach", "cron": "*/15 * * * *", "enabled": False,
+         "enabled_setting": "proactive.outreach_enabled", "handler": "h.py"},
+        {"name": "sleep_goodnight", "cron": "0 22 * * *", "enabled": False, "time_setting": "proactive.sleep_utc_hour",
+         "enabled_setting": "proactive.sleep_schedule_enabled", "handler": "h.py"},
+        {"name": "ambient_distill", "cron": "*/15 * * * *", "enabled": False,
+         "enabled_setting": "profile.ambient_distill_enabled", "handler": "h.py"},
+    ],
+}
+
+
+def test_fixture_manifest_schedules_are_bound():
+    settings = {s["key"]: s for s in FIXTURE["settings"]}
+    by_name = {s["name"]: s for s in FIXTURE["schedule"]}
     for name, key in [("quiet_outreach", "proactive.outreach_enabled"),
                       ("sleep_goodnight", "proactive.sleep_schedule_enabled"),
                       ("ambient_distill", "profile.ambient_distill_enabled")]:
         s = by_name[name]
         assert s["enabled_setting"] == key and key in settings, name
         assert s["enabled"] is False and settings[key]["default"] is False, name
-    # Timed once a day at the bound hour; manifest cron equals the default hour.
     for name, key in [("morning_greeting", "proactive.greeting_utc_hour"),
                       ("sleep_goodnight", "proactive.sleep_utc_hour")]:
         s = by_name[name]
@@ -78,39 +98,18 @@ def test_discord_manifest_schedules_are_bound():
         minute, hour = s["cron"].split()[:2]
         assert minute.isdigit() and hour.isdigit(), name
         assert _time_to_cron(settings[key]["default"], "BAD") == s["cron"], name
-    # Nothing polls sub-hourly without a feature gate.
-    for s in caps["schedule"]:
-        if not s["cron"].split()[0].isdigit():
-            assert s.get("enabled_setting"), f"{s['name']} polls without a gate"
 
 
-@pytest.mark.parametrize("source,cron,hidden", [
-    ("plugin:discord", "*/15 * * * *", True),
-    ("plugin:discord", "* * * * *", True),
-    ("plugin:discord", "0,30 * * * *", True),
-    ("plugin:discord", "0 * * * *", False),
-    ("plugin:discord", "30 4 * * *", False),
-    ("user", "*/15 * * * *", False),
-    ("", "*/15 * * * *", False),
-])
-def test_is_plugin_heartbeat(source, cron, hidden):
-    status = importlib.import_module("plugins.status.routes.status")
-    assert status._is_plugin_heartbeat({"source": source}, cron) is hidden
-
-
-def test_upcoming_skips_plugin_heartbeats_keeps_events_and_user_tasks():
-    status = importlib.import_module("plugins.status.routes.status")
-    soon = (datetime.now() + timedelta(hours=1)).hour
-    tasks = [
-        {"name": "user_poll", "enabled": True, "schedule": "*/5 * * * *", "source": "user"},
-        {"name": "quiet_outreach", "enabled": True, "schedule": "*/15 * * * *",
-         "source": "plugin:discord"},
-        {"name": "sleep_goodnight", "enabled": True, "schedule": f"0 {soon} * * *",
-         "source": "plugin:discord"},
-        {"name": "off_poll", "enabled": False, "schedule": "*/15 * * * *",
-         "source": "plugin:discord"},
-    ]
-    sched = types.SimpleNamespace(list_tasks=lambda: tasks)
-    names = [t["name"] for t in status._get_upcoming_tasks(sched, hours=4)]
-    assert "user_poll" in names and "sleep_goodnight" in names
-    assert "quiet_outreach" not in names and "off_poll" not in names
+def test_discord_manifest_has_no_proactive_legs_left():
+    caps = json.loads(MANIFEST.read_text(encoding="utf-8"))["capabilities"]
+    names = {s["name"] for s in caps["schedule"]}
+    assert names == {"retention_purge", "ambient_distill"}
+    keys = {s["key"] for s in caps["settings"] if "key" in s}
+    assert not any(k.startswith(("proactive.", "presence.", "profile.birthday_")) for k in keys)
+    sources = {s["name"]: s for s in caps["daemon"]["event_sources"]}
+    assert set(sources) == {"discord_message", "discord_greetings", "discord_all"}
+    for name in ("discord_greetings", "discord_all"):
+        fields = {f["key"]: f for f in sources[name]["task_fields"]}
+        assert {"account", "channels", "greeting_time", "goodnight_time"} <= set(fields)
+        assert fields["greeting_time"].get("widget") == "time"
+    assert "auto_reply" in {f["key"] for f in sources["discord_all"]["task_fields"]}

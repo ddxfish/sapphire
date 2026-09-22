@@ -138,7 +138,7 @@ class LifecycleManager:
         # The scheduler tick reconciles later if tasks change.
         selected = set()
         if container.scheduler_bridge:
-            selected = container.scheduler_bridge.active_daemon_accounts('discord_message')
+            selected = container.scheduler_bridge.selected_accounts()
         if not selected:
             logger.info('[DISCORD] No enabled daemon task selects a bot — not connecting any accounts')
             return

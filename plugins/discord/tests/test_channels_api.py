@@ -26,7 +26,7 @@ class _FakeRuntime:
         self.transport = transport
 
 
-def test_list_proactive_targets_api(monkeypatch):
+def test_list_text_channels_api(monkeypatch):
     targets = [{
         'account': 'alpha',
         'guild_id': '100',
@@ -40,13 +40,13 @@ def test_list_proactive_targets_api(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: runtime)
     monkeypatch.setattr(channels_api, 'run_coroutine', lambda coro: _FakeFuture(targets))
 
-    result = channels_api.list_proactive_targets()
+    result = channels_api.list_text_channels()
 
     assert result['connected'] is True
     assert result['targets'][0]['value'] == 'alpha:200'
 
 
-def test_list_proactive_targets_voice_query(monkeypatch):
+def test_list_text_channels_voice_query(monkeypatch):
     targets = [{
         'account': 'alpha',
         'guild_id': '100',
@@ -66,17 +66,17 @@ def test_list_proactive_targets_voice_query(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: runtime)
     monkeypatch.setattr(channels_api, 'run_coroutine', lambda coro: _FakeFuture(targets))
 
-    result = channels_api.list_proactive_targets(query={'channel_type': 'voice'})
+    result = channels_api.list_text_channels(query={'channel_type': 'voice'})
 
     assert result['connected'] is True
     assert result['channel_type'] == 'voice'
     assert result['targets'][0]['value'] == 'alpha:300'
 
 
-def test_list_proactive_targets_api_offline(monkeypatch):
+def test_list_text_channels_api_offline(monkeypatch):
     monkeypatch.setattr(channels_api, 'get_runtime', lambda: None)
 
-    result = channels_api.list_proactive_targets()
+    result = channels_api.list_text_channels()
 
     assert result['connected'] is False
     assert result['targets'] == []

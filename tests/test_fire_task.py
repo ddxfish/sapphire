@@ -24,7 +24,9 @@ class FakeScheduler:
                 if t.get("type") == "daemon" and t.get("enabled", True)
                 and t.get("trigger_config", {}).get("source") == source]
 
-    def fire_event_task(self, task_id, event_data, reply_callback=None):
+    def fire_event_task(self, task_id, event_data, reply_callback=None, skip_filter=False):
+        # fire_task is the owner's own clock — the task's MESSAGE filter must not apply
+        assert skip_filter is True
         self.fired.append((task_id, event_data, reply_callback))
         return {"success": True}
 

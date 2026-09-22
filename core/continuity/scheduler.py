@@ -929,7 +929,8 @@ class ContinuityScheduler:
     # EVENT-TRIGGERED EXECUTION
     # =========================================================================
 
-    def fire_event_task(self, task_id: str, event_data: str, reply_callback=None) -> Dict[str, Any]:
+    def fire_event_task(self, task_id: str, event_data: str, reply_callback=None,
+                        skip_filter: bool = False) -> Dict[str, Any]:
         """Fire an event-triggered task (daemon or webhook) with event data.
         Runs on a worker thread, returns immediately.
 
@@ -967,7 +968,10 @@ class ContinuityScheduler:
                 pass
 
         # Check filter (daemon and webhook tasks)
-        if task_type in ("daemon", "webhook"):
+        # skip_filter: plugin_loader.fire_task — the owning daemon's own clock
+        # firing its task (a greeting is not a message; a "mentioned=True"
+        # filter must not swallow it). Account match above still applies.
+        if task_type in ("daemon", "webhook") and not skip_filter:
             trigger_config = task.get("trigger_config", {})
             task_filter = trigger_config.get("filter")
             if task_filter and isinstance(task_filter, dict):

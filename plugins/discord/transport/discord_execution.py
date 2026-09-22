@@ -764,7 +764,7 @@ class DiscordExecution:
         activity: str | None = None,
     ) -> dict:
         import discord
-        from plugins.discord.presence.activity_parser import parse_activity_entry
+        from plugins.discord.transport.activity_parser import parse_activity_entry
         name, state = self._state_for_account(account_name)
         client = state.get('client')
         if not client:
