@@ -103,9 +103,9 @@ def test_fixture_manifest_schedules_are_bound():
 def test_discord_manifest_has_no_proactive_legs_left():
     caps = json.loads(MANIFEST.read_text(encoding="utf-8"))["capabilities"]
     names = {s["name"] for s in caps["schedule"]}
-    assert names == {"retention_purge", "ambient_distill"}
+    assert names == {"retention_purge"}
     keys = {s["key"] for s in caps["settings"] if "key" in s}
-    assert not any(k.startswith(("proactive.", "presence.", "profile.birthday_")) for k in keys)
+    assert not any(k.startswith(("proactive.", "presence.", "profile.")) for k in keys)
     sources = {s["name"]: s for s in caps["daemon"]["event_sources"]}
     assert set(sources) == {"discord_message", "discord_greetings", "discord_all"}
     for name in ("discord_greetings", "discord_all"):

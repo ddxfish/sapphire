@@ -19,10 +19,6 @@ def _source_label(payload: dict) -> str:
     proactive_kind = str(payload.get('proactive_kind') or '').strip()
     if proactive_kind:
         return f'proactive:{proactive_kind}'
-    if str(payload.get('task_follow_up') or '').lower() in {'true', '1'}:
-        return 'task_followup'
-    if str(payload.get('message_id') or '').startswith('task-followup-'):
-        return 'task_followup'
     return 'discord_message'
 
 
@@ -137,8 +133,6 @@ class LlmDebugService:
         extra = dict(extra or {})
         message_id = str(payload.get('message_id') or '').strip() or f'prompt-{uuid.uuid4().hex[:12]}'
         now = time.time()
-        memory = extra.get('memory') or {}
-        profile = extra.get('profile') or {}
         entry = {
             'id': message_id,
             'kind': 'exchange',
@@ -162,9 +156,6 @@ class LlmDebugService:
                 'recent_history': str(payload.get('recent_history') or ''),
                 'reply_hints': list(payload.get('reply_hints') or []),
                 'reply_instructions': str(payload.get('reply_instructions') or ''),
-                'memory_recalled': len((memory or {}).get('recalled') or []),
-                'memory_pinned': len((memory or {}).get('pinned') or []),
-                'profile_summary': _preview(str((profile or {}).get('summary') or '')),
                 'edit_history_hint': _preview(str(extra.get('edit_history_hint') or '')),
                 'llm_primary': str(payload.get('llm_primary') or ''),
                 'llm_model': str(payload.get('llm_model') or ''),
@@ -231,9 +222,6 @@ class LlmDebugService:
                 'recent_history': '',
                 'reply_hints': [],
                 'reply_instructions': '',
-                'memory_recalled': 0,
-                'memory_pinned': 0,
-                'profile_summary': '',
                 'edit_history_hint': '',
                 'llm_primary': llm_primary,
                 'llm_model': llm_model,

@@ -1,4 +1,4 @@
-from plugins.discord.cognition.policy_service import PolicyService
+from plugins.discord.conversation.policy_service import PolicyService
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.models.intentions import ReplyMessageIntention, SpeakVoiceIntention
 from plugins.discord.models.settings import EffectiveSettings, SafetySettings, VoiceSettings

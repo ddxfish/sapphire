@@ -130,7 +130,6 @@ def _batch():
 
 
 def test_process_batch_fires_prompt_context_and_appends_to_the_prompt():
-    from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
     from plugins.discord.models.settings import SettingsStore
     seen = []
 
@@ -142,7 +141,6 @@ def test_process_batch_fires_prompt_context_and_appends_to_the_prompt():
     service = ConversationService(
         event_bridge=bridge, policy_service=FakePolicy(), prompt_context_service=FakeContext(),
         trace_repository=Traces(), settings_store=SettingsStore(),
-        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     assert service.process_batch(_batch()) is True

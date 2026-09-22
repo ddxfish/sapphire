@@ -27,7 +27,6 @@ class TextMessageObservation(BaseObservation):
     author_is_bot: bool = False
     mention_user_ids: list[str] = field(default_factory=list)
     name_matched: bool = False
-    follow_up_hints: list[str] = field(default_factory=list)
     attachments: list[dict] = field(default_factory=list)
     slash_command: str = ''
     reply_to_message_id: str = ''

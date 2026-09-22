@@ -2,12 +2,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from plugins.discord.cognition.world_model_service import WorldModelService
 from plugins.discord.conversation.media_service import MediaService
-from plugins.discord.storage.repositories.channels import ChannelRepository
 from plugins.discord.storage.repositories.media import MediaRepository
-from plugins.discord.storage.repositories.messages import MessageRepository
-from plugins.discord.storage.repositories.tasks import TaskRepository
 from plugins.discord.storage.sqlite import SQLiteService
 from plugins.discord.models.observations import TextMessageObservation, TypingObservation
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
@@ -85,15 +81,10 @@ class FakeMediaGloballyDisabledSettingsStore:
         return SimpleNamespace(media=SimpleNamespace(enabled=False, image_understanding_enabled=True))
 
 
-def _world(tmp_path):
+def _sqlite(tmp_path):
     sqlite = SQLiteService(tmp_path / 'event-adapter.sqlite3')
     sqlite.start()
-    return WorldModelService(
-        channel_repository=ChannelRepository(sqlite),
-        message_repository=MessageRepository(sqlite),
-        task_repository=TaskRepository(sqlite),
-        trace_repository=None,
-    )
+    return sqlite
 
 
 def _message_with_image():
@@ -173,15 +164,14 @@ def test_adapt_dm_typing_event():
 
 
 def test_adapt_message_records_media_without_observation_row(tmp_path):
-    world = _world(tmp_path)
+    sqlite = _sqlite(tmp_path)
     media_service = MediaService(
-        media_repository=MediaRepository(world.channel_repository.sqlite_service),
+        media_repository=MediaRepository(sqlite),
         vision_bridge=FakeVisionBridge(),
     )
     adapter = DiscordEventAdapter(
         message_repository=FakeMessageRepo(),
         trace_repository=FakeTraceRepo(),
-        world_model_service=world,
         media_service=media_service,
         settings_store=FakeSettingsStore(),
     )
@@ -195,7 +185,7 @@ def test_adapt_message_records_media_without_observation_row(tmp_path):
     assert stored[0]['interpretation']['summary'] == 'a cat picture'
 
     # Observation writes were removed (tier-2 strip) — media lives only in media_repository.
-    rows = world.channel_repository.sqlite_service.connection().execute(
+    rows = sqlite.connection().execute(
         "SELECT payload_json FROM observations WHERE observation_type = 'media_observation'"
     ).fetchall()
     assert rows == []
@@ -288,7 +278,6 @@ def test_adapt_message_records_media_failure_and_fallback_traces_when_vision_rai
 
 
 def test_adapt_message_skips_media_pipeline_when_media_disabled(tmp_path):
-    world = _world(tmp_path)
     sqlite = SQLiteService(tmp_path / 'media-disabled.sqlite3')
     sqlite.start()
     trace_repo = FakeTraceRepo()
@@ -299,7 +288,6 @@ def test_adapt_message_skips_media_pipeline_when_media_disabled(tmp_path):
     adapter = DiscordEventAdapter(
         message_repository=FakeMessageRepo(),
         trace_repository=trace_repo,
-        world_model_service=world,
         media_service=media_service,
         settings_store=FakeMediaGloballyDisabledSettingsStore(),
     )
@@ -308,7 +296,7 @@ def test_adapt_message_skips_media_pipeline_when_media_disabled(tmp_path):
 
     assert isinstance(obs, TextMessageObservation)
     assert media_service.media_repository.get_by_message('111') == []
-    rows = world.channel_repository.sqlite_service.connection().execute(
+    rows = sqlite.connection().execute(
         "SELECT payload_json FROM observations WHERE observation_type = 'media_observation'"
     ).fetchall()
     assert rows == []
@@ -321,15 +309,14 @@ def test_adapt_message_can_defer_media_interpretation(tmp_path):
     # C2 (hunt 2026-09-12): the transport adapts on the daemon loop with
     # interpret_media=False and runs interpret_media() on a worker thread, so
     # the attachment fetch + vision call never block the loop.
-    world = _world(tmp_path)
+    sqlite = _sqlite(tmp_path)
     media_service = MediaService(
-        media_repository=MediaRepository(world.channel_repository.sqlite_service),
+        media_repository=MediaRepository(sqlite),
         vision_bridge=FakeVisionBridge(),
     )
     adapter = DiscordEventAdapter(
         message_repository=FakeMessageRepo(),
         trace_repository=FakeTraceRepo(),
-        world_model_service=world,
         media_service=media_service,
         settings_store=FakeSettingsStore(),
     )

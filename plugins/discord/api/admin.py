@@ -24,14 +24,7 @@ def forget_user(**kwargs):
     user_id = str(body.get('user_id', '')).strip()
     if not account_name or not user_id:
         return {'error': 'account_name and user_id required'}
-    return runtime.retention_service.forget_user(
-        account_name,
-        user_id,
-        memory_repository=runtime.memory_repository,
-        profile_repository=runtime.profile_repository,
-        milestone_repository=getattr(runtime, 'milestone_repository', None),
-        interest_repository=getattr(runtime, 'interest_repository', None),
-    )
+    return runtime.retention_service.forget_user(account_name, user_id)
 
 
 def operator_summary(**kwargs):
@@ -46,7 +39,6 @@ def operator_summary(**kwargs):
     summary = {
         'health': runtime.health.as_dict(),
         'trace_summary': runtime.trace_service.summary() if runtime.trace_service else {},
-        'active_tasks': runtime.world_model_service.list_tasks(account, status='pending', limit=10) if runtime.world_model_service and account else [],
         'voice_sessions': [
             session.to_dict()
             for session in (runtime.voice_session_service.list_active(account) if runtime.voice_session_service and account else [])

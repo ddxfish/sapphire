@@ -192,8 +192,6 @@ function renderShell(container, data) {
 
   const replyProvider = values['cognitive.llm_primary'] || 'auto';
   const replyModel = values['cognitive.llm_model'] || '';
-  const distillProvider = values['profile.distill_model_provider'] || '';
-  const distillModel = values['profile.distill_model_name'] || '';
   const voiceProvider = values['voice.llm_provider'] || '';
   const voiceModel = values['voice.llm_model'] || '';
   const visionProvider = values['media.vision_llm_provider'] || '';
@@ -259,15 +257,6 @@ function renderShell(container, data) {
           autoLabel: 'Daemon chooses (default)',
         })}
         ${llmProviderBlockHtml({
-          prefix: 'dcg-distill-llm',
-          label: 'Ambient distill LLM',
-          help: 'LLM used when Memory → Learn from ambient chat is on. Extracts durable personal facts into the plugin DB. Defaults to Reply LLM when unset.',
-          providerField: 'profile.distill_model_provider',
-          modelField: 'profile.distill_model_name',
-          providerValue: distillProvider || replyProvider,
-          modelValue: distillModel || replyModel,
-        })}
-        ${llmProviderBlockHtml({
           prefix: 'dcg-voice-llm',
           label: 'Voice LLM',
           help: 'Override for live voice-channel replies. A fast non-thinking model keeps turns snappy. Default leaves the voice chat on its own settings. Takes effect on next /voice join.',
@@ -313,83 +302,10 @@ function renderShell(container, data) {
       </div>
   `;
 
-  const memorySection = `
-      <div class="dcg-section">
-        <h4>People She Knows</h4>
-        <div class="dcg-help">Per-user memory for the selected bot — names, facts, interests, relationship milestones. Stored in the plugin's own database, never in her core Mind. Soft-forget hides one fact; Forget permanently deletes everything about that user.</div>
-        <div class="dcg-target-toolbar">
-          <select class="dcg-select" id="dcg-mem-account"></select>
-          <button type="button" class="dcg-btn" id="dcg-mem-refresh">Refresh</button>
-          <span class="dcg-help" id="dcg-mem-status"></span>
-        </div>
-        <div id="dcg-mem-list" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Loading…</p>
-        </div>
-      </div>
-      <div class="dcg-section">
-        <h4>Ambient distill review</h4>
-        <div class="dcg-help">Unpinned facts learned from ambient chat (source <code>ambient_distill</code>). <strong>Pin</strong> keeps them; <strong>Soft-forget</strong> hides junk without wiping the person.</div>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-distill-review-refresh">Refresh queue</button>
-          <label class="dcg-help" style="display:inline-flex;gap:6px;align-items:center">
-            <input type="checkbox" id="dcg-distill-review-include-pinned" /> Include already pinned
-          </label>
-          <span class="dcg-help" id="dcg-distill-review-status"></span>
-        </div>
-        <div id="dcg-distill-review-list" class="dcg-debug-list">
-          <p class="dcg-help" style="margin:0">Loading…</p>
-        </div>
-      </div>
-      <div class="dcg-section">
-        <h4>Shared Server Lore</h4>
-        <div class="dcg-help">Guild/channel facts (“deploy day is Thursday”) shared across the server — separate from per-user profiles. Pick a server (and optional channel) from connected Discord guilds.</div>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-lore-targets-refresh">Refresh servers</button>
-          <span class="dcg-help" id="dcg-lore-targets-status"></span>
-        </div>
-        <div class="dcg-row" style="gap:8px;flex-wrap:wrap;margin:8px 0">
-          <select class="dcg-select" id="dcg-lore-guild" style="min-width:180px;flex:1">
-            <option value="">All servers / no filter</option>
-          </select>
-          <select class="dcg-select" id="dcg-lore-channel" style="min-width:180px;flex:1">
-            <option value="">Whole server (guild-wide)</option>
-          </select>
-          <input class="dcg-input" id="dcg-lore-content" placeholder="New lore fact" style="min-width:220px;flex:2" />
-          <button type="button" class="dcg-btn" id="dcg-lore-add">Add lore</button>
-          <button type="button" class="dcg-btn" id="dcg-lore-refresh">Refresh list</button>
-        </div>
-        <label class="dcg-help" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <input type="checkbox" id="dcg-lore-show-forgotten" /> Show soft-forgotten
-        </label>
-        <div id="dcg-lore-list" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">No lore yet.</p>
-        </div>
-      </div>
-      <div class="dcg-section">
-        <h4>Memory test pathways</h4>
-        <div class="dcg-help">Dry-run helpers that write into the plugin SQLite only — useful for verifying milestones, lore, interest graphs, ambient distill, and prompt context without waiting for live chat.</div>
-        <div class="dcg-row" style="gap:8px;flex-wrap:wrap;margin:8px 0">
-          <input class="dcg-input" id="dcg-mem-test-user" placeholder="User id for tests" style="min-width:160px;flex:1" />
-          <select class="dcg-select" id="dcg-mem-test-guild" style="min-width:180px;flex:1">
-            <option value="">Guild for lore/context tests</option>
-          </select>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
-          <button type="button" class="dcg-btn" id="dcg-mem-test-milestone">Seed milestone</button>
-          <button type="button" class="dcg-btn" id="dcg-mem-test-interact">Simulate return + interests</button>
-          <button type="button" class="dcg-btn" id="dcg-mem-test-lore">Seed lore</button>
-          <button type="button" class="dcg-btn" id="dcg-mem-test-interest">Seed interest</button>
-          <button type="button" class="dcg-btn" id="dcg-mem-test-context">Preview context</button>
-          <button type="button" class="dcg-btn" id="dcg-mem-test-distill">Run ambient distill</button>
-        </div>
-        <pre id="dcg-mem-test-output" class="dcg-help" style="white-space:pre-wrap;margin:0;max-height:220px;overflow:auto">Run a test to see results.</pre>
-      </div>
-  `;
-
   const allowlistSection = `
       <div class="dcg-section">
         <h4>Ignored channels</h4>
-        <p class="dcg-help">Fully ignore these text channels: no replies, reactions, ambient learning from them, or scheduled posts. Save after changing.</p>
+        <p class="dcg-help">Fully ignore these text channels: no replies, reactions, or scheduled posts. Save after changing.</p>
         <div id="dcg-ignore-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
         <div class="dcg-target-toolbar">
           <button type="button" class="dcg-btn" id="dcg-ignore-refresh">Refresh from Discord</button>
@@ -450,20 +366,8 @@ function renderShell(container, data) {
 
   const debugSection = `
       <div class="dcg-section">
-        <h4>Cognition preview</h4>
-        <p class="dcg-help">Live social judgment from the daemon: last channel situations, intention scores (reply / react / silent), and gate multipliers. Empty until chat or outreach runs with Cognition settings on.</p>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-cognition-refresh">Refresh now</button>
-          <span class="dcg-help" id="dcg-cognition-status"></span>
-        </div>
-        <div id="dcg-cognition-flags" class="dcg-help" style="margin:6px 0 10px"></div>
-        <div id="dcg-cognition-panel">
-          <p class="dcg-help" style="margin:0">Loading…</p>
-        </div>
-      </div>
-      <div class="dcg-section">
         <h4>Decision traces</h4>
-        <p class="dcg-help">Recent world-model / policy / delivery traces — why she replied, stayed quiet, skipped outreach, distilled facts, etc. Filter by type optional.</p>
+        <p class="dcg-help">Recent policy / delivery traces — why she replied, stayed quiet, skipped outreach, etc. Filter by type optional.</p>
         <div class="dcg-target-toolbar">
           <select class="dcg-select" id="dcg-traces-filter" style="min-width:180px">
             <option value="">All types</option>
@@ -499,7 +403,6 @@ function renderShell(container, data) {
     { tab: 'Voice', mount: (el) => { el.innerHTML = voiceJoinSection; } },
     { tab: 'Voice', mount: (el) => { el.innerHTML = voicePromptSection; } },
     { tab: 'Media', mount: (el) => { el.innerHTML = visionLlmSection; } },
-    { tab: 'Memory', mount: (el) => { el.innerHTML = memorySection; } },
     { tab: 'Debug', mount: (el) => { el.innerHTML = debugSection; } },
   ];
 
@@ -523,10 +426,7 @@ function renderShell(container, data) {
     voicePromptField.dataset.defaultTemplate = voicePromptDefault;
   }
   bindAccounts(container);
-  initMemoryBrowser(container, data.accounts?.accounts || []);
-  initDistillReviewPanel(container, data.accounts?.accounts || []);
   initDebugPanel(container, data.llmDebug?.entries || []);
-  initCognitionPanel(container, data.cognitionDebug || null);
   initTracesPanel(container, data.traces || null);
   initIgnoredChannelPicker(container, ignoredChannels);
   initBotAllowlistPicker(container, allowlistIds);
@@ -537,12 +437,6 @@ function renderShell(container, data) {
       providerKey: replyProvider,
       modelName: replyModel,
       autoLabel: 'Daemon chooses (default)',
-    },
-    distill: {
-      prefix: 'dcg-distill-llm',
-      providerKey: distillProvider || replyProvider,
-      modelName: distillModel || replyModel,
-      inheritsReply: !distillProvider,
     },
     voice: {
       prefix: 'dcg-voice-llm',
@@ -561,9 +455,6 @@ function renderShell(container, data) {
 
 let _LLM_PROVIDERS = [];
 let _LLM_METADATA = {};
-const _llmInheritState = {
-  distillInheritsReply: false,
-};
 
 async function loadLlmProviders() {
   const response = await fetch('/api/llm/providers');
@@ -674,18 +565,6 @@ function syncLlmModelField(container, prefix) {
   }
 }
 
-function syncInheritedLlmBlocks(container) {
-  if (_llmInheritState.distillInheritsReply) {
-    const reply = readLlmBlockValues(container, 'dcg-llm');
-    const distill = llmBlockElements(container, 'dcg-distill-llm');
-    if (distill.primary) {
-      distill.primary.innerHTML = llmProviderOptionsHtml(reply.provider);
-      distill.primary.value = reply.provider;
-      updateLlmModelSelector(container, 'dcg-distill-llm', reply.provider, reply.model);
-    }
-  }
-}
-
 function initLlmProviderBlock(container, { prefix, providerKey, modelName, onProviderChange, autoLabel }) {
   const els = llmBlockElements(container, prefix);
   if (!els.primary) return;
@@ -729,20 +608,7 @@ function initLlmProviderBlock(container, { prefix, providerKey, modelName, onPro
 }
 
 function initLlmProviderBlocks(container, blocks) {
-  _llmInheritState.distillInheritsReply = !!blocks.distill?.inheritsReply;
-
-  initLlmProviderBlock(container, {
-    ...blocks.reply,
-    onProviderChange: () => syncInheritedLlmBlocks(container),
-  });
-  if (blocks.distill) {
-    initLlmProviderBlock(container, {
-      ...blocks.distill,
-      onProviderChange: () => {
-        _llmInheritState.distillInheritsReply = false;
-      },
-    });
-  }
+  initLlmProviderBlock(container, { ...blocks.reply });
   if (blocks.voice) {
     initLlmProviderBlock(container, { ...blocks.voice });
   }
@@ -751,30 +617,12 @@ function initLlmProviderBlocks(container, blocks) {
   }
 }
 
-// Inheritance blanking on the flat dotted keyspace: when the distill block
-// matches what it would inherit anyway, store '' so it keeps following.
-function applyProactiveLlmInheritance(flat) {
-  const replyProvider = flat['cognitive.llm_primary'] || 'auto';
-  const replyModel = flat['cognitive.llm_model'] || '';
-
-  if ((flat['profile.distill_model_provider'] || 'auto') === replyProvider
-    && (flat['profile.distill_model_name'] || '') === replyModel) {
-    flat['profile.distill_model_provider'] = '';
-    flat['profile.distill_model_name'] = '';
-  }
-}
-
 const ignoredChannelCatalog = {};
 let ignoredChannelSelection = new Set();
-/** Cached channels/text rows for Memory lore dropdowns: account -> targets[] */
-const loreTargetsByAccount = {};
-const loreGuildNames = {};
-const loreChannelNames = {};
 
 // ── LLM debug panel (Debug tab slot) ──
 
 let _debugRefreshTimer = null;
-let _cognitionRefreshTimer = null;
 
 function debugStatusBadge(status) {
   const normalized = String(status || 'pending').toLowerCase();
@@ -865,7 +713,6 @@ Reason: ${esc(rejection.reason || 'blocked')}${Object.keys(rejection.detail || {
         <div class="dcg-debug-block">${esc(prompt.user_content || '—')}</div>
         ${history ? `<div class="dcg-debug-label">Prompt — recent history</div><div class="dcg-debug-block">${esc(history)}</div>` : ''}
         ${hints ? `<div class="dcg-debug-label">Prompt — reply hints</div><div class="dcg-debug-block">${esc(hints)}</div>` : ''}
-        ${prompt.memory_recalled || prompt.memory_pinned ? `<div class="dcg-debug-label">Prompt — memory</div><div class="dcg-debug-block">Recalled: ${Number(prompt.memory_recalled) || 0} · Pinned: ${Number(prompt.memory_pinned) || 0}${prompt.profile_summary ? `\nProfile: ${esc(prompt.profile_summary)}` : ''}</div>` : ''}
         <div class="dcg-debug-label">LLM response (raw)</div>
         <div class="dcg-debug-block">${esc(response.raw || '—')}</div>
         ${(response.parsed_chunks || []).length > 1 ? `<div class="dcg-debug-label">Parsed chunks</div><div class="dcg-debug-block">${esc((response.parsed_chunks || []).join('\n---\n'))}</div>` : ''}
@@ -921,107 +768,6 @@ function initDebugPanel(container, initialEntries = []) {
   _debugRefreshTimer = setInterval(() => {
     if (container.isConnected) refreshDebugPanel(container);
   }, 15000);
-}
-
-function formatSilence(seconds) {
-  const s = Number(seconds) || 0;
-  if (s >= 3600) return `${(s / 3600).toFixed(1)}h quiet`;
-  if (s >= 60) return `${Math.round(s / 60)}m quiet`;
-  return `${Math.round(s)}s quiet`;
-}
-
-function renderCognitionPanel(panelEl, flagsEl, data) {
-  if (!panelEl) return;
-  const settings = data?.settings || {};
-  if (flagsEl) {
-    const flags = [
-      settings.situation_enabled ? 'situation on' : 'situation off',
-      settings.situation_in_prompt ? 'prompt inject' : 'no prompt inject',
-      settings.intention_competition_enabled ? 'competition on' : 'competition off',
-      settings.relationship_policy_enabled
-        ? `relationship ${settings.relationship_policy_strength || 'normal'}`
-        : 'relationship off',
-    ];
-    flagsEl.textContent = `Flags: ${flags.join(' · ')}`;
-  }
-  const situations = data?.situations || [];
-  const intentions = data?.intentions || [];
-  const gates = data?.gates || [];
-    if (!situations.length && !intentions.length && !gates.length) {
-    panelEl.innerHTML = '<p class="dcg-help" style="margin:0">No cognition events yet. Chat with her, then Refresh.</p>';
-    return;
-  }
-  const sitHtml = situations.length
-    ? situations.slice(0, 8).map((s) => `
-        <details class="dcg-debug-entry">
-          <summary><span class="dcg-debug-badge dcg-debug-badge-pending">${esc(s.vibe || '—')}</span> ${esc(s.channel_name || s.channel_id || 'channel')} · mult ${esc(Number(s.organic_multiplier || 1).toFixed(2))}</summary>
-          <div class="dcg-debug-meta">${esc(s.account || '')} · ${esc(formatSilence(s.silence_seconds))} · heat ${esc(Number(s.heat || 0).toFixed(2))} · ${esc(Number(s.message_count) || 0)} msgs · ${esc(formatDebugTimestamp(s.built_at))}</div>
-          <div class="dcg-debug-block">${esc(s.summary || '—')}${(s.recent_topics || []).length ? `\nTopics: ${(s.recent_topics || []).map(esc).join(', ')}` : ''}</div>
-        </details>`).join('')
-    : '<p class="dcg-help">No situations cached.</p>';
-  const intentHtml = intentions.length
-    ? intentions.slice(0, 10).map((i) => `
-        <details class="dcg-debug-entry">
-          <summary><span class="dcg-debug-badge ${i.kind === 'reply' ? 'dcg-debug-badge-ok' : 'dcg-debug-badge-warn'}">${esc(i.kind || '—')}</span> ${esc(i.username || 'someone')} · ${esc(i.channel_name || i.channel_id || '')}</summary>
-          <div class="dcg-debug-meta">${esc(formatDebugTimestamp(i.at))} · score ${esc(Number(i.score || 0).toFixed(3))} · ${esc(i.reason || '')} · vibe ${esc(i.situation_vibe || '—')}</div>
-          <div class="dcg-debug-block">organic×${esc(Number(i.organic_multiplier || 1).toFixed(2))} · react×${esc(Number(i.reaction_multiplier || 1).toFixed(2))}
-${i.relationship && Object.keys(i.relationship).length ? `Relationship: fam ${Number(i.relationship.familiarity || 0).toFixed(2)} · fond ${Number(i.relationship.fondness || 0).toFixed(2)}` : ''}</div>
-        </details>`).join('')
-    : '<p class="dcg-help">No intention scores yet (enable Intention competition, or wait for organic rolls to show under Gates).</p>';
-  const gateHtml = gates.length
-    ? gates.slice(0, 10).map((g) => `
-        <details class="dcg-debug-entry">
-          <summary>${esc(g.gate || 'gate')} · ${esc(g.channel_name || g.channel_id || '')}</summary>
-          <div class="dcg-debug-meta">${esc(formatDebugTimestamp(g.at))} · ${esc(g.account || '')}</div>
-          <div class="dcg-debug-block">${esc(JSON.stringify(g.detail || {}, null, 2))}</div>
-        </details>`).join('')
-    : '<p class="dcg-help">No gate events yet.</p>';
-  panelEl.innerHTML = `
-    <div class="dcg-debug-label">Last situations (per channel)</div>
-    <div class="dcg-debug-list">${sitHtml}</div>
-    <div class="dcg-debug-label" style="margin-top:12px">Recent intentions</div>
-    <div class="dcg-debug-list">${intentHtml}</div>
-    <div class="dcg-debug-label" style="margin-top:12px">Recent gates</div>
-    <div class="dcg-debug-list">${gateHtml}</div>
-  `;
-}
-
-async function refreshCognitionPanel(container) {
-  const panel = container.querySelector('#dcg-cognition-panel');
-  const flags = container.querySelector('#dcg-cognition-flags');
-  const status = container.querySelector('#dcg-cognition-status');
-  if (!panel) return;
-  if (status) status.textContent = 'Refreshing…';
-  try {
-    const data = await api('debug/cognition');
-    renderCognitionPanel(panel, flags, data);
-    if (status) {
-      status.textContent = data.daemon_running
-        ? `Updated ${new Date().toLocaleTimeString()} · daemon running`
-        : `Updated ${new Date().toLocaleTimeString()} · daemon offline`;
-    }
-  } catch (err) {
-    if (status) status.textContent = err.message;
-    panel.innerHTML = `<p class="dcg-help" style="margin:0;color:var(--error)">${esc(err.message)}</p>`;
-  }
-}
-
-function initCognitionPanel(container, initialData = null) {
-  const panel = container.querySelector('#dcg-cognition-panel');
-  const flags = container.querySelector('#dcg-cognition-flags');
-  const refreshBtn = container.querySelector('#dcg-cognition-refresh');
-  if (!panel) return;
-  if (initialData) renderCognitionPanel(panel, flags, initialData);
-  else panel.innerHTML = '<p class="dcg-help" style="margin:0">Loading…</p>';
-  refreshBtn?.addEventListener('click', () => refreshCognitionPanel(container));
-  if (_cognitionRefreshTimer) {
-    clearInterval(_cognitionRefreshTimer);
-    _cognitionRefreshTimer = null;
-  }
-  _cognitionRefreshTimer = setInterval(() => {
-    if (container.isConnected) refreshCognitionPanel(container);
-  }, 15000);
-  if (!initialData) refreshCognitionPanel(container);
 }
 
 let _tracesRefreshTimer = null;
@@ -1132,602 +878,6 @@ function initTracesPanel(container, initialData = null) {
     if (container.isConnected) refreshTracesPanel(container);
   }, 15000);
   if (!initialData) refreshTracesPanel(container);
-}
-
-function personLabel(row) {
-  return row.display_name || row.username || row.user_id || 'unknown';
-}
-
-function renderDistillReviewList(listEl, facts) {
-  if (!listEl) return;
-  if (!facts.length) {
-    listEl.innerHTML = '<p class="dcg-help" style="margin:0">No pending ambient facts — queue is clear (or distill has not run yet).</p>';
-    return;
-  }
-  listEl.innerHTML = facts.map((f) => `
-    <div class="dcg-debug-entry" style="padding:8px" data-fact-id="${esc(String(f.id))}">
-      <div class="dcg-debug-meta">${esc(personLabel(f))} · ${esc(f.source || 'ambient_distill')} · ${esc(formatDebugTimestamp(f.created_at))}${Number(f.pinned) ? ' · pinned' : ''}</div>
-      <div class="dcg-debug-block" style="margin-bottom:6px">${esc(f.content || '')}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button type="button" class="dcg-btn dcg-review-pin" data-id="${esc(String(f.id))}">${Number(f.pinned) ? 'Unpin' : 'Pin (approve)'}</button>
-        <button type="button" class="dcg-btn dcg-review-forget" data-id="${esc(String(f.id))}">Soft-forget</button>
-      </div>
-    </div>
-  `).join('');
-}
-
-async function refreshDistillReviewPanel(container) {
-  const list = container.querySelector('#dcg-distill-review-list');
-  const status = container.querySelector('#dcg-distill-review-status');
-  const accountSelect = container.querySelector('#dcg-mem-account');
-  const includePinned = container.querySelector('#dcg-distill-review-include-pinned')?.checked;
-  if (!list) return;
-  const account = accountSelect?.value || '';
-  if (!account) {
-    list.innerHTML = '<p class="dcg-help" style="margin:0">Select a bot account above.</p>';
-    return;
-  }
-  if (status) status.textContent = 'Loading…';
-  try {
-    const pending = includePinned ? '0' : '1';
-    const data = await api(`profiles/facts/review?account=${encodeURIComponent(account)}&pending_only=${pending}&limit=40`);
-    renderDistillReviewList(list, data.facts || []);
-    list.querySelectorAll('.dcg-review-pin').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          const pinned = btn.textContent.includes('Unpin');
-          await api('profiles/facts/update', {
-            method: 'POST',
-            body: JSON.stringify({ fact_id: Number(btn.dataset.id), action: pinned ? 'unpin' : 'pin' }),
-          });
-          await refreshDistillReviewPanel(container);
-        } catch (err) {
-          if (status) status.textContent = err.message;
-        }
-      });
-    });
-    list.querySelectorAll('.dcg-review-forget').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          await api('profiles/facts/update', {
-            method: 'POST',
-            body: JSON.stringify({ fact_id: Number(btn.dataset.id), action: 'soft_forget' }),
-          });
-          await refreshDistillReviewPanel(container);
-        } catch (err) {
-          if (status) status.textContent = err.message;
-        }
-      });
-    });
-    if (status) status.textContent = `${(data.facts || []).length} fact(s)`;
-  } catch (err) {
-    if (status) status.textContent = err.message;
-    list.innerHTML = `<p class="dcg-help" style="margin:0;color:var(--error)">${esc(err.message)}</p>`;
-  }
-}
-
-function initDistillReviewPanel(container, accounts) {
-  const list = container.querySelector('#dcg-distill-review-list');
-  if (!list) return;
-  const refreshBtn = container.querySelector('#dcg-distill-review-refresh');
-  const includePinned = container.querySelector('#dcg-distill-review-include-pinned');
-  const accountSelect = container.querySelector('#dcg-mem-account');
-  refreshBtn?.addEventListener('click', () => refreshDistillReviewPanel(container));
-  includePinned?.addEventListener('change', () => refreshDistillReviewPanel(container));
-  accountSelect?.addEventListener('change', () => refreshDistillReviewPanel(container));
-  if ((accounts || []).length) refreshDistillReviewPanel(container);
-  else list.innerHTML = '<p class="dcg-help" style="margin:0">Add a bot account first.</p>';
-}
-
-// ── Memory browser (Memory tab slot) ──
-
-function memoryUserLabel(row) {
-  return row.display_name || row.username || row.birthday_display_name
-    || row.birthday_username || row.user_id;
-}
-
-function initMemoryBrowser(container, accounts) {
-  const select = container.querySelector('#dcg-mem-account');
-  const list = container.querySelector('#dcg-mem-list');
-  const status = container.querySelector('#dcg-mem-status');
-  if (!select || !list) return;
-
-  const names = (accounts || []).map((a) => a.name).filter(Boolean);
-  select.innerHTML = names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')
-    || '<option value="">no bots configured</option>';
-
-  const setStatus = (text) => { if (status) status.textContent = text || ''; };
-
-  const factActions = (fact) => `
-    <span style="display:inline-flex;gap:4px;margin-left:8px">
-      <button type="button" class="dcg-btn dcg-fact-pin" data-id="${fact.id}" data-pinned="${Number(fact.pinned) ? '1' : '0'}">${Number(fact.pinned) ? 'Unpin' : 'Pin'}</button>
-      <button type="button" class="dcg-btn dcg-fact-edit" data-id="${fact.id}">Edit</button>
-      <button type="button" class="dcg-btn dcg-fact-soft" data-id="${fact.id}">Soft-forget</button>
-    </span>`;
-
-  const bindFactButtons = (box, account, userId, reloadFacts) => {
-    box.querySelectorAll('.dcg-fact-pin').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          const pinned = btn.dataset.pinned === '1';
-          await api('profiles/facts/update', {
-            method: 'POST',
-            body: JSON.stringify({ fact_id: Number(btn.dataset.id), action: pinned ? 'unpin' : 'pin' }),
-          });
-          await reloadFacts();
-        } catch (err) { setStatus(`Pin failed: ${err.message}`); }
-      });
-    });
-    box.querySelectorAll('.dcg-fact-edit').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const row = btn.closest('.dcg-fact-row');
-        const current = row?.dataset.content || '';
-        const next = window.prompt('Edit fact', current);
-        if (next == null || !String(next).trim()) return;
-        try {
-          await api('profiles/facts/update', {
-            method: 'POST',
-            body: JSON.stringify({ fact_id: Number(btn.dataset.id), action: 'edit', content: String(next).trim() }),
-          });
-          await reloadFacts();
-        } catch (err) { setStatus(`Edit failed: ${err.message}`); }
-      });
-    });
-    box.querySelectorAll('.dcg-fact-soft').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          await api('profiles/facts/update', {
-            method: 'POST',
-            body: JSON.stringify({ fact_id: Number(btn.dataset.id), action: 'soft_forget' }),
-          });
-          await reloadFacts();
-        } catch (err) { setStatus(`Soft-forget failed: ${err.message}`); }
-      });
-    });
-    box.querySelectorAll('.dcg-fact-restore').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          await api('profiles/facts/update', {
-            method: 'POST',
-            body: JSON.stringify({ fact_id: Number(btn.dataset.id), action: 'restore' }),
-          });
-          await reloadFacts();
-        } catch (err) { setStatus(`Restore failed: ${err.message}`); }
-      });
-    });
-    box.querySelector('#dcg-fact-add')?.addEventListener('click', async () => {
-      const input = box.querySelector('#dcg-fact-new');
-      const content = input?.value?.trim();
-      if (!content) return;
-      try {
-        await api('profiles/facts', {
-          method: 'POST',
-          body: JSON.stringify({ account: account, user_id: userId, content }),
-        });
-        if (input) input.value = '';
-        await reloadFacts();
-      } catch (err) { setStatus(`Add fact failed: ${err.message}`); }
-    });
-  };
-
-  const renderFactPanel = async (box, account, userId) => {
-    box.innerHTML = '<span class="dcg-help">Loading…</span>';
-    try {
-      const [factsData, milesData, interestData] = await Promise.all([
-        api(`profiles/facts?account=${encodeURIComponent(account)}&user=${encodeURIComponent(userId)}&include_forgotten=1`),
-        api(`profiles/milestones?account=${encodeURIComponent(account)}&user=${encodeURIComponent(userId)}`),
-        api(`profiles/interests?account=${encodeURIComponent(account)}&user=${encodeURIComponent(userId)}`),
-      ]);
-      const facts = factsData.facts || [];
-      const milestones = milesData.milestones || [];
-      const interests = interestData.interests || [];
-      const active = facts.filter((f) => !Number(f.forgotten));
-      const forgotten = facts.filter((f) => Number(f.forgotten));
-      const factHtml = active.length
-        ? active.map((f) => `
-            <div class="dcg-fact-row dcg-help" data-content="${esc(f.content)}" style="margin:4px 0">
-              ${Number(f.pinned) ? '📌 ' : '• '}${esc(f.content)}
-              <em>(${esc(f.source || '')})</em>${factActions(f)}
-            </div>`).join('')
-        : '<div class="dcg-help">No stored facts.</div>';
-      const forgottenHtml = forgotten.length
-        ? `<details style="margin-top:6px"><summary class="dcg-help">Soft-forgotten (${forgotten.length})</summary>${
-            forgotten.map((f) => `
-              <div class="dcg-fact-row dcg-help" data-content="${esc(f.content)}" style="margin:4px 0;opacity:.7">
-                • ${esc(f.content)}
-                <button type="button" class="dcg-btn dcg-fact-restore" data-id="${f.id}">Restore</button>
-              </div>`).join('')
-          }</details>`
-        : '';
-      const mileHtml = milestones.length
-        ? `<div class="dcg-help" style="margin-top:8px"><strong>Milestones</strong><br>${
-            milestones.map((m) => `• ${esc(m.detail || m.milestone_type)}${Number(m.acknowledged) ? '' : ' <em>(pending)</em>'}`).join('<br>')
-          }</div>`
-        : '<div class="dcg-help" style="margin-top:8px">No milestones yet.</div>';
-      const interestHtml = interests.length
-        ? `<div class="dcg-help" style="margin-top:8px"><strong>Interests</strong><br>${
-            interests.map((t) => `• ${esc(t.topic)} <em>(w=${Number(t.weight).toFixed(1)}, n=${t.mention_count})</em>`).join('<br>')
-          }</div>`
-        : '<div class="dcg-help" style="margin-top:8px">No interest topics yet.</div>';
-      box.innerHTML = `
-        ${factHtml}
-        <div style="display:flex;gap:6px;margin-top:8px">
-          <input class="dcg-input" id="dcg-fact-new" placeholder="Add a fact…" style="flex:1" />
-          <button type="button" class="dcg-btn" id="dcg-fact-add">Add</button>
-        </div>
-        ${forgottenHtml}
-        ${mileHtml}
-        ${interestHtml}`;
-      bindFactButtons(box, account, userId, () => renderFactPanel(box, account, userId));
-    } catch (err) {
-      box.innerHTML = `<span class="dcg-status-err">${esc(err.message)}</span>`;
-    }
-  };
-
-  const renderRows = (profiles, account) => {
-    if (!profiles.length) {
-      list.innerHTML = '<p class="dcg-help" style="margin:0">No users in memory for this bot yet — she learns people as they talk.</p>';
-      return;
-    }
-    list.innerHTML = profiles.map((row) => {
-      const birthday = Number(row.birthday_month)
-        ? ` · 🎂 ${String(row.birthday_month).padStart(2, '0')}-${String(row.birthday_day).padStart(2, '0')}`
-        : '';
-      return `
-        <div class="dcg-mem-row" data-user="${esc(row.user_id)}" style="padding:6px 0;border-bottom:1px solid var(--border)">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-            <span><strong>${esc(memoryUserLabel(row))}</strong>
-              <span class="dcg-help">${Number(row.message_count) || 0} messages${birthday}</span></span>
-            <span style="display:flex;gap:6px">
-              <button type="button" class="dcg-btn dcg-mem-facts">Browse</button>
-              <button type="button" class="dcg-btn dcg-btn-danger dcg-mem-forget">Forget</button>
-            </span>
-          </div>
-          <div class="dcg-mem-fact-list" style="display:none;margin:6px 0 0 8px"></div>
-        </div>`;
-    }).join('');
-
-    list.querySelectorAll('.dcg-mem-facts').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const rowEl = btn.closest('.dcg-mem-row');
-        const box = rowEl.querySelector('.dcg-mem-fact-list');
-        if (box.style.display !== 'none') { box.style.display = 'none'; return; }
-        box.style.display = 'block';
-        await renderFactPanel(box, account, rowEl.dataset.user);
-      });
-    });
-
-    list.querySelectorAll('.dcg-mem-forget').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const rowEl = btn.closest('.dcg-mem-row');
-        const label = rowEl.querySelector('strong')?.textContent || rowEl.dataset.user;
-        if (!window.confirm(`Forget everything about ${label}? This deletes their profile, facts, milestones, interests, and pinned memories.`)) return;
-        try {
-          const res = await api('admin/forget-user', {
-            method: 'POST',
-            body: JSON.stringify({ account_name: account, user_id: rowEl.dataset.user }),
-          });
-          // The route answers {error} at HTTP 200 when the daemon is down — the
-          // row used to vanish with "Forgot X." and nothing deleted (row 32).
-          if (res && res.error) throw new Error(res.error);
-          rowEl.remove();
-          setStatus(`Forgot ${label}.`);
-        } catch (err) {
-          setStatus(`Forget failed: ${err.message}`);
-        }
-      });
-    });
-  };
-
-  const loadList = async () => {
-    const account = select.value;
-    if (!account) {
-      list.innerHTML = '<p class="dcg-help" style="margin:0">Add a bot account first.</p>';
-      return;
-    }
-    setStatus('Loading…');
-    try {
-      const data = await api(`profiles?account=${encodeURIComponent(account)}`);
-      renderRows(data.profiles || [], account);
-      setStatus('');
-    } catch (err) {
-      setStatus(`Load failed: ${err.message}`);
-    }
-  };
-
-  const loreList = container.querySelector('#dcg-lore-list');
-  const loreGuildSelect = container.querySelector('#dcg-lore-guild');
-  const loreChannelSelect = container.querySelector('#dcg-lore-channel');
-  const loreTargetsStatus = container.querySelector('#dcg-lore-targets-status');
-  const testGuildSelect = container.querySelector('#dcg-mem-test-guild');
-
-  const loreScopeLabel = (guildId, channelId) => {
-    if (!guildId && !channelId) return 'all servers';
-    const guildName = loreGuildNames[guildId] || guildId || 'server';
-    if (!channelId) return `${guildName} (whole server)`;
-    const channelName = loreChannelNames[channelId] || channelId;
-    return `${guildName} · #${channelName}`;
-  };
-
-  const fillLoreGuildOptions = (account, { preserve = true } = {}) => {
-    const prevGuild = preserve ? (loreGuildSelect?.value || '') : '';
-    const prevTestGuild = preserve ? (testGuildSelect?.value || '') : '';
-    const targets = (loreTargetsByAccount[account] || []).filter((t) => t.account === account);
-    const guilds = [];
-    const seen = new Set();
-    targets.forEach((t) => {
-      if (!t.guild_id || seen.has(t.guild_id)) return;
-      seen.add(t.guild_id);
-      guilds.push({ id: t.guild_id, name: t.guild_name || t.guild_id });
-      loreGuildNames[t.guild_id] = t.guild_name || t.guild_id;
-      loreChannelNames[t.channel_id] = t.channel_name || t.channel_id;
-    });
-    guilds.sort((a, b) => a.name.localeCompare(b.name));
-    if (loreGuildSelect) {
-      loreGuildSelect.innerHTML = '<option value="">All servers / no filter</option>'
-        + guilds.map((g) => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
-      if (prevGuild && [...loreGuildSelect.options].some((o) => o.value === prevGuild)) {
-        loreGuildSelect.value = prevGuild;
-      }
-    }
-    if (testGuildSelect) {
-      testGuildSelect.innerHTML = '<option value="">Guild for lore/context tests</option>'
-        + guilds.map((g) => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
-      if (prevTestGuild && [...testGuildSelect.options].some((o) => o.value === prevTestGuild)) {
-        testGuildSelect.value = prevTestGuild;
-      } else if (!prevTestGuild && guilds.length) {
-        testGuildSelect.value = guilds[0].id;
-      }
-    }
-    fillLoreChannelOptions(account, { preserve });
-  };
-
-  const fillLoreChannelOptions = (account, { preserve = true } = {}) => {
-    if (!loreChannelSelect) return;
-    const prevChannel = preserve ? (loreChannelSelect.value || '') : '';
-    const guildId = loreGuildSelect?.value || '';
-    const targets = (loreTargetsByAccount[account] || []).filter((t) => t.account === account);
-    const channels = targets
-      .filter((t) => !guildId || t.guild_id === guildId)
-      .map((t) => ({ id: t.channel_id, name: t.channel_name || t.channel_id, guild_id: t.guild_id }));
-    // Dedup by channel id
-    const seen = new Set();
-    const unique = [];
-    channels.forEach((c) => {
-      if (!c.id || seen.has(c.id)) return;
-      seen.add(c.id);
-      unique.push(c);
-      loreChannelNames[c.id] = c.name;
-    });
-    unique.sort((a, b) => a.name.localeCompare(b.name));
-    const wholeLabel = guildId ? 'Whole server (guild-wide)' : 'Whole server (pick a server first)';
-    loreChannelSelect.innerHTML = `<option value="">${esc(wholeLabel)}</option>`
-      + (guildId
-        ? unique.map((c) => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('')
-        : '');
-    if (prevChannel && [...loreChannelSelect.options].some((o) => o.value === prevChannel)) {
-      loreChannelSelect.value = prevChannel;
-    } else {
-      loreChannelSelect.value = '';
-    }
-  };
-
-  const loadLoreTargets = async () => {
-    const account = select.value;
-    if (!account) {
-      if (loreTargetsStatus) loreTargetsStatus.textContent = 'Select a bot account first.';
-      return;
-    }
-    if (loreTargetsStatus) loreTargetsStatus.textContent = 'Loading servers…';
-    try {
-      const data = await api('channels/text');
-      if (data.error && !(data.targets || []).length) throw new Error(data.error);
-      const all = data.targets || [];
-      const byAccount = {};
-      all.forEach((t) => {
-        if (!byAccount[t.account]) byAccount[t.account] = [];
-        byAccount[t.account].push(t);
-        if (t.guild_id) loreGuildNames[t.guild_id] = t.guild_name || t.guild_id;
-        if (t.channel_id) loreChannelNames[t.channel_id] = t.channel_name || t.channel_id;
-      });
-      Object.keys(loreTargetsByAccount).forEach((key) => { delete loreTargetsByAccount[key]; });
-      Object.assign(loreTargetsByAccount, byAccount);
-      fillLoreGuildOptions(account);
-      const count = (loreTargetsByAccount[account] || []).length;
-      const guildCount = new Set((loreTargetsByAccount[account] || []).map((t) => t.guild_id)).size;
-      if (loreTargetsStatus) {
-        loreTargetsStatus.textContent = count
-          ? `${guildCount} server${guildCount === 1 ? '' : 's'}, ${count} channel${count === 1 ? '' : 's'}`
-          : (data.error || 'No channels for this bot — connect it and refresh');
-      }
-    } catch (err) {
-      if (loreTargetsStatus) loreTargetsStatus.textContent = err.message || 'Failed to load servers';
-    }
-  };
-
-  const loadLore = async () => {
-    const account = select.value;
-    if (!loreList || !account) return;
-    const guild = loreGuildSelect?.value?.trim() || '';
-    const showForgotten = !!container.querySelector('#dcg-lore-show-forgotten')?.checked;
-    loreList.innerHTML = '<p class="dcg-help" style="margin:0">Loading…</p>';
-    try {
-      let path = `lore?account=${encodeURIComponent(account)}&include_forgotten=${showForgotten ? '1' : '0'}`;
-      if (guild) path += `&guild=${encodeURIComponent(guild)}`;
-      const data = await api(path);
-      const rows = data.lore || [];
-      if (!rows.length) {
-        loreList.innerHTML = '<p class="dcg-help" style="margin:0">No lore yet.</p>';
-        return;
-      }
-      loreList.innerHTML = rows.map((row) => {
-        const scope = loreScopeLabel(row.guild_id, row.channel_id);
-        const forgotten = Number(row.forgotten);
-        return `
-          <div class="dcg-lore-row" data-id="${row.id}" style="padding:6px 0;border-bottom:1px solid var(--border);${forgotten ? 'opacity:.65' : ''}">
-            <div>${Number(row.pinned) ? '📌 ' : ''}${esc(row.content)}
-              <span class="dcg-help"> · ${esc(scope)} · ${esc(row.source || '')}</span></div>
-            <div style="display:flex;gap:6px;margin-top:4px">
-              <button type="button" class="dcg-btn dcg-lore-pin">${Number(row.pinned) ? 'Unpin' : 'Pin'}</button>
-              <button type="button" class="dcg-btn dcg-lore-edit">Edit</button>
-              ${forgotten
-                ? '<button type="button" class="dcg-btn dcg-lore-restore">Restore</button>'
-                : '<button type="button" class="dcg-btn dcg-lore-soft">Soft-forget</button>'}
-            </div>
-          </div>`;
-      }).join('');
-      loreList.querySelectorAll('.dcg-lore-pin').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const row = btn.closest('.dcg-lore-row');
-          const pinned = btn.textContent === 'Pin';
-          await api('lore', {
-            method: 'POST',
-            body: JSON.stringify({ lore_id: Number(row.dataset.id), action: pinned ? 'pin' : 'unpin' }),
-          });
-          loadLore();
-        });
-      });
-      loreList.querySelectorAll('.dcg-lore-edit').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const row = btn.closest('.dcg-lore-row');
-          const current = row.querySelector('div')?.childNodes?.[0]?.textContent?.replace(/^📌\s*/, '').trim() || '';
-          const next = window.prompt('Edit lore', current);
-          if (next == null || !String(next).trim()) return;
-          await api('lore', {
-            method: 'POST',
-            body: JSON.stringify({ lore_id: Number(row.dataset.id), action: 'edit', content: String(next).trim() }),
-          });
-          loadLore();
-        });
-      });
-      loreList.querySelectorAll('.dcg-lore-soft').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const row = btn.closest('.dcg-lore-row');
-          await api('lore', {
-            method: 'POST',
-            body: JSON.stringify({ lore_id: Number(row.dataset.id), action: 'soft_forget' }),
-          });
-          loadLore();
-        });
-      });
-      loreList.querySelectorAll('.dcg-lore-restore').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const row = btn.closest('.dcg-lore-row');
-          await api('lore', {
-            method: 'POST',
-            body: JSON.stringify({ lore_id: Number(row.dataset.id), action: 'restore' }),
-          });
-          loadLore();
-        });
-      });
-    } catch (err) {
-      loreList.innerHTML = `<p class="dcg-status-err">${esc(err.message)}</p>`;
-    }
-  };
-
-  container.querySelector('#dcg-lore-add')?.addEventListener('click', async () => {
-    const account = select.value;
-    const content = container.querySelector('#dcg-lore-content')?.value?.trim();
-    const guildId = loreGuildSelect?.value?.trim() || '';
-    const channelId = loreChannelSelect?.value?.trim() || '';
-    if (!account || !content) { setStatus('Account and lore content required.'); return; }
-    if (channelId && !guildId) {
-      setStatus('Pick a server before attaching lore to a channel.');
-      return;
-    }
-    try {
-      await api('lore', {
-        method: 'POST',
-        body: JSON.stringify({
-          action: 'add',
-          account,
-          content,
-          guild_id: guildId,
-          channel_id: channelId,
-        }),
-      });
-      const input = container.querySelector('#dcg-lore-content');
-      if (input) input.value = '';
-      await loadLore();
-      setStatus(guildId
-        ? `Lore added for ${loreScopeLabel(guildId, channelId)}.`
-        : 'Lore added (no server scope).');
-    } catch (err) {
-      setStatus(`Add lore failed: ${err.message}`);
-    }
-  });
-  container.querySelector('#dcg-lore-refresh')?.addEventListener('click', loadLore);
-  container.querySelector('#dcg-lore-show-forgotten')?.addEventListener('change', loadLore);
-  container.querySelector('#dcg-lore-targets-refresh')?.addEventListener('click', loadLoreTargets);
-  loreGuildSelect?.addEventListener('change', () => {
-    fillLoreChannelOptions(select.value);
-    loadLore();
-  });
-
-  const testOut = container.querySelector('#dcg-mem-test-output');
-  const runMemoryTest = async (kind, extra = {}) => {
-    const account = select.value;
-    if (!account) { if (testOut) testOut.textContent = 'Select a bot account first.'; return; }
-    const userId = container.querySelector('#dcg-mem-test-user')?.value?.trim() || '';
-    const guildId = testGuildSelect?.value?.trim()
-      || loreGuildSelect?.value?.trim()
-      || 'test-guild';
-    if (testOut) testOut.textContent = `Running ${kind}…`;
-    try {
-      const data = await api('memory/test', {
-        method: 'POST',
-        body: JSON.stringify({ kind, account, user_id: userId, guild_id: guildId, ...extra }),
-      });
-      if (testOut) testOut.textContent = JSON.stringify(data, null, 2);
-      await loadList();
-      await loadLore();
-    } catch (err) {
-      if (testOut) testOut.textContent = `Test failed: ${err.message}`;
-    }
-  };
-  container.querySelector('#dcg-mem-test-milestone')?.addEventListener('click', () => runMemoryTest('milestone'));
-  container.querySelector('#dcg-mem-test-interact')?.addEventListener('click', () => runMemoryTest('simulate_interaction', {
-    count: 1,
-    gap_days: 21,
-    message_text: 'Been playing games and coding a python deploy',
-  }));
-  container.querySelector('#dcg-mem-test-lore')?.addEventListener('click', () => runMemoryTest('lore', {
-    content: 'Deploy day is Thursday',
-    pinned: true,
-  }));
-  container.querySelector('#dcg-mem-test-interest')?.addEventListener('click', () => runMemoryTest('interest', { topic: 'coding' }));
-  container.querySelector('#dcg-mem-test-context')?.addEventListener('click', () => runMemoryTest('context_preview'));
-  container.querySelector('#dcg-mem-test-distill')?.addEventListener('click', () => runMemoryTest('ambient_distill', {
-    seed_text: [
-      'I have a dog named Mochi and walk him every morning',
-      'I usually work night shifts so I sleep late',
-      'Been playing games and coding on python this week',
-      'Coffee over tea for me, always',
-      'My birthday is in March but we already know that maybe',
-      'Deploy day is Thursday on our team — wait that is server lore',
-      'I live with two cats as well actually',
-      'Prefer short replies in Discord chat',
-    ].join('\n'),
-  }));
-
-  select.addEventListener('change', () => {
-    fillLoreGuildOptions(select.value);
-    loadList();
-    loadLore();
-    loadLoreTargets();
-  });
-  container.querySelector('#dcg-mem-refresh')?.addEventListener('click', () => {
-    loadList();
-    loadLore();
-    loadLoreTargets();
-  });
-  if (names.length) {
-    loadList();
-    loadLore();
-    loadLoreTargets();
-  } else {
-    list.innerHTML = '<p class="dcg-help" style="margin:0">Add a bot account first.</p>';
-  }
 }
 
 function fieldByData(container, fieldId) {
@@ -2163,7 +1313,6 @@ function normalizedVoicePrompt(container) {
 // Flat dotted keys owned by the slot-mounted widget sections.
 function customSectionValues(container) {
   const reply = readLlmBlockValues(container, 'dcg-llm');
-  const distill = readLlmBlockValues(container, 'dcg-distill-llm');
   // Voice block was missing here — voice.llm_provider/llm_model never saved
   // from the UI (found during the 2026-08-05 slot conversion). ensure_voice_chat
   // treats ''/'auto' as hands-off, so persisting 'auto' is safe.
@@ -2172,8 +1321,6 @@ function customSectionValues(container) {
   const flat = {
     'cognitive.llm_primary': reply.provider,
     'cognitive.llm_model': reply.model,
-    'profile.distill_model_provider': distill.provider,
-    'profile.distill_model_name': distill.model,
     'voice.llm_provider': voice.provider,
     'voice.llm_model': voice.model,
     'media.vision_llm_provider': vision.provider,
@@ -2184,19 +1331,17 @@ function customSectionValues(container) {
     'voice.join_targets': [...voiceTargetSelection].sort(),
     'voice.conversation_prompt_template': normalizedVoicePrompt(container),
   };
-  applyProactiveLlmInheritance(flat);
   return flat;
 }
 
 async function loadPanelData() {
-  const [accounts, settings, health, summary, traces, llmDebug, cognitionDebug, plugins, values] = await Promise.allSettled([
+  const [accounts, settings, health, summary, traces, llmDebug, plugins, values] = await Promise.allSettled([
     api('accounts'),
     api('settings'), // daemon state + built-in defaults only — values live in core now
     api('health'),
     api('admin/summary'),
     api('traces'),
     api('debug/llm?limit=10'),
-    api('debug/cognition'),
     pluginsAPI.listPlugins(),
     pluginsAPI.getSettings(PLUGIN_NAME),
   ]);
@@ -2221,7 +1366,6 @@ async function loadPanelData() {
     summary: val(summary, {}),
     traces: val(traces, { traces: [] }),
     llmDebug: val(llmDebug, { entries: [] }),
-    cognitionDebug: val(cognitionDebug, null),
   };
 }
 
@@ -2255,7 +1399,7 @@ function registerTab() {
       // a failed Media/Voice slot mount returns fabricated
       // {provider:'auto'} values that would overwrite explicit pins on save.
       // Residual of the 2026-08-05 wipe-guard class.
-      const slotPrefixes = ['dcg-llm', 'dcg-distill-llm', 'dcg-voice-llm', 'dcg-vision-llm'];
+      const slotPrefixes = ['dcg-llm', 'dcg-voice-llm', 'dcg-vision-llm'];
       const missing = slotPrefixes.filter((p) => !container.querySelector(`#${p}-primary`));
       if (!box || missing.length) {
         throw new Error('Discord panel is still loading — wait a moment and save again.');

@@ -25,21 +25,6 @@ class SafetySettings:
 
 
 @dataclass
-class ProfileSettings:
-    enabled: bool = True
-    # Opt-in ambient chat → fact distill (plugin-local; not Sapphire core Mind).
-    ambient_distill_enabled: bool = False
-    ambient_distill_interval_hours: float = 1.0
-    ambient_distill_min_messages: int = 8
-    ambient_distill_max_facts: int = 3
-    distill_model_provider: str = ''
-    distill_model_name: str = ''
-    # Soft social modulation from relationship scores.
-    relationship_policy_enabled: bool = True
-    relationship_policy_strength: str = 'normal'  # subtle | normal | bold
-
-
-@dataclass
 class MediaSettings:
     enabled: bool = False
     gif_enabled: bool = False
@@ -145,15 +130,8 @@ class DeliverySettings:
 class CognitiveSettings:
     enabled: bool = True
     mode: str = 'integrated'
-    task_follow_up_enabled: bool = True
-    commitment_followups_enabled: bool = True
-    reminder_followups_enabled: bool = True
     llm_primary: str = 'auto'
     llm_model: str = ''
-    # Human world-model roadmap features
-    situation_enabled: bool = True
-    situation_in_prompt: bool = True
-    intention_competition_enabled: bool = False
     # Debug ring holds full prompts (other people's messages) in memory — opt in.
     llm_debug_enabled: bool = False
     # Side lanes (greeting, goodnight, distill, vision) in 'auto' mode pick
@@ -164,7 +142,6 @@ class CognitiveSettings:
 @dataclass
 class EffectiveSettings:
     safety: SafetySettings = field(default_factory=SafetySettings)
-    profile: ProfileSettings = field(default_factory=ProfileSettings)
     media: MediaSettings = field(default_factory=MediaSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
     retention: RetentionSettings = field(default_factory=RetentionSettings)
@@ -183,7 +160,6 @@ class EffectiveSettings:
 @dataclass
 class SettingsOverlay:
     safety: dict[str, Any] = field(default_factory=dict)
-    profile: dict[str, Any] = field(default_factory=dict)
     media: dict[str, Any] = field(default_factory=dict)
     voice: dict[str, Any] = field(default_factory=dict)
     retention: dict[str, Any] = field(default_factory=dict)

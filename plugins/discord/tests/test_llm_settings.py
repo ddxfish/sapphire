@@ -1,9 +1,8 @@
 from types import SimpleNamespace
 
-from plugins.discord.models.settings import CognitiveSettings, EffectiveSettings, ProfileSettings
+from plugins.discord.models.settings import CognitiveSettings, EffectiveSettings
 from plugins.discord.sapphire.llm_settings import (
     cognitive_llm_from_settings,
-    distill_llm_from_settings,
     llm_event_fields,
 )
 
@@ -37,16 +36,3 @@ def test_llm_event_fields_omits_blank_model():
 def test_cognitive_llm_from_settings():
     settings = SimpleNamespace(cognitive=CognitiveSettings(llm_primary='openai', llm_model='gpt-4o'))
     assert cognitive_llm_from_settings(settings) == ('openai', 'gpt-4o')
-
-
-def test_distill_llm_inherits_reply_then_override():
-    settings = EffectiveSettings(
-        cognitive=CognitiveSettings(llm_primary='ollama', llm_model='llama3.2'),
-        profile=ProfileSettings(),
-    )
-    assert distill_llm_from_settings(settings) == ('ollama', 'llama3.2')
-    settings.profile = ProfileSettings(
-        distill_model_provider='openai',
-        distill_model_name='gpt-4o-mini',
-    )
-    assert distill_llm_from_settings(settings) == ('openai', 'gpt-4o-mini')

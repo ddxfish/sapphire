@@ -88,7 +88,7 @@ def test_h4_emergency_switch_is_gone_and_old_stores_still_load():
     assert not hasattr(VoiceSettings(), 'emergency_disabled')
     assert 'emergency_disabled' not in _src('plugin.json')
     for rel in ('voice/auto_join_service.py', 'voice/voice_service.py', 'voice/voice_listener_service.py',
-                'voice/voice_conversation_service.py', 'cognition/policy_service.py'):
+                'voice/voice_conversation_service.py', 'conversation/policy_service.py'):
         assert 'emergency_disabled' not in _src(rel), rel
     # a settings.json written before the removal still loads — unknown keys drop
     overlay = SettingsOverlay.from_dict({'voice': {'enabled': True, 'emergency_disabled': True}})
@@ -128,15 +128,8 @@ def test_h5_payload_images_use_the_cache_only():
 def test_h6_ignore_check_runs_before_observation():
     src = _src('transport/discord_event_adapter.py')
     body = src[src.index('def adapt_message_event('):]
-    assert body.index('is_channel_ignored(') < body.index('record_text_observation(')
-    assert body.index('is_channel_ignored(') < body.index('scan_and_schedule(')
+    assert body.index('is_channel_ignored(') < body.index('save_message(')
     assert body.count("record_trace('event_dropped', 'Ignored channel'") == 1
-
-
-def test_h6_task_follow_up_respects_the_ignore_list():
-    src = _src('cognition/cognitive_orchestrator.py')
-    body = src[src.index('def _generate_task_follow_up('):]
-    assert 'is_channel_ignored(account_name, channel_id, settings)' in body
 
 
 # ── H7: a voice session summary is a record, not a scheduled post ──────────

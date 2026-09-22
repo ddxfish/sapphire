@@ -63,7 +63,7 @@ def test_user_hour_follows_config_timezone(monkeypatch):
     assert user_hour(now) == now.hour
 
 
-# ── rows 9 + 29: reach fails closed; memory reads carry the origin filter ──
+# ── row 9: reach fails closed ─────────────────────────────────────────────
 def test_reach_error_fails_closed_without_guild_id():
     from plugins.discord.tools import discord_tools as dt
     transport = SimpleNamespace(channel_reach_sync=lambda target, account_name=None: {'guild_id': 'g2', 'is_dm': False})
@@ -73,35 +73,6 @@ def test_reach_error_fails_closed_without_guild_id():
         assert dt._reach_error('1', 'bot') is None                 # the event channel itself
         err = dt._reach_error('2', 'bot')
         assert err and "can't tell which server" in err
-
-
-def test_event_for_guild_shapes():
-    from plugins.discord.tools.discord_tools import _event_for_guild
-    assert _event_for_guild({}) is None
-    assert _event_for_guild({'channel_id': '1', 'is_dm': True}) is None
-    assert _event_for_guild({'channel_id': '1', 'guild_id': 'g1'}) == 'g1'
-    assert _event_for_guild({'channel_id': '1', 'guild_id': ''}) == 'guild'
-
-
-def test_memory_reads_pass_origin_filter_source_tripwire():
-    src = (ROOT / 'plugins/discord/tools/discord_tools.py').read_text(encoding='utf-8')
-    assert 'list_facts(account_name, row[\'user_id\'], limit=20, for_guild=_event_for_guild(event))' in src
-    assert 'search_facts(account_name, query, limit=20, for_guild=_event_for_guild(event))' in src
-
-
-# ── row 8: no per-person memory reach on an authorless turn ────────────────
-def test_discord_memory_denies_authorless_event():
-    from plugins.discord.tools import discord_tools as dt
-    runtime = MagicMock()
-    with patch.object(dt, 'get_runtime', return_value=runtime), \
-         patch.object(dt, '_event_data', return_value={'channel_id': '1', 'account': 'bot'}), \
-         patch.object(dt, '_memory_enabled', return_value=True, create=True):
-        try:
-            text, ok = dt.discord_memory(action='search', user='someone')
-        except TypeError:
-            pytest.skip('discord_memory signature changed')
-        assert ok is False
-        assert 'scheduled post' in text
 
 
 # ── row 27: an unknown account never becomes "the first bot" ───────────────
@@ -169,15 +140,9 @@ def test_sweep_pending_drops_stale_rows():
 # ── row 15: prompt context keyed to the trigger, not observations[-1] ──────
 def test_prompt_context_uses_trigger_identity():
     from plugins.discord.conversation.prompt_context_service import PromptContextService
-    profile = MagicMock()
-    profile.build_context.return_value = {}
     repo = MagicMock()
     repo.get_recent_messages.return_value = []
-    svc = PromptContextService(
-        message_repository=repo, memory_service=None, profile_service=profile,
-        media_service=None, trace_service=None, edit_history_service=None,
-        channel_situation_service=None, settings_store=None,
-    )
+    svc = PromptContextService(message_repository=repo)
     def obs(author, mid):
         return SimpleNamespace(account_name='bot', channel_id='c1', channel_name='general', guild_name='G',
                                guild_id='g1', author_id=author, attachments=[], message_id=mid,
@@ -185,7 +150,6 @@ def test_prompt_context_uses_trigger_identity():
     alice, bob = obs('alice', 'm1'), obs('bob', 'm2')
     ctx = svc.build(SimpleNamespace(observations=[alice, bob]), trigger=alice)
     assert ctx['author_id'] == 'alice'
-    assert profile.build_context.call_args.args[1] == 'alice'
 
 
 # ── row 44: the settings store reloads in place ────────────────────────────

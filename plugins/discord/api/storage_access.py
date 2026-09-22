@@ -9,8 +9,6 @@ from typing import Iterator
 from plugins.discord.daemon import get_runtime
 from plugins.discord.storage.repositories.accounts import AccountRepository
 from plugins.discord.storage.repositories.channels import ChannelRepository
-from plugins.discord.storage.repositories.memory import MemoryRepository
-from plugins.discord.storage.repositories.profiles import ProfileRepository
 from plugins.discord.storage.repositories.traces import TraceRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
 from plugins.discord.models.settings import SettingsStore
@@ -21,8 +19,6 @@ class StorageBundle:
     sqlite_service: SQLiteService
     account_repository: AccountRepository
     channel_repository: ChannelRepository
-    memory_repository: MemoryRepository
-    profile_repository: ProfileRepository
     trace_repository: TraceRepository
     settings_store: SettingsStore
     owns_sqlite: bool = False
@@ -40,8 +36,6 @@ def _bundle_from_runtime(runtime) -> StorageBundle:
         sqlite_service=runtime.sqlite_service,
         account_repository=runtime.account_repository,
         channel_repository=runtime.channel_repository,
-        memory_repository=runtime.memory_repository,
-        profile_repository=runtime.profile_repository,
         trace_repository=runtime.trace_repository,
         settings_store=settings_store,
         owns_sqlite=False,
@@ -56,8 +50,6 @@ def _bundle_from_sqlite(sqlite: SQLiteService) -> StorageBundle:
         sqlite_service=sqlite,
         account_repository=AccountRepository(sqlite),
         channel_repository=channel_repository,
-        memory_repository=MemoryRepository(sqlite),
-        profile_repository=ProfileRepository(sqlite),
         trace_repository=TraceRepository(sqlite),
         settings_store=settings_store,
         owns_sqlite=True,

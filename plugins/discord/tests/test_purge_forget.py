@@ -10,8 +10,6 @@ from plugins.discord.runtime import retention_service as rs
 from plugins.discord.runtime.forget_service import ForgetService
 from plugins.discord.runtime.retention_service import RetentionService
 from plugins.discord.storage.repositories.accounts import AccountRepository
-from plugins.discord.storage.repositories.profile_buffers import ProfileBufferRepository
-from plugins.discord.storage.repositories.tasks import TaskRepository
 from plugins.discord.storage.sqlite import SQLiteService
 
 
@@ -127,16 +125,6 @@ def test_retention_forget_door_uses_the_one_service(tmp_path):
     assert _count(conn, 'voice_transcripts') == 0
 
 
-def test_processed_profile_buffers_are_deleted_not_flagged(tmp_path):
-    service = _service(tmp_path)
-    repo = ProfileBufferRepository(service)
-    a = repo.add('bot', 'u1', 'snippet one')
-    b = repo.add('bot', 'u1', 'snippet two')
-    assert repo.mark_processed([a]) == 1
-    assert _count(service.connection(), 'profile_buffers') == 1
-    assert [r['id'] for r in repo.list_unprocessed_for_user('bot', 'u1')] == [b]
-
-
 def test_account_delete_cascades(tmp_path):
     service = _service(tmp_path)
     conn = service.connection()
@@ -156,17 +144,6 @@ def test_account_delete_cascades(tmp_path):
     for table in ('user_profiles', 'tasks', 'voice_sessions', 'presence_state'):
         assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE account_name = 'a1'").fetchone()[0] == 0
         assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE account_name = 'a2'").fetchone()[0] == 1
-
-
-def test_pending_task_dedupe_key(tmp_path):
-    service = _service(tmp_path)
-    tasks = TaskRepository(service)
-    tasks.create_task('bot', 'social_check_in', target_id='chan', payload={'author_id': '42', 'username': 'k'})
-    assert tasks.has_pending('bot', 'social_check_in', target_id='chan', payload_contains='"author_id": "42"',
-                             since=time.time() - 86400)
-    assert not tasks.has_pending('bot', 'social_check_in', target_id='chan', payload_contains='"author_id": "7"')
-    assert not tasks.has_pending('bot', 'social_check_in', target_id='other', payload_contains='"author_id": "42"')
-    assert not tasks.has_pending('bot', 'social_check_in', target_id='chan', since=time.time() + 10)
 
 
 def test_pending_payloads_expire_and_clear_returns_the_payload(monkeypatch):
@@ -206,24 +183,16 @@ def test_overlay_values_are_coerced_to_field_types():
 
     store = SettingsStore.from_dict({'global': {
         'safety': {'rate_limit_seconds': '45', 'allow_direct_messages': 'false'},
-        'profile': {'ambient_distill_interval_hours': '0.5'},
+        'retention': {'trace_days': '3'},
         'voice': {'addressing_aliases': 'sapph, saphire', 'follow_up_seconds': 'nope'},
         'channel': {'ignored_channels': '["a", "b"]'},
     }})
     s = store.resolve()
     assert s.safety.rate_limit_seconds == 45 and s.safety.allow_direct_messages is False
-    assert s.profile.ambient_distill_interval_hours == 0.5
+    assert s.retention.trace_days == 3
     assert s.voice.addressing_aliases == ['sapph', 'saphire']
     assert s.voice.follow_up_seconds == 20.0                    # unparseable → default stands
     assert s.channel.ignored_channels == ['a', 'b']
-
-
-def test_memory_test_route_only_ever_writes_scratch_users():
-    from plugins.discord.api.profiles import _scratch_user
-
-    assert _scratch_user('123456') == 'test:123456'
-    assert _scratch_user('test:123456') == 'test:123456'
-    assert _scratch_user('') == ''
 
 
 def test_debug_ring_is_opt_in_and_clearable():

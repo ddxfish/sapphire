@@ -1,6 +1,5 @@
 from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.conversation_service import ConversationService
-from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
 from plugins.discord.models.observations import TextMessageObservation
 from plugins.discord.models.settings import SettingsStore
 
@@ -80,7 +79,6 @@ def test_emit_reply_includes_vision_description_in_content():
         prompt_context_service=FakeContext({'recent_history': [], 'media': media_context}),
         trace_repository=FakeTraceRepo(),
         settings_store=SettingsStore(),
-        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     emitted = service.process_batch(batch)
@@ -95,10 +93,8 @@ def test_emit_reply_intention_for_batch():
     batch_service.add_message(make_obs())
     batch = batch_service.flush_ready(now=10.0)[0]
     bridge = FakeBridge()
-    from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
     from plugins.discord.models.settings import SettingsStore
 
-    orchestrator = CognitiveOrchestrator()
     store = SettingsStore()
     service = ConversationService(
         event_bridge=bridge,
@@ -106,7 +102,6 @@ def test_emit_reply_intention_for_batch():
         prompt_context_service=FakeContext(),
         trace_repository=FakeTraceRepo(),
         settings_store=store,
-        cognitive_orchestrator=orchestrator,
     )
 
     emitted = service.process_batch(batch)
@@ -129,7 +124,6 @@ def test_rejected_event_does_not_create_pending_metadata():
         prompt_context_service=FakeContext(),
         trace_repository=traces,
         settings_store=SettingsStore(),
-        cognitive_orchestrator=CognitiveOrchestrator(),
     )
 
     emitted = service.process_batch(batch)
@@ -137,55 +131,3 @@ def test_rejected_event_does_not_create_pending_metadata():
     assert emitted is False
     assert service.pending_reply('m1') is None
     assert traces.traces[-1][0] == 'event_dropped'
-
-
-class FakeMentionMap:
-    def mention_format_hint(self):
-        return 'Use @DisplayName for mentions.'
-
-    def build_for_channel(self, *args, **kwargs):
-        return {}
-
-
-def test_emit_reply_omits_plugin_scheduled_without_follow_up_hints():
-    batch_service = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
-    batch_service.add_message(make_obs())
-    batch = batch_service.flush_ready(now=10.0)[0]
-    bridge = FakeBridge()
-    service = ConversationService(
-        event_bridge=bridge,
-        policy_service=FakePolicy(),
-        prompt_context_service=FakeContext(),
-        trace_repository=FakeTraceRepo(),
-        settings_store=SettingsStore(),
-        mention_map_service=FakeMentionMap(),
-        cognitive_orchestrator=CognitiveOrchestrator(),
-    )
-
-    assert service.process_batch(batch) is True
-    payload = bridge.payloads[0]
-    assert 'reply_hints' in payload
-    assert 'plugin_scheduled' not in payload
-
-
-def test_emit_reply_sets_plugin_scheduled_for_follow_up_hints():
-    batch_service = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
-    obs = make_obs()
-    obs.follow_up_hints = ['You scheduled a reminder for 5 minutes: "drink water".']
-    batch_service.add_message(obs)
-    batch = batch_service.flush_ready(now=10.0)[0]
-    bridge = FakeBridge()
-    service = ConversationService(
-        event_bridge=bridge,
-        policy_service=FakePolicy(),
-        prompt_context_service=FakeContext(),
-        trace_repository=FakeTraceRepo(),
-        settings_store=SettingsStore(),
-        mention_map_service=FakeMentionMap(),
-        cognitive_orchestrator=CognitiveOrchestrator(),
-    )
-
-    assert service.process_batch(batch) is True
-    payload = bridge.payloads[0]
-    assert payload.get('plugin_scheduled') == 'true'
-    assert any('scheduled a reminder' in hint for hint in payload['reply_hints'])

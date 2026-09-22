@@ -9,11 +9,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 from plugins.discord import hooks_out
-from plugins.discord.cognition.channel_situation import ChannelSituationService
-from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
-from plugins.discord.cognition.commitment_service import CommitmentService
-from plugins.discord.cognition.policy_service import PolicyService
-from plugins.discord.cognition.world_model_service import WorldModelService
+from plugins.discord.conversation.policy_service import PolicyService
 from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.bot_session_service import BotSessionService
 from plugins.discord.conversation.conversation_service import ConversationService
@@ -27,14 +23,7 @@ from plugins.discord.conversation.edit_history_service import EditHistoryService
 from plugins.discord.conversation.reaction_service import ReactionService
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.greetings import GreetingsClock
-from plugins.discord.memory.distill_service import DistillService
-from plugins.discord.memory.interest_service import InterestService
-from plugins.discord.memory.lore_service import LoreService
-from plugins.discord.memory.memory_service import MemoryService
-from plugins.discord.memory.milestone_service import MilestoneService
-from plugins.discord.memory.profile_service import ProfileService
 from plugins.discord.models.settings import SettingsStore
-from plugins.discord.observability.cognition_debug_service import CognitionDebugService
 from plugins.discord.observability.llm_debug_service import LlmDebugService
 from plugins.discord.observability.trace_service import TraceService
 from plugins.discord.runtime.health import RuntimeHealth
@@ -49,15 +38,8 @@ from plugins.discord.sapphire.settings_bridge import SapphireSettingsBridge
 from plugins.discord.sapphire.speech_bridge import SapphireSpeechBridge
 from plugins.discord.storage.repositories.accounts import AccountRepository
 from plugins.discord.storage.repositories.channels import ChannelRepository
-from plugins.discord.storage.repositories.interests import InterestRepository
-from plugins.discord.storage.repositories.lore import LoreRepository
 from plugins.discord.storage.repositories.media import MediaRepository
-from plugins.discord.storage.repositories.memory import MemoryRepository
 from plugins.discord.storage.repositories.messages import MessageRepository
-from plugins.discord.storage.repositories.milestones import MilestoneRepository
-from plugins.discord.storage.repositories.profile_buffers import ProfileBufferRepository
-from plugins.discord.storage.repositories.profiles import ProfileRepository
-from plugins.discord.storage.repositories.tasks import TaskRepository
 from plugins.discord.storage.repositories.traces import TraceRepository
 from plugins.discord.storage.repositories.voice_sessions import VoiceSessionRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
@@ -95,9 +77,6 @@ class RuntimeContainer:
         self.account_repository = None
         self.channel_repository = None
         self.message_repository = None
-        self.memory_repository = None
-        self.profile_repository = None
-        self.task_repository = None
         self.trace_repository = None
         self.presence_repository = None
         self.media_repository = None
@@ -120,19 +99,6 @@ class RuntimeContainer:
         self.reaction_service = None
         self.gif_service = None
         self.conversation_service = None
-        self.world_model_service = None
-        self.cognitive_orchestrator = None
-        self.memory_service = None
-        self.profile_service = None
-        self.milestone_service = None
-        self.lore_service = None
-        self.interest_service = None
-        self.distill_service = None
-        self.channel_situation_service = None
-        self.milestone_repository = None
-        self.lore_repository = None
-        self.interest_repository = None
-        self.profile_buffer_repository = None
         self.media_service = None
         self.greetings = None
         self.mention_map_service = None
@@ -147,7 +113,6 @@ class RuntimeContainer:
         self.voice_auto_join_service = None
         self.trace_service = None
         self.llm_debug_service = None
-        self.cognition_debug_service = None
         self.retention_service = None
 
     async def start(self) -> None:
@@ -165,17 +130,9 @@ class RuntimeContainer:
         self.account_repository = AccountRepository(self.sqlite_service)
         self.channel_repository = ChannelRepository(self.sqlite_service)
         self.message_repository = MessageRepository(self.sqlite_service)
-        self.memory_repository = MemoryRepository(self.sqlite_service)
-        self.profile_repository = ProfileRepository(self.sqlite_service)
-        self.milestone_repository = MilestoneRepository(self.sqlite_service)
-        self.lore_repository = LoreRepository(self.sqlite_service)
-        self.interest_repository = InterestRepository(self.sqlite_service)
-        self.profile_buffer_repository = ProfileBufferRepository(self.sqlite_service)
-        self.task_repository = TaskRepository(self.sqlite_service)
         self.trace_repository = TraceRepository(self.sqlite_service)
         self.trace_service = TraceService(trace_repository=self.trace_repository)
         self.llm_debug_service = LlmDebugService(limit=10, plugin_loader=self.plugin_loader)
-        self.cognition_debug_service = CognitionDebugService()
         self.forget_service = ForgetService(sqlite_service=self.sqlite_service, trace_repository=self.trace_repository)
         self.retention_service = RetentionService(
             sqlite_service=self.sqlite_service, trace_repository=self.trace_repository,
@@ -191,48 +148,6 @@ class RuntimeContainer:
         self.scheduler_bridge = SapphireSchedulerBridge(self.plugin_loader)
         self.settings_bridge = SapphireSettingsBridge(self.plugin_loader, self.plugin_name)
         self.speech_bridge = SapphireSpeechBridge(self.plugin_loader)
-
-    def build_cognition(self) -> None:
-        self.world_model_service = WorldModelService(
-            channel_repository=self.channel_repository,
-            message_repository=self.message_repository,
-            task_repository=self.task_repository,
-            trace_repository=self.trace_repository,
-        )
-        self.commitment_service = CommitmentService(
-            world_model_service=self.world_model_service,
-            trace_repository=self.trace_repository,
-        )
-        self.cognitive_orchestrator = CognitiveOrchestrator(
-            world_model_service=self.world_model_service,
-            trace_service=self.trace_service,
-        )
-        self.memory_service = MemoryService(
-            memory_repository=self.memory_repository,
-            message_repository=self.message_repository,
-        )
-        self.milestone_service = MilestoneService(milestone_repository=self.milestone_repository)
-        self.lore_service = LoreService(lore_repository=self.lore_repository)
-        self.interest_service = InterestService(interest_repository=self.interest_repository)
-        self.channel_situation_service = ChannelSituationService(
-            message_repository=self.message_repository,
-            interest_service=self.interest_service,
-            trace_repository=self.trace_repository,
-            cognition_debug_service=self.cognition_debug_service,
-        )
-        self.cognitive_orchestrator.channel_situation_service = self.channel_situation_service
-        self.profile_service = ProfileService(
-            profile_repository=self.profile_repository,
-            milestone_service=self.milestone_service,
-            interest_service=self.interest_service,
-            lore_service=self.lore_service,
-        )
-        self.distill_service = DistillService(
-            buffer_repository=self.profile_buffer_repository,
-            profile_repository=self.profile_repository,
-            sqlite_service=self.sqlite_service,
-            trace_repository=self.trace_repository,
-        )
 
     def build_media_and_clock(self) -> None:
         self.media_service = MediaService(
@@ -260,13 +175,11 @@ class RuntimeContainer:
         self.voice_turn_taking_service = VoiceTurnTakingService()
         self.voice_session_service = VoiceSessionService(
             voice_session_repository=self.voice_session_repository,
-            world_model_service=self.world_model_service,
             trace_repository=self.trace_repository,
         )
         self.voice_perception_service = VoicePerceptionService(
             voice_session_repository=self.voice_session_repository,
             speech_bridge=self.speech_bridge,
-            world_model_service=self.world_model_service,
             trace_repository=self.trace_repository,
             settings_store=self.settings_store,
         )
@@ -310,7 +223,6 @@ class RuntimeContainer:
         self.voice_event_bridge = VoiceEventBridge(
             voice_session_repository=self.voice_session_repository,
             trace_repository=self.trace_repository,
-            world_model_service=self.world_model_service,
             conversation_runner=self.discord_conversation_runner,
         )
         self.voice_service = VoiceService(
@@ -450,7 +362,6 @@ class RuntimeContainer:
         self.discord_conversation_runner.leave_fn = _leave_voice
 
     def build_transport(self) -> None:
-        self.build_cognition()
         self.mention_map_service = MentionMapService(
             message_repository=self.message_repository,
             channel_repository=self.channel_repository,
@@ -474,15 +385,11 @@ class RuntimeContainer:
         self.build_media_and_clock()
         self.event_adapter = DiscordEventAdapter(
             message_repository=self.message_repository,
+            channel_repository=self.channel_repository,
             trace_repository=self.trace_repository,
-            world_model_service=self.world_model_service,
             media_service=self.media_service,
             settings_store=self.settings_store,
-            commitment_service=self.commitment_service,
             mention_map_service=self.mention_map_service,
-            distill_service=self.distill_service,
-            channel_situation_service=self.channel_situation_service,
-            cognition_debug_service=self.cognition_debug_service,
             llm_debug_service=self.llm_debug_service,
         )
         # Wire channel.batching_seconds — this was a live UI knob that nothing
@@ -495,13 +402,9 @@ class RuntimeContainer:
             default_window_seconds=max(1.0, _batch_window))
         self.prompt_context_service = PromptContextService(
             message_repository=self.message_repository,
-            memory_service=self.memory_service,
-            profile_service=self.profile_service,
             media_service=self.media_service,
             trace_service=self.trace_service,
             edit_history_service=self.edit_history_service,
-            channel_situation_service=self.channel_situation_service,
-            settings_store=self.settings_store,
         )
         self.conversation_service = ConversationService(
             event_bridge=self.event_bridge,
@@ -513,19 +416,14 @@ class RuntimeContainer:
             delivery_style_service=self.delivery_style_service,
             edit_history_service=self.edit_history_service,
             transport=self.transport,
-            profile_service=self.profile_service,
             gif_service=self.gif_service,
             reaction_service=self.reaction_service,
             settings_store=self.settings_store,
             trace_service=self.trace_service,
-            cognitive_orchestrator=self.cognitive_orchestrator,
             account_repository=self.account_repository,
             bot_session_service=self.bot_session_service,
             mention_map_service=self.mention_map_service,
             llm_debug_service=self.llm_debug_service,
-            channel_situation_service=self.channel_situation_service,
-            world_model_service=self.world_model_service,
-            cognition_debug_service=self.cognition_debug_service,
         )
         self.message_pipeline = MessagePipelineService(
             batching_service=self.batching_service,

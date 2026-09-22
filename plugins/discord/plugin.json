@@ -2,9 +2,9 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.27.0",
+  "version": "1.29.0",
   "min_core_version": "2.13.0",
-  "description": "Discord bot \u2014 accounts, conversation, memory, media understanding, and voice. Greetings ride the Discord: Greetings / All interactions daemon tasks; personality modules live in the discord-personality plugin.",
+  "description": "Discord bot \u2014 accounts, conversation, media understanding, and voice. Greetings ride the Discord: Greetings / All interactions daemon tasks; people memory and the other personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83c\udfae",
@@ -282,56 +282,6 @@
       },
       {
         "method": "GET",
-        "path": "profiles",
-        "handler": "api/profiles.py:list_profiles"
-      },
-      {
-        "method": "GET",
-        "path": "profiles/facts",
-        "handler": "api/profiles.py:list_profile_facts"
-      },
-      {
-        "method": "GET",
-        "path": "profiles/facts/review",
-        "handler": "api/profiles.py:list_distill_review"
-      },
-      {
-        "method": "POST",
-        "path": "profiles/facts",
-        "handler": "api/profiles.py:add_profile_fact"
-      },
-      {
-        "method": "POST",
-        "path": "profiles/facts/update",
-        "handler": "api/profiles.py:update_profile_fact"
-      },
-      {
-        "method": "GET",
-        "path": "profiles/milestones",
-        "handler": "api/profiles.py:list_milestones"
-      },
-      {
-        "method": "GET",
-        "path": "profiles/interests",
-        "handler": "api/profiles.py:list_interests"
-      },
-      {
-        "method": "GET",
-        "path": "lore",
-        "handler": "api/profiles.py:list_lore"
-      },
-      {
-        "method": "POST",
-        "path": "lore",
-        "handler": "api/profiles.py:mutate_lore"
-      },
-      {
-        "method": "POST",
-        "path": "memory/test",
-        "handler": "api/profiles.py:memory_test"
-      },
-      {
-        "method": "GET",
         "path": "channels/text",
         "handler": "api/channels.py:list_text_channels"
       },
@@ -381,11 +331,6 @@
         "handler": "api/debug.py:list_llm_debug"
       },
       {
-        "method": "GET",
-        "path": "debug/cognition",
-        "handler": "api/debug.py:get_cognition_debug"
-      },
-      {
         "method": "POST",
         "path": "debug/clear",
         "handler": "api/debug.py:clear_llm_debug"
@@ -397,41 +342,9 @@
         "cron": "30 4 * * *",
         "handler": "schedule/retention_purge.py",
         "description": "Daily purge of plugin data older than the Retention day limits"
-      },
-      {
-        "name": "ambient_distill",
-        "cron": "*/15 * * * *",
-        "enabled": false,
-        "enabled_setting": "profile.ambient_distill_enabled",
-        "handler": "schedule/ambient_distill.py",
-        "description": "Opt-in ambient chat distill into profile facts (checks every 15 min, only while enabled; honors profile.ambient_distill_interval_hours, default 1h)"
       }
     ],
     "settings": [
-      {
-        "key": "cognitive.task_follow_up_enabled",
-        "type": "boolean",
-        "label": "Task follow-ups",
-        "default": true,
-        "tab": "Tasks",
-        "help": "Deliver due follow-ups from voice sessions, reminders, and commitments."
-      },
-      {
-        "key": "cognitive.commitment_followups_enabled",
-        "type": "boolean",
-        "label": "Commitment follow-ups",
-        "default": true,
-        "tab": "Tasks",
-        "help": "When someone says they will do something, follow up later."
-      },
-      {
-        "key": "cognitive.reminder_followups_enabled",
-        "type": "boolean",
-        "label": "Reminder requests",
-        "default": true,
-        "tab": "Tasks",
-        "help": "\"Remind me in 5 minutes to\u2026\" queues a task and @mentions them when due."
-      },
       {
         "key": "cognitive.llm_primary",
         "type": "string",
@@ -447,105 +360,11 @@
         "hidden": true
       },
       {
-        "key": "profile.enabled",
-        "type": "boolean",
-        "label": "Memory",
-        "default": true,
-        "tab": "Memory",
-        "help": "ON (default): she builds per-user memory from Discord \u2014 facts, birthdays, and names, kept per bot account in the plugin's own database (never in her core Mind). OFF: no new capture and replies stop using stored facts; existing data stays until you Forget users below."
-      },
-      {
-        "key": "profile.ambient_distill_enabled",
-        "type": "boolean",
-        "label": "Learn from ambient chat",
-        "default": false,
-        "tab": "Memory",
-        "help": "OFF (default): only explicit facts (/remember, tools, UI) and lightweight interests. ON: buffer member chat and periodically distill durable personal facts with an LLM into the plugin DB (never core Mind)."
-      },
-      {
-        "key": "profile.ambient_distill_interval_hours",
-        "type": "number",
-        "label": "Ambient distill interval (hours)",
-        "default": 1.0,
-        "tab": "Memory",
-        "help": "How often distill may run per bot account. Default 1 hour. Cron checks every 15 minutes; values below 0.25 are clamped to 15 minutes."
-      },
-      {
-        "key": "profile.ambient_distill_min_messages",
-        "type": "number",
-        "label": "Min buffered messages before distill",
-        "default": 8,
-        "tab": "Memory",
-        "help": "A person needs at least this many new buffered lines before the LLM distill runs for them."
-      },
-      {
-        "key": "profile.ambient_distill_max_facts",
-        "type": "number",
-        "label": "Max new facts per distill pass",
-        "default": 3,
-        "tab": "Memory",
-        "help": "Upper bound on facts written for one person in a single distill pass."
-      },
-      {
-        "key": "profile.relationship_policy_enabled",
-        "type": "boolean",
-        "label": "Relationship-aware social timing",
-        "default": true,
-        "tab": "Cognition",
-        "help": "ON (default): familiarity and fondness softly scale organic replies, reactions, and outreach. Hard cooldowns and safety gates still win."
-      },
-      {
-        "key": "profile.relationship_policy_strength",
-        "type": "string",
-        "label": "Relationship policy strength",
-        "default": "normal",
-        "tab": "Cognition",
-        "help": "How strongly relationship scores reshape social chances.",
-        "options": [
-          {
-            "label": "Subtle",
-            "value": "subtle"
-          },
-          {
-            "label": "Normal",
-            "value": "normal"
-          },
-          {
-            "label": "Bold",
-            "value": "bold"
-          }
-        ]
-      },
-      {
-        "key": "cognitive.situation_enabled",
-        "type": "boolean",
-        "label": "Channel situation model",
-        "default": true,
-        "tab": "Cognition",
-        "help": "Build a short-lived channel vibe snapshot (quiet / calm / lively / playful / heated) from recent messages for prompts and gates."
-      },
-      {
-        "key": "cognitive.situation_in_prompt",
-        "type": "boolean",
-        "label": "Inject situation into prompts",
-        "default": true,
-        "tab": "Cognition",
-        "help": "When situation is on, add a compact channel-situation block to reply instructions (data fence, not instructions)."
-      },
-      {
-        "key": "cognitive.intention_competition_enabled",
-        "type": "boolean",
-        "label": "Intention competition (reply / react / silent)",
-        "default": false,
-        "tab": "Cognition",
-        "help": "OFF (default): legacy organic % roll, then optional silent react on miss. ON: score reply vs react-only vs silence from situation + relationship (mentions/DMs still always reply)."
-      },
-      {
         "key": "cognitive.llm_debug_enabled",
         "type": "boolean",
         "label": "LLM debug ring",
         "default": false,
-        "tab": "Cognition",
+        "tab": "Debug",
         "help": "Keep the last 10 prompts and replies in memory for the Debug panel \u2014 full prompts, other people's messages included. Off = nothing retained. Clear it from the panel any time."
       },
       {
@@ -553,22 +372,8 @@
         "type": "boolean",
         "label": "Side lanes: local providers only",
         "default": true,
-        "tab": "Cognition",
-        "help": "ON (default): greetings, goodnights, ambient distill and image captions on 'auto' pick only providers marked local in Settings \u203a LLM \u2014 server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick always wins."
-      },
-      {
-        "key": "profile.distill_model_provider",
-        "type": "string",
-        "label": "Ambient distill model provider",
-        "default": "",
-        "hidden": true
-      },
-      {
-        "key": "profile.distill_model_name",
-        "type": "string",
-        "label": "Ambient distill model name",
-        "default": "",
-        "hidden": true
+        "tab": "Debug",
+        "help": "ON (default): greetings, goodnights and image captions on 'auto' pick only providers marked local in Settings \u203a LLM \u2014 server chatter never rides to a cloud model by accident. OFF: any provider in the fallback order. An explicit provider pick always wins."
       },
       {
         "key": "channel.reply_mode",

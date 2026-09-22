@@ -15,7 +15,7 @@ class FakeRepo:
         return None
 
 
-def test_voice_turn_start_records_trace_and_world_model():
+def test_voice_turn_start_records_trace():
     session = VoiceSession(
         session_id='sess-1',
         account_name='bot',
@@ -24,11 +24,9 @@ def test_voice_turn_start_records_trace_and_world_model():
         mode=VoiceMode.CONVERSATIONAL,
     )
     traces = []
-    world = MagicMock()
     bridge = VoiceEventBridge(
         voice_session_repository=FakeRepo(session),
         trace_repository=MagicMock(record_trace=lambda t, m, p: traces.append((t, p))),
-        world_model_service=world,
     )
     chat = voice_chat_name('111', '222')
     bridge._handle_voice_turn('voice_turn_start', chat, {

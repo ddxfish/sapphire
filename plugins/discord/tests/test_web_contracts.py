@@ -15,4 +15,7 @@ def test_esc_escapes_quotes_for_attribute_context():
 
 
 def test_attribute_sites_still_go_through_esc():
-    assert 'data-content="${esc(f.content)}"' in _JS
+    # H1 class: every user-influenced value interpolated into an attribute goes
+    # through esc(); the only bare interpolations left are code-owned field ids.
+    bare = {m for m in re.findall(r'[a-z-]+="\$\{([^}]*)\}"', _JS) if not m.startswith('esc(')}
+    assert bare <= {'id', 'providerField', 'modelField'}, bare

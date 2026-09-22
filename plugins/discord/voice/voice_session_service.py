@@ -6,9 +6,8 @@ from plugins.discord.models.voice import VoiceMode, VoiceSession
 
 
 class VoiceSessionService:
-    def __init__(self, *, voice_session_repository, world_model_service=None, trace_repository=None):
+    def __init__(self, *, voice_session_repository, trace_repository=None):
         self.voice_session_repository = voice_session_repository
-        self.world_model_service = world_model_service
         self.trace_repository = trace_repository
         self._reconnect_counts: dict[str, int] = {}
 

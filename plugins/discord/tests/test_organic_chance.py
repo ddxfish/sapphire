@@ -4,7 +4,6 @@ from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.bot_session_service import BotSessionService
 from plugins.discord.conversation.conversation_service import ConversationService
 from plugins.discord.conversation.trigger_service import evaluate_organic_chance, evaluate_reply_trigger
-from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
 from plugins.discord.models.observations import TextMessageObservation
 from plugins.discord.models.settings import SettingsStore
 
@@ -67,7 +66,6 @@ def _service(store, *, bot_session_service=None):
         prompt_context_service=FakeContext(),
         trace_repository=FakeTraceRepo(),
         settings_store=store,
-        cognitive_orchestrator=CognitiveOrchestrator(),
         bot_session_service=bot_session_service,
     )
 
@@ -152,7 +150,6 @@ def test_process_batch_organic_miss_drops(monkeypatch):
         prompt_context_service=FakeContext(),
         trace_repository=traces,
         settings_store=store,
-        cognitive_orchestrator=CognitiveOrchestrator(),
     )
     assert service.process_batch(_batch(_obs())) is False
     assert not service.event_bridge.payloads

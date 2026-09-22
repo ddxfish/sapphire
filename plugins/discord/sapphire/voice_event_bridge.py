@@ -16,12 +16,10 @@ class VoiceEventBridge:
         *,
         voice_session_repository=None,
         trace_repository=None,
-        world_model_service=None,
         conversation_runner=None,
     ):
         self.voice_session_repository = voice_session_repository
         self.trace_repository = trace_repository
-        self.world_model_service = world_model_service
         self.conversation_runner = conversation_runner
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None

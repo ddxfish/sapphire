@@ -12,27 +12,19 @@ class DiscordEventAdapter:
         self,
         *,
         message_repository,
+        channel_repository=None,
         trace_repository=None,
-        world_model_service=None,
         media_service=None,
         settings_store=None,
-        commitment_service=None,
         mention_map_service=None,
-        distill_service=None,
-        channel_situation_service=None,
-        cognition_debug_service=None,
         llm_debug_service=None,
     ):
         self.message_repository = message_repository
+        self.channel_repository = channel_repository
         self.trace_repository = trace_repository
-        self.world_model_service = world_model_service
         self.media_service = media_service
         self.settings_store = settings_store
-        self.commitment_service = commitment_service
         self.mention_map_service = mention_map_service
-        self.distill_service = distill_service
-        self.channel_situation_service = channel_situation_service
-        self.cognition_debug_service = cognition_debug_service
         self.llm_debug_service = llm_debug_service
 
     def adapt_message_event(
@@ -84,9 +76,8 @@ class DiscordEventAdapter:
         )
         # Ignored channels are dropped BEFORE anything observes them (broadsword
         # H6): this check used to sit at the END, so an ignored channel was
-        # still stored, scanned for commitments, distilled and counted as
-        # activity — and a commitment made there could even draw a follow-up
-        # post. The doc says "fully ignored… dropped before batching".
+        # still stored and counted as activity. The doc says "fully ignored…
+        # dropped before batching".
         if self.settings_store:
             settings = self.settings_store.resolve(
                 guild_id=observation.guild_id,
@@ -100,34 +91,15 @@ class DiscordEventAdapter:
                         'channel_id': observation.channel_id,
                         'account_name': observation.account_name,
                     })
-                if self.cognition_debug_service:
-                    self.cognition_debug_service.record_gate(
-                        gate='channel_ignored',
-                        account_name=observation.account_name,
-                        channel_id=observation.channel_id,
-                        channel_name=observation.channel_name,
-                        detail={'reason': 'ignored_channels', 'message_id': observation.message_id},
-                    )
                 return None
-        if self.world_model_service:
-            self.world_model_service.record_text_observation(observation)
-        elif self.message_repository:
+        if self.channel_repository:
+            # The guild / channel / user caches the pickers and mention map read.
+            if observation.guild_id:
+                self.channel_repository.upsert_guild(observation.guild_id, observation.guild_name)
+            self.channel_repository.upsert_channel(observation.channel_id, observation.guild_id, observation.channel_name)
+            self.channel_repository.upsert_user(observation.author_id, observation.username, observation.display_name)
+        if self.message_repository:
             self.message_repository.save_message(observation)
-        if self.commitment_service and self.settings_store:
-            settings = self.settings_store.resolve(
-                guild_id=observation.guild_id,
-                channel_id=observation.channel_id,
-                dm_id=observation.channel_id if observation.is_dm else None,
-            )
-            _created, hints = self.commitment_service.scan_and_schedule(observation, settings)
-            observation.follow_up_hints = hints
-        if self.distill_service and self.settings_store:
-            settings = self.settings_store.resolve(
-                guild_id=observation.guild_id,
-                channel_id=observation.channel_id,
-                dm_id=observation.channel_id if observation.is_dm else None,
-            )
-            self.distill_service.buffer_observation(observation, settings)
         if interpret_media:
             self.interpret_media(observation)
         if self.settings_store:

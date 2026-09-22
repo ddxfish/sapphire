@@ -10,22 +10,14 @@ class PromptContextService:
         self,
         *,
         message_repository,
-        memory_service=None,
-        profile_service=None,
         media_service=None,
         trace_service=None,
         edit_history_service=None,
-        channel_situation_service=None,
-        settings_store=None,
     ):
         self.message_repository = message_repository
-        self.memory_service = memory_service
-        self.profile_service = profile_service
         self.media_service = media_service
         self.trace_service = trace_service
         self.edit_history_service = edit_history_service
-        self.channel_situation_service = channel_situation_service
-        self.settings_store = settings_store
 
     def build(self, batch, trigger=None) -> dict:
         # One identity for the whole turn: the reply gates key off the newest
@@ -52,72 +44,10 @@ class PromptContextService:
             'author_id': last.author_id,
             'attachments': last.attachments,
         }
-        if self.memory_service:
-            recalled = self.memory_service.recall(
-                last.account_name,
-                last.guild_id,
-                last.channel_id,
-                last.clean_content[:80] or 'conversation',
-                limit=5,
-            )
-            pinned = self.memory_service.get_pinned(
-                last.account_name, guild_id=last.guild_id, channel_id=last.channel_id, limit=5,
-            )
-            context['memory'] = {
-                'recalled': recalled,
-                'pinned': pinned,
-            }
-            if self.trace_service:
-                self.trace_service.record_memory_injection({
-                    'channel_id': last.channel_id,
-                    'recalled': len(recalled),
-                    'pinned': len(pinned),
-                })
-        if self.profile_service:
-            profile_context = self.profile_service.build_context(
-                last.account_name,
-                last.author_id,
-                guild_id=last.guild_id,
-                channel_id=last.channel_id,
-                is_dm=bool(getattr(last, 'is_dm', False)),
-            )
-            context['profile'] = profile_context
-            # Soft-ack milestones once they've been offered to the prompt so
-            # they don't repeat every message — noticing once is enough.
-            pending_ids = [
-                int(row['id'])
-                for row in (profile_context.get('milestones') or [])
-                if row.get('id') is not None
-            ]
-            if pending_ids:
-                self.profile_service.acknowledge_milestones(pending_ids)
         if self.edit_history_service:
             edit_hint = self.edit_history_service.build_prompt_hint(last.account_name, last.channel_id)
             if edit_hint:
                 context['edit_history_hint'] = edit_hint
-        if self.channel_situation_service:
-            settings = None
-            if self.settings_store:
-                settings = self.settings_store.resolve(
-                    guild_id=last.guild_id,
-                    channel_id=last.channel_id,
-                    dm_id=last.channel_id if last.is_dm else None,
-                )
-            cognitive = getattr(settings, 'cognitive', None) if settings else None
-            if cognitive is None or (
-                getattr(cognitive, 'situation_enabled', True)
-                and getattr(cognitive, 'situation_in_prompt', True)
-            ):
-                situation = self.channel_situation_service.build(
-                    last.account_name,
-                    last.channel_id,
-                    guild_id=last.guild_id or '',
-                    channel_name=last.channel_name or '',
-                )
-                context['situation'] = situation.to_dict()
-                hint = situation.prompt_hint()
-                if hint:
-                    context['situation_hint'] = hint
         if self.media_service:
             media_context = []
             media_message_id = self._media_context_message_id(batch)

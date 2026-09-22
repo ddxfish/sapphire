@@ -25,13 +25,13 @@ def test_settings_defaults_and_merge_behavior():
 
 
 def test_retired_sections_are_ignored_not_fatal():
-    # Stored settings from 1.x still carry proactive./presence. keys (S1, 2026-09-22).
+    # Stored settings from 1.x still carry proactive./presence./profile. keys (S1 + S2, 2026-09-22).
     overlay = SettingsOverlay.from_dict({"proactive": {"greeting_enabled": True}, "presence": {"status": "idle"},
                                          "profile": {"birthday_capture_enabled": True, "enabled": False}})
     store = SettingsStore(global_overlay=overlay)
     resolved = store.resolve()
     assert not hasattr(resolved, "proactive") and not hasattr(resolved, "presence")
-    assert resolved.profile.enabled is False
+    assert not hasattr(resolved, "profile")
 
 
 def test_overlay_round_trip():

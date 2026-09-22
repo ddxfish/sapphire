@@ -30,12 +30,11 @@ def list_traces(**kwargs):
         limit = 50
     trace_type = str(query.get('type') or query.get('trace_type') or '').strip() or None
     cognitive = {}
-    if runtime.profile_service and runtime.transport:
+    if runtime.transport:
         connected = runtime.transport.list_connected()
         if connected:
             account = connected[0]
             cognitive = {
-                'tasks': runtime.world_model_service.list_tasks(account, status='pending', limit=5) if runtime.world_model_service else [],
                 'voice_sessions': [
                     session.to_dict()
                     for session in (runtime.voice_session_service.list_active(account) if runtime.voice_session_service else [])

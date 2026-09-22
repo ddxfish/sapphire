@@ -38,17 +38,6 @@ def _providers_config() -> dict[str, Any]:
     }
 
 
-def distill_llm_from_settings(settings) -> tuple[str, str]:
-    """Resolve ambient-distill LLM, inheriting from Reply LLM when unset."""
-    profile = getattr(settings, 'profile', None)
-    cognitive_primary, cognitive_model = cognitive_llm_from_settings(settings)
-    if profile is None:
-        return cognitive_primary, cognitive_model
-    provider = str(getattr(profile, 'distill_model_provider', '') or '').strip()
-    model = str(getattr(profile, 'distill_model_name', '') or '').strip()
-    return (provider, model) if provider else (cognitive_primary, cognitive_model)    # pair (row 28)
-
-
 def side_lanes_local_only() -> bool:
     """cognitive.side_lanes_local_only, read live from core's plugin settings
     (M6). Unreadable → True: the safe direction for other people's chatter."""

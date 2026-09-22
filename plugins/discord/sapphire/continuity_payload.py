@@ -16,20 +16,6 @@ def prepare_continuity_payload(payload: dict) -> dict:
     history = list(prepared.get('recent_history') or [])
     additions = []
 
-    if _is_truthy(prepared.get('plugin_scheduled')):
-        additions.append(
-            'IMPORTANT: The Discord plugin has already scheduled the follow-up/reminder '
-            'described below in its database. Briefly confirm that in your reply. '
-            'Do NOT say you cannot set reminders, timers, or scheduled messages.'
-        )
-
-    if _is_truthy(prepared.get('task_follow_up')):
-        additions.append(
-            'IMPORTANT: This is a scheduled reminder follow-up, not a reply to a live message. '
-            'Send a new message in the channel and @mention the user. '
-            'Do NOT set reply_to_message_id — there is no real message to quote.'
-        )
-
     if str(prepared.get('proactive_kind') or '').strip():
         additions.append(
             'IMPORTANT: This is a scheduled proactive post, not a reply to a live message. '

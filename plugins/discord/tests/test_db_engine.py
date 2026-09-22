@@ -8,9 +8,6 @@ import pytest
 
 from plugins.discord.storage import migrations as mig
 from plugins.discord.storage import sqlite as sq
-from plugins.discord.storage.repositories.interests import InterestRepository
-from plugins.discord.storage.repositories.profile_buffers import ProfileBufferRepository
-from plugins.discord.storage.repositories.profiles import ProfileRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
 
 
@@ -119,60 +116,6 @@ def test_legacy_db_moves_into_place_once(tmp_path, monkeypatch):
     assert path.with_name('discord.sqlite3-wal').read_bytes() == b'wal'
     assert not legacy.exists()
     assert resolve_default_db_path('discord') == path      # idempotent
-
-
-# ── H16b: DM-origin facts never reach a server prompt ────────────────────
-
-def test_dm_facts_stay_out_of_servers_but_show_in_dms(tmp_path):
-    service = _service(tmp_path)
-    facts = ProfileRepository(service)
-    facts.add_fact('bot', 'u1', 'told her in a DM: going through a divorce', origin='dm')
-    facts.add_fact('bot', 'u1', 'likes chess', origin='guild-9')
-    facts.add_fact('bot', 'u1', 'operator note', origin='')
-    in_server = {f['content'] for f in facts.list_facts('bot', 'u1', for_guild='guild-9')}
-    in_dm = {f['content'] for f in facts.list_facts('bot', 'u1', for_guild=None)}
-    assert 'told her in a DM: going through a divorce' not in in_server
-    assert in_server == {'likes chess', 'operator note'}
-    assert 'told her in a DM: going through a divorce' in in_dm
-
-
-def test_interest_origin_upgrades_from_dm_to_public_never_back(tmp_path):
-    service = _service(tmp_path)
-    repo = InterestRepository(service)
-    repo.bump('bot', 'u1', 'guitar', origin='dm')
-    assert repo.list_for_user('bot', 'u1', exclude_dm=True) == []
-    repo.bump('bot', 'u1', 'guitar', origin='guild-9')      # said it in a server too
-    assert [r['topic'] for r in repo.list_for_user('bot', 'u1', exclude_dm=True)] == ['guitar']
-    repo.bump('bot', 'u1', 'guitar', origin='dm')
-    assert repo.list_for_user('bot', 'u1', exclude_dm=True)[0]['origin'] == 'guild-9'
-    assert repo.top_for_users('bot', ['u1']) and repo.top_for_users('bot', ['u1'])[0]['topic'] == 'guitar'
-    repo.bump('bot', 'u2', 'therapy', origin='dm')
-    assert [r['topic'] for r in repo.top_for_users('bot', ['u2'])] == []   # outreach never surfaces DM topics
-
-
-def test_buffers_carry_origin_for_the_distiller(tmp_path):
-    service = _service(tmp_path)
-    buffers = ProfileBufferRepository(service)
-    buffers.add('bot', 'u1', 'a private thing', origin='dm')
-    rows = buffers.list_unprocessed_for_user('bot', 'u1')
-    assert rows[0]['origin'] == 'dm'
-
-
-def test_build_context_respects_is_dm(tmp_path):
-    from plugins.discord.memory.interest_service import InterestService
-    from plugins.discord.memory.profile_service import ProfileService
-
-    service = _service(tmp_path)
-    profiles = ProfileRepository(service)
-    interests = InterestService(interest_repository=InterestRepository(service))
-    svc = ProfileService(profile_repository=profiles, interest_service=interests)
-    svc.remember_fact('bot', 'u1', 'secret', origin='dm')
-    svc.record_interaction('bot', 'u1', message_text='I love gardening and gardening tools', origin='dm')
-    server = svc.build_context('bot', 'u1', guild_id='guild-9', channel_id='c', is_dm=False)
-    dm = svc.build_context('bot', 'u1', guild_id='', channel_id='dm1', is_dm=True)
-    assert [f['content'] for f in server['facts']] == []
-    assert server['interests'] == []
-    assert [f['content'] for f in dm['facts']] == ['secret']
 
 
 def test_runner_closes_a_callers_implicit_transaction_first(tmp_path, monkeypatch):

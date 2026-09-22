@@ -18,13 +18,11 @@ class VoicePerceptionService:
         *,
         voice_session_repository,
         speech_bridge=None,
-        world_model_service=None,
         trace_repository=None,
         settings_store=None,
     ):
         self.voice_session_repository = voice_session_repository
         self.speech_bridge = speech_bridge
-        self.world_model_service = world_model_service
         self.trace_repository = trace_repository
         self.settings_store = settings_store
 
