@@ -2,7 +2,7 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "min_core_version": "2.13.0",
   "description": "Discord cognitive agent \u2014 bot accounts, conversation, memory, proactive scheduling, media understanding, presence, and voice",
   "author": "zeebie-the-zebra",

@@ -23,6 +23,7 @@ from plugins.discord.cognition.relationship_policy import (
     relationship_strength,
 )
 from plugins.discord.conversation.post_reply_tags import deliver_gif_and_reaction
+from plugins.discord import hooks_out
 from plugins.discord.models.intentions import ReplyMessageIntention
 from plugins.discord.models.observations import SlashCommandObservation
 
@@ -556,6 +557,15 @@ class ConversationService:
         if situation_hint:
             hints.append(situation_hint)
         hints.extend(follow_up_hints)
+        # S0 door: add-ons append to the reply prompt (synchronous — the
+        # result is used right here; handlers run on the gateway loop).
+        ctx_ev = hooks_out.fire('discord_prompt_context', {
+            **hooks_out.observed_payload(trigger),
+            'reply_reason': reply_reason,
+            'recent_history': context.get('recent_history') or [],
+            'context_parts': list(hints),
+        })
+        hints = [str(p) for p in (ctx_ev.metadata.get('context_parts') or []) if str(p).strip()]
         if hints:
             payload['reply_hints'] = hints
             payload['reply_instructions'] = '\n\n'.join(hints)
@@ -744,6 +754,30 @@ class ConversationService:
             reply_to_default = None
             edit_plan = None
 
+        # S0 door: add-ons may reshape the reply before it goes out (worker
+        # thread). A handler can reorder/rewrite chunks, pick the quote target,
+        # set the reaction or add a delay — never silence the reply.
+        plan_ev = hooks_out.fire('discord_reply_planned', {
+            'account': account_name, 'guild_id': guild_id, 'channel_id': channel_id,
+            'message_id': message_id, 'proactive_kind': proactive_kind,
+            'is_dm': str((event_data or {}).get('is_dm', '')).lower() in {'true', '1'},
+            'chunks': list(chunks), 'quote_reply': reply_to_default,
+            'reaction': parsed.reaction or '', 'delay_s': 0.0,
+        })
+        hook_chunks = [str(c) for c in (plan_ev.metadata.get('chunks') or []) if str(c).strip()]
+        if hook_chunks:
+            chunks = hook_chunks
+        quote_from_hook = plan_ev.metadata.get('quote_reply') != reply_to_default
+        if quote_from_hook:
+            reply_to_default = plan_ev.metadata.get('quote_reply')
+        hook_reaction = str(plan_ev.metadata.get('reaction') or '')
+        try:
+            hook_delay = max(0.0, min(30.0, float(plan_ev.metadata.get('delay_s') or 0.0)))
+        except (TypeError, ValueError):
+            hook_delay = 0.0
+        if hook_delay:
+            time.sleep(hook_delay)
+
         if human_pause_enabled:
             time.sleep(human_pause_seconds())
 
@@ -760,8 +794,9 @@ class ConversationService:
                 )
             reply_to = None
             if index == 0 and not proactive_kind:
-                if edit_plan is not None:
-                    # The delivery plan decided ('' = deliberately unquoted).
+                if edit_plan is not None or quote_from_hook:
+                    # The delivery plan (or a reply_planned handler) decided
+                    # ('' = deliberately unquoted).
                     # The old None-fallback below re-quoted every reply and
                     # made the smart-quote heuristic and its toggle dead.
                     reply_to = reply_to_default or None
@@ -858,6 +893,12 @@ class ConversationService:
                 'quote_reply_to': str(reply_to_default or '') if edit_plan is not None else '',
                 'chunks_sent': len(sent_message_ids),
             }
+        # S0 door: what actually landed (worker thread).
+        hooks_out.fire('discord_reply_sent', {
+            'account': account_name, 'guild_id': guild_id, 'channel_id': channel_id,
+            'message_id': message_id, 'proactive_kind': proactive_kind,
+            'sent_message_ids': list(sent_message_ids), 'chunks': list(chunks),
+        })
         if self.llm_debug_service:
             self._record_llm_debug_response(
                 message_id,
@@ -869,7 +910,7 @@ class ConversationService:
                 strip_think_tags=strip_thinking,
                 delivery=delivery_debug,
             )
-        reaction = parsed.reaction
+        reaction = hook_reaction or parsed.reaction
         if self.reaction_service:
             reaction = self.reaction_service.maybe_react(parsed) or reaction
         if reaction and not proactive_kind:

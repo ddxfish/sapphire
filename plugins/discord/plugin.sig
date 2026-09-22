@@ -1,6 +1,6 @@
 {
   "plugin": "discord",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "files": {
     "OPERATIONS.md": "sha256:fc90eefa6cfd38f816c691efe06d817af0513817d792e0567e3856efe28fea39",
     "README.md": "sha256:9bd602453ac455375efa09b0d4778194177a8c0959f1769f945130fae4566db2",
@@ -29,7 +29,7 @@
     "conversation/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "conversation/batching_service.py": "sha256:a4fececbb87da86d8249e93e23d4bc58320a326bcef9d21fc15787b1adbbf342",
     "conversation/bot_session_service.py": "sha256:9804b3f6a350db62b8ecaf83c081b1a2c6c29c6d5a7662ad661a9534a1862c3b",
-    "conversation/conversation_service.py": "sha256:56114b638aa24c10d7f8d330daa936d7db50bf4e64fdd2451167db2ce80ad8dd",
+    "conversation/conversation_service.py": "sha256:35677f387734365a3049fc9976b3381bb8b393a59c74e484b42beb580ef149a9",
     "conversation/delivery_style_service.py": "sha256:40639d6278600e7c277555eb7fd5cb4e7a1e079935ba4b93b4bf939191aa5f1c",
     "conversation/edit_history_service.py": "sha256:71bb0305abe9af52ec69ee7bc80c8243f83ac20066fb786e730cfe082d2e330c",
     "conversation/gif_search.py": "sha256:71e460c7ecbf55910e52008b2f400f39ca4261b76565563a9638ec802169874a",
@@ -39,7 +39,7 @@
     "conversation/media_service.py": "sha256:d4d96d231fa3b6b08f58dd03248ee7eeca692cf355b731487cfceabb5a379bf7",
     "conversation/mention_map_service.py": "sha256:1df2814f5ddd9071bf836724c5c5a95abd64b0eef0b2831595c7792849c559f3",
     "conversation/mentions.py": "sha256:b30dfdd219229f7020a2d1dda9bcba95c323b41aa4024a914151d380c0cd3665",
-    "conversation/message_pipeline_service.py": "sha256:605b91ac0713a603dd2c07eea98fb31990a300bfb9ab01916ac21591e6b10cc2",
+    "conversation/message_pipeline_service.py": "sha256:2c72cfc47167adf440a23f26e57b5513682e117bee21bb25e535a2040259eff8",
     "conversation/name_match.py": "sha256:74dec039f513cc6b7f906ce293f9f5caf3f1723791a90b3d59712ecd09c8332c",
     "conversation/post_reply_tags.py": "sha256:60b4c3af21cdbc94100e19c9db41b2615e64f7a2afc20879e158dd2f9dc35ec5",
     "conversation/prompt_context_service.py": "sha256:9247c9116d2b059b53e118266b8b4e0a0c643b6afa9aaefb2e838c2cf3b3974d",
@@ -75,6 +75,7 @@
     "docs/settings/Voice.md": "sha256:5bd955cb8592711b16fa64ef10deba0d1bc156959b7c67464d7e7b051404b0e0",
     "hooks/hangup_sentinel.py": "sha256:c83e5826fb9c083fe050b4c8fcc3894cc05b3e3500b84f69842955448e5b9190",
     "hooks/voice_prompt_inject.py": "sha256:eafafcdee9c26d17acbc712a22602fa52b337985823afdf662cd75734d072664",
+    "hooks_out.py": "sha256:399ad92685ca58715d3eebcee1378a39f897c89d189c97d9da95c209fa471815",
     "lib/server_time.py": "sha256:f89062a9bb9675b267ad41354d62ce17eabed9296148a4de60263ecd31bd9bf7",
     "lib/token_check.py": "sha256:a400baf0dd61e461011a88a5f8da4485d87e754ce123ca7e42d0e45e9b3d618f",
     "memory/birthday_service.py": "sha256:e32b96aabea480cd67e376b472af1ee64e982b8a7af97af161b51ed87570befd",
@@ -95,7 +96,7 @@
     "observability/cognition_debug_service.py": "sha256:58055894cfcdc1d97898956cf622a370a9bb286a20c213c0caf53d9e90e2ba9a",
     "observability/llm_debug_service.py": "sha256:a0fafa243956528e9402b3cd2b197f84bcc224d8a845038001d71ecc07bba673",
     "observability/trace_service.py": "sha256:e13cb4c4da32508f209c0db8f39185cf642ae46c42bfffeac8784d5e81e9057e",
-    "plugin.json": "sha256:7daf22bc3a508846156d1da6a29cacf17cf9d30e66740802c7d41b872875e3cf",
+    "plugin.json": "sha256:e3c0dbb9b962cc40cecfe3ed283f9d302657d429aa089ed7c48214829e446a9d",
     "presence/activity_parser.py": "sha256:bb757874d8b1b0e61059e4ffc95e47a5630f77162d0c2c284bc931d01e79a3a1",
     "presence/presence_catalog.py": "sha256:a4857cab82751e03900c1e83012225cf0248f80d0cddc36ff44fa7dce5138615",
     "presence/presence_service.py": "sha256:8d0429ab1c29fa41d44abb4557f64118059dca1f948c79cf2b902c05548eedd6",
@@ -110,7 +111,7 @@
     "proactive/sleep_service.py": "sha256:eabe44527668a6d184e443460068f1e737cda662a03f4b04ec93afa5e107688b",
     "proactive/targets.py": "sha256:447279f5824e606568fd8151774fc4613817da861cd89b3b59d027c1b1f60019",
     "runtime/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "runtime/container.py": "sha256:90c00c5f43abe7fe24f1eb9023073462ef2fe57b9ada6306febaebdec4767c4b",
+    "runtime/container.py": "sha256:df44c79641a55b55a4a38f2efd992a3e2646e0d7ada23e72f749e0beb3427c8d",
     "runtime/daemon_state.py": "sha256:383fbaf4a604ba4036eb84046449b0b758ad7243adaa011cfa2d802210cc7936",
     "runtime/forget_service.py": "sha256:17fe085e93ffa2faa6389701d2f693b9d7d29fc0376cdc37c7435ff3deac5745",
     "runtime/health.py": "sha256:ccd626ee3ba7e2a25cb45abe98f0aa35ea0fae3f5641f777fa38d9c4c98d790e",
@@ -194,6 +195,7 @@
     "tests/test_gif_service.py": "sha256:e3b8691bd70cb0c2f1e0308979f955b3b195d43ed296bb12632fc76ce9242f36",
     "tests/test_greeting_service.py": "sha256:da5d41b03139176d7db8076d26474c9fc8de8f3ace5c999be32563272d4082fd",
     "tests/test_hangup_sentinel.py": "sha256:43e850bb028b27b6f49ffd22361d744e3bb0a18d2e56c6c41b5e7cf2eaf55702",
+    "tests/test_hooks_out.py": "sha256:ff668ef60c5254564561535432a4caaf5fb0e410fe41ab56ccfdbd311442b8f2",
     "tests/test_human_world_model.py": "sha256:ad8a896f1e845e8a3d7b8429b019f7b2f5865c9cc45cef333c02c4dba3bbf8ba",
     "tests/test_hunt_2130_wave1.py": "sha256:76c2876c81776d2bb4cd966333ce9245e846f3db929ccc53fc5994c8c2421cc4",
     "tests/test_ignored_channels.py": "sha256:7ff3b4482c9cb58c276400b0b87e1476a6bdb3effbe428eb6ee42cce1a9ff1fa",
@@ -290,7 +292,7 @@
     "voice/voice_conversation_service.py": "sha256:0ffff73c850f867211b2072f36523a965adfd6aab676cf15a988a9acd5b4305a",
     "voice/voice_deps.py": "sha256:f0e8067f21e5bf26a896ee8f91ac0afb656a97beeed2d54086cc09614d5d1d49",
     "voice/voice_execution_service.py": "sha256:30e2af893d9874a5ba775800f6861fded50008550525cdbecc6cc3bab8ae6cef",
-    "voice/voice_listener_service.py": "sha256:a158f1c46d6ac59e14a2b6626f83080215d4dd3cb9f8c779b076c59ad484320c",
+    "voice/voice_listener_service.py": "sha256:3b9b3ddaf3a90a4bf56b0560ae1cca5d85e5e252f928fcd6084775bc3ae5d39b",
     "voice/voice_perception_service.py": "sha256:4e8d7ed68340b333edff13b31c444e8638d744aa0ac0f432237ac1d1b36ab29d",
     "voice/voice_service.py": "sha256:f00c3a0c223f11d1989a7cb944efa8bc4b0e2709404a39a8be75c983cfe072a7",
     "voice/voice_session_service.py": "sha256:84047c67b2d61077891d53b23cbce14db43ddb391c85f11627edd29b921e6712",
@@ -299,5 +301,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:be06171abb167a5f1d89c576ba946f01816cb3ae79f1d5275f44407c4ecf3d38"
   },
-  "signature": "2qJFvAdhhGHF+7bszV1wea5UaEbN+cbC3mbU0Tylcdd8YOAzpUR5d4tdtmdmHm8/xcvgUqTTqUbLD33T/ksBAg=="
+  "signature": "zIMKWXrFyRRJjyRjRPcL4z9Hb3P4YKbmIw8uC87Q2H5UO7W7P8z+1RZJCZgzN6M4dmG4v1/AYDrWWQLcszt7Ag=="
 }

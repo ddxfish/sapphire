@@ -330,7 +330,10 @@ def test_continuity_pinned_carries_model_and_task_privacy(monkeypatch):
         _ctx(True, {'prompt': 'p', 'provider': 'claude', 'model': ''})._resolve_provider()
 
 
-def test_continuity_event_payload_override_wins(monkeypatch):
+def test_continuity_event_payload_override_is_retired(monkeypatch):
+    # S0 doors 2026-09-21: the task's provider IS the brain. A daemon payload
+    # carrying llm_primary/llm_model (Discord's Reply LLM) no longer beats the
+    # task's dropdown — that override was the 1pm "good morning!" class.
     from core.continuity import executor as ex
     by_key = MagicMock(return_value=_prov()); monkeypatch.setattr(lp, 'get_provider_by_key', by_key)
     token = ex.current_event_data.set({'llm_primary': 'lanbox', 'llm_model': 'ev-model'})
@@ -338,7 +341,7 @@ def test_continuity_event_payload_override_wins(monkeypatch):
         key, _, override = _ctx(False, {'prompt': 'p', 'provider': 'claude', 'model': 'task-model'})._resolve_provider()
     finally:
         ex.current_event_data.reset(token)
-    assert (key, override) == ('lanbox', 'ev-model')
+    assert (key, override) == ('claude', 'task-model')
 
 
 def test_discord_side_lane_none_is_loud_not_mute(monkeypatch, caplog):

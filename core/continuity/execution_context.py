@@ -311,15 +311,9 @@ class ExecutionContext:
         provider_key = self.task_settings.get("provider", "auto")
         model_override = self.task_settings.get("model", "")
 
-        # Daemon-event payloads may carry a per-event provider/model override
-        # (e.g. the discord plugin's per-guild model routing) — payload wins
-        # over task settings.
-        from core.continuity.executor import current_event_data
-        event = current_event_data.get() or {}
-        ev_provider = str(event.get("llm_primary") or "").strip()
-        if ev_provider and ev_provider != "auto":
-            provider_key = ev_provider
-            model_override = str(event.get("llm_model") or "").strip()
+        # The task's provider IS the brain. The event-payload override
+        # (llm_primary/llm_model riding a daemon event — Discord's Reply LLM
+        # silently beating the task's dropdown) retired 2026-09-21, S0 doors.
 
         from core.chat.llm_providers.resolve import resolve, PrivacyRefused
         requires_privacy = bool(getattr(self, '_prompt_privacy_required', False))

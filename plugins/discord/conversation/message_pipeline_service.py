@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 
+from plugins.discord import hooks_out
 from plugins.discord.models.observations import TextMessageObservation, TypingObservation
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ class MessagePipelineService:
 
     def handle_message(self, observation: TextMessageObservation) -> None:
         batch = self.batching_service.add_message(observation)
+        # S0 door: add-ons see every inbound message (worker thread — this
+        # runs on the gateway loop).
+        hooks_out.fire_threaded('discord_message_observed', hooks_out.observed_payload(observation))
         if self.trace_repository:
             self.trace_repository.record_trace('batch_queued', 'Message added to channel batch', {
                 'account_name': observation.account_name,

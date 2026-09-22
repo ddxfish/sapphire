@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 
+from plugins.discord import hooks_out
 from plugins.discord.models.voice import VoiceMode
 from plugins.discord.sapphire.voice_prompt import format_voice_turn_text
 from plugins.discord.transport.discord_audio import concat_wav_bytes
@@ -429,6 +430,13 @@ class VoiceListenerService:
             guild_id=session.guild_id,
         )
         status = result.get('status', '')
+        if status == 'transcribed' and str(result.get('text') or '').strip():
+            # S0 door: add-ons hear what was said (worker thread).
+            hooks_out.fire('discord_voice_utterance', {
+                'account': account_name, 'guild_id': str(getattr(session, 'guild_id', '') or ''),
+                'channel_id': str(channel_id), 'speaker_id': str(user_id),
+                'speaker_name': speaker_name, 'text': str(result.get('text') or '').strip(),
+            })
         if status == 'transcribed':
             logger.debug(
                 'Voice transcript %s:%s from %s: %r',

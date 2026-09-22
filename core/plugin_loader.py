@@ -264,7 +264,11 @@ class PluginLoader:
         # Load enabled plugins
         loaded = 0
         blocked = []
-        for name, info in self._plugins.items():
+        # Add-ons (`requires_plugins`) load after every host, so a dependent
+        # that sorts before its host by name still finds it loaded (S0 doors).
+        ordered = sorted(self._plugins.items(),
+                         key=lambda kv: bool((kv[1].get("manifest") or {}).get("requires_plugins")))
+        for name, info in ordered:
             if info["enabled"]:
                 if self._load_plugin(name):
                     loaded += 1
@@ -637,6 +641,28 @@ class PluginLoader:
             # Stay enabled but not loaded — user can install deps and reload
             return True  # Don't block/disable, just skip loading code
 
+        # requires_plugins (S0 doors, 2026-09-21): an add-on that rides another
+        # plugin's hooks + api facade (discord-personality -> discord) does not
+        # load while its host is missing or disabled. Same shape as missing
+        # deps: stays enabled, reports once, retried when the host loads
+        # (_load_dependents) or at the next boot.
+        required = [str(r) for r in (manifest.get("requires_plugins") or [])]
+        info.pop("missing_plugins", None)
+        missing_hosts = [r for r in required
+                         if not (self._plugins.get(r) or {}).get("loaded")]
+        if missing_hosts:
+            info["missing_plugins"] = missing_hosts
+            hosts = ", ".join(missing_hosts)
+            logger.warning(f"[PLUGINS] {name}: requires {hosts} — not loaded")
+            err_data = {"plugin": name,
+                        "error": f"Requires plugin(s) not loaded: {hosts}",
+                        "hint": f"Enable {hosts} first, then reload {name}",
+                        "missing_plugins": missing_hosts}
+            self._load_errors.append(err_data)
+            from core.event_bus import publish, Events
+            publish(Events.PLUGIN_LOAD_ERROR, err_data)
+            return True
+
         # Offset user plugins into 100-199 band
         if band == "user":
             base_priority = min(base_priority + 100, 199)
@@ -960,6 +986,7 @@ class PluginLoader:
                 logger.info(f"[PLUGINS] Services for {name} deferred until boot completes")
 
         info["loaded"] = True
+        self._load_dependents(name)
 
         # Seed default settings if manifest declares schema and no settings file exists
         settings_schema = capabilities.get("settings", [])
@@ -1019,6 +1046,19 @@ class PluginLoader:
         except Exception as e:
             logger.error(f"[PLUGINS] Failed to load daemon module {full_path}: {e}", exc_info=True)
             return None
+
+    def _load_dependents(self, host: str):
+        """Retry add-ons that failed earlier for want of `host` (toggle-on lane).
+        Boot never sets missing_plugins before an attempt, so this is a no-op
+        during scan() — no double registration."""
+        for dep, dinfo in list(self._plugins.items()):
+            if (dinfo.get("enabled") and not dinfo.get("loaded")
+                    and host in (dinfo.get("missing_plugins") or [])):
+                logger.info(f"[PLUGINS] {host} loaded — retrying {dep}")
+                try:
+                    self._load_plugin(dep)
+                except Exception as e:
+                    logger.error(f"[PLUGINS] {dep}: retry after {host} loaded failed: {e}")
 
     def _load_handler(self, plugin_dir: Path, handler_path: str, hook_name: str, ns_cache: dict = None):
         """Import a Python handler from a plugin directory.
@@ -1097,6 +1137,11 @@ class PluginLoader:
         # non-destructive). (wave-3 A1)
         self._load_errors[:] = [e for e in self._load_errors
                                 if e.get("plugin") != name]
+        quiet = [n for n, i in self._plugins.items() if i.get("loaded")
+                 and name in ((i.get("manifest") or {}).get("requires_plugins") or [])]
+        if quiet:
+            logger.info(f"[PLUGINS] {name} unloading — {quiet} stay loaded; "
+                        f"their {name} hooks go quiet until it is back")
         hook_runner.unregister_plugin(name)
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)
@@ -2162,14 +2207,54 @@ class PluginLoader:
         with self._lock:
             self._reply_handlers.pop(plugin_name, None)
 
-    def _get_reply_handler(self, source_name: str) -> Optional[Callable]:
-        """Find the reply handler for an event source by looking up its plugin."""
+    def _source_plugin(self, source_name: str) -> Optional[str]:
+        """Which plugin declared this event source (None = nobody)."""
         with self._lock:
             for plugin_name, sources in self._event_sources.items():
-                for src in sources:
-                    if src["name"] == source_name:
-                        return self._reply_handlers.get(plugin_name)
+                if any(src["name"] == source_name for src in sources):
+                    return plugin_name
         return None
+
+    def _get_reply_handler(self, source_name: str) -> Optional[Callable]:
+        """Find the reply handler for an event source by looking up its plugin."""
+        owner = self._source_plugin(source_name)
+        with self._lock:
+            return self._reply_handlers.get(owner) if owner else None
+
+    def tasks_for_source(self, source_name: str) -> List[dict]:
+        """Enabled daemon tasks listening on `source_name`, trigger_config
+        included — a daemon's own clock reads its task_fields (greeting_time,
+        goodnight_time…) from these. Empty before the scheduler exists."""
+        if not self._scheduler:
+            return []
+        return self._scheduler.find_tasks_by_event(source_name)
+
+    def fire_task(self, task_id: str, payload, *, plugin: str = None) -> dict:
+        """A daemon fires ONE named task it owns (S0 doors, 2026-09-21).
+
+        emit_daemon_event fans a payload out to every listener of a source;
+        this targets a task — the Discord daemon's clock fires the greetings
+        task whose own greeting_time just passed, and nobody else's. The
+        task's source must be one this plugin declared (when `plugin` is
+        given); the answer routes to that plugin's reply handler. Scheduler
+        rules still apply: enabled, account match, filter. Realtime gates
+        refuse (they are switches, not tasks)."""
+        if not self._scheduler:
+            return {"success": False, "error": "no scheduler"}
+        task = self._scheduler.get_task(task_id)
+        if not task:
+            return {"success": False, "error": "Task not found"}
+        source = str((task.get("trigger_config") or {}).get("source") or "")
+        owner = self._source_plugin(source)
+        if owner is None or (plugin and owner != plugin):
+            return {"success": False,
+                    "error": f"source '{source}' is not owned by {plugin or 'any plugin'}"}
+        if self._is_realtime_source(source):
+            return {"success": False, "error": f"'{source}' is a realtime gate, not a fireable task"}
+        data = payload if isinstance(payload, str) else json.dumps(payload)
+        with self._lock:
+            handler = self._reply_handlers.get(owner)
+        return self._scheduler.fire_event_task(task_id, data, reply_callback=handler)
 
     def emit_daemon_event(self, source_name: str, event_data: str):
         """Emit an event from a daemon plugin, triggering matching tasks.
@@ -2283,6 +2368,7 @@ class PluginLoader:
             "verify_tier": info.get("verify_tier", "unsigned"),
             "verified_author": info.get("verified_author"),
             "missing_deps": info.get("missing_deps", []),
+            "missing_plugins": info.get("missing_plugins", []),
             "env": self.get_env_status(name),
         }
 

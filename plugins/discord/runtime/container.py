@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+from plugins.discord import hooks_out
 from plugins.discord.cognition.channel_situation import ChannelSituationService
 from plugins.discord.cognition.cognitive_orchestrator import CognitiveOrchestrator
 from plugins.discord.cognition.commitment_service import CommitmentService
@@ -429,7 +430,26 @@ class RuntimeContainer:
                     await self.voice_auto_join_service.tick_async(account_name)
                 except Exception:
                     logger.exception("Voice auto-join tick failed for %s", account_name)
+            try:
+                # S0 door: add-ons get a clock per connected account (worker
+                # thread, so their facade calls may block).
+                await asyncio.to_thread(hooks_out.fire, 'discord_tick', self._tick_payload(account_name))
+            except Exception:
+                logger.exception("discord_tick hook failed for %s", account_name)
         await self._reap_voice_chats()
+
+    def _tick_payload(self, account_name: str) -> dict:
+        from datetime import datetime
+        guilds = []
+        try:
+            client = self.transport.get_client(account_name)
+            guilds = [str(g.id) for g in (getattr(client, 'guilds', None) or [])]
+        except Exception:
+            pass
+        now = datetime.now()
+        return {'account': account_name, 'connected_guilds': guilds,
+                'local_hour': now.hour, 'local_time': now.strftime('%H:%M'),
+                'interval_s': float(getattr(self.scheduler, 'interval_seconds', 15.0) or 15.0)}
 
     async def _reap_voice_chats(self) -> None:
         """Delete VC chats idle past their TTL (M8). Once a minute, off the loop

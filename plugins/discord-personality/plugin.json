@@ -1,0 +1,36 @@
+{
+  "name": "discord-personality",
+  "short_display_name": "Discord Personality",
+  "version": "0.1.0",
+  "min_core_version": "2.13.0",
+  "description": "Personality for the Discord bot: people memory, birthdays, reminders, typos & edits, presence cycling. Rides the Discord plugin's hooks; one toggle per module.",
+  "author": "zeebie-the-zebra",
+  "url": "https://sapphireblue.dev",
+  "icon": "🦓",
+  "priority": 60,
+  "default_enabled": false,
+  "requires_plugins": ["discord"],
+  "settingsUI": "plugin",
+  "capabilities": {
+    "hooks": {
+      "discord_message_observed": "hooks.py",
+      "discord_prompt_context": "hooks.py",
+      "discord_reply_planned": "hooks.py",
+      "discord_reply_sent": "hooks.py",
+      "discord_voice_utterance": "hooks.py",
+      "discord_tick": "hooks.py"
+    },
+    "settings": [
+      {"key": "people.enabled", "type": "boolean", "label": "People memory", "default": true, "tab": "People",
+       "help": "Remember, recall and forget facts about Discord users; what she knows about the speaker rides into her reply prompt."},
+      {"key": "birthdays.enabled", "type": "boolean", "label": "Birthdays", "default": false, "tab": "Birthdays",
+       "help": "A birthday wish on the day, written by the LLM from a Discord: Birthdays daemon task. Needs People memory."},
+      {"key": "reminders.enabled", "type": "boolean", "label": "Reminders", "default": false, "tab": "Reminders",
+       "help": "\"Remind me in 2 hours to…\" posts an @mention when due. No LLM involved."},
+      {"key": "typos.enabled", "type": "boolean", "label": "Typos & edits", "default": false, "tab": "Typos",
+       "help": "An occasional typo, fixed by editing the message a moment later; a chance to quote-reply."},
+      {"key": "presence.enabled", "type": "boolean", "label": "Presence cycling", "default": false, "tab": "Presence",
+       "help": "Cycle the bot's status line through a list; a night status after hours."}
+    ]
+  }
+}
