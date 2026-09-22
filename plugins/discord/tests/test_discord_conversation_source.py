@@ -117,3 +117,19 @@ def test_batch_fallback_never_speaks_the_hangup_tag():
     source.wait(timeout=0.01)
 
     source.speech_bridge.synthesize_speech.assert_called_once_with('Talk soon, take care.')
+
+
+def test_source_stale_generation_gates_feed_finish_wait():
+    """hunt 2.13.0 row 11: a replaced turn cannot touch the new turn's stream."""
+    from types import SimpleNamespace
+    src = DiscordConversationSource.__new__(DiscordConversationSource)
+    src.driver = SimpleNamespace(_turn_gen=5)
+    assert src._stale() is False                     # never started: not gated
+    src._gen = 5
+    assert src._stale() is False
+    src.driver._turn_gen = 6
+    assert src._stale() is True
+    src.feed_chunk({'audio_b64': 'x'})               # returns before touching playback
+    src.playback_service = MagicMock()
+    src.wait()
+    src.playback_service.wait.assert_not_called()

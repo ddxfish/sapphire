@@ -10,8 +10,7 @@ from plugins.discord.models.settings import EffectiveSettings, MediaSettings, Se
 
 
 def _settings(**media_kwargs):
-    store = SettingsStore()
-    store.global_overlay.media.update(media_kwargs)
+    store = SettingsStore({'media': media_kwargs})
     return store.resolve()
 
 

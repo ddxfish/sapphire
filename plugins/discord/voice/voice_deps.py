@@ -1,6 +1,10 @@
-"""Voice receive dependency checks (py-cord sinks, not rapptz discord.py)."""
+"""Voice receive dependency checks and the py-cord patch step (py-cord sinks, not rapptz discord.py)."""
 
 from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 INSTALL_HINT = """Discord voice receive needs py-cord with DAVE support (not discord.py).
 In the Sapphire venv run:
@@ -95,3 +99,29 @@ def voice_stack_info() -> dict:
         info['patches'] = {}
         info['patches_missing'] = []
     return info
+
+
+def apply_patches() -> dict:
+    """Apply the DAVE and py-cord voice patches once (before any voice client
+    exists) and log the stack. Reports, never raises."""
+    from plugins.discord.voice.dave_voice_patches import apply_dave_voice_patches
+    from plugins.discord.voice.pycord_patches import apply_pycord_voice_patches
+
+    apply_dave_voice_patches()
+    apply_pycord_voice_patches()
+    stack = voice_stack_info()
+    logger.info('[DISCORD] Voice stack: pycord=%s davey=%s dave_mode=%s router_patches=%s opus_pcm_patch=%s',
+                stack.get('pycord_version') or 'missing', stack.get('davey'), stack.get('dave_patch_mode'),
+                stack.get('router_patches'), stack.get('opus_pcm_patch'))
+    if stack.get('patches_missing'):
+        logger.warning('[DISCORD] voice patches NOT applied (py-cord moved/renamed something?): %s',
+                       {name: stack['patches'].get(name) for name in stack['patches_missing']})
+    if not stack.get('voice_sinks') or not stack.get('davey'):
+        logger.warning('[DISCORD] Voice receive unavailable — %s', stack)
+    elif not stack.get('opus_pcm_patch'):
+        logger.warning('[DISCORD] Voice receive is available but the PCM double-decrypt skip patch did not apply '
+                       '— DAVE transcription may be corrupted')
+    hint = voice_receive_error()
+    if hint:
+        logger.warning('Discord voice receive unavailable:\n%s', hint)
+    return stack

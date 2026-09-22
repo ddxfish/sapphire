@@ -52,3 +52,21 @@ def test_llm_debug_records_policy_rejection():
     assert len(entries) == 1
     assert entries[0]['kind'] == 'rejection'
     assert entries[0]['rejection']['reason'] == 'cooldown'
+
+
+def test_debug_ring_is_opt_in_and_clearable():
+    class Loader:
+        def __init__(self, on):
+            self.on = on
+
+        def get_plugin_settings(self, name):
+            return {'debug.llm_debug_enabled': self.on}
+
+    off = LlmDebugService(limit=5, plugin_loader=Loader(False))
+    off.record_prompt({'message_id': 'm1', 'account': 'bot', 'content': 'hello'})
+    assert off.list_entries() == []
+    on = LlmDebugService(limit=5, plugin_loader=Loader('true'))
+    on.record_prompt({'message_id': 'm1', 'account': 'bot', 'content': 'hello'})
+    assert len(on.list_entries()) == 1
+    assert on.clear() == 1 and on.list_entries() == []
+    assert LlmDebugService(limit=5).enabled is True            # no loader = unit test / standalone

@@ -39,8 +39,7 @@ def test_message_matches_bot_name_insensitive():
 
 
 def test_evaluate_reply_trigger_name_match():
-    store = SettingsStore()
-    store.global_overlay.channel.update({'name_match_enabled': True})
+    store = SettingsStore({'channel': {'name_match_enabled': True}})
     settings = store.resolve()
     obs = _obs(clean_content='hey LeonaBot whats up')
 
@@ -52,8 +51,7 @@ def test_evaluate_reply_trigger_name_match():
 
 
 def test_evaluate_reply_trigger_mentions_only_blocks_organic():
-    store = SettingsStore()
-    store.global_overlay.channel.update({'reply_mode': 'mentions_only', 'name_match_enabled': False})
+    store = SettingsStore({'channel': {'reply_mode': 'mentions_only', 'name_match_enabled': False}})
     settings = store.resolve()
     obs = _obs(clean_content='hello everyone')
 

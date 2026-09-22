@@ -47,17 +47,11 @@ def test_handle_llm_response_resolves_username_mentions(monkeypatch):
     transport = FakeTransport(mention_map_service=mention_map_service)
     service = ConversationService(
         event_bridge=None,
-        policy_service=None,
-        prompt_context_service=None,
-        trace_repository=type('T', (), {'record_trace': lambda *a, **k: None})(),
         reply_style_service=FakeReplyStyle(),
         transport=transport,
         mention_map_service=mention_map_service,
     )
-    monkeypatch.setattr(
-        'plugins.discord.conversation.conversation_service.deliver_gif_and_reaction',
-        lambda **kwargs: None,
-    )
+    monkeypatch.setattr('plugins.discord.conversation.conversation_service.time.sleep', lambda s: None)
     service.handle_llm_response(
         None,
         {

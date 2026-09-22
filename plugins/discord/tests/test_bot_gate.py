@@ -10,8 +10,7 @@ def _obs(author='peer', bot=True):
 
 
 def _settings(enabled=True, allow=('peer',)):
-    store = SettingsStore()
-    store.global_overlay.bot.update({'enabled': enabled, 'allowlist_ids': allow if isinstance(allow, str) else list(allow)})
+    store = SettingsStore({'bot': {'enabled': enabled, 'allowlist_ids': allow if isinstance(allow, str) else list(allow)}})
     return store.resolve()
 
 

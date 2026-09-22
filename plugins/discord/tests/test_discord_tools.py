@@ -145,8 +145,13 @@ def test_resolve_channel_id_maps_account_name_to_reply_channel(monkeypatch):
 
 
 def test_discord_send_message_strips_gif_tag_and_posts_gif(monkeypatch):
+    from plugins.discord.conversation.conversation_service import ConversationService
     runtime = FakeRuntime()
     runtime.gif_service = FakeGifService()
+    # The tool's tags ride the one delivery door (S7): the conversation service's deliver_tags.
+    runtime.conversation_service = ConversationService(event_bridge=None, transport=runtime.transport,
+                                                       reply_style_service=runtime.reply_style_service,
+                                                       gif_service=runtime.gif_service)
     monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
     tools._reply_channel_id.set('c1')
     tools._reply_message_id.set('1521787194761678918')
@@ -422,3 +427,29 @@ def test_tools_stay_in_the_server_inside_an_event(monkeypatch):
     # operator chat (no event): full reach
     msg, ok = tools.execute('discord_send_message', {'channel': 'c9', 'text': 'from home'})
     assert ok is True
+
+
+def test_reach_error_fails_closed_without_guild_id():
+    """hunt 2.13.0 row 9: inside a server event her tools reach only that server, and
+    an event with no guild id refuses every other channel instead of guessing."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    transport = SimpleNamespace(channel_reach_sync=lambda target, account_name=None: {'guild_id': 'g2', 'is_dm': False})
+    with patch.object(tools, '_event_data', return_value={'channel_id': '1', 'guild_id': ''}), \
+         patch.object(tools, '_tools_stay_in_server', return_value=True), \
+         patch.object(tools, '_transport', return_value=transport):
+        assert tools._reach_error('1', 'bot') is None                 # the event channel itself
+        err = tools._reach_error('2', 'bot')
+        assert err and "can't tell which server" in err
+
+
+def test_send_message_tags_ride_the_conversation_service(monkeypatch):
+    """A tool-sent reply's [react:] / [gif:] tags are delivered by the one door."""
+    runtime = FakeRuntime()
+    seen = []
+    runtime.conversation_service = type('C', (), {'deliver_tags': lambda self, parsed, **kw: seen.append((parsed, kw))})()
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_channel_id.set('c1')
+    tools._reply_message_id.set('1521787194761678918')
+    msg, ok = tools.execute('discord_send_message', {'channel': 'c1', 'text': 'hello [react:🔥]'})
+    assert ok is True and len(seen) == 1 and seen[0][1]['channel_id'] == 'c1'

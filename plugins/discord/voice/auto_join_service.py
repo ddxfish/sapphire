@@ -21,11 +21,10 @@ AUTO_REASONS = ('auto_join_empty', 'no_voice_task')
 
 
 class VoiceAutoJoinService:
-    def __init__(self, *, transport, voice_service, gate, trace_service=None):
+    def __init__(self, *, transport, voice_service, gate):
         self.transport = transport
         self.voice_service = voice_service
         self.gate = gate
-        self.trace_service = trace_service
         self._latched: set[tuple[str, str]] = set()
         self._last_state: dict[tuple[str, str], str] = {}
 
@@ -132,9 +131,6 @@ class VoiceAutoJoinService:
         intention = JoinVoiceIntention(intention_type='join_voice', account_name=account_name, channel_id=channel_id,
                                        message_id='', reason='auto_join', guild_id=str(target.get('guild_id') or ''))
         result = await self.voice_service.join_async(intention)
-        if self.trace_service:
-            self.trace_service.record_voice_decision('auto_join', {'account_name': account_name, 'channel_id': channel_id,
-                                                                   'human_count': humans, 'result': result})
         if result.get('status') in ('error', 'blocked'):
             logger.warning('Voice auto-join failed for %s:%s: %s', account_name, channel_id,
                            result.get('reason') or result.get('error') or result.get('status'))
@@ -146,9 +142,6 @@ class VoiceAutoJoinService:
         intention = LeaveVoiceIntention(intention_type='leave_voice', account_name=account_name, channel_id=channel_id,
                                         message_id='', reason=reason)
         result = await self.voice_service.leave_async(intention)
-        if self.trace_service:
-            self.trace_service.record_voice_decision('auto_leave', {'account_name': account_name, 'channel_id': channel_id,
-                                                                    'reason': reason, 'result': result})
         logger.info('Voice auto-leave %s <- channel %s (%s)', account_name, channel_id, reason)
         return result
 

@@ -1,224 +1,292 @@
-"""Dependency injection root for the Discord cognitive plugin."""
+"""The runtime: every service the host runs, built once, started and stopped in order (S7).
+
+One object, one place to read the wiring. Routes, tools, hooks and the
+schedule handler reach it through daemon.get_runtime().
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-
-logger = logging.getLogger(__name__)
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from plugins.discord import hooks_out
-from plugins.discord.conversation.policy_service import PolicyService
 from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.bot_gate import BotGate
 from plugins.discord.conversation.conversation_service import ConversationService
-from plugins.discord.conversation.mention_map_service import MentionMapService
-from plugins.discord.conversation.message_pipeline_service import MessagePipelineService
 from plugins.discord.conversation.gif_service import GifService
 from plugins.discord.conversation.images import ImageLane
-from plugins.discord.conversation.prompt_context_service import PromptContextService
+from plugins.discord.conversation.mention_map_service import MentionMapService
+from plugins.discord.conversation.message_pipeline_service import MessagePipelineService
 from plugins.discord.conversation.reactions import Reactions
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.greetings import GreetingsClock
+from plugins.discord.models.intentions import LeaveVoiceIntention
 from plugins.discord.models.settings import SettingsStore
 from plugins.discord.observability.llm_debug_service import LlmDebugService
-from plugins.discord.observability.trace_service import TraceService
-from plugins.discord.runtime.health import RuntimeHealth
-from plugins.discord.runtime.forget_service import ForgetService
-from plugins.discord.runtime.retention_service import RetentionService
-from plugins.discord.runtime.lifecycle import LifecycleManager
-from plugins.discord.runtime.scheduler_loop import SchedulerLoop
 from plugins.discord.sapphire.event_bridge import SapphireEventBridge
 from plugins.discord.sapphire.scheduler_bridge import SapphireSchedulerBridge
-from plugins.discord.sapphire.settings_bridge import SapphireSettingsBridge
 from plugins.discord.sapphire.speech_bridge import SapphireSpeechBridge
-from plugins.discord.storage.repositories.accounts import AccountRepository
-from plugins.discord.storage.repositories.channels import ChannelRepository
-from plugins.discord.storage.repositories.messages import MessageRepository
-from plugins.discord.storage.repositories.traces import TraceRepository
+from plugins.discord.storage.repositories import AccountRepository, ChannelRepository, MessageRepository
 from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
 from plugins.discord.transport.discord_transport import DiscordTransport
 from plugins.discord.transport.voice_transport import VoiceTransport
-from plugins.discord.voice.voice_gate import VoiceGate
-from plugins.discord.voice.voice_service import VoiceService
-from plugins.discord.voice.voice_sessions import VoiceSessions
+from plugins.discord.voice import voice_deps
 from plugins.discord.voice.auto_join_service import VoiceAutoJoinService
 from plugins.discord.voice.discord_conversation_runner import DiscordConversationRunner
-from plugins.discord.sapphire.voice_event_bridge import VoiceEventBridge
-from plugins.discord.voice.voice_streaming_playback_service import VoiceStreamingPlaybackService
+from plugins.discord.voice.voice_gate import VoiceGate
 from plugins.discord.voice.voice_listener_service import VoiceListenerService
+from plugins.discord.voice.voice_service import VoiceService
+from plugins.discord.voice.voice_sessions import VoiceSessions
+from plugins.discord.voice.voice_streaming_playback_service import VoiceStreamingPlaybackService
+
+logger = logging.getLogger(__name__)
+
+CONNECT_BACKOFF_SECONDS = 300   # repeated failed logins get rate-banned by Discord
+VOICE_REAP_SECONDS = 60
 
 
 @dataclass
+class RuntimeHealth:
+    state: str = 'created'
+    detail: str = ''
+    started_at: float | None = None
+    updated_at: float = field(default_factory=time.time)
+
+    def mark(self, state: str, detail: str = '') -> None:
+        if state == 'ready' and self.started_at is None:
+            self.started_at = time.time()
+        self.state, self.detail, self.updated_at = state, detail, time.time()
+
+    def as_dict(self) -> dict:
+        return {'state': self.state, 'detail': self.detail, 'started_at': self.started_at, 'updated_at': self.updated_at}
+
+
+async def _quiet(coro, message: str) -> None:
+    try:
+        await coro
+    except Exception:
+        logger.exception(message)
+
+
 class RuntimeContainer:
-    plugin_name: str
-    plugin_loader: object
-    settings: dict
-    loop: asyncio.AbstractEventLoop
-
-    def __post_init__(self):
-        database_path = self.settings.get("database_path") or resolve_default_db_path(self.plugin_name)
+    def __init__(self, *, plugin_name: str, plugin_loader, settings: dict, loop: asyncio.AbstractEventLoop):
+        self.plugin_name = plugin_name
+        self.plugin_loader = plugin_loader
+        self.settings = dict(settings or {})
+        self.loop = loop
         self.health = RuntimeHealth()
-        self.lifecycle = LifecycleManager()
-        self.sqlite_service = SQLiteService(database_path)
-        self.scheduler = SchedulerLoop(interval_seconds=float(self.settings.get("scheduler_interval_seconds", 15)))
-        self.settings_store = None
-        self.transport = None
-        self.account_repository = None
-        self.channel_repository = None
-        self.message_repository = None
-        self.trace_repository = None
-        self.presence_repository = None
-        self.event_bridge = None
-        self.scheduler_bridge = None
-        self._connect_backoff = {}
+        self.tick_seconds = max(1.0, float(self.settings.get('scheduler_interval_seconds', 15)))
+        self.sqlite_service = SQLiteService(self.settings.get('database_path') or resolve_default_db_path(plugin_name))
+        self._tick_task: asyncio.Task | None = None
+        self._connect_backoff: dict[str, float] = {}
         self._last_voice_reap = 0.0
-        self.settings_bridge = None
-        self.speech_bridge = None
-        self.event_adapter = None
-        self.batching_service = None
-        self.message_pipeline = None
-        self.policy_service = None
-        self.prompt_context_service = None
-        self.reply_style_service = None
-        self.reaction_service = None
-        self.gif_service = None
-        self.conversation_service = None
-        self.image_lane = None
-        self.greetings = None
-        self.mention_map_service = None
-        self.voice_transport = None
-        self.voice_sessions = None
-        self.voice_gate = None
-        self.voice_listener_service = None
-        self.voice_service = None
-        self.voice_auto_join_service = None
-        self.trace_service = None
-        self.llm_debug_service = None
-        self.retention_service = None
+        self._build()
 
-    async def start(self) -> None:
-        await self.lifecycle.start(self)
+    # ── wiring ───────────────────────────────────────────────────────────────
 
-    async def stop(self) -> None:
-        await self.lifecycle.stop(self)
-
-    def build_settings_store(self) -> None:
+    def _build(self) -> None:
+        loader = self.plugin_loader
         # Core's plugin settings, read live on every resolve (no overlays since S6).
         self.settings_store = SettingsStore()
-
-    def build_repositories(self) -> None:
         self.account_repository = AccountRepository(self.sqlite_service)
         self.channel_repository = ChannelRepository(self.sqlite_service)
         self.message_repository = MessageRepository(self.sqlite_service)
-        self.trace_repository = TraceRepository(self.sqlite_service)
-        self.trace_service = TraceService(trace_repository=self.trace_repository)
-        self.llm_debug_service = LlmDebugService(limit=10, plugin_loader=self.plugin_loader)
-        self.forget_service = ForgetService(sqlite_service=self.sqlite_service, trace_repository=self.trace_repository)
-        self.retention_service = RetentionService(
-            sqlite_service=self.sqlite_service, trace_repository=self.trace_repository,
-            forget_service=self.forget_service,
-        )
+        self.llm_debug_service = LlmDebugService(limit=10, plugin_loader=loader)
+        self.event_bridge = SapphireEventBridge(loader, llm_debug_service=self.llm_debug_service)
+        self.scheduler_bridge = SapphireSchedulerBridge(loader)
+        self.speech_bridge = SapphireSpeechBridge(loader)
+        self.voice_gate = VoiceGate(loader)
 
-    def build_bridges(self) -> None:
-        self.event_bridge = SapphireEventBridge(self.plugin_loader, llm_debug_service=self.llm_debug_service)
-        self.scheduler_bridge = SapphireSchedulerBridge(self.plugin_loader)
-        self.voice_gate = VoiceGate(self.plugin_loader)
-        self.settings_bridge = SapphireSettingsBridge(self.plugin_loader, self.plugin_name)
-        self.speech_bridge = SapphireSpeechBridge(self.plugin_loader)
+        self.mention_map_service = MentionMapService(message_repository=self.message_repository,
+                                                     channel_repository=self.channel_repository)
+        self.transport = DiscordTransport(loop=self.loop, account_repository=self.account_repository,
+                                          mention_map_service=self.mention_map_service)
+        self.mention_map_service.set_transport(self.transport)
+        self.voice_gate.describe = self.transport.describe_voice_channel
 
-    def build_media_and_clock(self) -> None:
         self.image_lane = ImageLane()
-        # S1 (2026-09-22): the greetings clock replaced the proactive family.
-        # Times live on the Greetings / All interactions daemon tasks; the
-        # clock fires them into the task through core's fire_task.
-        get_state = getattr(self.plugin_loader, 'get_plugin_state', None)
+        self.bot_gate = BotGate()
+        self.reply_style_service = ReplyStyleService()
+        self.reactions = Reactions()
+        self.gif_service = GifService()
+        self.event_adapter = DiscordEventAdapter(
+            message_repository=self.message_repository, channel_repository=self.channel_repository,
+            image_lane=self.image_lane, settings_store=self.settings_store, mention_map_service=self.mention_map_service,
+        )
+        self.batching_service = BatchingService(default_window_seconds=self._batch_window())
+        self.conversation_service = ConversationService(
+            event_bridge=self.event_bridge, message_repository=self.message_repository, transport=self.transport,
+            settings_store=self.settings_store, reply_style_service=self.reply_style_service,
+            gif_service=self.gif_service, reactions=self.reactions, bot_gate=self.bot_gate,
+            mention_map_service=self.mention_map_service, llm_debug_service=self.llm_debug_service,
+            image_lane=self.image_lane, account_repository=self.account_repository,
+        )
+        self.message_pipeline = MessagePipelineService(batching_service=self.batching_service,
+                                                       conversation_service=self.conversation_service)
+        self.transport.set_event_adapter(self.event_adapter)
+        self.transport.set_message_pipeline(self.message_pipeline)
+        self.transport.set_on_account_connected(self._on_account_connected)
+
+        # S1: greeting / goodnight times live on the daemon tasks; the clock
+        # fires them into the task through core's fire_task.
+        get_state = getattr(loader, 'get_plugin_state', None)
         self.greetings = GreetingsClock(
-            plugin_loader=self.plugin_loader,
-            transport=self.transport,
-            message_repository=self.message_repository,
-            channel_repository=self.channel_repository,
-            account_repository=self.account_repository,
+            plugin_loader=loader, transport=self.transport, message_repository=self.message_repository,
+            channel_repository=self.channel_repository, account_repository=self.account_repository,
             state=get_state(self.plugin_name) if callable(get_state) else None,
         )
-        self.scheduler.set_tick_handler(self._scheduler_tick)
 
-    def build_voice(self) -> None:
+        # Voice: one lane on core's conversation engine, gated by the Realtime rule.
         self.voice_transport = VoiceTransport(discord_transport=self.transport)
-        self.voice_sessions = VoiceSessions(trace_repository=self.trace_repository)
-        self.voice_streaming_playback_service = VoiceStreamingPlaybackService(
-            voice_transport=self.voice_transport,
-        )
+        self.voice_sessions = VoiceSessions()
+        self.voice_streaming_playback_service = VoiceStreamingPlaybackService(voice_transport=self.voice_transport)
         self.discord_conversation_runner = DiscordConversationRunner(
-            playback_service=self.voice_streaming_playback_service,
-            transport=self.transport,
-            settings_store=self.settings_store,
-            sessions=self.voice_sessions,
-            speech_bridge=self.speech_bridge,
-            voice_transport=self.voice_transport,
-            gate=self.voice_gate,
+            playback_service=self.voice_streaming_playback_service, transport=self.transport,
+            settings_store=self.settings_store, sessions=self.voice_sessions, speech_bridge=self.speech_bridge,
+            voice_transport=self.voice_transport, gate=self.voice_gate,
         )
         self.voice_listener_service = VoiceListenerService(
-            voice_transport=self.voice_transport,
-            conversation_runner=self.discord_conversation_runner,
-            speech_bridge=self.speech_bridge,
-            settings_store=self.settings_store,
-            trace_repository=self.trace_repository,
-        )
-        self.voice_event_bridge = VoiceEventBridge(
-            sessions=self.voice_sessions,
-            trace_repository=self.trace_repository,
-            conversation_runner=self.discord_conversation_runner,
+            voice_transport=self.voice_transport, conversation_runner=self.discord_conversation_runner,
+            speech_bridge=self.speech_bridge, settings_store=self.settings_store,
         )
         self.voice_service = VoiceService(
-            voice_transport=self.voice_transport,
-            sessions=self.voice_sessions,
-            gate=self.voice_gate,
-            voice_listener_service=self.voice_listener_service,
-            trace_repository=self.trace_repository,
-            loop=self.loop,
+            voice_transport=self.voice_transport, sessions=self.voice_sessions, gate=self.voice_gate,
+            voice_listener_service=self.voice_listener_service, loop=self.loop,
         )
-        self.voice_auto_join_service = VoiceAutoJoinService(
-            transport=self.transport,
-            voice_service=self.voice_service,
-            gate=self.voice_gate,
-            trace_service=self.trace_service,
-        )
-        # Every leave (hang-up, /voice leave, the tool, auto) reaches the latch.
+        self.voice_auto_join_service = VoiceAutoJoinService(transport=self.transport, voice_service=self.voice_service,
+                                                            gate=self.voice_gate)
+        # Every leave (hang-up, /voice leave, the tool, auto) reaches the latch,
+        # and <<HANG UP>> leaves through the same door as /voice leave — wired
+        # here at build, not on the first tick.
         self.voice_service.on_leave = self.voice_auto_join_service.note_leave
-        from plugins.discord.voice.voice_deps import voice_receive_error
+        self.discord_conversation_runner.leave_fn = self._leave_voice
 
-        hint = voice_receive_error()
-        if hint:
-            logger.warning("Discord voice receive unavailable:\n%s", hint)
+    def _batch_window(self) -> float:
+        try:
+            return max(1.0, float(self.settings_store.resolve().channel.batching_seconds))
+        except Exception:
+            return 8.0
 
-    async def _scheduler_tick(self):
-        if not self.transport:
-            return
-        await self._reconcile_accounts()
-        if self.greetings:
+    def refresh_settings(self) -> None:
+        """Core's settings-saved hook: the store reads core live; only the one
+        construct-time scalar (the batch window) needs a nudge."""
+        self.batching_service.default_window_seconds = self._batch_window()
+
+    def _leave_voice(self, account_name: str, channel_id: str) -> dict:
+        return self.voice_service.leave(LeaveVoiceIntention(
+            intention_type='leave_voice', account_name=account_name, channel_id=str(channel_id),
+            message_id='', reason='hangup_sentinel',
+        ))
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        try:
+            self.health.mark('starting', 'Opening storage')
+            self.sqlite_service.start()
+            self.health.mark('starting', 'Applying voice patches')
+            voice_deps.apply_patches()
+            self.health.mark('starting', 'Starting message pipeline')
+            await self.message_pipeline.start()
+            self._tick_task = asyncio.create_task(self._tick_loop(), name='discord-tick')
+            self.health.mark('ready', 'Runtime ready')
+            await self._connect_stored_accounts()
+        except Exception as exc:
+            self.health.mark('error', str(exc))
+            logger.exception('Discord runtime startup failed')
+            raise
+
+    async def stop(self) -> None:
+        self.health.mark('stopping', 'Stopping message pipeline')
+        await _quiet(self.message_pipeline.stop(), 'Message pipeline stop failed')
+        if self._tick_task is not None:
+            self._tick_task.cancel()
             try:
-                await asyncio.to_thread(self.greetings.tick)
+                await self._tick_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._tick_task = None
+        self.health.mark('stopping', 'Closing voice')
+        await _quiet(self.discord_conversation_runner.stop_all_async(), 'Conversation runner shutdown failed')
+        for item in self.voice_transport.list_connections():
+            await _quiet(self.voice_transport.disconnect_async(item['account_name'], item['channel_id']),
+                         f'Voice disconnect failed for {item}')
+        try:
+            from plugins.discord.voice import voice_workers
+            voice_workers.shutdown()
+        except Exception:
+            logger.exception('Voice worker pool shutdown failed')
+        self.health.mark('stopping', 'Closing transport')
+        await _quiet(self.transport.close_all(), 'Transport close failed')
+        self.health.mark('stopping', 'Closing storage')
+        try:
+            self.sqlite_service.stop()
+        except Exception:
+            logger.exception('Storage close failed')
+        self.health.mark('stopped', 'Runtime stopped')
+
+    async def _connect_stored_accounts(self) -> None:
+        # Only bots selected by an enabled daemon task log in (house semantic);
+        # the tick reconciles later if tasks change.
+        selected = self.scheduler_bridge.selected_accounts()
+        if not selected:
+            logger.info('[DISCORD] No enabled daemon task selects a bot — not connecting any accounts')
+            return
+        first = True
+        for account in self.account_repository.list_accounts():
+            name = account.get('name', '')
+            token = self.account_repository.get_token(name)
+            if not name or not token:
+                continue
+            if name not in selected:
+                logger.info('[DISCORD] Skipping %s — no enabled daemon task selects it', name)
+                continue
+            if not first:
+                await asyncio.sleep(5)  # stagger multi-bot boots — Discord rate limits logins
+            first = False
+            await _quiet(self.transport.connect_account(name, token), f'Failed to connect stored account {name}')
+
+    async def _on_account_connected(self, account_name: str) -> None:
+        # Presence is the discord-personality plugin's job (its presence
+        # module sets it on the next tick); the host connects plain online.
+        logger.debug('[DISCORD] account %s connected', account_name)
+
+    # ── the tick ─────────────────────────────────────────────────────────────
+
+    async def _tick_loop(self) -> None:
+        while True:
+            try:
+                await self._tick()
+            except asyncio.CancelledError:
+                raise
             except Exception:
-                logger.exception("Greetings clock tick failed")
+                logger.exception('Discord tick failed')
+            await asyncio.sleep(self.tick_seconds)
+
+    async def _tick(self) -> None:
+        await self._reconcile_accounts()
+        try:
+            await asyncio.to_thread(self.greetings.tick)
+        except Exception:
+            logger.exception('Greetings clock tick failed')
         for account_name in self.transport.list_connected():
-            if self.voice_auto_join_service:
-                try:
-                    await self.voice_auto_join_service.tick_async(account_name)
-                except Exception:
-                    logger.exception("Voice auto-join tick failed for %s", account_name)
+            try:
+                await self.voice_auto_join_service.tick_async(account_name)
+            except Exception:
+                logger.exception('Voice auto-join tick failed for %s', account_name)
             try:
                 # S0 door: add-ons get a clock per connected account (worker
                 # thread, so their facade calls may block).
                 await asyncio.to_thread(hooks_out.fire, 'discord_tick', self._tick_payload(account_name))
             except Exception:
-                logger.exception("discord_tick hook failed for %s", account_name)
+                logger.exception('discord_tick hook failed for %s', account_name)
         await self._reap_voice_chats()
 
     def _tick_payload(self, account_name: str) -> dict:
-        from datetime import datetime
         guilds = []
         try:
             client = self.transport.get_client(account_name)
@@ -226,21 +294,17 @@ class RuntimeContainer:
         except Exception:
             pass
         now = datetime.now()
-        return {'account': account_name, 'connected_guilds': guilds,
-                'local_hour': now.hour, 'local_time': now.strftime('%H:%M'),
-                'interval_s': float(getattr(self.scheduler, 'interval_seconds', 15.0) or 15.0)}
+        return {'account': account_name, 'connected_guilds': guilds, 'local_hour': now.hour,
+                'local_time': now.strftime('%H:%M'), 'interval_s': self.tick_seconds}
 
     async def _reap_voice_chats(self) -> None:
         """Delete VC chats idle past their TTL (M8). Once a minute, off the loop
-        (core's reaper takes the history lock); chats with a live conversation
-        session are excluded."""
-        import time
+        (core's reaper takes the history lock); chats with a live session are excluded."""
         now = time.monotonic()
-        if now - self._last_voice_reap < 60.0:
+        if now - self._last_voice_reap < VOICE_REAP_SECONDS:
             return
         self._last_voice_reap = now
-        runner = getattr(self, 'discord_conversation_runner', None)
-        live = set(runner.active_chat_names()) if runner else set()
+        live = set(self.discord_conversation_runner.active_chat_names())
         try:
             from core.api_fastapi import get_system
             system = get_system()
@@ -249,40 +313,32 @@ class RuntimeContainer:
         if system is None:
             return
         from plugins.discord.sapphire.voice_chat import reap_voice_chats
-        try:
-            await asyncio.to_thread(reap_voice_chats, system, live=live)
-        except Exception:
-            logger.exception('Voice chat reap failed')
+        await _quiet(asyncio.to_thread(reap_voice_chats, system, live=live), 'Voice chat reap failed')
 
     async def retry_account_connect(self, name: str) -> None:
         """User-triggered retry (e.g. after fixing portal intents): forget backoff, reconcile now."""
         name = str(name or '')
         self._connect_backoff.pop(name, None)
-        if self.transport:
-            self.transport.clear_connect_failure(name)
+        self.transport.clear_connect_failure(name)
         await self._reconcile_accounts()
 
-    async def _reconcile_accounts(self):
+    async def _reconcile_accounts(self) -> None:
         """Keep connections matched to daemon tasks: only task-selected bots stay online."""
-        if not self.account_repository or not self.scheduler_bridge:
-            return
-        import time
         selected = self.scheduler_bridge.selected_accounts()
         connected = set(self.transport.list_connected())
         for name in connected - selected:
-            try:
-                await self.transport.disconnect_account(name)
-                logger.info('Disconnected %s — no enabled daemon task selects it', name)
-            except Exception:
-                logger.exception('Failed to disconnect %s', name)
+            await _quiet(self.transport.disconnect_account(name), f'Failed to disconnect {name}')
+            logger.info('Disconnected %s — no enabled daemon task selects it', name)
         for name in selected - connected:
             if time.monotonic() < self._connect_backoff.get(name, 0):
                 continue
+            if (self.transport.account_health(name) or {}).get('state') == 'connecting':
+                continue   # the boot connect (or the last tick's) is still logging in
             # Gateway logins fail AFTER connect_account returns (async runner) —
             # honor those failures too, or a bad token/intents gets hammered every
-            # 15s and Discord's daily identify cap eats the token.
+            # tick and Discord's daily identify cap eats the token.
             failed_at = self.transport.last_connect_failure(name)
-            if failed_at and (time.monotonic() - failed_at) < 300:
+            if failed_at and (time.monotonic() - failed_at) < CONNECT_BACKOFF_SECONDS:
                 continue
             token = self.account_repository.get_token(name)
             if not token:
@@ -291,87 +347,5 @@ class RuntimeContainer:
                 await self.transport.connect_account(name, token)
                 logger.info('Connecting %s — selected by an enabled daemon task', name)
             except Exception:
-                # back off 5 min — repeated failed logins get rate-banned by Discord
-                self._connect_backoff[name] = time.monotonic() + 300
+                self._connect_backoff[name] = time.monotonic() + CONNECT_BACKOFF_SECONDS
                 logger.exception('Failed to connect %s (retry in 5 min)', name)
-
-        # <<HANG UP>> sentinel: the runner leaves through the same door as
-        # /voice leave and the leave tool (session closed, listener stopped,
-        # disconnect).
-        def _leave_voice(account_name: str, channel_id: str) -> dict:
-            from plugins.discord.models.intentions import LeaveVoiceIntention
-            return self.voice_service.leave(LeaveVoiceIntention(
-                intention_type='leave_voice', account_name=account_name,
-                channel_id=str(channel_id), message_id='', reason='hangup_sentinel',
-            ))
-
-        self.discord_conversation_runner.leave_fn = _leave_voice
-
-    def build_transport(self) -> None:
-        self.mention_map_service = MentionMapService(
-            message_repository=self.message_repository,
-            channel_repository=self.channel_repository,
-        )
-        self.transport = DiscordTransport(
-            loop=self.loop,
-            account_repository=self.account_repository,
-            mention_map_service=self.mention_map_service,
-        )
-        self.mention_map_service.set_transport(self.transport)
-        if self.voice_gate is not None:
-            self.voice_gate.describe = self.transport.describe_voice_channel
-        self.policy_service = PolicyService()
-        self.bot_gate = BotGate()
-        self.reply_style_service = ReplyStyleService()
-        self.reaction_service = Reactions(trace_repository=self.trace_repository)
-        self.gif_service = GifService(trace_repository=self.trace_repository)
-        self.build_media_and_clock()
-        self.event_adapter = DiscordEventAdapter(
-            message_repository=self.message_repository,
-            channel_repository=self.channel_repository,
-            trace_repository=self.trace_repository,
-            image_lane=self.image_lane,
-            settings_store=self.settings_store,
-            mention_map_service=self.mention_map_service,
-            llm_debug_service=self.llm_debug_service,
-        )
-        # Wire channel.batching_seconds — this was a live UI knob that nothing
-        # read (the service always ran on its hardcoded 8s default).
-        try:
-            _batch_window = float(self.settings_store.resolve().channel.batching_seconds)
-        except Exception:
-            _batch_window = 8.0
-        self.batching_service = BatchingService(
-            default_window_seconds=max(1.0, _batch_window))
-        self.prompt_context_service = PromptContextService(message_repository=self.message_repository)
-        self.conversation_service = ConversationService(
-            event_bridge=self.event_bridge,
-            policy_service=self.policy_service,
-            prompt_context_service=self.prompt_context_service,
-            trace_repository=self.trace_repository,
-            image_lane=self.image_lane,
-            reply_style_service=self.reply_style_service,
-            transport=self.transport,
-            gif_service=self.gif_service,
-            reaction_service=self.reaction_service,
-            settings_store=self.settings_store,
-            trace_service=self.trace_service,
-            account_repository=self.account_repository,
-            bot_gate=self.bot_gate,
-            mention_map_service=self.mention_map_service,
-            llm_debug_service=self.llm_debug_service,
-        )
-        self.message_pipeline = MessagePipelineService(
-            batching_service=self.batching_service,
-            conversation_service=self.conversation_service,
-            trace_repository=self.trace_repository,
-        )
-        self.transport.set_event_adapter(self.event_adapter)
-        self.transport.set_message_pipeline(self.message_pipeline)
-        self.transport.set_on_account_connected(self._on_account_connected)
-        self.build_voice()
-
-    async def _on_account_connected(self, account_name: str) -> None:
-        # Presence is the discord-personality plugin's job now (its presence
-        # module sets it on the next tick); the host connects plain online.
-        logger.debug('[DISCORD] account %s connected', account_name)

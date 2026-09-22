@@ -2,9 +2,9 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "1.33.0",
+  "version": "2.0.0",
   "min_core_version": "2.13.0",
-  "description": "Discord bot \u2014 accounts, conversation, images in and out, and voice channels on Sapphire's conversation engine. Chat, greetings and voice are daemon tasks (Discord: Chat only / Greetings / All interactions; Realtime: Discord: Voice channel); personality modules live in the discord-personality plugin.",
+  "description": "Discord bot \u2014 accounts, conversation, images in and out, GIFs, silent reactions, and voice channels on Sapphire's conversation engine. Chat, greetings and voice are daemon tasks (Discord: Chat only / Greetings / All interactions; Realtime: Discord: Voice channel); personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83c\udfae",
@@ -13,9 +13,7 @@
   "pip_dependencies": [
     "py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@6e71bfffb520f77948ff28544949925a55767ee7",
     "davey>=0.1.4",
-    "PyNaCl",
-    "dateparser>=1.2.0",
-    "vaderSentiment"
+    "PyNaCl"
   ],
   "settingsUI": "plugin",
   "capabilities": {
@@ -324,12 +322,7 @@
       {
         "method": "GET",
         "path": "health",
-        "handler": "api/traces.py:get_health"
-      },
-      {
-        "method": "GET",
-        "path": "traces",
-        "handler": "api/traces.py:list_traces"
+        "handler": "api/health.py:get_health"
       },
       {
         "method": "GET",
@@ -343,33 +336,13 @@
       },
       {
         "method": "GET",
+        "path": "voice/status",
+        "handler": "api/voice.py:voice_status"
+      },
+      {
+        "method": "GET",
         "path": "bots/allowlist",
         "handler": "api/channels.py:list_bot_allowlist_candidates"
-      },
-      {
-        "method": "GET",
-        "path": "voice/sessions",
-        "handler": "api/voice.py:list_voice_sessions"
-      },
-      {
-        "method": "GET",
-        "path": "voice/diagnostics",
-        "handler": "api/voice.py:voice_diagnostics"
-      },
-      {
-        "method": "GET",
-        "path": "voice/auto-join",
-        "handler": "api/voice.py:auto_join_status"
-      },
-      {
-        "method": "GET",
-        "path": "admin/summary",
-        "handler": "api/admin.py:operator_summary"
-      },
-      {
-        "method": "POST",
-        "path": "admin/purge",
-        "handler": "api/admin.py:purge_retention"
       },
       {
         "method": "POST",
@@ -392,7 +365,7 @@
         "name": "retention_purge",
         "cron": "30 4 * * *",
         "handler": "schedule/retention_purge.py",
-        "description": "Daily purge of plugin data older than the Retention day limits"
+        "description": "Daily purge of stored Discord messages older than the Retention day limit"
       }
     ],
     "settings": [
@@ -589,38 +562,6 @@
         "help": "Minimum seconds between replies in the same channel, DMs included (default 30). 0 = no limit. This is the only throttle on the reply pipeline."
       },
       {
-        "key": "safety.proactive_cooldown_hours",
-        "type": "number",
-        "label": "Proactive cooldown (hours)",
-        "default": 6,
-        "tab": "Safety",
-        "help": "Minimum hours between proactive posts of the same kind (greeting, outreach, goodnight, birthday) in one channel. Reminder and commitment follow-ups bypass this."
-      },
-      {
-        "key": "safety.quiet_hours_enabled",
-        "type": "boolean",
-        "label": "Quiet hours",
-        "default": false,
-        "tab": "Safety",
-        "help": "Presence only: during the quiet window her status switches to the Quiet / sleep status. Replies and proactive posts still send \u2014 use the Sleep schedule to actually go quiet."
-      },
-      {
-        "key": "safety.quiet_hours_start",
-        "type": "number",
-        "label": "Quiet start (server local hour)",
-        "default": 0,
-        "tab": "Safety",
-        "help": "Hour (0-23, server local) quiet hours begin. Start later than end wraps past midnight; start equal to end disables."
-      },
-      {
-        "key": "safety.quiet_hours_end",
-        "type": "number",
-        "label": "Quiet end (server local hour)",
-        "default": 0,
-        "tab": "Safety",
-        "help": "Hour (0-23, server local) quiet hours end. Example: start 22, end 7 covers overnight."
-      },
-      {
         "key": "media.images_in_enabled",
         "type": "boolean",
         "label": "Images in",
@@ -781,7 +722,7 @@
         "label": "Retention purge",
         "default": false,
         "tab": "Retention",
-        "help": "OFF (default): nothing is ever purged. ON: a daily purge (4:30 AM server time) deletes plugin rows older than the day limits below \u2014 enabling this is a conscious choice; the first run on a long-lived database deletes everything beyond the windows."
+        "help": "OFF (default): nothing is ever purged. ON: a daily purge (4:30 AM server time) deletes the plugin's stored copies of Discord messages older than the day limit below. Bot accounts are never touched."
       },
       {
         "key": "retention.message_days",
@@ -790,29 +731,6 @@
         "default": 90,
         "tab": "Retention",
         "help": "Purge deletes the plugin's stored copies of Discord messages older than this many days (default 90). 0 = keep forever. Nothing is deleted on Discord itself."
-      },
-      {
-        "key": "retention.trace_days",
-        "type": "number",
-        "label": "Keep traces (days)",
-        "default": 14,
-        "tab": "Retention",
-        "help": "Purge deletes decision traces (the Traces view) older than this many days (default 14). 0 = keep forever."
-      },
-      {
-        "key": "retention.transcript_days",
-        "type": "number",
-        "label": "Keep transcripts (days)",
-        "default": 30,
-        "tab": "Retention",
-        "help": "Purge deletes voice-channel transcripts older than this many days (default 30). 0 = keep forever."
-      },
-      {
-        "key": "retention.profile_buffer_days",
-        "type": "number",
-        "label": "Keep profile buffers (days)",
-        "default": 7,
-        "hidden": true
       }
     ]
   }

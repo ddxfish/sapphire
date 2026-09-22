@@ -1,3 +1,4 @@
+"""The runtime container (S7): build, start, stop, restart on the same file, and the doors it wires."""
 import asyncio
 
 from plugins.discord.runtime.container import RuntimeContainer
@@ -10,21 +11,56 @@ class FakeLoader:
     def register_reply_handler(self, plugin_name, handler):
         self.handlers.append((plugin_name, handler))
 
+    def active_daemon_accounts(self, source):
+        return set()
 
-def test_container_start_and_stop(tmp_path):
-    async def run_test():
-        loader = FakeLoader()
-        container = RuntimeContainer(
-            plugin_name="discord",
-            plugin_loader=loader,
-            settings={"database_path": str(tmp_path / "discord.sqlite3")},
-            loop=asyncio.get_running_loop(),
-        )
-        await container.start()
-        assert container.health.state == "ready"
-        assert container.sqlite_service is not None
-        assert container.transport is not None
-        await container.stop()
-        assert container.health.state == "stopped"
 
-    asyncio.run(run_test())
+def _container(db, loop):
+    return RuntimeContainer(plugin_name='discord', plugin_loader=FakeLoader(),
+                            settings={'database_path': str(db), 'scheduler_interval_seconds': 1}, loop=loop)
+
+
+def test_container_start_stop_and_restart_on_the_same_file(tmp_path):
+    async def run():
+        db = tmp_path / 'discord.sqlite3'
+        c1 = _container(db, asyncio.get_running_loop())
+        await c1.start()
+        assert c1.health.state == 'ready' and c1._tick_task is not None
+        assert c1.transport is not None and c1.transport.list_connected() == []
+        await c1.stop()
+        assert c1.health.state == 'stopped' and c1._tick_task is None
+        c2 = _container(db, asyncio.get_running_loop())
+        await c2.start()
+        assert c2.health.state == 'ready'
+        await c2.stop()
+    asyncio.run(run())
+
+
+def test_the_doors_are_wired_at_build_not_on_the_first_tick(tmp_path):
+    async def run():
+        c = _container(tmp_path / 'd.sqlite3', asyncio.get_running_loop())
+        # <<HANG UP>> and every other leave reach the latch before any tick ran.
+        assert c.discord_conversation_runner.leave_fn == c._leave_voice
+        assert c.voice_service.on_leave == c.voice_auto_join_service.note_leave
+        assert c.voice_gate.describe == c.transport.describe_voice_channel
+        assert c.conversation_service.message_repository is c.message_repository
+    asyncio.run(run())
+
+
+def test_tick_survives_a_failing_step(tmp_path):
+    async def run():
+        c = _container(tmp_path / 'd.sqlite3', asyncio.get_running_loop())
+        await c.start()
+        c.greetings.tick = lambda: 1 / 0
+        await c._tick()                       # the greetings failure is logged, the tick completes
+        await c.stop()
+    asyncio.run(run())
+
+
+def test_refresh_settings_moves_the_batch_window(tmp_path):
+    async def run():
+        c = _container(tmp_path / 'd.sqlite3', asyncio.get_running_loop())
+        c.settings_store.overrides = {'channel': {'batching_seconds': 3}}
+        c.refresh_settings()
+        assert c.batching_service.default_window_seconds == 3.0
+    asyncio.run(run())

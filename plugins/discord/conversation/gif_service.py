@@ -56,8 +56,8 @@ def user_requested_gif(user_text: str) -> bool:
 
 
 class GifService:
-    def __init__(self, *, trace_repository=None):
-        self.trace_repository = trace_repository
+    def __init__(self):
+        pass
 
     def gif_allowed(self, settings) -> bool:
         media = getattr(settings, 'media', None) if settings else None
@@ -86,11 +86,6 @@ class GifService:
             provider=media.gif_provider or 'klipy',
             content_filter=media.gif_content_filter or 'medium',
         )
-        if url and self.trace_repository:
-            self.trace_repository.record_trace('gif_search', 'Resolved GIF URL', {
-                'query': query,
-                'provider': media.gif_provider or 'klipy',
-            })
         return url or None
 
     # Spontaneous auto-GIFs (should_auto_gif/mark_sent + the gif_auto_chance

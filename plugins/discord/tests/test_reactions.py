@@ -7,8 +7,7 @@ from plugins.discord.models.settings import SettingsStore
 
 
 def _settings(**over):
-    store = SettingsStore()
-    store.global_overlay.reaction.update({'silent_enabled': True, 'reaction_chance': 100, 'reaction_cooldown_seconds': 0, **over})
+    store = SettingsStore({'reaction': {'silent_enabled': True, 'reaction_chance': 100, 'reaction_cooldown_seconds': 0, **over}})
     return store.resolve()
 
 
@@ -55,3 +54,14 @@ def test_roll_cooldown_and_once_per_message(monkeypatch):
     assert svc.evaluate_silent(_obs('ok', 'm3'), settings=_settings()) is None            # nothing to react to
     assert svc.evaluate_silent(_obs(mid='m4'), settings=_settings(reaction_chance=0)) is None
     assert svc.evaluate_silent(_obs(mid='m4'), settings=_settings(silent_enabled=False)) is None
+
+
+def test_reacted_messages_memory_is_bounded():
+    from plugins.discord.models.intentions import AddReactionIntention
+    service = rx.Reactions()
+    for i in range(rx.REACTED_MESSAGES_CAP + 50):
+        intention = AddReactionIntention(intention_type='add_reaction', account_name='bot', channel_id='c',
+                                         message_id=str(i), reason='r', emoji='x')
+        service._record(intention, result={}, delay=0.0)
+    assert len(service._reacted_messages) == rx.REACTED_MESSAGES_CAP
+    assert ('bot', 'c', '0') not in service._reacted_messages

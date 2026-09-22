@@ -51,3 +51,44 @@ def test_cache_is_bounded():
     for i in range(im.CACHE_SIZE + 5):
         lane.fetch(SimpleNamespace(attachments=[_att(f'https://cdn/{i}.png')]), _settings())
     assert len(lane._cache) == im.CACHE_SIZE and lane.cached('https://cdn/0.png') is None
+
+
+def test_h5_payload_lane_reads_the_cache_and_never_fetches():
+    """Broadsword H5: process_batch runs on the daemon loop — the payload lane is cache-only."""
+    calls = []
+    lane = im.ImageLane(fetch=lambda url: (calls.append(url) or (b'PNGDATA', 'image/png')))
+    settings = SimpleNamespace(media=SimpleNamespace(images_in_enabled=True, max_images=4))
+    obs = SimpleNamespace(attachments=[{'url': 'https://cdn/x.png', 'content_type': 'image/png', 'filename': 'x.png'},
+                                       {'url': 'https://cdn/never.png', 'content_type': 'image/png', 'filename': 'n.png'}])
+    assert lane.payload_images(obs, settings) == [] and calls == []          # nothing cached → nothing, no fetch
+    assert lane.fetch(SimpleNamespace(attachments=obs.attachments[:1]), settings) == 1
+    assert lane.fetch(SimpleNamespace(attachments=obs.attachments[:1]), settings) == 1   # cached: no refetch
+    out = lane.payload_images(obs, settings)
+    assert len(out) == 1 and out[0]['media_type'] == 'image/png' and calls == ['https://cdn/x.png']
+
+
+def test_fetch_streams_with_a_cap_and_never_follows_redirects(monkeypatch):
+    """Wave E: a body past the cap is refused, redirects are never followed."""
+    from core import net
+    calls = {}
+
+    class Resp:
+        status_code = 200
+        headers = {'Content-Type': 'image/png'}
+
+        def iter_content(self, n):
+            for _ in range(200):
+                yield b'\x89PNG\r\n\x1a\n' + b'\x00' * (n - 8)
+
+    def fake_get(url, **kw):
+        calls.update(kw)
+        return Resp()
+    monkeypatch.setattr(net, 'get', fake_get)
+    try:
+        im.fetch_bytes('https://cdn.example/x.png')
+    except ValueError as exc:
+        assert 'over' in str(exc)
+    else:
+        raise AssertionError('a body past the cap must be refused')
+    assert calls['stream'] is True and calls['allow_redirects'] is False
+    assert im.FETCH_MAX_BYTES == 10 * 1024 * 1024

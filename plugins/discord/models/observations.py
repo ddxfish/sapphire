@@ -35,23 +35,3 @@ class TextMessageObservation(BaseObservation):
 @dataclass
 class TypingObservation(BaseObservation):
     pass
-
-
-@dataclass
-class SlashCommandObservation(BaseObservation):
-    command_name: str = ''
-    content: str = ''
-
-
-@dataclass
-class ReactionContextObservation(BaseObservation):
-    message_id: str = ''
-    content: str = ''
-
-
-@dataclass
-class VoiceTranscriptObservation(BaseObservation):
-    session_id: str = ''
-    text: str = ''
-    confidence: float = 0.5
-    transcript_segment_id: int = 0

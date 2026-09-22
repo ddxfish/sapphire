@@ -130,3 +130,14 @@ def test_recent_history_labels_her_own_lines_you():
     clock = GreetingsClock(plugin_loader=SimpleNamespace(), transport=transport, message_repository=repo)
     lines = clock.build_payload('alpha', '111', 'greeting')['recent_history']
     assert len(lines) == 2 and lines[1].startswith('You:') and not lines[0].startswith('You:')
+
+
+def test_now_user_follows_config_timezone(monkeypatch):
+    """hunt 2.13.0 row 74: one clock — Sapphire's configured timezone, else OS-local."""
+    import config
+    from datetime import datetime
+    from plugins.discord.greetings import now_user
+    monkeypatch.setattr(config, 'USER_TIMEZONE', 'UTC', raising=False)
+    assert abs((now_user() - datetime.utcnow()).total_seconds()) < 5
+    monkeypatch.setattr(config, 'USER_TIMEZONE', '', raising=False)
+    assert abs((now_user() - datetime.now()).total_seconds()) < 5

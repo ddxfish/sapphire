@@ -108,19 +108,9 @@ class FakeBridge:
         return True
 
 
-class FakePolicy:
-    def evaluate_text_observation(self, observation, resolved_settings=None):
-        return {'allowed': True, 'reason': 'ok'}
-
-
-class FakeContext:
-    def build(self, batch):
-        return {'recent_history': ['hi']}
-
-
-class Traces:
-    def record_trace(self, *a, **k):
-        return None
+class FakeMessages:
+    def get_recent_messages(self, account_name, channel_id, limit=20):
+        return [{'message_id': 'm0', 'author_name': 'Bob', 'content': 'hi'}]
 
 
 def _batch():
@@ -138,15 +128,12 @@ def test_process_batch_fires_prompt_context_and_appends_to_the_prompt():
         ev.metadata['context_parts'].append('Speak like a pirate.')
     _listen('discord_prompt_context', handler)
     bridge = FakeBridge()
-    service = ConversationService(
-        event_bridge=bridge, policy_service=FakePolicy(), prompt_context_service=FakeContext(),
-        trace_repository=Traces(), settings_store=SettingsStore(),
-    )
+    service = ConversationService(event_bridge=bridge, message_repository=FakeMessages(), settings_store=SettingsStore())
 
     assert service.process_batch(_batch()) is True
 
     assert seen[0]['message_id'] == 'm1' and seen[0]['reply_reason'] == 'mentioned'
-    assert seen[0]['recent_history'] == ['hi']
+    assert seen[0]['recent_history'] == ['Bob: hi']
     payload = bridge.payloads[0]
     assert 'Speak like a pirate.' in payload['reply_hints']
     assert 'Speak like a pirate.' in payload['reply_instructions']
@@ -177,13 +164,8 @@ class FakeReplyStyle:
 
 
 def _delivery_service(transport, monkeypatch):
-    monkeypatch.setattr('plugins.discord.conversation.conversation_service.deliver_gif_and_reaction',
-                        lambda **kwargs: None)
     monkeypatch.setattr('plugins.discord.conversation.conversation_service.time.sleep', lambda s: None)
-    return ConversationService(
-        event_bridge=None, policy_service=None, prompt_context_service=None,
-        trace_repository=Traces(), reply_style_service=FakeReplyStyle(), transport=transport,
-    )
+    return ConversationService(event_bridge=None, reply_style_service=FakeReplyStyle(), transport=transport)
 
 
 EVENT = {'message_id': 'm-trigger', 'account': 'alpha', 'channel_id': 'c1', 'guild_id': 'g1'}
@@ -242,7 +224,7 @@ def test_tick_fires_per_connected_account_off_the_loop():
     seen = []
     _listen('discord_tick', lambda ev: seen.append(dict(ev.metadata)))
 
-    async def _noop():
+    async def _noop(*a):
         return None
 
     fake = SimpleNamespace(
@@ -250,13 +232,13 @@ def test_tick_fires_per_connected_account_off_the_loop():
             list_connected=lambda: ['alpha', 'beta'],
             get_client=lambda name: SimpleNamespace(guilds=[SimpleNamespace(id=11), SimpleNamespace(id=22)]),
         ),
-        scheduler=SimpleNamespace(interval_seconds=15.0),
-        greetings=None, voice_auto_join_service=None,
+        tick_seconds=15.0,
+        greetings=SimpleNamespace(tick=lambda: []), voice_auto_join_service=SimpleNamespace(tick_async=_noop),
         _reconcile_accounts=_noop, _reap_voice_chats=_noop,
     )
     fake._tick_payload = lambda name: RuntimeContainer._tick_payload(fake, name)
 
-    asyncio.run(RuntimeContainer._scheduler_tick(fake))
+    asyncio.run(RuntimeContainer._tick(fake))
 
     assert [m['account'] for m in seen] == ['alpha', 'beta']
     assert seen[0]['connected_guilds'] == ['11', '22']

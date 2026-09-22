@@ -16,124 +16,71 @@ class FakeBridge:
         return True
 
 
-class FakePolicy:
-    def evaluate_text_observation(self, observation, resolved_settings=None):
-        return {'allowed': True, 'reason': 'ok'}
-
-
-class FakeContext:
-    def build(self, batch):
-        return {'recent_history': ['hi'], 'channel_summary': batch.channel_name}
-
-
-class FakeTraceRepo:
-    def __init__(self):
-        self.traces = []
-
-    def record_trace(self, trace_type, summary, detail=None):
-        self.traces.append((trace_type, summary, detail or {}))
-
-
 def make_message(message_id='m1', created_at=None):
     return TextMessageObservation(
-      observation_id=f'obs-{message_id}',
-      account_name='alpha',
-      guild_id='g1',
-      guild_name='Guild',
-      channel_id='c1',
-      channel_name='general',
-      author_id='u1',
-      username='alice',
-      display_name='Alice',
-      message_id=message_id,
-      content='hello',
-      clean_content='hello',
-      created_at=created_at if created_at is not None else time.time(),
-      is_dm=False,
-      mentioned=True,
-      attachments=[],
+        observation_id=f'obs-{message_id}', account_name='alpha', guild_id='g1', guild_name='Guild', channel_id='c1',
+        channel_name='general', author_id='u1', username='alice', display_name='Alice', message_id=message_id,
+        content='hello', clean_content='hello', created_at=created_at if created_at is not None else time.time(),
+        is_dm=False, mentioned=True, attachments=[],
     )
+
+
+def _pipeline(window, bridge=None, **kw):
+    batching = BatchingService(default_window_seconds=window, typing_extension_seconds=window)
+    conversation = ConversationService(event_bridge=bridge or FakeBridge())
+    return MessagePipelineService(batching_service=batching, conversation_service=conversation, **kw)
 
 
 def test_pipeline_flushes_batch_into_conversation_service():
-    batching = BatchingService(default_window_seconds=0.1, typing_extension_seconds=0.1)
     bridge = FakeBridge()
-    traces = FakeTraceRepo()
-    conversation = ConversationService(
-        event_bridge=bridge,
-        policy_service=FakePolicy(),
-        prompt_context_service=FakeContext(),
-        trace_repository=traces,
-    )
-    pipeline = MessagePipelineService(
-        batching_service=batching,
-        conversation_service=conversation,
-        trace_repository=traces,
-    )
+    pipeline = _pipeline(0.1, bridge)
     observation = make_message()
     pipeline.handle_message(observation)
     results = pipeline.flush_due(observation.created_at + 1.0)
-    assert len(results) == 1
-    assert results[0]['accepted'] is True
+    assert len(results) == 1 and results[0]['accepted'] is True and results[0]['message_ids'] == ['m1']
     assert len(bridge.payloads) == 1
-    assert any(trace[0] == 'batch_queued' for trace in traces.traces)
-    assert any(trace[0] == 'batch_flushed' for trace in traces.traces)
 
 
-def test_pipeline_records_typing_extension():
-    batching = BatchingService(default_window_seconds=5.0, typing_extension_seconds=4.0)
-    traces = FakeTraceRepo()
-    conversation = ConversationService(
-        event_bridge=FakeBridge(),
-        policy_service=FakePolicy(),
-        prompt_context_service=FakeContext(),
-        trace_repository=traces,
-    )
-    pipeline = MessagePipelineService(
-        batching_service=batching,
-        conversation_service=conversation,
-        trace_repository=traces,
-    )
-    observation = make_message(created_at=0.0)
-    pipeline.handle_message(observation)
-    typing = TypingObservation(
-        observation_id='typing-1',
-        account_name='alpha',
-        guild_id='g1',
-        guild_name='Guild',
-        channel_id='c1',
-        channel_name='general',
-        author_id='u1',
-        username='alice',
-        display_name='Alice',
-        created_at=4.0,
-        is_dm=False,
-    )
+def test_typing_extends_the_batch_window():
+    pipeline = _pipeline(5.0)
+    pipeline.handle_message(make_message(created_at=0.0))
+    typing = TypingObservation(observation_id='typing-1', account_name='alpha', guild_id='g1', guild_name='Guild',
+                               channel_id='c1', channel_name='general', author_id='u1', username='alice',
+                               display_name='Alice', created_at=4.0, is_dm=False)
     pipeline.handle_typing(typing)
     assert pipeline.flush_due(6.0) == []
-    assert any(trace[0] == 'batch_typing' for trace in traces.traces)
+    assert len(pipeline.flush_due(10.0)) == 1
 
 
-async def _run_pipeline_loop_test():
-    batching = BatchingService(default_window_seconds=0.05, typing_extension_seconds=0.05)
+def test_a_batch_that_raises_does_not_stop_the_others():
     bridge = FakeBridge()
-    conversation = ConversationService(
-        event_bridge=bridge,
-        policy_service=FakePolicy(),
-        prompt_context_service=FakeContext(),
-        trace_repository=FakeTraceRepo(),
-    )
-    pipeline = MessagePipelineService(
-        batching_service=batching,
-        conversation_service=conversation,
-        flush_interval_seconds=0.05,
-    )
-    await pipeline.start()
-    pipeline.handle_message(make_message())
-    await asyncio.sleep(0.2)
-    await pipeline.stop()
-    assert len(bridge.payloads) == 1
+    pipeline = _pipeline(0.1, bridge)
+    calls = {'n': 0}
+    real = pipeline.conversation_service.process_batch
+
+    def flaky(batch):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise RuntimeError('boom')
+        return real(batch)
+    pipeline.conversation_service.process_batch = flaky
+    a = make_message('m1', created_at=0.0)
+    a.channel_id = 'c1'
+    b = make_message('m2', created_at=0.0)
+    b.channel_id = 'c2'
+    pipeline.handle_message(a)
+    pipeline.handle_message(b)
+    results = pipeline.flush_due(5.0)
+    assert len(results) == 1 and len(bridge.payloads) == 1
 
 
 def test_pipeline_background_flush_loop():
-    asyncio.run(_run_pipeline_loop_test())
+    async def run():
+        bridge = FakeBridge()
+        pipeline = _pipeline(0.05, bridge, flush_interval_seconds=0.05)
+        await pipeline.start()
+        pipeline.handle_message(make_message())
+        await asyncio.sleep(0.25)
+        await pipeline.stop()
+        assert len(bridge.payloads) == 1
+    asyncio.run(run())

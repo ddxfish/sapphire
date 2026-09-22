@@ -22,50 +22,8 @@ class ReplyMessageIntention(BaseIntention):
 
 
 @dataclass
-class SummarizeChannelIntention(BaseIntention):
-    prompt: str = ''
-
-
-@dataclass
-class RecordUserFactIntention(BaseIntention):
-    fact: str = ''
-
-
-@dataclass
 class AddReactionIntention(BaseIntention):
     emoji: str = ''
-
-
-@dataclass
-class GreetChannelIntention(BaseIntention):
-    prompt: str = ''
-
-
-@dataclass
-class BirthdayWishIntention(BaseIntention):
-    prompt: str = ''
-    user_id: str = ''
-
-
-@dataclass
-class OutreachIntention(BaseIntention):
-    prompt: str = ''
-
-
-@dataclass
-class GoodnightIntention(BaseIntention):
-    prompt: str = ''
-
-
-@dataclass
-class SendGifIntention(BaseIntention):
-    query: str = ''
-
-
-@dataclass
-class UpdatePresenceIntention(BaseIntention):
-    status: str = 'online'
-    activity: str = ''
 
 
 @dataclass
@@ -77,14 +35,3 @@ class JoinVoiceIntention(BaseIntention):
 @dataclass
 class LeaveVoiceIntention(BaseIntention):
     session_id: str = ''
-
-
-@dataclass
-class SpeakVoiceIntention(BaseIntention):
-    text: str = ''
-
-
-@dataclass
-class SummarizeVoiceSessionIntention(BaseIntention):
-    session_id: str = ''
-    prompt: str = ''

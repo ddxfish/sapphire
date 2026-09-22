@@ -35,3 +35,25 @@ def test_gif_dedupe_blocks_second_send():
     service.mark_gif_sent('m1')
     assert service.gif_already_sent('m1') is True
     assert service.gif_already_sent('m2') is False
+
+
+# ── hunt 2.13.0 row 34 + wave E: code fences survive chunking ──────────────
+def test_prose_backticks_do_not_carry_a_fence():
+    chunks = ['To fence code you type ``` before it.', 'Then your code.', "That's it!"]
+    assert ReplyStyleService._rebalance_fences(chunks) == chunks
+
+
+def test_real_fence_cut_by_a_chunk_is_closed_and_reopened():
+    out = ReplyStyleService._rebalance_fences(['```py\nprint(1)', 'print(2)\n```'])
+    assert out[0].endswith('\n```') and out[1].startswith('```\n')
+
+
+def test_chunker_closes_and_reopens_code_fences():
+    svc = ReplyStyleService.__new__(ReplyStyleService)
+    svc.message_limit = 60
+    body = '```py\n' + '\n'.join(f'line {i} of code' for i in range(12)) + '\n```'
+    chunks = svc._split_message('here is code:\n\n' + body)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert chunk.count('```') % 2 == 0, chunk
+    assert chunks[1].startswith('```')

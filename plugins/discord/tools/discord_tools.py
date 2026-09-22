@@ -525,17 +525,11 @@ def discord_send_message(*, text: str, channel=None, reply_to_message_id=None):
     if parsed and not sent_parts and not parsed.gif_query and not parsed.reaction:
         return ('Message text is empty.', False)
     _mark_tool_sent('\n\n'.join(sent_parts))
-    if parsed and runtime:
-        from plugins.discord.conversation.post_reply_tags import deliver_gif_and_reaction
-
-        deliver_gif_and_reaction(
-            runtime=runtime,
-            parsed=parsed,
-            message_id=_correlation_message_id(),
-            channel_id=channel,
-            account_name=account_name or '',
-            settings=settings,
-            trigger_message_id=_correlation_message_id(),
+    conversation = getattr(runtime, 'conversation_service', None) if runtime else None
+    if parsed and conversation is not None:
+        conversation.deliver_tags(
+            parsed, message_id=_correlation_message_id(), channel_id=channel,
+            account_name=account_name or '', settings=settings, trigger_message_id=_correlation_message_id(),
         )
     receipt = f' (message_id {", ".join(sent_ids)})' if sent_ids else ''
     return (f'Message sent to channel {channel}{receipt}.', True)

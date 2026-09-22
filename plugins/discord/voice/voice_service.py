@@ -10,15 +10,13 @@ logger = logging.getLogger(__name__)
 
 
 class VoiceService:
-    def __init__(self, *, voice_transport, sessions, gate=None, voice_listener_service=None, trace_repository=None, loop=None,
-                 on_leave=None):
+    def __init__(self, *, voice_transport, sessions, gate=None, voice_listener_service=None, loop=None, on_leave=None):
         self.voice_transport = voice_transport
         self.sessions = sessions
         self.gate = gate
         # on_leave(account, channel_id, reason): every leave, whatever asked for it — the auto-join latch.
         self.on_leave = on_leave
         self.voice_listener_service = voice_listener_service
-        self.trace_repository = trace_repository
         self.loop = loop
 
     def _blocked(self, account_name: str, channel_id: str) -> dict | None:

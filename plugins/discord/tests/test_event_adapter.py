@@ -14,14 +14,6 @@ class FakeMessageRepo:
         self.saved.append(observation)
 
 
-class FakeTraceRepo:
-    def __init__(self):
-        self.traces = []
-
-    def record_trace(self, trace_type, summary, detail=None):
-        self.traces.append((trace_type, summary, detail or {}))
-
-
 class FakeAuthor:
     def __init__(self, user_id, name, display_name, bot=False):
         self.id = user_id
@@ -61,12 +53,8 @@ def _message_with_image():
     )
 
 
-def _trace_details(trace_repo, trace_type):
-    return [detail for current_type, _summary, detail in trace_repo.traces if current_type == trace_type]
-
-
 def test_adapt_guild_message_and_persist():
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo())
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo())
     message = SimpleNamespace(
         id=111,
         content='hello there',
@@ -88,7 +76,7 @@ def test_adapt_guild_message_and_persist():
 
 
 def test_ignore_self_authored_message():
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo())
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo())
     message = SimpleNamespace(
         id=111,
         content='self',
@@ -107,7 +95,7 @@ def test_ignore_self_authored_message():
 
 
 def test_adapt_dm_typing_event():
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo())
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo())
     user = FakeAuthor(7, 'alice', 'Alice')
     channel = FakeChannel(44, 'Direct Message')
 
@@ -130,7 +118,7 @@ def test_adapt_then_fetch_images_off_loop_when_images_in_is_on():
     from plugins.discord.conversation.images import ImageLane
     calls = []
     lane = ImageLane(fetch=lambda url: (calls.append(url) or (b'PNG', 'image/png')))
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo(),
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(),
                                   image_lane=lane, settings_store=FakeImagesStore(True))
     obs = adapter.adapt_message_event('alpha', 99, _message_with_image(), fetch_images=False)
     assert isinstance(obs, TextMessageObservation) and obs.attachments and calls == []     # C2: nothing fetched inline
@@ -142,7 +130,19 @@ def test_images_off_means_no_fetch():
     from plugins.discord.conversation.images import ImageLane
     calls = []
     lane = ImageLane(fetch=lambda url: (calls.append(url) or (b'PNG', 'image/png')))
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(), trace_repository=FakeTraceRepo(),
+    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(),
                                   image_lane=lane, settings_store=FakeImagesStore(False))
     obs = adapter.adapt_message_event('alpha', 99, _message_with_image())
     assert isinstance(obs, TextMessageObservation) and calls == [] and lane.cached('https://cdn/a.png') is None
+
+
+def test_h6_ignored_channels_are_dropped_before_anything_stores_them():
+    """Broadsword H6: the ignore check runs first — "fully ignored" means never stored."""
+    class Store:
+        def resolve(self):
+            return SimpleNamespace(channel=SimpleNamespace(ignored_channels=['alpha:22']),
+                                   media=SimpleNamespace(images_in_enabled=False, max_images=4))
+    repo = FakeMessageRepo()
+    adapter = DiscordEventAdapter(message_repository=repo, settings_store=Store())
+    assert adapter.adapt_message_event('alpha', 99, _message_with_image()) is None
+    assert repo.saved == []

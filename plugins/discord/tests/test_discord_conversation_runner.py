@@ -240,7 +240,7 @@ def test_interjecting_on_her_reply_to_you_counts_as_follow_up():
 def test_follow_up_window_zero_turns_it_off():
     from plugins.discord.models.settings import SettingsStore
 
-    store = SettingsStore.from_dict({'global': {'voice': {'follow_up_seconds': 0, 'solo_no_name': False}}})
+    store = SettingsStore({'voice': {'follow_up_seconds': 0, 'solo_no_name': False}})
     runner, _driver = _started_runner(store=store)
     assert runner.submit_turn_text('sess-1', 'Krem: hey Remmi', speaker_id='42', humans=1)['reason'] == 'named'
     runner._note_reply_end('sess-1')

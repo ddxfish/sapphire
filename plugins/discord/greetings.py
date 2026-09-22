@@ -198,10 +198,10 @@ class GreetingsClock:
             return []
         if not rows:
             return []
-        from plugins.discord.conversation.bot_identity import bot_identity_fields, bot_name_aliases
-        from plugins.discord.conversation.transcript_service import format_recent_history
-        fields = bot_identity_fields(account, transport=self.transport, account_repository=self.account_repository)
-        bot_names = {name.lower() for name in bot_name_aliases(fields)}
+        from plugins.discord.conversation.context import format_recent_history
+        from plugins.discord.conversation.name_match import bot_names_for_account
+        bot_names = {name.lower() for name in bot_names_for_account(
+            account, transport=self.transport, account_repository=self.account_repository)}
         lines = []
         for line in format_recent_history(rows, line_max_chars=1000):
             author, _, rest = line.partition(':')

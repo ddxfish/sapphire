@@ -1,8 +1,8 @@
 """Live voice sessions, in memory (S6, 2026-09-22).
 
-The voice_sessions / voice_transcripts / voice_summaries tables are gone: the
-transport is the truth of where she is, and a session is a handle the listener,
-the conversation runner and the event bridge share while she is in a channel.
+The transport is the truth of where she is; a session is the handle the
+listener, the conversation runner and the runner's chat share while she is in
+a channel. Nothing about a voice session touches disk.
 """
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ from plugins.discord.models.voice import VoiceSession
 
 
 class VoiceSessions:
-    def __init__(self, *, trace_repository=None):
-        self.trace_repository = trace_repository
+    def __init__(self):
         self._by_key: dict[tuple[str, str], VoiceSession] = {}
         self._lock = threading.Lock()
 
@@ -28,13 +27,8 @@ class VoiceSessions:
                 session = VoiceSession(session_id=uuid.uuid4().hex[:12], account_name=str(account_name),
                                        guild_id=str(guild_id or ''), channel_id=str(channel_id), started_at=time.time())
                 self._by_key[key] = session
-                created = True
-            else:
-                if guild_id and not session.guild_id:
-                    session.guild_id = str(guild_id)
-                created = False
-        if created and self.trace_repository:
-            self.trace_repository.record_trace('voice_session_started', 'Voice session created', session.to_dict())
+            elif guild_id and not session.guild_id:
+                session.guild_id = str(guild_id)
         return session
 
     def get(self, account_name: str, channel_id: str) -> VoiceSession | None:
@@ -58,10 +52,7 @@ class VoiceSessions:
     def close(self, session_id: str) -> VoiceSession | None:
         with self._lock:
             key = next((k for k, s in self._by_key.items() if s.session_id == session_id), None)
-            session = self._by_key.pop(key, None) if key else None
-        if session and self.trace_repository:
-            self.trace_repository.record_trace('voice_session_closed', 'Voice session closed', session.to_dict())
-        return session
+            return self._by_key.pop(key, None) if key else None
 
     def list_active(self, account_name: str | None = None) -> list[VoiceSession]:
         with self._lock:

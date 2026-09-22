@@ -5,9 +5,8 @@ import pluginsAPI from '/static/shared/plugins-api.js';
 const PLUGIN_NAME = 'discord';
 const CSRF = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
 
-// The old '--' dot-bridge is gone: the shared renderer now CSS.escape()s its
-// id selectors, so dotted manifest keys (channel.reply_mode) work natively.
-
+// The shared renderer CSS.escape()s its id selectors, so dotted manifest keys
+// (channel.reply_mode) work natively.
 let _SCHEMA = [];
 
 const DCG_STYLES = `
@@ -57,7 +56,6 @@ const DCG_STYLES = `
   border: 1px solid var(--border);
   font-size: 0.9em;
 }
-.dcg-details summary { cursor: pointer; font-weight: 500; margin-bottom: 8px; }
 .dcg-target-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; margin: 8px 0; }
 .dcg-target-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -119,8 +117,8 @@ function esc(str) {
   const d = document.createElement('div');
   d.textContent = str ?? '';
   // textContent→innerHTML encodes & < > only. This helper also feeds attribute
-  // values (data-content="…"), where an unescaped quote breaks out of the
-  // attribute and runs an inline handler with the owner's session (hunt H1).
+  // values, where an unescaped quote breaks out of the attribute and runs an
+  // inline handler with the owner's session (hunt H1).
   return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
@@ -142,189 +140,311 @@ function textarea(id, label, value, help = '') {
   </div>`;
 }
 
-function renderShell(container, data) {
-  const schema = data.schema || [];
-  const values = data.values || {};
-  const defaults = data.settings?.defaults || {};
-  const voicePromptDefault = defaults.voice?.conversation_prompt_template || '';
-  const daemon = data.settings?.daemon_running;
-  const daemonState = data.settings?.daemon_state || data.health?.state || 'unknown';
-  const daemonNote = !daemon
-    ? `<div class="dcg-notice">Daemon is offline (${esc(daemonState)}). Enable the plugin under Settings → Plugins, then reload it. You do not add a separate daemon — this plugin starts one automatically when enabled.</div>`
-    : `<div class="dcg-notice" style="border-color:var(--success)">Daemon is running (${esc(daemonState)}).</div>`;
-
-  const ignoredChannels = values['channel.ignored_channels'] || [];
-  const allowlistIds = values['bot.allowlist_ids'] || [];
-
-  container.innerHTML = `
-    <style>${DCG_STYLES}</style>
-    <div class="dcg">
-      ${daemonNote}
-
-      <div class="dcg-section">
-        <h4>Bot Accounts</h4>
-        <p class="dcg-help">Create a bot at discord.com/developers, enable the <strong>Message Content</strong> and <strong>Server Members</strong> intents (Bot page), then paste the token.</p>
-        <div id="dcg-accounts"></div>
-        <div style="margin-top:8px;display:flex;gap:8px">
-          <button type="button" class="dcg-btn" id="dcg-add-toggle">+ Add Bot</button>
-        </div>
-        <div id="dcg-add-form" style="display:none;margin-top:12px">
-          <div class="dcg-field">
-            <label for="dcg-acc-name">Account name</label>
-            <input class="dcg-input" id="dcg-acc-name" placeholder="e.g. sapphire">
-            <div class="dcg-help">Sapphire's local label for this bot — daemon tasks and per-bot settings key off it. Any short name; it does not need to match the bot's Discord username.</div>
-          </div>
-          <div class="dcg-field">
-            <label for="dcg-acc-token">Bot token</label>
-            <input class="dcg-input" id="dcg-acc-token" type="password" placeholder="paste bot token">
-            <div class="dcg-help">Discord Developer Portal → your app → Bot → Reset Token.</div>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button type="button" class="dcg-btn" id="dcg-acc-test">Test token</button>
-            <button type="button" class="dcg-btn dcg-btn-primary" id="dcg-acc-save">Add Bot</button>
-          </div>
-          <div class="dcg-status" id="dcg-acc-status"></div>
-        </div>
-      </div>
-
-      <div id="dcg-schema-form"></div>
-
-      <details class="dcg-details" style="margin-top:20px">
-        <summary>Operator debug</summary>
-        <pre id="dcg-debug" style="font-size:0.8em;overflow:auto;max-height:240px"></pre>
-      </details>
-    </div>
-  `;
-
-  // Custom widget sections — mounted into renderer slots on the tab that owns
-  // their settings (this was the always-visible pile below the schema form).
-  const allowlistSection = `
-      <div class="dcg-section">
-        <h4>Ignored channels</h4>
-        <p class="dcg-help">Fully ignore these text channels: no replies, reactions, or scheduled posts. Save after changing.</p>
-        <div id="dcg-ignore-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-ignore-refresh">Refresh from Discord</button>
-          <button type="button" class="dcg-btn" id="dcg-ignore-clear">Clear all</button>
-          <span class="dcg-help" id="dcg-ignore-status"></span>
-        </div>
-        <div id="dcg-ignore-picker" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Connect a bot and refresh to list channels.</p>
-        </div>
-        <textarea class="dcg-textarea" id="channel.ignored_channels" data-field="channel.ignored_channels" style="display:none" aria-hidden="true">${esc(ignoredChannels.join('\n'))}</textarea>
-      </div>
-      <div class="dcg-section">
-        <h4>Allowlisted Bots</h4>
-        <div class="dcg-help">Bots she may answer (Bot-to-bot replies must be on). Loaded from servers your bot is in — enable <strong>Server Members Intent</strong> in the Discord Developer Portal if the list is empty.</div>
-        <div id="dcg-bot-allowlist-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-bot-allowlist-refresh">Refresh from Discord</button>
-          <button type="button" class="dcg-btn" id="dcg-bot-allowlist-select-all">Select all</button>
-          <button type="button" class="dcg-btn" id="dcg-bot-allowlist-clear">Clear all</button>
-          <span class="dcg-help" id="dcg-bot-allowlist-status"></span>
-        </div>
-        <div id="dcg-bot-allowlist-picker" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Connect a bot, then click Refresh to load bots.</p>
-        </div>
-        <textarea class="dcg-textarea" id="bot.allowlist_ids" data-field="bot.allowlist_ids" style="display:none" aria-hidden="true">${esc(allowlistIds.join('\n'))}</textarea>
-      </div>
-  `;
-
-  const voiceChannelsSection = `
-      <div class="dcg-section">
-        <h4>Voice channels</h4>
-        <div class="dcg-help">Voice is a Realtime rule: Settings → Continuity → Realtime → <strong>Discord: Voice channel</strong> names the bot; its filter says which voice channels the rule covers (server or channel name, or an id from the list below — no filter = all of them), <strong>Auto-join</strong> is opt-in per rule, and its persona, model and toolset run the voice chat. She joins on <code>/voice join</code> or her join tool, and leaves on &lt;&lt;HANG UP&gt;&gt;, <code>/voice leave</code>, or when the channel empties.</div>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-voice-channels-refresh">Refresh from Discord</button>
-          <span class="dcg-help" id="dcg-voice-channels-status"></span>
-        </div>
-        <div id="dcg-voice-channels-list" class="dcg-target-picker">
-          <p class="dcg-help" style="margin:0">Connect a bot, then click Refresh to list voice channels.</p>
-        </div>
-      </div>
-  `;
-
-  const voicePromptSection = `
-      <div class="dcg-section">
-        <h4>Voice Conversation Prompt</h4>
-        ${textarea(
-          'voice.conversation_prompt_template',
-          'Voice conversation prompt',
-          values['voice.conversation_prompt_template'] || voicePromptDefault,
-          'System instructions for conversational voice mode. Placeholders: {primary} = bot name, {alias_line} = alias suffix (empty when none). Clear and save to restore the built-in default.',
-        )}
-      </div>
-  `;
-
-  const debugSection = `
-      <div class="dcg-section">
-        <h4>Decision traces</h4>
-        <p class="dcg-help">Recent policy / delivery traces — why she replied, stayed quiet, skipped outreach, etc. Filter by type optional.</p>
-        <div class="dcg-target-toolbar">
-          <select class="dcg-select" id="dcg-traces-filter" style="min-width:180px">
-            <option value="">All types</option>
-          </select>
-          <button type="button" class="dcg-btn" id="dcg-traces-refresh">Refresh now</button>
-          <span class="dcg-help" id="dcg-traces-status"></span>
-        </div>
-        <div id="dcg-traces-summary" class="dcg-help" style="margin:6px 0 10px"></div>
-        <div id="dcg-traces-list" class="dcg-debug-list">
-          <p class="dcg-help" style="margin:0">Loading…</p>
-        </div>
-      </div>
-      <div class="dcg-section">
-        <h4>LLM Debug</h4>
-        <p class="dcg-help">Last 10 LLM-related events — successful exchanges and policy rejections. Shows the task's model, the prompt breakdown, and why blocked messages never reached the AI.</p>
-        <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-debug-refresh">Refresh now</button>
-          <button type="button" class="dcg-btn" id="dcg-debug-clear">Clear</button>
-          <span class="dcg-help" id="dcg-debug-status"></span>
-        </div>
-        <div id="dcg-debug-list" class="dcg-debug-list">
-          <p class="dcg-help" style="margin:0">Loading…</p>
-        </div>
-      </div>
-  `;
-
-  // Slot order within a tab = array order.
-  const slots = [
-    { tab: 'Conversation', mount: (el) => { el.innerHTML = allowlistSection; } },
-    { tab: 'Voice', mount: (el) => { el.innerHTML = voiceChannelsSection; } },
-    { tab: 'Voice', mount: (el) => { el.innerHTML = voicePromptSection; } },
-    { tab: 'Debug', mount: (el) => { el.innerHTML = debugSection; } },
-  ];
-
-  const settingsBox = container.querySelector('#dcg-schema-form');
-  if (!schema.length) {
-    settingsBox.insertAdjacentHTML('beforebegin',
-      '<div class="dcg-notice">Settings schema unavailable — plugin manifest not loaded. Bot accounts and the widget tabs still work; reload the plugin to restore the settings fields.</div>');
-  }
-  renderSettingsForm(settingsBox, schema, values, { slots });
-
-  renderAccounts(container, data.accounts?.accounts || []);
-  container.querySelector('#dcg-debug').textContent = JSON.stringify({
-    health: data.health,
-    summary: data.summary,
-    trace_summary: data.traces?.trace_summary || {},
-    trace_count: (data.traces?.traces || []).length,
-  }, null, 2);
-
-  const voicePromptField = fieldByData(container, 'voice.conversation_prompt_template');
-  if (voicePromptField && voicePromptDefault) {
-    voicePromptField.dataset.defaultTemplate = voicePromptDefault;
-  }
-  bindAccounts(container);
-  initDebugPanel(container, data.llmDebug?.entries || []);
-  initTracesPanel(container, data.traces || null);
-  initIgnoredChannelPicker(container, ignoredChannels);
-  initBotAllowlistPicker(container, allowlistIds);
-  initVoiceChannelList(container);
+function fieldByData(container, fieldId) {
+  return [...container.querySelectorAll('[data-field]')].find((el) => el.dataset.field === fieldId) || null;
 }
 
-const ignoredChannelCatalog = {};
-let ignoredChannelSelection = new Set();
+function daemonRunning(container) {
+  return container.querySelector('.dcg-notice')?.textContent?.includes('Daemon is running');
+}
 
-// ── LLM debug panel (Debug tab slot) ──
+// ── chip picker: a hidden list field fed by a refreshable checkbox list ─────
+// Two instances: ignored channels (grouped by bot · server) and the bot allowlist.
+
+class ChipPicker {
+  constructor(container, opts) {
+    this.container = container;
+    this.opts = opts;               // { key, fieldId, load, group, label, selectAll }
+    this.catalog = {};
+    this.selection = new Set();
+  }
+
+  el(part) {
+    return this.container.querySelector(`#dcg-${this.opts.key}-${part}`);
+  }
+
+  static markup(key, title, help, { selectAll = false, emptyText } = {}) {
+    return `
+      <div class="dcg-section">
+        <h4>${esc(title)}</h4>
+        <div class="dcg-help">${help}</div>
+        <div id="dcg-${key}-chips" class="dcg-target-chips"><span class="dcg-help">None selected</span></div>
+        <div class="dcg-target-toolbar">
+          <button type="button" class="dcg-btn" id="dcg-${key}-refresh">Refresh from Discord</button>
+          ${selectAll ? `<button type="button" class="dcg-btn" id="dcg-${key}-select-all">Select all</button>` : ''}
+          <button type="button" class="dcg-btn" id="dcg-${key}-clear">Clear all</button>
+          <span class="dcg-help" id="dcg-${key}-status"></span>
+        </div>
+        <div id="dcg-${key}-picker" class="dcg-target-picker">
+          <p class="dcg-help" style="margin:0">${esc(emptyText)}</p>
+        </div>
+      </div>`;
+  }
+
+  init(selected) {
+    this.selection = new Set((selected || []).map((line) => String(line).trim()).filter(Boolean));
+    this.sync();
+    this.el('refresh')?.addEventListener('click', () => this.load());
+    this.el('select-all')?.addEventListener('click', () => this.setAll(true));
+    this.el('clear')?.addEventListener('click', () => this.setAll(false));
+    if (daemonRunning(this.container)) this.load();
+  }
+
+  values() {
+    return [...this.selection].sort();
+  }
+
+  setAll(on) {
+    this.container.querySelectorAll(`#dcg-${this.opts.key}-picker input[type="checkbox"]`).forEach((cb) => {
+      cb.checked = on;
+      if (on) this.selection.add(cb.dataset.value);
+    });
+    if (!on) this.selection.clear();
+    this.sync();
+  }
+
+  sync() {
+    const hidden = fieldByData(this.container, this.opts.fieldId);
+    if (hidden) hidden.value = this.values().join('\n');
+    const box = this.el('chips');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!this.selection.size) {
+      box.innerHTML = '<span class="dcg-help">None selected</span>';
+      return;
+    }
+    this.values().forEach((value) => {
+      const chip = document.createElement('span');
+      chip.className = 'dcg-target-chip';
+      const text = document.createElement('span');
+      text.textContent = this.catalog[value]?.label || value;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('aria-label', 'Remove');
+      btn.textContent = '×';
+      btn.addEventListener('click', () => {
+        this.selection.delete(value);
+        const cb = [...this.container.querySelectorAll(`#dcg-${this.opts.key}-picker input[type="checkbox"]`)]
+          .find((el) => el.dataset.value === value);
+        if (cb) cb.checked = false;
+        this.sync();
+      });
+      chip.append(text, btn);
+      box.appendChild(chip);
+    });
+  }
+
+  render(items) {
+    const box = this.el('picker');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!items.length) {
+      box.innerHTML = `<p class="dcg-help" style="margin:0">${esc(this.opts.noneText)}</p>`;
+      return;
+    }
+    const groups = {};
+    items.forEach((item) => {
+      this.catalog[item.value] = item;
+      const title = this.opts.group(item);
+      (groups[title] ||= []).push(item);
+    });
+    Object.entries(groups).forEach(([title, members]) => {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'dcg-target-group';
+      const titleEl = document.createElement('div');
+      titleEl.className = 'dcg-target-group-title';
+      titleEl.textContent = title;
+      groupEl.appendChild(titleEl);
+      members.forEach((item) => {
+        const label = document.createElement('label');
+        label.className = 'dcg-target-option';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.value = item.value;
+        cb.checked = this.selection.has(item.value);
+        cb.addEventListener('change', () => {
+          if (cb.checked) this.selection.add(item.value);
+          else this.selection.delete(item.value);
+          this.sync();
+        });
+        const span = document.createElement('span');
+        span.textContent = this.opts.label(item);
+        label.append(cb, span);
+        groupEl.appendChild(label);
+      });
+      box.appendChild(groupEl);
+    });
+    this.sync();
+  }
+
+  async load() {
+    const status = this.el('status');
+    const refreshBtn = this.el('refresh');
+    if (refreshBtn) refreshBtn.disabled = true;
+    if (status) status.textContent = 'Loading…';
+    try {
+      const { items, note } = await this.opts.load();
+      this.render(items);
+      if (status) status.textContent = note;
+    } catch (err) {
+      if (status) status.textContent = err.message || 'Failed to load';
+    } finally {
+      if (refreshBtn) refreshBtn.disabled = false;
+    }
+  }
+}
+
+let ignoredChannels = null;
+let botAllowlist = null;
+
+function buildPickers(container) {
+  ignoredChannels = new ChipPicker(container, {
+    key: 'ignore',
+    fieldId: 'channel.ignored_channels',
+    noneText: 'No text channels found. Connect a bot and ensure the daemon is running.',
+    group: (t) => `${t.account} · ${t.guild_name}`,
+    label: (t) => `#${t.channel_name}`,
+    load: async () => {
+      const data = await api('channels/text');
+      if (data.error) throw new Error(data.error);
+      const items = data.targets || [];
+      return { items, note: data.connected ? `${items.length} channels` : 'Daemon offline / no bots connected' };
+    },
+  });
+  botAllowlist = new ChipPicker(container, {
+    key: 'bot-allowlist',
+    fieldId: 'bot.allowlist_ids',
+    noneText: 'No other bots found in connected servers. Bots must share a server with your bot and appear in the member list.',
+    group: () => 'Bots in your servers',
+    label: (b) => b.label,
+    load: async () => {
+      const data = await api('bots/allowlist');
+      if (data.error && !data.bots?.length) throw new Error(data.error);
+      const items = data.bots || [];
+      return { items, note: items.length ? `${items.length} bot${items.length === 1 ? '' : 's'} found` : (data.error || 'No connected bots') };
+    },
+  });
+}
+
+// ── bot accounts ─────────────────────────────────────────────────────────────
+
+function renderAccounts(container, accounts) {
+  const list = container.querySelector('#dcg-accounts');
+  if (!list) return;
+  if (!accounts.length) {
+    list.innerHTML = '<p class="dcg-help">No bot accounts configured yet.</p>';
+    return;
+  }
+  list.innerHTML = accounts.map((a) => `
+    <div class="dcg-account" data-account="${esc(a.name)}">
+      <div>
+        <strong>${esc(a.bot_name || a.name)}</strong>
+        <span class="dcg-badge ${a.connected ? 'dcg-badge-ok' : 'dcg-badge-off'}">${a.connected ? 'connected' : (a.state === 'error' ? 'connect error' : a.state || 'disconnected')}</span>
+        <div class="dcg-help">${esc(a.name)}${a.last_error ? ` — ${esc(a.last_error)}` : ''}</div>
+        <div class="dcg-help dcg-test-result" data-name="${esc(a.name)}"></div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="dcg-btn dcg-test-account" data-name="${esc(a.name)}">Test</button>
+        <button type="button" class="dcg-btn dcg-btn-danger dcg-del-account" data-name="${esc(a.name)}">Remove</button>
+      </div>
+    </div>
+  `).join('');
+  const refresh = async () => {
+    const refreshed = await api('accounts');
+    renderAccounts(container, refreshed.accounts || []);
+    return refreshed;
+  };
+  list.querySelectorAll('.dcg-test-account').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const result_for = (root) => [...root.querySelectorAll('.dcg-test-result')].find((el) => el.dataset.name === btn.dataset.name);
+      const out = result_for(list);
+      btn.disabled = true;
+      if (out) out.textContent = 'Testing token against Discord…';
+      try {
+        const result = await api(`accounts/${encodeURIComponent(btn.dataset.name)}/test`, { method: 'POST' });
+        const suffix = result.reconnect
+          ? ' — token OK, retrying connection…'
+          : ' (token check only — the badge shows connection state)';
+        const okText = `✓ ${result.message}${suffix}`;
+        if (out) out.textContent = result.success ? okText : `✗ ${result.error || 'Test failed'}`;
+        if (result.success) {
+          await refresh();
+          const fresh = result_for(container);
+          if (fresh) fresh.textContent = okText;
+          if (result.reconnect) setTimeout(() => refresh().catch(() => {}), 4000);
+        }
+      } catch (e) {
+        if (out) out.textContent = `✗ ${e.message}`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+  list.querySelectorAll('.dcg-del-account').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Remove bot "${btn.dataset.name}"?`)) return;
+      btn.disabled = true;
+      try {
+        await api(`accounts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
+        await refresh();
+      } catch (e) {
+        alert(e.message);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+function bindAccounts(container) {
+  const form = container.querySelector('#dcg-add-form');
+  const status = container.querySelector('#dcg-acc-status');
+  const say = (text, cls = '') => {
+    status.textContent = text;
+    status.className = `dcg-status ${cls}`;
+  };
+  container.querySelector('#dcg-add-toggle')?.addEventListener('click', () => {
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  });
+  container.querySelector('#dcg-acc-test')?.addEventListener('click', async () => {
+    const token = container.querySelector('#dcg-acc-token')?.value?.trim();
+    const btn = container.querySelector('#dcg-acc-test');
+    if (!token) return say('Paste a token to test.', 'dcg-status-err');
+    btn.disabled = true;
+    say('Testing token against Discord…');
+    try {
+      const result = await api('accounts/test', { method: 'POST', body: JSON.stringify({ token }) });
+      say(result.success ? `✓ ${result.message}` : `✗ ${result.error || 'Test failed'}`,
+        result.success ? 'dcg-status-ok' : 'dcg-status-err');
+    } catch (e) {
+      say(`✗ ${e.message}`, 'dcg-status-err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  container.querySelector('#dcg-acc-save')?.addEventListener('click', async () => {
+    const name = container.querySelector('#dcg-acc-name')?.value?.trim();
+    const token = container.querySelector('#dcg-acc-token')?.value?.trim();
+    const btn = container.querySelector('#dcg-acc-save');
+    if (!name || !token) return say('Name and token required.', 'dcg-status-err');
+    btn.disabled = true;
+    say('Saving…');
+    try {
+      await api('accounts', { method: 'POST', body: JSON.stringify({ account_name: name, token }) });
+      say('Account saved.', 'dcg-status-ok');
+      const refreshed = await api('accounts');
+      renderAccounts(container, refreshed.accounts || []);
+      form.style.display = 'none';
+      container.querySelector('#dcg-acc-name').value = '';
+      container.querySelector('#dcg-acc-token').value = '';
+    } catch (e) {
+      say(e.message, 'dcg-status-err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// ── LLM debug panel (Debug tab slot) ──────────────────────────────────────────
 
 let _debugRefreshTimer = null;
 
@@ -363,13 +483,9 @@ function renderDebugEntries(listEl, entries) {
     const timing = entry.timing || {};
     const trigger = entry.trigger || {};
     const rejection = entry.rejection || {};
-    const location = [
-      entry.account,
-      entry.guild_name || entry.guild_id,
-      entry.channel_name || entry.channel_id,
-    ].filter(Boolean).join(' · ');
+    const location = [entry.account, entry.guild_name || entry.guild_id, entry.channel_name || entry.channel_id]
+      .filter(Boolean).join(' · ');
     const latency = timing.latency_ms != null ? `${timing.latency_ms} ms` : '—';
-    const modelSummary = formatLlmSummary(entry.llm);
 
     if (entry.kind === 'rejection') {
       return `
@@ -393,7 +509,7 @@ Reason: ${esc(rejection.reason || 'blocked')}${Object.keys(rejection.detail || {
       <details class="dcg-debug-entry" open>
         <summary>${debugStatusBadge(response.status)} ${esc(formatDebugTimestamp(entry.created_at))} · ${esc(entry.source || 'discord_message')}</summary>
         <div class="dcg-debug-meta">
-          ${esc(location)} · trigger: ${esc(trigger.reason || trigger.username || '—')} · ${esc(modelSummary)} · latency: ${esc(latency)}
+          ${esc(location)} · trigger: ${esc(trigger.reason || trigger.username || '—')} · ${esc(formatLlmSummary(entry.llm))} · latency: ${esc(latency)}
         </div>
         <div class="dcg-debug-label">Trigger message</div>
         <div class="dcg-debug-block">${esc(trigger.content || '—')}</div>
@@ -422,9 +538,7 @@ async function refreshDebugPanel(container) {
     const data = await api('debug/llm?limit=10');
     renderDebugEntries(list, data.entries || []);
     if (status) {
-      status.textContent = data.daemon_running
-        ? `Updated ${new Date().toLocaleTimeString()} · daemon running`
-        : `Updated ${new Date().toLocaleTimeString()} · daemon offline`;
+      status.textContent = `Updated ${new Date().toLocaleTimeString()} · daemon ${data.daemon_running ? 'running' : 'offline'}`;
     }
   } catch (err) {
     if (status) status.textContent = err.message;
@@ -434,10 +548,9 @@ async function refreshDebugPanel(container) {
 
 function initDebugPanel(container, initialEntries = []) {
   const list = container.querySelector('#dcg-debug-list');
-  const refreshBtn = container.querySelector('#dcg-debug-refresh');
   if (!list) return;
   renderDebugEntries(list, initialEntries);
-  refreshBtn?.addEventListener('click', () => refreshDebugPanel(container));
+  container.querySelector('#dcg-debug-refresh')?.addEventListener('click', () => refreshDebugPanel(container));
   container.querySelector('#dcg-debug-clear')?.addEventListener('click', async () => {
     try {
       await api('debug/clear', { method: 'POST', body: {} });
@@ -448,394 +561,13 @@ function initDebugPanel(container, initialEntries = []) {
     }
     refreshDebugPanel(container);
   });
-  if (_debugRefreshTimer) {
-    clearInterval(_debugRefreshTimer);
-    _debugRefreshTimer = null;
-  }
+  if (_debugRefreshTimer) clearInterval(_debugRefreshTimer);
   _debugRefreshTimer = setInterval(() => {
     if (container.isConnected) refreshDebugPanel(container);
   }, 15000);
 }
 
-let _tracesRefreshTimer = null;
-
-function detailPreview(detail) {
-  if (!detail || typeof detail !== 'object') return '';
-  const bits = [];
-  for (const key of ['channel_id', 'reason', 'vibe', 'message_id', 'author_id', 'task_id', 'account_name', 'kind']) {
-    if (detail[key] != null && detail[key] !== '') bits.push(`${key}=${detail[key]}`);
-    if (bits.length >= 4) break;
-  }
-  return bits.join(' · ');
-}
-
-function renderTracesPanel(listEl, summaryEl, filterEl, data) {
-  if (!listEl) return;
-  const traces = data?.traces || [];
-  const summary = data?.trace_summary || {};
-  const byType = summary.by_type || {};
-  if (summaryEl) {
-    const top = Object.entries(byType)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(' · ');
-    summaryEl.textContent = top
-      ? `Last ${summary.total || traces.length} · ${top}`
-      : (traces.length ? `${traces.length} traces` : 'No traces yet');
-  }
-  if (filterEl && filterEl.options.length <= 1) {
-    Object.keys(byType).sort().forEach((type) => {
-      const opt = document.createElement('option');
-      opt.value = type;
-      opt.textContent = type;
-      filterEl.appendChild(opt);
-    });
-  }
-  if (!traces.length) {
-    listEl.innerHTML = '<p class="dcg-help" style="margin:0">No traces yet — chat or wait for cron activity while the daemon runs.</p>';
-    return;
-  }
-  listEl.innerHTML = traces.slice(0, 40).map((t) => {
-    const detail = t.detail || {};
-    const preview = detailPreview(detail);
-    const badgeClass = String(t.trace_type || '').includes('dropped') || String(t.trace_type || '').includes('reject')
-      ? 'dcg-debug-badge-warn'
-      : (String(t.trace_type || '').includes('sent') || String(t.trace_type || '').includes('emitted')
-        ? 'dcg-debug-badge-ok'
-        : 'dcg-debug-badge-pending');
-    return `
-      <details class="dcg-debug-entry">
-        <summary><span class="dcg-debug-badge ${badgeClass}">${esc(t.trace_type || 'trace')}</span> ${esc(formatDebugTimestamp(t.created_at))} · ${esc(t.summary || '')}</summary>
-        <div class="dcg-debug-meta">${preview ? esc(preview) : '—'}</div>
-        <div class="dcg-debug-block">${esc(JSON.stringify(detail, null, 2))}</div>
-      </details>`;
-  }).join('');
-}
-
-async function refreshTracesPanel(container) {
-  const list = container.querySelector('#dcg-traces-list');
-  const summary = container.querySelector('#dcg-traces-summary');
-  const filter = container.querySelector('#dcg-traces-filter');
-  const status = container.querySelector('#dcg-traces-status');
-  if (!list) return;
-  if (status) status.textContent = 'Refreshing…';
-  try {
-    const type = filter?.value || '';
-    const qs = type ? `traces?limit=40&type=${encodeURIComponent(type)}` : 'traces?limit=40';
-    const data = await api(qs);
-    // Preserve filter selection when rebuilding options from an unfiltered summary once.
-    if (filter && !type && (data.trace_summary?.by_type)) {
-      const current = filter.value;
-      while (filter.options.length > 1) filter.remove(1);
-      Object.keys(data.trace_summary.by_type).sort().forEach((t) => {
-        const opt = document.createElement('option');
-        opt.value = t;
-        opt.textContent = t;
-        filter.appendChild(opt);
-      });
-      filter.value = current;
-    }
-    renderTracesPanel(list, summary, filter, data);
-    if (status) {
-      status.textContent = data.daemon_running
-        ? `Updated ${new Date().toLocaleTimeString()} · daemon running`
-        : `Updated ${new Date().toLocaleTimeString()} · daemon offline`;
-    }
-  } catch (err) {
-    if (status) status.textContent = err.message;
-    list.innerHTML = `<p class="dcg-help" style="margin:0;color:var(--error)">${esc(err.message)}</p>`;
-  }
-}
-
-function initTracesPanel(container, initialData = null) {
-  const list = container.querySelector('#dcg-traces-list');
-  const summary = container.querySelector('#dcg-traces-summary');
-  const filter = container.querySelector('#dcg-traces-filter');
-  const refreshBtn = container.querySelector('#dcg-traces-refresh');
-  if (!list) return;
-  if (initialData) renderTracesPanel(list, summary, filter, initialData);
-  refreshBtn?.addEventListener('click', () => refreshTracesPanel(container));
-  filter?.addEventListener('change', () => refreshTracesPanel(container));
-  if (_tracesRefreshTimer) {
-    clearInterval(_tracesRefreshTimer);
-    _tracesRefreshTimer = null;
-  }
-  _tracesRefreshTimer = setInterval(() => {
-    if (container.isConnected) refreshTracesPanel(container);
-  }, 15000);
-  if (!initialData) refreshTracesPanel(container);
-}
-
-function fieldByData(container, fieldId) {
-  return [...container.querySelectorAll('[data-field]')].find((el) => el.dataset.field === fieldId) || null;
-}
-
-function checkboxByDataValue(container, pickerId, value) {
-  return [...container.querySelectorAll(`#${pickerId} input[type="checkbox"]`)]
-    .find((el) => el.dataset.value === value) || null;
-}
-
-function ignoredChannelLabel(value) {
-  return ignoredChannelCatalog[value]?.label || value;
-}
-
-function syncIgnoredChannelsField(container) {
-  const hidden = fieldByData(container, 'channel.ignored_channels');
-  if (hidden) {
-    hidden.value = [...ignoredChannelSelection].sort().join('\n');
-  }
-}
-
-function renderIgnoredChannelChips(container) {
-  const box = container.querySelector('#dcg-ignore-chips');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!ignoredChannelSelection.size) {
-    box.innerHTML = '<span class="dcg-help">None selected</span>';
-    return;
-  }
-  [...ignoredChannelSelection].sort().forEach((value) => {
-    const chip = document.createElement('span');
-    chip.className = 'dcg-target-chip';
-    const text = document.createElement('span');
-    text.textContent = ignoredChannelLabel(value);
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Remove');
-    btn.textContent = '×';
-    btn.addEventListener('click', () => {
-      ignoredChannelSelection.delete(value);
-      const cb = checkboxByDataValue(container, 'dcg-ignore-picker', value);
-      if (cb) cb.checked = false;
-      renderIgnoredChannelChips(container);
-      syncIgnoredChannelsField(container);
-    });
-    chip.appendChild(text);
-    chip.appendChild(btn);
-    box.appendChild(chip);
-  });
-}
-
-function renderIgnoredChannelPicker(container, targets) {
-  const box = container.querySelector('#dcg-ignore-picker');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!targets.length) {
-    box.innerHTML = '<p class="dcg-help" style="margin:0">No text channels found. Connect a bot and ensure the daemon is running.</p>';
-    return;
-  }
-  const groups = {};
-  targets.forEach((target) => {
-    ignoredChannelCatalog[target.value] = target;
-    const key = `${target.account}|${target.guild_id}`;
-    if (!groups[key]) {
-      groups[key] = { title: `${target.account} · ${target.guild_name}`, items: [] };
-    }
-    groups[key].items.push(target);
-  });
-  Object.values(groups).forEach((group) => {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'dcg-target-group';
-    const title = document.createElement('div');
-    title.className = 'dcg-target-group-title';
-    title.textContent = group.title;
-    groupEl.appendChild(title);
-    group.items.forEach((target) => {
-      const label = document.createElement('label');
-      label.className = 'dcg-target-option';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset.value = target.value;
-      cb.checked = ignoredChannelSelection.has(target.value);
-      cb.addEventListener('change', () => {
-        if (cb.checked) ignoredChannelSelection.add(target.value);
-        else ignoredChannelSelection.delete(target.value);
-        renderIgnoredChannelChips(container);
-        syncIgnoredChannelsField(container);
-      });
-      const span = document.createElement('span');
-      span.textContent = `#${target.channel_name}`;
-      label.appendChild(cb);
-      label.appendChild(span);
-      groupEl.appendChild(label);
-    });
-    box.appendChild(groupEl);
-  });
-}
-
-async function loadIgnoredChannelPicker(container) {
-  const status = container.querySelector('#dcg-ignore-status');
-  const refreshBtn = container.querySelector('#dcg-ignore-refresh');
-  if (refreshBtn) refreshBtn.disabled = true;
-  if (status) status.textContent = 'Loading…';
-  try {
-    const data = await api('channels/text');
-    if (data.error) throw new Error(data.error);
-    renderIgnoredChannelPicker(container, data.targets || []);
-    if (status) {
-      status.textContent = data.connected
-        ? `${(data.targets || []).length} channels`
-        : 'Daemon offline / no bots connected';
-    }
-  } catch (err) {
-    if (status) status.textContent = err.message || 'Failed to load channels';
-  } finally {
-    if (refreshBtn) refreshBtn.disabled = false;
-  }
-}
-
-function initIgnoredChannelPicker(container, selectedTargets) {
-  ignoredChannelSelection = new Set((selectedTargets || []).map((line) => String(line).trim()).filter(Boolean));
-  syncIgnoredChannelsField(container);
-  renderIgnoredChannelChips(container);
-
-  container.querySelector('#dcg-ignore-refresh')?.addEventListener('click', () => loadIgnoredChannelPicker(container));
-  container.querySelector('#dcg-ignore-clear')?.addEventListener('click', () => {
-    ignoredChannelSelection.clear();
-    container.querySelectorAll('#dcg-ignore-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = false;
-    });
-    renderIgnoredChannelChips(container);
-    syncIgnoredChannelsField(container);
-  });
-
-  if (container.querySelector('.dcg-notice')?.textContent?.includes('Daemon is running')) {
-    loadIgnoredChannelPicker(container);
-  }
-}
-
-const botAllowlistCatalog = {};
-let botAllowlistSelection = new Set();
-
-function botAllowlistLabel(value) {
-  return botAllowlistCatalog[value]?.label || value;
-}
-
-function syncBotAllowlistField(container) {
-  const hidden = fieldByData(container, 'bot.allowlist_ids');
-  if (hidden) {
-    hidden.value = [...botAllowlistSelection].sort().join('\n');
-  }
-}
-
-function renderBotAllowlistChips(container) {
-  const box = container.querySelector('#dcg-bot-allowlist-chips');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!botAllowlistSelection.size) {
-    box.innerHTML = '<span class="dcg-help">None selected</span>';
-    return;
-  }
-  [...botAllowlistSelection].sort().forEach((value) => {
-    const chip = document.createElement('span');
-    chip.className = 'dcg-target-chip';
-    const text = document.createElement('span');
-    text.textContent = botAllowlistLabel(value);
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Remove');
-    btn.textContent = '×';
-    btn.addEventListener('click', () => {
-      botAllowlistSelection.delete(value);
-      const cb = checkboxByDataValue(container, 'dcg-bot-allowlist-picker', value);
-      if (cb) cb.checked = false;
-      renderBotAllowlistChips(container);
-      syncBotAllowlistField(container);
-    });
-    chip.appendChild(text);
-    chip.appendChild(btn);
-    box.appendChild(chip);
-  });
-}
-
-function renderBotAllowlistPicker(container, bots) {
-  const box = container.querySelector('#dcg-bot-allowlist-picker');
-  if (!box) return;
-  box.innerHTML = '';
-  if (!bots.length) {
-    box.innerHTML = '<p class="dcg-help" style="margin:0">No other bots found in connected servers. Bots must share a server with Remmi and appear in the member list.</p>';
-    return;
-  }
-  const groupEl = document.createElement('div');
-  groupEl.className = 'dcg-target-group';
-  const title = document.createElement('div');
-  title.className = 'dcg-target-group-title';
-  title.textContent = 'Bots in your servers';
-  groupEl.appendChild(title);
-  bots.forEach((bot) => {
-    botAllowlistCatalog[bot.value] = bot;
-    const label = document.createElement('label');
-    label.className = 'dcg-target-option';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.dataset.value = bot.value;
-    cb.checked = botAllowlistSelection.has(bot.value);
-    cb.addEventListener('change', () => {
-      if (cb.checked) botAllowlistSelection.add(bot.value);
-      else botAllowlistSelection.delete(bot.value);
-      renderBotAllowlistChips(container);
-      syncBotAllowlistField(container);
-    });
-    const span = document.createElement('span');
-    span.textContent = bot.label;
-    label.appendChild(cb);
-    label.appendChild(span);
-    groupEl.appendChild(label);
-  });
-  box.appendChild(groupEl);
-}
-
-async function loadBotAllowlistPicker(container) {
-  const status = container.querySelector('#dcg-bot-allowlist-status');
-  const refreshBtn = container.querySelector('#dcg-bot-allowlist-refresh');
-  if (refreshBtn) refreshBtn.disabled = true;
-  if (status) status.textContent = 'Loading…';
-  try {
-    const data = await api('bots/allowlist');
-    if (data.error && !data.bots?.length) throw new Error(data.error);
-    renderBotAllowlistPicker(container, data.bots || []);
-    const count = (data.bots || []).length;
-    if (status) {
-      status.textContent = count
-        ? `${count} bot${count === 1 ? '' : 's'} found`
-        : (data.error || 'No connected bots');
-    }
-    renderBotAllowlistChips(container);
-  } catch (err) {
-    if (status) status.textContent = err.message || 'Failed to load bots';
-  } finally {
-    if (refreshBtn) refreshBtn.disabled = false;
-  }
-}
-
-function initBotAllowlistPicker(container, selectedIds) {
-  botAllowlistSelection = new Set((selectedIds || []).map((line) => String(line).trim()).filter(Boolean));
-  syncBotAllowlistField(container);
-  renderBotAllowlistChips(container);
-
-  container.querySelector('#dcg-bot-allowlist-refresh')?.addEventListener('click', () => loadBotAllowlistPicker(container));
-  container.querySelector('#dcg-bot-allowlist-select-all')?.addEventListener('click', () => {
-    container.querySelectorAll('#dcg-bot-allowlist-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = true;
-      botAllowlistSelection.add(cb.dataset.value);
-    });
-    renderBotAllowlistChips(container);
-    syncBotAllowlistField(container);
-  });
-  container.querySelector('#dcg-bot-allowlist-clear')?.addEventListener('click', () => {
-    botAllowlistSelection.clear();
-    container.querySelectorAll('#dcg-bot-allowlist-picker input[type="checkbox"]').forEach((cb) => {
-      cb.checked = false;
-    });
-    renderBotAllowlistChips(container);
-    syncBotAllowlistField(container);
-  });
-
-  if (container.querySelector('.dcg-notice')?.textContent?.includes('Daemon is running')) {
-    loadBotAllowlistPicker(container);
-  }
-}
+// ── voice channel list (Voice tab slot) ───────────────────────────────────────
 
 async function loadVoiceChannelList(container) {
   const status = container.querySelector('#dcg-voice-channels-status');
@@ -859,11 +591,121 @@ async function loadVoiceChannelList(container) {
   }
 }
 
-function initVoiceChannelList(container) {
-  container.querySelector('#dcg-voice-channels-refresh')?.addEventListener('click', () => loadVoiceChannelList(container));
-  if (container.querySelector('.dcg-notice')?.textContent?.includes('Daemon is running')) {
-    loadVoiceChannelList(container);
+// ── the shell ─────────────────────────────────────────────────────────────────
+
+function renderShell(container, data) {
+  const schema = data.schema || [];
+  const values = data.values || {};
+  const voicePromptDefault = data.settings?.defaults?.voice?.conversation_prompt_template || '';
+  const daemon = data.settings?.daemon_running;
+  const daemonState = data.settings?.daemon_state || data.health?.state || 'unknown';
+  const daemonNote = !daemon
+    ? `<div class="dcg-notice">Daemon is offline (${esc(daemonState)}). Enable the plugin under Settings → Plugins, then reload it. You do not add a separate daemon — the plugin starts its own runtime.</div>`
+    : `<div class="dcg-notice" style="border-color:var(--success)">Daemon is running (${esc(daemonState)}).</div>`;
+
+  container.innerHTML = `
+    <style>${DCG_STYLES}</style>
+    <div class="dcg">
+      ${daemonNote}
+      <div class="dcg-section">
+        <h4>Bot Accounts</h4>
+        <p class="dcg-help">Create a bot at discord.com/developers, enable the <strong>Message Content</strong> and <strong>Server Members</strong> intents (Bot page), then paste its token here. A saved bot logs in only when an enabled daemon task (Settings → Continuity) selects it.</p>
+        <div id="dcg-accounts"></div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button type="button" class="dcg-btn" id="dcg-add-toggle">+ Add Bot</button>
+        </div>
+        <div id="dcg-add-form" style="display:none;margin-top:12px">
+          <div class="dcg-field">
+            <label for="dcg-acc-name">Account name</label>
+            <input class="dcg-input" id="dcg-acc-name" placeholder="e.g. sapphire">
+            <div class="dcg-help">Sapphire's local label for this bot — daemon tasks key off it. Any short name; it does not need to match the bot's Discord username.</div>
+          </div>
+          <div class="dcg-field">
+            <label for="dcg-acc-token">Bot token</label>
+            <input class="dcg-input" id="dcg-acc-token" type="password" placeholder="paste bot token">
+            <div class="dcg-help">Discord Developer Portal → your app → Bot → Reset Token.</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="dcg-btn" id="dcg-acc-test">Test token</button>
+            <button type="button" class="dcg-btn dcg-btn-primary" id="dcg-acc-save">Add Bot</button>
+          </div>
+          <div class="dcg-status" id="dcg-acc-status"></div>
+        </div>
+      </div>
+      <div id="dcg-schema-form"></div>
+    </div>
+  `;
+
+  const ignoredChannelsList = values['channel.ignored_channels'] || [];
+  const allowlistIds = values['bot.allowlist_ids'] || [];
+  const conversationSections = ChipPicker.markup('ignore', 'Ignored channels',
+    'Fully ignore these text channels: no replies, reactions, or scheduled posts. Save after changing.',
+    { emptyText: 'Connect a bot and refresh to list channels.' })
+    + `<textarea class="dcg-textarea" id="channel.ignored_channels" data-field="channel.ignored_channels" style="display:none" aria-hidden="true">${esc(ignoredChannelsList.join('\n'))}</textarea>`
+    + ChipPicker.markup('bot-allowlist', 'Allowlisted Bots',
+      'Bots she may answer (Bot-to-bot replies must be on). Loaded from servers your bot is in — enable <strong>Server Members Intent</strong> in the Developer Portal or the list stays empty.',
+      { selectAll: true, emptyText: 'Connect a bot, then click Refresh to load bots.' })
+    + `<textarea class="dcg-textarea" id="bot.allowlist_ids" data-field="bot.allowlist_ids" style="display:none" aria-hidden="true">${esc(allowlistIds.join('\n'))}</textarea>`;
+
+  const voiceSections = `
+      <div class="dcg-section">
+        <h4>Voice channels</h4>
+        <div class="dcg-help">Voice is a Realtime rule: Settings → Continuity → Realtime → <strong>Discord: Voice channel</strong> names the bot; its filter says which voice channels the rule covers (server or channel name, or an id from the list below — no filter = all of them), <strong>Auto-join</strong> is opt-in per rule, and its persona, model and toolset run the voice chat. She joins on <code>/voice join</code> or her join tool, and leaves on &lt;&lt;HANG UP&gt;&gt;, <code>/voice leave</code>, or when the channel empties.</div>
+        <div class="dcg-target-toolbar">
+          <button type="button" class="dcg-btn" id="dcg-voice-channels-refresh">Refresh from Discord</button>
+          <span class="dcg-help" id="dcg-voice-channels-status"></span>
+        </div>
+        <div id="dcg-voice-channels-list" class="dcg-target-picker">
+          <p class="dcg-help" style="margin:0">Connect a bot, then click Refresh to list voice channels.</p>
+        </div>
+      </div>
+      <div class="dcg-section">
+        <h4>Voice Conversation Prompt</h4>
+        ${textarea(
+          'voice.conversation_prompt_template',
+          'Voice conversation prompt',
+          values['voice.conversation_prompt_template'] || voicePromptDefault,
+          'System instructions for conversational voice mode. Placeholders: {primary} = bot name, {alias_line} = alias suffix (empty when none). Clear and save to restore the built-in default.',
+        )}
+      </div>`;
+
+  const debugSection = `
+      <div class="dcg-section">
+        <h4>LLM Debug</h4>
+        <p class="dcg-help">Last 10 LLM-related events — successful exchanges and policy rejections. Shows the task's model, the prompt breakdown, and why blocked messages never reached the LLM. Held in memory only while the ring is on.</p>
+        <div class="dcg-target-toolbar">
+          <button type="button" class="dcg-btn" id="dcg-debug-refresh">Refresh now</button>
+          <button type="button" class="dcg-btn" id="dcg-debug-clear">Clear</button>
+          <span class="dcg-help" id="dcg-debug-status"></span>
+        </div>
+        <div id="dcg-debug-list" class="dcg-debug-list">
+          <p class="dcg-help" style="margin:0">Loading…</p>
+        </div>
+      </div>`;
+
+  const slots = [
+    { tab: 'Conversation', mount: (el) => { el.innerHTML = conversationSections; } },
+    { tab: 'Voice', mount: (el) => { el.innerHTML = voiceSections; } },
+    { tab: 'Debug', mount: (el) => { el.innerHTML = debugSection; } },
+  ];
+
+  const settingsBox = container.querySelector('#dcg-schema-form');
+  if (!schema.length) {
+    settingsBox.insertAdjacentHTML('beforebegin',
+      '<div class="dcg-notice">Settings schema unavailable — plugin manifest not loaded. Bot accounts and the widget tabs still work; reload the plugin to restore the settings fields.</div>');
   }
+  renderSettingsForm(settingsBox, schema, values, { slots });
+
+  renderAccounts(container, data.accounts?.accounts || []);
+  bindAccounts(container);
+  const voicePromptField = fieldByData(container, 'voice.conversation_prompt_template');
+  if (voicePromptField && voicePromptDefault) voicePromptField.dataset.defaultTemplate = voicePromptDefault;
+  initDebugPanel(container, data.llmDebug?.entries || []);
+  buildPickers(container);
+  ignoredChannels.init(ignoredChannelsList);
+  botAllowlist.init(allowlistIds);
+  container.querySelector('#dcg-voice-channels-refresh')?.addEventListener('click', () => loadVoiceChannelList(container));
+  if (daemonRunning(container)) loadVoiceChannelList(container);
 }
 
 function normalizedVoicePrompt(container) {
@@ -877,21 +719,18 @@ function normalizedVoicePrompt(container) {
 
 // Flat dotted keys owned by the slot-mounted widget sections.
 function customSectionValues(container) {
-  const flat = {
-    'channel.ignored_channels': [...ignoredChannelSelection].sort(),
-    'bot.allowlist_ids': [...botAllowlistSelection].sort(),
+  return {
+    'channel.ignored_channels': ignoredChannels ? ignoredChannels.values() : [],
+    'bot.allowlist_ids': botAllowlist ? botAllowlist.values() : [],
     'voice.conversation_prompt_template': normalizedVoicePrompt(container),
   };
-  return flat;
 }
 
 async function loadPanelData() {
-  const [accounts, settings, health, summary, traces, llmDebug, plugins, values] = await Promise.allSettled([
+  const [accounts, settings, health, llmDebug, plugins, values] = await Promise.allSettled([
     api('accounts'),
-    api('settings'), // daemon state + built-in defaults only — values live in core now
+    api('settings'), // daemon state + built-in defaults only — values live in core
     api('health'),
-    api('admin/summary'),
-    api('traces'),
     api('debug/llm?limit=10'),
     pluginsAPI.listPlugins(),
     pluginsAPI.getSettings(PLUGIN_NAME),
@@ -899,10 +738,8 @@ async function loadPanelData() {
   const val = (r, fallback = {}) => (r.status === 'fulfilled' ? r.value : fallback);
   const settingsData = val(settings, {});
   const healthData = val(health, {});
-  const daemonRunning = settingsData.daemon_running === true
-    || healthData.daemon_running === true
-    || healthData.state === 'ready'
-    || healthData.state === 'starting';
+  const running = settingsData.daemon_running === true || healthData.daemon_running === true
+    || healthData.state === 'ready' || healthData.state === 'starting';
   _SCHEMA = (val(plugins, {}).plugins || []).find((p) => p.name === PLUGIN_NAME)?.settings_schema || [];
   return {
     accounts: val(accounts, { accounts: [] }),
@@ -910,12 +747,10 @@ async function loadPanelData() {
     values: val(values, {}),
     settings: {
       defaults: settingsData.defaults || {},
-      daemon_running: daemonRunning,
+      daemon_running: running,
       daemon_state: settingsData.daemon_state || healthData.state || 'unknown',
     },
     health: healthData,
-    summary: val(summary, {}),
-    traces: val(traces, { traces: [] }),
     llmDebug: val(llmDebug, { entries: [] }),
   };
 }
@@ -925,7 +760,7 @@ function registerTab() {
     id: PLUGIN_NAME,
     name: 'Discord',
     icon: '🎮',
-    helpText: 'Discord bot accounts, conversation behavior, reactions, safety, media, and voice settings. Greetings live on the Discord: Greetings / All interactions daemon tasks.',
+    helpText: 'Discord bot accounts, conversation behavior, reactions, safety, media, retention and voice knobs. Chat, greetings and voice are Continuity tasks; personality modules live in the discord-personality plugin.',
 
     load: () => loadPanelData(),
 
@@ -939,16 +774,12 @@ function registerTab() {
     },
 
     getSettings(container) {
-      // Wipe guard: customSectionValues returns plausible EMPTIES (auto
-      // providers, empty target lists) when the slot sections aren't in the
-      // DOM — saving that would silently wipe 15 stored keys. If the panel
-      // hasn't finished rendering (save clicked mid-load, load failed, slot
-      // mount threw), refuse; the settings page surfaces this as
-      // "Save failed: …" instead of a lying success toast.
+      // Wipe guard: customSectionValues returns plausible EMPTIES when the slot
+      // sections aren't in the DOM — saving that would silently wipe stored
+      // keys. If the panel hasn't finished rendering, refuse; the settings page
+      // surfaces this as "Save failed: …" instead of a lying success toast.
       const box = container.querySelector('#dcg-schema-form');
-      if (!box) {
-        throw new Error('Discord panel is still loading — wait a moment and save again.');
-      }
+      if (!box) throw new Error('Discord panel is still loading — wait a moment and save again.');
       const schemaValues = _SCHEMA.length ? readSettingsForm(box, _SCHEMA) : {};
       return { ...schemaValues, ...customSectionValues(container) };
     },
@@ -962,9 +793,7 @@ registerTab();
 document.addEventListener('sapphire:plugin_toggled', (event) => {
   const detail = event.detail || {};
   const name = detail.plugin || detail.name;
-  if (name === PLUGIN_NAME && detail.enabled) {
-    registerTab();
-  }
+  if (name === PLUGIN_NAME && detail.enabled) registerTab();
 });
 
 export default { init() { registerTab(); } };

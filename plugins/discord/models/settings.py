@@ -1,4 +1,9 @@
-"""Typed settings models and layered settings resolution."""
+"""Typed settings (S7): manifest defaults ← core's saved values (read live) ← overrides.
+
+A Settings save reaches the reply path on the next resolve() — no daemon
+reload. Overrides exist for tests and standalone tooling. Per-guild / channel /
+DM overlays are gone (S6): daemon tasks + filters do per-server behavior.
+"""
 
 from __future__ import annotations
 
@@ -22,34 +27,26 @@ class SafetySettings:
 
 @dataclass
 class MediaSettings:
-    # Images posted in chat ride the reply payload (the task's model sees them).
-    images_in_enabled: bool = False
+    images_in_enabled: bool = False       # images in chat ride the reply payload (the task's model sees them)
     max_images: int = 4
     gif_enabled: bool = False
     gif_api_key: str = ''
     gif_provider: str = 'klipy'
     gif_content_filter: str = 'medium'
-    gif_auto_chance: float = 0.0
-    gif_cooldown_seconds: int = 300
 
 
 @dataclass
 class VoiceSettings:
-    # Voice is a Realtime daemon task (Discord: Voice channel): the account,
-    # the channels and keep_chat_history live on the task. These are the
-    # channel-independent conversation knobs.
+    # Voice is a Realtime rule (Discord: Voice channel): the account, the
+    # channel filter, auto-join and keep_chat_history live on the rule. These
+    # are the channel-independent conversation knobs.
     turn_cues_enabled: bool = True
     min_silence_seconds: float = 1.5
     addressing_mode: str = 'bot_name'  # always | bot_name
     addressing_aliases: list = field(default_factory=list)
-    # Addressing (mic test 2026-09-13): in bot_name mode, one human alone with
-    # her needs no name; the person she just answered may keep talking nameless
-    # for follow_up_seconds after her reply ends. Everyone else says her name.
-    solo_no_name: bool = True
-    follow_up_seconds: float = 20.0
-    # Continuous VAD-speech needed over her before she stops (Discord only —
-    # its audio arrives through the client's own gate, clicks and all).
-    barge_hold_ms: int = 250
+    solo_no_name: bool = True          # one human alone with her needs no name
+    follow_up_seconds: float = 20.0    # the person she just answered may keep talking nameless
+    barge_hold_ms: int = 250           # continuous speech over her before she stops
     conversation_prompt_template: str = ''
 
 
@@ -57,9 +54,6 @@ class VoiceSettings:
 class RetentionSettings:
     enabled: bool = False
     message_days: int = 90
-    trace_days: int = 14
-    transcript_days: int = 30
-    profile_buffer_days: int = 7
 
 
 @dataclass
@@ -74,8 +68,7 @@ class ConversationSettings:
     typing_indicator_enabled: bool = True
     human_pause_enabled: bool = True
     read_delay_enabled: bool = True
-    # account:channel_id entries — fully ignore inbound (and skip proactive) for these.
-    ignored_channels: list = field(default_factory=list)
+    ignored_channels: list = field(default_factory=list)   # account:channel_id entries
 
 
 @dataclass
@@ -88,8 +81,7 @@ class ReactionSettings:
 
 @dataclass
 class DebugSettings:
-    # Debug ring holds full prompts (other people's messages) in memory — opt in.
-    llm_debug_enabled: bool = False
+    llm_debug_enabled: bool = False    # the ring holds full prompts (other people's messages) — opt in
 
 
 @dataclass
@@ -101,96 +93,69 @@ class EffectiveSettings:
     debug: DebugSettings = field(default_factory=DebugSettings)
     bot: BotInteractionSettings = field(default_factory=BotInteractionSettings)
     reaction: ReactionSettings = field(default_factory=ReactionSettings)
-    dm: ConversationSettings = field(default_factory=ConversationSettings)
-    guild: ConversationSettings = field(default_factory=ConversationSettings)
     channel: ConversationSettings = field(default_factory=ConversationSettings)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-@dataclass
-class SettingsOverlay:
-    safety: dict[str, Any] = field(default_factory=dict)
-    media: dict[str, Any] = field(default_factory=dict)
-    voice: dict[str, Any] = field(default_factory=dict)
-    retention: dict[str, Any] = field(default_factory=dict)
-    debug: dict[str, Any] = field(default_factory=dict)
-    bot: dict[str, Any] = field(default_factory=dict)
-    reaction: dict[str, Any] = field(default_factory=dict)
-    dm: dict[str, Any] = field(default_factory=dict)
-    guild: dict[str, Any] = field(default_factory=dict)
-    channel: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any] | None) -> 'SettingsOverlay':
-        payload = payload or {}
-        keys = cls.__dataclass_fields__.keys()
-        return cls(**{key: dict(payload.get(key) or {}) for key in keys})
-
-    def to_dict(self) -> dict[str, Any]:
-        return {key: dict(getattr(self, key)) for key in self.__dataclass_fields__.keys() if getattr(self, key)}
-
-
-@dataclass
 class SettingsStore:
-    """The effective settings: core's plugin settings, read live on every
-    resolve (a Settings save reaches the reply path with no daemon reload),
-    under an in-memory global overlay (tests, standalone tooling). Per-guild /
-    channel / DM overlays are gone (S6, 2026-09-22): daemon tasks + filters do
-    per-server behavior now."""
-    global_overlay: SettingsOverlay = field(default_factory=SettingsOverlay)
+    """resolve() = defaults, then core's saved plugin settings, then this
+    store's overrides. Overrides may be flat ({'channel.reply_mode': 'all'})
+    or nested ({'channel': {'reply_mode': 'all'}})."""
 
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any] | None) -> 'SettingsStore':
-        payload = payload or {}
-        return cls(global_overlay=SettingsOverlay.from_dict(payload.get('global')))
-
-    def to_dict(self) -> dict[str, Any]:
-        return {'global': self.global_overlay.to_dict()}
+    def __init__(self, overrides: dict | None = None):
+        self.overrides = nested(overrides)
 
     def resolve(self) -> EffectiveSettings:
         effective = EffectiveSettings()
-        for overlay in (self.global_overlay, core_global_overlay()):
-            if overlay:
-                _apply_overlay(effective, overlay)
+        apply_settings(effective, core_settings())
+        apply_settings(effective, self.overrides)
         return effective
 
 
-def overlay_from_flat(flat: dict | None) -> SettingsOverlay:
-    """Map core's flat dotted-key settings dict (section.field) to an overlay."""
-    nested: dict = {}
-    for key, value in (flat or {}).items():
-        section, dot, field_name = key.partition('.')
-        if dot and field_name:
-            nested.setdefault(section, {})[field_name] = value
-    return SettingsOverlay.from_dict(nested)
+def nested(values: dict | None) -> dict:
+    """{'a.b': 1, 'c': {'d': 2}} → {'a': {'b': 1}, 'c': {'d': 2}}."""
+    out: dict = {}
+    for key, value in (values or {}).items():
+        if isinstance(value, dict):
+            out.setdefault(key, {}).update(value)
+            continue
+        section, dot, name = str(key).partition('.')
+        if dot and name:
+            out.setdefault(section, {})[name] = value
+    return out
 
 
-def core_global_overlay() -> SettingsOverlay:
-    """Global settings layer, read live from core (manifest defaults + user/webui/plugins/discord.json).
-
-    Live per-resolve so a Settings save reaches the reply path immediately —
-    no daemon reload needed. Falls back to an empty overlay outside Sapphire
-    (unit tests, standalone tooling).
-    """
+def core_settings() -> dict:
+    """Core's saved plugin settings (manifest defaults + user/webui/plugins/discord.json),
+    nested. Empty outside a booted Sapphire (unit tests, standalone tooling) —
+    gated on registration, not importability."""
     try:
         from core.plugin_loader import plugin_loader
         if not plugin_loader.get_plugin_info('discord'):
-            # Plugin system not booted (unit tests, standalone tooling) — the
-            # import alone succeeds anywhere the repo root is on sys.path, so
-            # gate on actual registration, not importability.
-            return SettingsOverlay()
-        flat = plugin_loader.get_plugin_settings('discord') or {}
+            return {}
+        return nested(plugin_loader.get_plugin_settings('discord') or {})
     except Exception:
-        return SettingsOverlay()
-    return overlay_from_flat(flat)
+        return {}
+
+
+def apply_settings(effective: EffectiveSettings, values: dict) -> None:
+    """Retired sections and unknown keys are ignored, never fatal (stale keys
+    in a saved settings file are the §9 class)."""
+    for section, fields_ in (values or {}).items():
+        target = getattr(effective, str(section), None)
+        if target is None or not isinstance(fields_, dict):
+            continue
+        for key, value in fields_.items():
+            if hasattr(target, str(key)):
+                setattr(target, str(key), _coerce(getattr(target, str(key)), value))
 
 
 def _coerce(current, value):
-    """Coerce an overlay value to the dataclass field's type (M29): a saved
-    '0.5' or 'false' used to land as a str and every `> 0` / `if flag` read
-    misjudged it. Unparseable → the existing value stands."""
+    """Coerce a saved value to the field's type (M29): a saved '0.5' or 'false'
+    used to land as a str and every `> 0` / `if flag` read misjudged it.
+    Unparseable → the existing value stands."""
     if value is None:
         return current
     if isinstance(current, bool):
@@ -229,11 +194,3 @@ def _coerce(current, value):
     if isinstance(current, str):
         return str(value)
     return value
-
-
-def _apply_overlay(effective: EffectiveSettings, overlay: SettingsOverlay) -> None:
-    for section, values in overlay.to_dict().items():
-        target = getattr(effective, section)
-        for key, value in values.items():
-            if hasattr(target, key):
-                setattr(target, key, _coerce(getattr(target, key), value))

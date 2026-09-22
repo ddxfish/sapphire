@@ -20,13 +20,11 @@ _MIN_UTTERANCE_SECONDS = 0.35
 
 
 class VoiceListenerService:
-    def __init__(self, *, voice_transport, conversation_runner=None, speech_bridge=None, settings_store=None,
-                 trace_repository=None):
+    def __init__(self, *, voice_transport, conversation_runner=None, speech_bridge=None, settings_store=None):
         self.voice_transport = voice_transport
         self.conversation_runner = conversation_runner
         self.speech_bridge = speech_bridge
         self.settings_store = settings_store
-        self.trace_repository = trace_repository
         self._sessions = {}
 
     def _listening_params(self) -> tuple[float, float]:
@@ -209,9 +207,6 @@ class VoiceListenerService:
         text = self._transcribe(wav_bytes, speaker_hint=speaker_name or str(user_id))
         if not text:
             return
-        if self.trace_repository:
-            self.trace_repository.record_trace('voice_transcript', 'Transcribed voice segment',
-                                               {'session_id': session.session_id, 'chars': len(text)})
         logger.debug('Voice transcript %s:%s from %s: %r', account_name, channel_id, speaker_name, text[:200])
         # S0 door: add-ons hear what was said (worker thread).
         hooks_out.fire('discord_voice_utterance', {

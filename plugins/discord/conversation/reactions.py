@@ -4,7 +4,7 @@ A message she reads gets one roll at `reaction.reaction_chance`; on a hit a
 lexicon picks the emoji from the message's tone (no sentiment model, no
 network). One reaction per message, a per-channel cooldown, a 1-5 s human
 delay before it lands. The LLM's own `[react:]` tags are a separate lane
-(post_reply_tags) gated by `reaction.enabled`.
+(ConversationService.deliver_tags) gated by `reaction.enabled`.
 """
 from __future__ import annotations
 
@@ -69,12 +69,11 @@ def pick_emoji(text: str, rng=random) -> str:
 
 
 class Reactions:
-    def __init__(self, *, trace_repository=None):
-        self.trace_repository = trace_repository
+    def __init__(self):
         self._last_reaction_at: dict[tuple[str, str], float] = {}
         self._reacted_messages: OrderedDict[tuple[str, str, str], bool] = OrderedDict()
 
-    def evaluate_silent(self, trigger, *, settings, world_state=None, reply_planned=False, read_only=False):
+    def evaluate_silent(self, trigger, *, settings):
         reaction = getattr(settings, 'reaction', None) if settings else None
         if not reaction or not getattr(reaction, 'silent_enabled', False):
             return None
@@ -126,10 +125,6 @@ class Reactions:
         while len(self._reacted_messages) > REACTED_MESSAGES_CAP:
             self._reacted_messages.popitem(last=False)
         self._last_reaction_at[(intention.account_name, intention.channel_id)] = time.time()
-        if self.trace_repository:
-            self.trace_repository.record_trace('silent_reaction', 'Added a silent reaction', {
-                'channel_id': intention.channel_id, 'message_id': intention.message_id, 'emoji': intention.emoji,
-            })
         return {'status': 'reacted', 'emoji': intention.emoji, 'transport': result, 'delay': delay}
 
     def _on_cooldown(self, trigger, reaction) -> bool:

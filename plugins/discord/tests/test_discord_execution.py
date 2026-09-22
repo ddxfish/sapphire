@@ -103,3 +103,14 @@ def test_stop_playback_only_leaves_recording_reader_alive():
     assert vc._player is None
     assert vc._player_future is None
     assert isinstance(vc._reader, FakeReader)
+
+
+def test_state_for_account_refuses_unknown_name():
+    """hunt 2.13.0 row 27: an unknown account never becomes "the first bot"."""
+    from types import SimpleNamespace
+    from plugins.discord.transport.discord_execution import DiscordExecution
+    transport = SimpleNamespace(_accounts={'real': {'client': object()}}, list_connected=lambda: ['real'])
+    ex = DiscordExecution(transport)
+    with pytest.raises(RuntimeError):
+        ex._state_for_account('ghost')
+    assert ex._state_for_account('real')[0] == 'real'

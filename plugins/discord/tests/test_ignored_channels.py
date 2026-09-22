@@ -31,8 +31,7 @@ def _obs(**kwargs):
 
 
 def test_is_channel_ignored_matches_account_channel():
-    store = SettingsStore()
-    store.global_overlay.channel.update({'ignored_channels': ['alpha:c1', 'beta:c9']})
+    store = SettingsStore({'channel': {'ignored_channels': ['alpha:c1', 'beta:c9']}})
     settings = store.resolve()
     assert is_channel_ignored('alpha', 'c1', settings) is True
     assert is_channel_ignored('alpha', 'c2', settings) is False
@@ -40,19 +39,26 @@ def test_is_channel_ignored_matches_account_channel():
 
 
 def test_is_channel_ignored_accepts_bare_channel_id():
-    store = SettingsStore()
-    store.global_overlay.channel.update({'ignored_channels': ['c1']})
+    store = SettingsStore({'channel': {'ignored_channels': ['c1']}})
     settings = store.resolve()
     assert is_channel_ignored('alpha', 'c1', settings) is True
 
 
 def test_evaluate_reply_trigger_blocks_ignored_channel():
-    store = SettingsStore()
-    store.global_overlay.channel.update({
+    store = SettingsStore({'channel': {
         'reply_mode': 'all',
         'ignored_channels': ['alpha:c1'],
-    })
+    }})
     settings = store.resolve()
     result = evaluate_reply_trigger(_obs(mentioned=True), settings)
     assert result['allowed'] is False
     assert result['reason'] == 'channel_ignored'
+
+
+def test_parse_target_warns_on_bad_entry(caplog):
+    """hunt 2.13.0 row 43: a typo'd target is loud, not silently skipped."""
+    import logging
+    from plugins.discord.conversation.ignored_channels import parse_target
+    with caplog.at_level(logging.WARNING):
+        assert parse_target('justachannelid') is None
+    assert 'not account:channel_id' in caplog.text
