@@ -1,3 +1,8 @@
+# 2.13.1 - Discord Simplify
+- Removed Discord memory
+- Routed Discord through Daemons and Realtime
+- Moved greetings to their own daemon
+- Simplified many settings to fewer tied settings
 # 2.13.0 - Discord v2
 ## September 13, 2026
 - Total Discord plugin rebuild by Zeebie
@@ -7,7 +12,6 @@
 - Slash command support
 - Memory system for past users that the AI sees
 - Discord plugin depends on py-cord (git-pinned build): uninstall discord.py first if you had it, and Git must be on PATH for pip to fetch the pin
-- Discord proactive schedules run only while their feature is on, at the configured hour (no more 15-minute heartbeats in the AI's upcoming tasks)
 # 2.12.9 - Images
 - AI can web search images and diplay or see them itself
 - AI can add images to its knowledge layer

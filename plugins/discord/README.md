@@ -67,7 +67,7 @@ decides which bots log in.
 
 ### 4. Give her a job in Continuity
 
-**Settings → Continuity → Daemon → + New** with source **Discord: Chat only**, pick the bot, set
+**Settings → Continuity → Daemon → + New** with source **Discord: Chat**, pick the bot, set
 filters (start with `mentioned = true`), leave **Auto-reply** on, set the persona / provider /
 toolset. She answers in that channel from the next message.
 
@@ -77,9 +77,8 @@ Optional: **Realtime → + New → Discord: Voice channel** for voice (see [Voic
 
 | Source | Kind | What it does | Task fields |
 |---|---|---|---|
-| **Discord: Chat only** | daemon | replies to messages that pass the filter | account, auto_reply |
+| **Discord: Chat** | daemon | replies to messages that pass the filter | account, auto_reply |
 | **Discord: Greetings** | daemon | posts a good-morning / goodnight at set times, no replies | account, channels, greeting_time, goodnight_time |
-| **Discord: All interactions** | daemon | both of the above on one task | account, auto_reply, channels, greeting_time, goodnight_time |
 | **Discord: Voice channel** | realtime | turns voice ON for the channels its filter covers | account, auto_join, keep_chat_history |
 
 Chat filters: `mentioned`, `guild_name`, `channel_name`, `username`, `content_contains` and the
@@ -87,7 +86,7 @@ Chat filters: `mentioned`, `guild_name`, `channel_name`, `username`, `content_co
 twins, and the ids. Filters match case-insensitively; a comma list is an allowlist. A task with no
 filter hears everything the bot can see.
 
-A bot with a Chat-only task and an All-interactions task answers twice by design.
+A bot that should reply and greet gets one task of each; either task keeps it online.
 
 ## Settings (Settings → Plugins → Discord)
 

@@ -11,7 +11,7 @@ what remains.
 
 | Feature | Now |
 |---|---|
-| Greetings, goodnights, proactive schedule | the **Discord: Greetings** / **All interactions** daemon tasks (times in Source Settings) |
+| Greetings, goodnights, proactive schedule | the **Discord: Greetings** daemon task (times in Source Settings) |
 | Birthdays, presence cycling | `discord-personality` |
 | People memory (profiles, facts, pinned memories) | `discord-personality` (`discord_people`) |
 | Reminders ("remind me in 2h") | `discord-personality` (`discord_remind`) |
@@ -70,7 +70,7 @@ what remains.
    longer counts. Turn it on if she should see attachments — the task's own model must have vision.
 5. Voice: create one **Discord: Voice channel** Realtime rule per bot (filter blank = every voice
    channel) or she never joins.
-6. Greetings: put times on a **Greetings** / **All interactions** task; otherwise nothing posts.
+6. Greetings: put times on a **Discord: Greetings** task; otherwise nothing posts.
 7. Enable `discord-personality` for people memory, birthdays, reminders, typos and presence. People
    facts from 1.x do not migrate (other people's chatter — start clean).
 

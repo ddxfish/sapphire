@@ -1,7 +1,8 @@
-"""Greetings clock — the host's own daily clock for the Discord: Greetings and
-Discord: All interactions daemon sources (S1, 2026-09-22).
+"""Greetings clock — the host's own daily clock for the Discord: Greetings
+daemon source (S1, 2026-09-22; the combined "All interactions" source left the
+same day).
 
-Each enabled task on those sources carries `greeting_time` / `goodnight_time`
+Each enabled task on that source carries `greeting_time` / `goodnight_time`
 (HH:MM, user-local) and `channels` (comma-separated channel ids) in its
 Source Settings. Every runtime tick the clock compares the local time with
 each task's times and, inside a five-minute window after the time, fires ONE
@@ -23,7 +24,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ('discord_greetings', 'discord_all')
+SOURCES = ('discord_greetings',)
 KINDS = (('greeting', 'greeting_time'), ('goodnight', 'goodnight_time'))
 WINDOW_SECONDS = 300
 STATE_KEY = 'greetings_fired'

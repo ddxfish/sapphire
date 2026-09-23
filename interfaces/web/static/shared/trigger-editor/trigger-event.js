@@ -70,9 +70,6 @@ export function renderEventTrigger(t, opts = {}) {
                 <option value="_loading" disabled>Loading plugin events...</option>
             </select>
         </div>
-        <div id="ed-realtime-note" class="text-muted" style="display:none;font-size:var(--font-xs);margin-top:6px;padding:8px;border-left:2px solid var(--accent, #6cf);background:rgba(120,180,255,0.06)">
-            ⚡ Live source — this task is an <strong>on/off switch</strong>: enabling it lets Sapphire answer the call live (not a one-shot reply). Check <strong>"Ephemeral per-caller chat"</strong> above for a fresh throwaway chat per caller (auto-clears after the minutes you set); otherwise the call runs in the saved <strong>Chat</strong> you pick in AI settings, persistent across calls. <em>(The free-text prompt field isn't used here — behavior comes from the chat's persona.)</em>
-        </div>
         <div id="ed-task-fields"></div>
         <details class="sched-accordion" style="margin-top:8px">
             <summary class="sched-acc-header">Filter <span class="sched-preview" id="ed-filter-preview"></span></summary>
@@ -145,9 +142,7 @@ export function wireEventTrigger(modal, opts = {}) {
             const current = _readFilterRows(modal, '#ed-filter-rows');
             _buildFilterRows(modal, '#ed-filter-rows', current, _fieldsFor(e.target.value));
             _renderTaskFields(modal);
-            _updateRealtimeNote(modal);
         });
-        _updateRealtimeNote(modal);   // reflect on open (edit case)
     }
 }
 
@@ -231,14 +226,20 @@ async function _loadEventSources(modal, initialFilter) {
 
         select.innerHTML = '<option value="">Select event source...</option>';
 
-        if (_sourcesCache.length === 0) {
+        // A realtime source (phone line, voice channel) is a live gate edited on
+        // the Realtime tab, not an event this editor can wire to a one-shot task;
+        // only a task already stored on one still lists it here.
+        const current = select.dataset.currentValue;
+        const daemonSources = _sourcesCache.filter(s => !s.realtime || s.name === current);
+
+        if (daemonSources.length === 0) {
             select.innerHTML += '<option value="" disabled>No daemon plugins loaded</option>';
             return;   // rows already seeded above — don't clobber in-flight edits
         }
 
         // Group by plugin
         const grouped = {};
-        for (const s of _sourcesCache) {
+        for (const s of daemonSources) {
             const group = s.plugin || 'core';
             if (!grouped[group]) grouped[group] = [];
             grouped[group].push(s);
@@ -256,7 +257,6 @@ async function _loadEventSources(modal, initialFilter) {
             select.appendChild(optgroup);
         }
 
-        const current = select.dataset.currentValue;
         if (current) select.value = current;
 
         // Upgrade the seeded rows to dropdowns for the pre-selected source.
@@ -388,14 +388,6 @@ function _wireFilterRows(modal, containerSel, addBtnSel, previewSel) {
             _updateFilterPreview(modal, containerSel);
         }
     });
-}
-
-function _updateRealtimeNote(modal) {
-    const note = modal.querySelector('#ed-realtime-note');
-    if (!note) return;
-    const sourceName = modal.querySelector('#ed-event-source')?.value;
-    const source = _sourcesCache.find(s => s.name === sourceName);
-    note.style.display = source?.realtime ? '' : 'none';
 }
 
 function _renderTaskFields(modal) {

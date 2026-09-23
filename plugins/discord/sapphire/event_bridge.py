@@ -21,10 +21,7 @@ class SapphireEventBridge:
     def emit_discord_message(self, payload: dict) -> bool:
         prepared = prepare_continuity_payload(payload)
         data = json.dumps(prepared)
-        # Chat-only tasks and All-interactions tasks both hear every message
-        # (S1, 2026-09-22); a bot with one of each answers twice by design.
         accepted = self.emit('discord_message', data)
-        accepted = self.emit('discord_all', data) or accepted
         if accepted:
             self._sweep_pending()
             self._pending_payloads[str(payload.get('message_id', ''))] = (dict(payload), time.time())

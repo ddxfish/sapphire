@@ -1,6 +1,7 @@
-# The sources whose enabled task selects a bot for connection: Chat only /
-# Greetings / All interactions (S1) and the Voice channel gate (S6, 2026-09-22).
-MESSAGE_SOURCES = ('discord_message', 'discord_greetings', 'discord_all', 'discord_voice')
+# The sources whose enabled task selects a bot for connection: Chat / Greetings
+# (S1) and the Voice channel gate (S6, 2026-09-22). "All interactions" (chat +
+# greetings on one task) left the same day — one source, one mechanism.
+MESSAGE_SOURCES = ('discord_message', 'discord_greetings', 'discord_voice')
 
 
 class SapphireSchedulerBridge:

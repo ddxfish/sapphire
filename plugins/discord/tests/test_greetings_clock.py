@@ -80,7 +80,7 @@ def test_late_boot_never_greets_and_tomorrow_is_new():
 
 
 def test_goodnight_and_blank_times():
-    loader, clock = _clock([_task('t1', 'discord_all', channels='111', greeting='', goodnight='22:30')])
+    loader, clock = _clock([_task('t1', 'discord_greetings', channels='111', greeting='', goodnight='22:30')])
     assert clock.tick(datetime(2026, 9, 22, 8, 0)) == []
     fired = clock.tick(datetime(2026, 9, 22, 22, 31))
     assert [f['kind'] for f in fired] == ['goodnight']
