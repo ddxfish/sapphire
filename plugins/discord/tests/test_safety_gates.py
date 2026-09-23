@@ -1,4 +1,6 @@
 """Safety gates on the reply path: DMs are opt-in (M19) and budgeted per person per day."""
+import asyncio
+
 from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.conversation_service import ConversationService
 from plugins.discord.models.observations import TextMessageObservation
@@ -14,12 +16,13 @@ class FakeBridge:
         return True
 
 
-class FakeDebug:
+class FakeDecisions:
     def __init__(self):
         self.rejections = []
 
-    def record_rejection(self, **kw):
-        self.rejections.append((kw['stage'], kw['reason']))
+    def note(self, kind, **kw):
+        if kind == 'rejected':
+            self.rejections.append((kw['stage'], kw['reason']))
 
 
 def _dm_obs(message_id='m1', author_id='u1'):
@@ -31,13 +34,13 @@ def _dm_obs(message_id='m1', author_id='u1'):
 
 
 def _service(store):
-    return ConversationService(event_bridge=FakeBridge(), settings_store=store, llm_debug_service=FakeDebug())
+    return ConversationService(event_bridge=FakeBridge(), settings_store=store, decisions=FakeDecisions())
 
 
 def _run_dm(service, obs=None):
     batching = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
     batching.add_message(obs or _dm_obs())
-    return service.process_batch(batching.flush_ready(now=10.0)[0])
+    return asyncio.run(service.process_batch(batching.flush_ready(now=10.0)[0]))
 
 
 def test_dm_gate_blocks_by_default():
@@ -45,7 +48,7 @@ def test_dm_gate_blocks_by_default():
     service = _service(SettingsStore())
     assert _run_dm(service) is False
     assert service.event_bridge.payloads == []
-    assert service.llm_debug_service.rejections == [('safety', 'direct_messages_disabled')]
+    assert service.decisions.rejections == [('safety', 'direct_messages_disabled')]
 
 
 def test_dm_replies_when_enabled():
@@ -59,5 +62,5 @@ def test_dm_budget_counts_per_person_per_day():
     assert _run_dm(service, _dm_obs('m1')) is True
     assert _run_dm(service, _dm_obs('m2')) is True
     assert _run_dm(service, _dm_obs('m3')) is False                       # the third of the day is refused
-    assert service.llm_debug_service.rejections[-1] == ('safety', 'dm_daily_budget')
+    assert service.decisions.rejections[-1] == ('safety', 'dm_daily_budget')
     assert _run_dm(service, _dm_obs('m4', author_id='u2')) is True         # another person has their own budget

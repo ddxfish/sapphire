@@ -88,8 +88,8 @@ class Reactions:
             return None
         return AddReactionIntention(
             intention_type='add_reaction', account_name=trigger.account_name, channel_id=trigger.channel_id,
-            message_id=trigger.message_id, reason='silent_reaction', emoji=emoji, confidence=0.5, urgency=0.2,
-            cost=0.05, metadata={'guild_id': trigger.guild_id, 'author_id': trigger.author_id},
+            message_id=trigger.message_id, reason='silent_reaction', emoji=emoji,
+            metadata={'guild_id': trigger.guild_id, 'author_id': trigger.author_id},
         )
 
     def execute_silent(self, intention, *, transport, settings=None) -> dict:

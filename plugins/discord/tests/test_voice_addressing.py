@@ -1,4 +1,4 @@
-from plugins.discord.voice.discord_frame_feed import DiscordFrameFeed, stereo_frame_rms
+from plugins.discord.voice.discord_frame_feed import DiscordFrameFeed
 from plugins.discord.voice.voice_addressing import directed_voice_phrase, is_stop_command, mentions_bot, resolve_bot_names, should_address_bot
 from unittest.mock import MagicMock
 
@@ -70,7 +70,3 @@ def test_frame_feed_emits_engine_frames():
     assert len(frames[0][0]) == 512 * 2
     assert frames[0][1] is True
 
-
-def test_stereo_frame_rms_positive_for_speech_like_pcm():
-    stereo = b'\x00\x10' * 200
-    assert stereo_frame_rms(stereo) > 0

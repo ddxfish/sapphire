@@ -108,9 +108,9 @@ class FakeBridge:
         return True
 
 
-class FakeMessages:
-    def get_recent_messages(self, account_name, channel_id, limit=20):
-        return [{'message_id': 'm0', 'author_name': 'Bob', 'content': 'hi'}]
+class FakeHistory:
+    async def recent_messages_async(self, account_name, channel_id, *, limit):
+        return [{'message_id': 'm0', 'author': 'Bob', 'content': 'hi'}]
 
 
 def _batch():
@@ -128,9 +128,9 @@ def test_process_batch_fires_prompt_context_and_appends_to_the_prompt():
         ev.metadata['context_parts'].append('Speak like a pirate.')
     _listen('discord_prompt_context', handler)
     bridge = FakeBridge()
-    service = ConversationService(event_bridge=bridge, message_repository=FakeMessages(), settings_store=SettingsStore())
+    service = ConversationService(event_bridge=bridge, transport=FakeHistory(), settings_store=SettingsStore())
 
-    assert service.process_batch(_batch()) is True
+    assert asyncio.run(service.process_batch(_batch())) is True
 
     assert seen[0]['message_id'] == 'm1' and seen[0]['reply_reason'] == 'mentioned'
     assert seen[0]['recent_history'] == ['Bob: hi']

@@ -73,7 +73,7 @@ class FakeClientWithGuilds(FakeClient):
         self.guilds = guilds or []
 
 
-def test_list_proactive_targets_from_connected_guilds(tmp_path):
+def test_list_text_targets_from_connected_guilds(tmp_path):
     async def run_test():
         guild = FakeGuild(100, 'Test Server', [FakeChannel(200, 'general'), FakeChannel(201, 'random')])
         transport = DiscordTransport(
@@ -82,7 +82,7 @@ def test_list_proactive_targets_from_connected_guilds(tmp_path):
         )
         await transport.connect_account('alpha', 'secret')
         await asyncio.sleep(0)
-        targets = await transport.list_proactive_targets()
+        targets = await transport.list_text_targets()
 
         assert len(targets) == 2
         assert targets[0]['value'] == 'alpha:200'

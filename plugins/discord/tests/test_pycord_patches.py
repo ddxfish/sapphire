@@ -12,7 +12,7 @@ def test_opus_pcm_dave_double_decrypt_patch_applied():
 
     apply_pycord_voice_patches()
 
-    assert getattr(PacketDecoder._decode_packet, "_discord_cognitive_skip_pcm_dave", False) is True
+    assert getattr(PacketDecoder._decode_packet, "_discord_host_skip_pcm_dave", False) is True
 
     import inspect
 
@@ -42,7 +42,7 @@ from discord.voice.gateway import VoiceWebSocket
 from plugins.discord.voice.pycord_patches import apply_pycord_voice_patches
 
 apply_pycord_voice_patches()
-assert getattr(VoiceWebSocket.load_secret_key, '_discord_cognitive_rekey', False)
+assert getattr(VoiceWebSocket.load_secret_key, '_discord_host_rekey', False)
 
 class FakeReader:
     def __init__(self):

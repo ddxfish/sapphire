@@ -36,7 +36,7 @@ def test_pipeline_flushes_batch_into_conversation_service():
     pipeline = _pipeline(0.1, bridge)
     observation = make_message()
     pipeline.handle_message(observation)
-    results = pipeline.flush_due(observation.created_at + 1.0)
+    results = asyncio.run(pipeline.flush_due(observation.created_at + 1.0))
     assert len(results) == 1 and results[0]['accepted'] is True and results[0]['message_ids'] == ['m1']
     assert len(bridge.payloads) == 1
 
@@ -48,8 +48,8 @@ def test_typing_extends_the_batch_window():
                                channel_id='c1', channel_name='general', author_id='u1', username='alice',
                                display_name='Alice', created_at=4.0, is_dm=False)
     pipeline.handle_typing(typing)
-    assert pipeline.flush_due(6.0) == []
-    assert len(pipeline.flush_due(10.0)) == 1
+    assert asyncio.run(pipeline.flush_due(6.0)) == []
+    assert len(asyncio.run(pipeline.flush_due(10.0))) == 1
 
 
 def test_a_batch_that_raises_does_not_stop_the_others():
@@ -58,11 +58,11 @@ def test_a_batch_that_raises_does_not_stop_the_others():
     calls = {'n': 0}
     real = pipeline.conversation_service.process_batch
 
-    def flaky(batch):
+    async def flaky(batch):
         calls['n'] += 1
         if calls['n'] == 1:
             raise RuntimeError('boom')
-        return real(batch)
+        return await real(batch)
     pipeline.conversation_service.process_batch = flaky
     a = make_message('m1', created_at=0.0)
     a.channel_id = 'c1'
@@ -70,7 +70,7 @@ def test_a_batch_that_raises_does_not_stop_the_others():
     b.channel_id = 'c2'
     pipeline.handle_message(a)
     pipeline.handle_message(b)
-    results = pipeline.flush_due(5.0)
+    results = asyncio.run(pipeline.flush_due(5.0))
     assert len(results) == 1 and len(bridge.payloads) == 1
 
 

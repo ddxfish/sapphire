@@ -174,9 +174,9 @@ def reap_voice_chats(system, *, live=None) -> list:
 
 
 def sanitize_chat_name(chat_name: str) -> str:
-    """Match core SessionManager.create_chat name sanitization."""
-    safe = ''.join(c for c in str(chat_name or '') if c.isalnum() or c in (' ', '-', '_')).strip()
-    return safe.replace(' ', '_').lower()
+    """Core's chat-name normal form (the one create_chat applies) — one source."""
+    from core.chat.history import sanitize_chat_name as core_sanitize
+    return core_sanitize(str(chat_name or ''))
 
 
 def voice_chat_name(guild_id: str, channel_id: str) -> str:

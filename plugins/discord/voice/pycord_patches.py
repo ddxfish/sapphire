@@ -39,7 +39,7 @@ def apply_pycord_voice_patches() -> None:
 def _patch_opus_decoder() -> None:
     """Keep packet timeline aligned when Opus decode fails mid-stream."""
     from discord.opus import Decoder, OpusError, PacketDecoder
-    if getattr(PacketDecoder.pop_data, '_discord_cognitive_patched', False):
+    if getattr(PacketDecoder.pop_data, '_discord_host_patched', False):
         return
     original = PacketDecoder.pop_data
     from plugins.discord.voice.dave_voice_patches import OPUS_SILENCE
@@ -61,7 +61,7 @@ def _patch_opus_decoder() -> None:
                 member = Object(id=self._cached_id)
             return VoiceData(packet, member, pcm=pcm)
 
-    pop_data._discord_cognitive_patched = True
+    pop_data._discord_host_patched = True
     PacketDecoder.pop_data = pop_data
     logger.info('Applied py-cord voice OpusError resilience patch')
 
@@ -88,7 +88,7 @@ def _decode_opus_payload(decoder, data, *, fec: bool = False):
 def _patch_ssrc_rollover() -> None:
     """Destroy stale per-SSRC decoders when Discord assigns a user a new SSRC."""
     from discord.voice.client import VoiceClient
-    if getattr(VoiceClient._add_ssrc, '_discord_cognitive_rollover', False):
+    if getattr(VoiceClient._add_ssrc, '_discord_host_rollover', False):
         return
     original = VoiceClient._add_ssrc
 
@@ -109,9 +109,9 @@ def _patch_ssrc_rollover() -> None:
                 pass
         original(self, user_id, ssrc)
 
-    _add_ssrc._discord_cognitive_rollover = True
+    _add_ssrc._discord_host_rollover = True
     VoiceClient._add_ssrc = _add_ssrc
-    logger.info('Applied py-cord SSRC rollover decoder cleanup patch (discord_cognitive)')
+    logger.info('Applied py-cord SSRC rollover decoder cleanup patch')
 
 
 def _patch_opus_pcm_dave_double_decrypt() -> None:
@@ -122,7 +122,7 @@ def _patch_opus_pcm_dave_double_decrypt() -> None:
     runs dave.decrypt() on that PCM again, which corrupts every frame.
     """
     from discord.opus import PacketDecoder
-    if getattr(PacketDecoder._decode_packet, '_discord_cognitive_skip_pcm_dave', False):
+    if getattr(PacketDecoder._decode_packet, '_discord_host_skip_pcm_dave', False):
         return
 
     def _decode_packet(self, packet):
@@ -144,20 +144,22 @@ def _patch_opus_pcm_dave_double_decrypt() -> None:
             self._decoder, pcm = _decode_opus_payload(self._decoder, None, fec=False)
         return (packet, pcm)
 
-    _decode_packet._discord_cognitive_skip_pcm_dave = True
+    _decode_packet._discord_host_skip_pcm_dave = True
     PacketDecoder._decode_packet = _decode_packet
-    logger.info('Applied py-cord opus PCM double-decrypt skip patch (discord_cognitive)')
+    logger.info('Applied py-cord opus PCM double-decrypt skip patch')
 
 
 class AeadFloodFilter(logging.Filter):
-    """Rate-limit py-cord's per-packet AEAD failure logs.
+    """Rate-limit and reword py-cord's per-packet transport-decrypt failure logs.
 
-    During bot TTS these fire at media rate WITH tracebacks — hundreds of
-    journal lines per second that bury every useful voice log. Pass one
-    through per window, count the rest, report the count on the next pass.
+    py-cord logs every refused packet as ERROR 'Critical error at AEAD' plus a
+    traceback, then drops the packet and carries on — at media rate that
+    buries every useful voice log. One WARNING per window in plain words
+    (the packet was dropped, nothing else happened), the rest counted; the
+    dave_voice_patches diagnostic names the packet.
     """
 
-    _discord_cognitive_aead_limit = True
+    _discord_host_aead_limit = True
     WINDOW_SECONDS = 5.0
     _MARKERS = ('Critical error at AEAD', 'CryptoError while decoding')
 
@@ -174,13 +176,14 @@ class AeadFloodFilter(logging.Filter):
         now = _time.monotonic()
         if now >= self._allowed_at:
             self._allowed_at = now + self.WINDOW_SECONDS
-            if self._suppressed:
-                logger.warning(
-                    'AEAD decrypt failures: %s more suppressed in last %ss window',
-                    self._suppressed,
-                    self.WINDOW_SECONDS,
-                )
-                self._suppressed = 0
+            more = self._suppressed
+            self._suppressed = 0
+            record.levelno = logging.WARNING
+            record.levelname = 'WARNING'
+            record.exc_info = None
+            record.msg = 'voice packet failed transport decrypt — dropped, the call continues%s' % (
+                f' (+{more} more in the last {self.WINDOW_SECONDS:.0f}s)' if more else '')
+            record.args = ()
             return True
         self._suppressed += 1
         return False
@@ -188,10 +191,10 @@ class AeadFloodFilter(logging.Filter):
 
 def _patch_aead_log_flood() -> None:
     target = logging.getLogger('discord.voice.receive.reader')
-    if any(getattr(f, '_discord_cognitive_aead_limit', False) for f in target.filters):
+    if any(getattr(f, '_discord_host_aead_limit', False) for f in target.filters):
         return
     target.addFilter(AeadFloodFilter())
-    logger.info('Applied AEAD decrypt log flood limiter (discord_cognitive)')
+    logger.info('Applied AEAD decrypt log flood limiter')
 
 
 def _patch_rekey_reader_resync() -> None:
@@ -205,7 +208,7 @@ def _patch_rekey_reader_resync() -> None:
     able to speak. Observed live 2026-08-01, seconds after first TTS reply.
     """
     from discord.voice.gateway import VoiceWebSocket
-    if getattr(VoiceWebSocket.load_secret_key, '_discord_cognitive_rekey', False):
+    if getattr(VoiceWebSocket.load_secret_key, '_discord_host_rekey', False):
         return
     original = VoiceWebSocket.load_secret_key
 
@@ -221,14 +224,14 @@ def _patch_rekey_reader_resync() -> None:
         except Exception:
             logger.exception('Receive decryptor re-key sync failed')
 
-    load_secret_key._discord_cognitive_rekey = True
+    load_secret_key._discord_host_rekey = True
     VoiceWebSocket.load_secret_key = load_secret_key
-    logger.info('Applied py-cord receive re-key resync patch (discord_cognitive)')
+    logger.info('Applied py-cord receive re-key resync patch')
 
 
 def _patch_packet_routers() -> None:
     from discord.voice.receive.router import PacketRouter, SinkEventRouter
-    if not getattr(PacketRouter.run, '_discord_cognitive_patched', False):
+    if not getattr(PacketRouter.run, '_discord_host_patched', False):
 
         def packet_run_replacement(self):
             try:
@@ -242,9 +245,9 @@ def _patch_packet_routers() -> None:
                 _safe_stop_recording(getattr(self.reader, 'client', None))
                 self.waiter.clear()
 
-        packet_run_replacement._discord_cognitive_patched = True
+        packet_run_replacement._discord_host_patched = True
         PacketRouter.run = packet_run_replacement
-    if not getattr(SinkEventRouter.run, '_discord_cognitive_patched', False):
+    if not getattr(SinkEventRouter.run, '_discord_host_patched', False):
 
         def sink_run_replacement(self):
             try:
@@ -254,6 +257,6 @@ def _patch_packet_routers() -> None:
                 self.reader.error = exc
                 _safe_stop_recording(getattr(self.reader, 'client', None))
 
-        sink_run_replacement._discord_cognitive_patched = True
+        sink_run_replacement._discord_host_patched = True
         SinkEventRouter.run = sink_run_replacement
     logger.info('Applied py-cord voice router stop_recording guard patch')

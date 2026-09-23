@@ -21,17 +21,6 @@ class SapphireSpeechBridge:
     def __init__(self, plugin_loader):
         self.plugin_loader = plugin_loader
 
-    def available(self) -> bool:
-        system = self._system()
-        if not system:
-            return False
-        whisper = getattr(system, 'whisper_client', None)
-        tts = getattr(system, 'tts', None)
-        return bool(
-            (whisper and getattr(whisper, 'is_available', lambda: False)())
-            or (tts and hasattr(tts, 'generate_audio_data'))
-        )
-
     def transcribe_audio(self, audio_bytes, *, speaker_hint=''):
         system = self._system()
         whisper = getattr(system, 'whisper_client', None) if system else None
@@ -177,40 +166,29 @@ class SapphireSpeechBridge:
         *,
         duration: float,
     ) -> tuple[str, list]:
-        """Transcribe preprocessed Discord audio with web-mic quality filters."""
-        import config
-        from contextlib import nullcontext
+        """Transcribe preprocessed Discord audio with the DAVE quality gates, through
+        core's segment door (every STT provider answers it; faster-whisper gives
+        real per-segment confidence, the others one pseudo-segment)."""
         from core.stt.hallucination import is_whisper_hallucination
 
-        model = getattr(whisper, 'model', None)
-        lock = getattr(whisper, '_lock', None)
-        if model is None:
+        segments_fn = getattr(whisper, 'transcribe_segments', None)
+        if not callable(segments_fn):
             return str(whisper.transcribe_file(prepared_path) or '').strip(), []
-
-        params = {
-            'language': getattr(config, 'STT_LANGUAGE', None),
-            'beam_size': getattr(config, 'FASTER_WHISPER_BEAM_SIZE', 3),
-            'vad_filter': False,
-            'condition_on_previous_text': False,
-            'temperature': 0.0,
-        }
-        ctx = lock if lock is not None else nullcontext()
-        with ctx:
-            segments, _info = model.transcribe(prepared_path, **params)
-            segment_list = list(segments)
-            text, _kept = segments_to_transcript(segment_list)
-            if segment_list and not text:
-                logger.debug(
-                    'Discord voice whisper dropped all segments: %s',
-                    [
-                        (
-                            segment.text[:32],
-                            round(float(getattr(segment, 'no_speech_prob', 0.0)), 3),
-                            round(float(getattr(segment, 'avg_logprob', 0.0)), 3),
-                        )
-                        for segment in segment_list[:6]
-                    ],
-                )
+        segment_list = list(segments_fn(prepared_path, vad_filter=False, condition_on_previous_text=False,
+                                        temperature=0.0) or [])
+        text, _kept = segments_to_transcript(segment_list)
+        if segment_list and not text:
+            logger.debug(
+                'Discord voice whisper dropped all segments: %s',
+                [
+                    (
+                        segment.text[:32],
+                        round(float(getattr(segment, 'no_speech_prob', 0.0)), 3),
+                        round(float(getattr(segment, 'avg_logprob', 0.0)), 3),
+                    )
+                    for segment in segment_list[:6]
+                ],
+            )
         if is_whisper_hallucination(text):
             return '', segment_list
         return text, segment_list

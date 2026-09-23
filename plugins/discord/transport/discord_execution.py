@@ -72,7 +72,6 @@ def _split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
     while remaining:
         if len(remaining) <= limit:
             chunks.append(remaining)
-            pass
             return chunks
         split_at = remaining.rfind('\n', 0, limit)
         if split_at <= 0:
@@ -82,9 +81,6 @@ def _split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
         chunks.append(remaining[:split_at].strip())
         remaining = remaining[split_at:].strip()
     return chunks
-
-
-
 
 
 class DiscordExecution:
@@ -299,7 +295,7 @@ class DiscordExecution:
         await message.add_reaction(emoji)
         return {'status': 'reacted', 'message_id': str(message_id), 'emoji': emoji}
 
-    async def _resolve_voice_channel(self, account_name: str | None, channel_id: str | int):
+    async def _voice_channel_for_connect(self, account_name: str | None, channel_id: str | int):
         import discord
         name, state = self._state_for_account(account_name)
         client = state.get('client')
@@ -321,7 +317,7 @@ class DiscordExecution:
         return name, state, channel
 
     async def get_voice_channel_state(self, account_name: str | None, channel_id: str | int) -> dict:
-        name, state, channel = await self._resolve_voice_channel(account_name, channel_id)
+        name, state, channel = await self._voice_channel_for_connect(account_name, channel_id)
         bot_id = str(state.get('bot_id') or getattr(getattr(state.get('client'), 'user', None), 'id', '') or '')
         occupancy = voice_channel_occupancy(channel, bot_id)
         guild = getattr(channel, 'guild', None)
@@ -335,7 +331,7 @@ class DiscordExecution:
         }
 
     async def connect_voice(self, account_name: str | None, channel_id: str | int) -> dict:
-        name, _state, channel = await self._resolve_voice_channel(account_name, channel_id)
+        name, _state, channel = await self._voice_channel_for_connect(account_name, channel_id)
         guild = channel.guild
         existing = getattr(guild, 'voice_client', None) if guild else None
         if existing and getattr(existing, 'channel', None) and str(existing.channel.id) == str(channel.id):
@@ -369,7 +365,7 @@ class DiscordExecution:
         }
 
     async def _voice_client_for_channel(self, account_name: str | None, channel_id: str | int):
-        _name, _state, channel = await self._resolve_voice_channel(account_name, channel_id)
+        _name, _state, channel = await self._voice_channel_for_connect(account_name, channel_id)
         guild = channel.guild
         voice_client = getattr(guild, 'voice_client', None) if guild else None
         if not voice_client or not getattr(voice_client, 'channel', None):
@@ -480,8 +476,8 @@ class DiscordExecution:
         *,
         audio_format: str = 'wav',
     ) -> dict:
-        """Play one whole TTS blob (batch lane: speak tools, the legacy voice
-        conversation service, the streaming-TTS fallback).
+        """Play one whole TTS blob (batch lane: speak tools, the streaming-TTS
+        fallback, the hang-up chime).
 
         Decoded IN-PROCESS to 48 kHz stereo PCM and fed through the same
         QueuedPCMSource the conversational lane streams into. This was the
@@ -536,14 +532,6 @@ class DiscordExecution:
             'bytes': len(audio_bytes),
             'pcm_bytes': len(pcm),
         }
-
-    async def stop_voice_playback(self, account_name: str | None, channel_id: str | int) -> dict:
-        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
-        await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
-        if voice_client.is_playing():
-            _stop_playback_only(voice_client)
-            return {'status': 'stopped', 'account_name': name, 'channel_id': str(channel_id)}
-        return {'status': 'idle', 'account_name': name, 'channel_id': str(channel_id)}
 
     def _streaming_key(self, account_name: str, channel_id: str) -> tuple[str, str]:
         return (str(account_name), str(channel_id))

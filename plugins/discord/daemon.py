@@ -126,7 +126,7 @@ def list_connected() -> list[str]:
 
 
 def get_client(account_name: str):
-    """The live py-cord client for an account (other plugins still call this)."""
+    """The live py-cord client for an account — a public seam for out-of-tree add-ons (no in-house caller)."""
     runtime = get_runtime()
     return runtime.transport.get_client(str(account_name or '').strip()) if runtime else None
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from plugins.discord.voice.voice_gate import VOICE_OFF_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def register_slash_commands(client, account_name: str) -> bool:
         if status == 'joined':
             await ctx.respond(f'Joined **{target.name}**.')
         elif status == 'blocked':
-            await ctx.respond('Voice is off for this channel — no enabled "Discord: Voice channel" Realtime rule covers it.')
+            await ctx.respond(VOICE_OFF_TEXT)
         else:
             await ctx.respond(f"Could not join: {result.get('reason') or status}")
 

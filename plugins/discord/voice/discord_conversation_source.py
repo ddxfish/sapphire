@@ -53,18 +53,16 @@ class DiscordConversationSource:
         self,
         driver,
         gate,
-        playback_service,
+        voice_transport,
         *,
         account_name: str,
         channel_id: str,
         speech_bridge=None,
-        voice_transport=None,
         on_reply_end=None,
     ):
         self.on_reply_end = on_reply_end
         self.driver = driver
         self.gate = gate
-        self.playback_service = playback_service
         self.speech_bridge = speech_bridge
         self.voice_transport = voice_transport
         self.account_name = account_name
@@ -87,10 +85,10 @@ class DiscordConversationSource:
         write: no player contention, no engine/turn state touched.
         """
         encoded = _cue_b64(name)
-        if not encoded or self.playback_service is None:
+        if not encoded or self.voice_transport is None:
             return
         try:
-            result = self.playback_service.feed_chunk(
+            result = self.voice_transport.feed_streaming_chunk_sync(
                 self.account_name,
                 self.channel_id,
                 {'audio_b64': encoded},
@@ -129,7 +127,7 @@ class DiscordConversationSource:
         if self._running:
             self._audio_bytes_fed = 0
             if start_playback:
-                result = self.playback_service.start(self.account_name, self.channel_id)
+                result = self.voice_transport.start_streaming_playback_sync(self.account_name, self.channel_id)
                 if result.get('status') == 'error':
                     logger.warning(
                         'Discord streaming playback re-start failed for %s:%s: %s',
@@ -144,7 +142,7 @@ class DiscordConversationSource:
         self._thread = threading.Thread(target=self._loop, daemon=True, name='discord-conv-src')
         self._thread.start()
         if start_playback:
-            result = self.playback_service.start(self.account_name, self.channel_id)
+            result = self.voice_transport.start_streaming_playback_sync(self.account_name, self.channel_id)
             if result.get('status') == 'error':
                 logger.warning(
                     'Discord streaming playback start failed for %s:%s: %s',
@@ -155,9 +153,9 @@ class DiscordConversationSource:
         logger.info('[DISCORD] conversation source started for %s:%s', self.account_name, self.channel_id)
 
     async def start_playback_async(self) -> dict:
-        if not self.playback_service:
+        if not self.voice_transport:
             return {'status': 'unavailable'}
-        return await self.playback_service.start_async(self.account_name, self.channel_id)
+        return await self.voice_transport.start_streaming_playback_async(self.account_name, self.channel_id)
 
     def close(self) -> None:
         self._running = False
@@ -166,7 +164,7 @@ class DiscordConversationSource:
             self._thread.join(timeout=2.0)
             self._thread = None
         try:
-            self.playback_service.stop(self.account_name, self.channel_id)
+            self.voice_transport.stop_streaming_playback_sync(self.account_name, self.channel_id)
         except Exception as exc:
             logger.debug('Discord conversation playback stop: %s', exc)
         logger.info('[DISCORD] conversation source closed for %s:%s', self.account_name, self.channel_id)
@@ -203,7 +201,7 @@ class DiscordConversationSource:
             return
         if not self._playing:
             self._playing = True
-        result = self.playback_service.feed_chunk(self.account_name, self.channel_id, chunk)
+        result = self.voice_transport.feed_streaming_chunk_sync(self.account_name, self.channel_id, chunk)
         if isinstance(result, dict) and result.get('status') == 'not_streaming':
             logger.error(
                 '[DISCORD] feed_chunk dropped — streaming playback not active for %s:%s',
@@ -217,7 +215,7 @@ class DiscordConversationSource:
         """Cut in-flight playback without closing the source (driver re-arms per turn)."""
         self._stop_flag.set()
         try:
-            self.playback_service.stop(self.account_name, self.channel_id)
+            self.voice_transport.stop_streaming_playback_sync(self.account_name, self.channel_id)
         except Exception as exc:
             logger.debug('Discord conversation playback interrupt failed: %s', exc)
         self._playing = False
@@ -225,7 +223,7 @@ class DiscordConversationSource:
 
     def finish(self) -> None:
         if not self._stale() and not self._stop_flag.is_set():
-            self.playback_service.finish(self.account_name, self.channel_id)
+            self.voice_transport.finish_streaming_playback_sync(self.account_name, self.channel_id)
 
     def stop(self) -> None:
         self.interrupt_playback()
@@ -233,7 +231,7 @@ class DiscordConversationSource:
     def wait(self, timeout: float = 180.0) -> None:
         if self._stale():
             return          # the new turn owns playback and its fallback (row 11)
-        self.playback_service.wait(self.account_name, self.channel_id, timeout=timeout)
+        self.voice_transport.wait_streaming_playback_sync(self.account_name, self.channel_id, timeout=timeout)
         # The fallback exists for "streaming TTS produced nothing". A turn cut
         # by a barge-in also fed nothing — and its partial row ("Honestly, K")
         # is not something to read aloud (mic test 2026-09-13).

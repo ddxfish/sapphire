@@ -71,6 +71,7 @@ DEFAULT_CREDENTIALS = {
     "gcal_accounts": {},
     "github_accounts": {},
     "twilio_accounts": {},
+    "discord_accounts": {},
     "ssh": {
         "servers": []
     },
@@ -956,6 +957,67 @@ class CredentialsManager:
                 return False
             logger.info(f"Deleted twilio account '{scope}'")
             return True
+
+    # ── Discord bot accounts (plugins/discord, 2026-09-22): label → bot token ──
+
+    def get_discord_account(self, name: str) -> dict:
+        """One Discord bot account by its label; the token is unscrambled on read.
+        Empty dict when unknown."""
+        acct = self._credentials.get('discord_accounts', {}).get(name)
+        if not acct:
+            return {}
+        return {
+            'name': name,
+            'token': self._unscramble(acct.get('token', '')),
+            'bot_name': acct.get('bot_name', ''),
+            'bot_id': acct.get('bot_id', ''),
+            'created_at': acct.get('created_at', 0.0),
+        }
+
+    def set_discord_account(self, name: str, *, token: str = None, bot_name: str = None,
+                            bot_id: str = None, created_at: float = None) -> bool:
+        """Create or update a Discord bot account. Fields left None keep their
+        stored value; the token is scrambled before save; created_at is set once."""
+        import time as _time
+        with self._lock:
+            try:
+                accounts = self._credentials.setdefault('discord_accounts', {})
+                acct = dict(accounts.get(name) or {})
+                if token is not None:
+                    acct['token'] = self._scramble(token) if token else ''
+                if bot_name is not None:
+                    acct['bot_name'] = str(bot_name)
+                if bot_id is not None:
+                    acct['bot_id'] = str(bot_id)
+                if not acct.get('created_at'):
+                    acct['created_at'] = float(created_at) if created_at else _time.time()
+                accounts[name] = acct
+                if not self._save():
+                    logger.error(f"Failed to persist discord account '{name}'")
+                    return False
+                logger.info(f"Set discord account '{name}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set discord account '{name}': {e}")
+                return False
+
+    def delete_discord_account(self, name: str) -> bool:
+        with self._lock:
+            accounts = self._credentials.get('discord_accounts', {})
+            if name not in accounts:
+                return False
+            del accounts[name]
+            if not self._save():
+                logger.error(f"Failed to persist deletion of discord account '{name}'")
+                return False
+            logger.info(f"Deleted discord account '{name}'")
+            return True
+
+    def list_discord_accounts(self) -> list:
+        """Discord bot accounts (no tokens) — for the accounts page and the scope dropdown."""
+        accounts = self._credentials.get('discord_accounts', {})
+        return [{'name': name, 'bot_name': acct.get('bot_name', ''), 'bot_id': acct.get('bot_id', ''),
+                 'created_at': acct.get('created_at', 0.0)} for name, acct in sorted(accounts.items())]
 
     def list_twilio_accounts(self) -> list:
         """List Twilio accounts (no secrets) — for the account dropdown + UI."""

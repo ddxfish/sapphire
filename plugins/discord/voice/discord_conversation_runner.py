@@ -13,11 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import tempfile
 import threading
 import time
-import wave
 from typing import Callable
 
 from plugins.discord.sapphire.voice_chat import ensure_voice_chat, touch_voice_chat
@@ -36,7 +33,6 @@ class DiscordConversationRunner:
     def __init__(
         self,
         *,
-        playback_service=None,
         transport=None,
         settings_store=None,
         sessions=None,
@@ -44,7 +40,6 @@ class DiscordConversationRunner:
         voice_transport=None,
         gate=None,
     ):
-        self.playback_service = playback_service
         self.transport = transport
         self.settings_store = settings_store
         self.sessions = sessions
@@ -116,7 +111,7 @@ class DiscordConversationRunner:
         )
 
     def _prepare_session(self, session) -> dict:
-        if not self.playback_service:
+        if not self.voice_transport:
             return {'status': 'error', 'error': 'playback_unavailable'}
         try:
             system = _get_system()
@@ -476,17 +471,14 @@ class DiscordConversationRunner:
         built: dict = {}
 
         def ctor(driver, gate):
-            driver._transcribe_fn = self._build_transcribe_fn(
-                system, driver=driver, settings=settings, bot_names=bot_names,
-            )
+            driver._transcribe_fn = self._build_transcribe_fn(driver=driver, settings=settings, bot_names=bot_names)
             source = DiscordConversationSource(
                 driver,
                 gate,
-                self.playback_service,
+                self.voice_transport,
                 account_name=session.account_name,
                 channel_id=str(session.channel_id),
                 speech_bridge=self.speech_bridge,
-                voice_transport=self.voice_transport,
                 on_reply_end=lambda: self._note_reply_end(session.session_id),
             )
             original_run_turn = driver._run_turn
@@ -512,8 +504,7 @@ class DiscordConversationRunner:
             raise RuntimeError('conversation_refused (slot cap or chat already live)')
         return built['driver'], built['gate'], source, DiscordFrameFeed(source.push_pcm)
 
-    def _build_transcribe_fn(self, system, *, driver, settings, bot_names: list[str]) -> Callable:
-        sample_rate = 16000
+    def _build_transcribe_fn(self, *, driver, settings, bot_names: list[str]) -> Callable:
         addressing_mode = 'bot_name'
         if settings is not None:
             addressing_mode = str(getattr(settings.voice, 'addressing_mode', 'bot_name') or 'bot_name')
@@ -525,23 +516,8 @@ class DiscordConversationRunner:
                 driver._discord_pending_text = None
                 text = str(pending).strip()
             else:
-                wc = getattr(system, 'whisper_client', None)
-                if wc is None:
-                    return None
-                fd, path = tempfile.mkstemp(suffix='.wav')
-                os.close(fd)
-                try:
-                    with wave.open(path, 'wb') as handle:
-                        handle.setnchannels(1)
-                        handle.setsampwidth(2)
-                        handle.setframerate(sample_rate)
-                        handle.writeframes(pcm)
-                    text = str(wc.transcribe_file(path) or '').strip()
-                finally:
-                    try:
-                        os.unlink(path)
-                    except OSError:
-                        pass
+                # core's driver owns the pcm → temp WAV → STT dance; we only wrap it.
+                text = str(driver._whisper_transcribe(pcm) or '').strip()
             if not text:
                 return None
             logger.info('[DISCORD] conversation turn transcribed (%d chars)', len(text))

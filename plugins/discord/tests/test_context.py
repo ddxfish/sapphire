@@ -20,13 +20,12 @@ def test_recent_history_excludes_the_trigger_itself():
 
 def test_build_context_is_keyed_to_the_trigger_identity():
     """hunt 2.13.0 row 15: the gates key off the newest ADDRESSED message, so the transcript does too."""
-    repo = SimpleNamespace(get_recent_messages=lambda a, c, limit=20: [
-        {'message_id': 'm1', 'author_name': 'alice', 'content': 'hi'}, {'message_id': 'm2', 'author_name': 'bob', 'content': 'yo'}])
+    rows = [{'message_id': 'm1', 'author': 'alice', 'content': 'hi'}, {'message_id': 'm2', 'author': 'bob', 'content': 'yo'}]
     alice = SimpleNamespace(account_name='bot', channel_id='c1', channel_name='general', guild_name='G', guild_id='g1',
                             author_id='alice', attachments=[], message_id='m1')
-    ctx = build_context(repo, alice)
+    ctx = build_context(rows, alice)
     assert ctx['author_id'] == 'alice' and ctx['recent_history'] == ['bob: yo']
-    assert build_context(None, alice)['recent_history'] == []
+    assert build_context([], alice)['recent_history'] == []
 
 
 def test_cooldown_per_channel_and_missing_author():

@@ -4,7 +4,7 @@
   "short_display_name": "Discord",
   "version": "2.0.0",
   "min_core_version": "2.13.0",
-  "description": "Discord bot \u2014 accounts, conversation, images in and out, GIFs, silent reactions, and voice channels on Sapphire's conversation engine. Chat, greetings and voice are daemon tasks (Discord: Chat only / Greetings / All interactions; Realtime: Discord: Voice channel); personality modules live in the discord-personality plugin.",
+  "description": "Discord bot \u2014 accounts (the only thing it stores), conversation, images in and out, GIFs, silent reactions, and voice channels on Sapphire's conversation engine. Chat, greetings and voice are daemon tasks (Discord: Chat only / Greetings / All interactions; Realtime: Discord: Voice channel); personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83c\udfae",
@@ -45,7 +45,7 @@
           "filter_fields": [
             {
               "key": "mentioned",
-              "label": "bot was @mentioned (True/False)"
+              "label": "bot was addressed \u2014 @mention or name match (True/False)"
             },
             {
               "key": "guild_name",
@@ -149,7 +149,7 @@
           "filter_fields": [
             {
               "key": "mentioned",
-              "label": "bot was @mentioned (True/False)"
+              "label": "bot was addressed \u2014 @mention or name match (True/False)"
             },
             {
               "key": "guild_name",
@@ -345,38 +345,18 @@
         "handler": "api/channels.py:list_bot_allowlist_candidates"
       },
       {
-        "method": "POST",
-        "path": "admin/forget-user",
-        "handler": "api/admin.py:forget_user"
-      },
-      {
         "method": "GET",
-        "path": "debug/llm",
-        "handler": "api/debug.py:list_llm_debug"
+        "path": "debug/decisions",
+        "handler": "api/debug.py:list_decisions"
       },
       {
         "method": "POST",
         "path": "debug/clear",
-        "handler": "api/debug.py:clear_llm_debug"
+        "handler": "api/debug.py:clear_decisions"
       }
     ],
-    "schedule": [
-      {
-        "name": "retention_purge",
-        "cron": "30 4 * * *",
-        "handler": "schedule/retention_purge.py",
-        "description": "Daily purge of stored Discord messages older than the Retention day limit"
-      }
-    ],
+    "schedule": [],
     "settings": [
-      {
-        "key": "debug.llm_debug_enabled",
-        "type": "boolean",
-        "label": "LLM debug ring",
-        "default": false,
-        "tab": "Debug",
-        "help": "Keep the last 10 prompts and replies in memory for the Debug panel \u2014 full prompts, other people's messages included. Off = nothing retained. Clear it from the panel any time."
-      },
       {
         "key": "channel.reply_mode",
         "type": "string",
@@ -451,44 +431,28 @@
         "help": "Collect rapid messages into one reply. Typing extends; questions halve."
       },
       {
-        "key": "channel.strip_think_tags",
-        "type": "boolean",
-        "label": "Strip thinking tags",
-        "default": true,
+        "key": "channel.context_messages",
+        "type": "number",
+        "label": "Give the AI the last X channel messages",
+        "default": 20,
         "tab": "Conversation",
-        "help": "ON (default): removes <think> reasoning blocks from replies before posting. OFF: raw thinking text posts to the channel."
+        "help": "When she replies, the last X messages of that channel are fetched live from Discord and shown to the AI as 'Recent chat' (0-50; 0 = only the message that triggered her). Nothing is stored \u2014 the plugin keeps no copy of anyone's messages. If the task also keeps a chat, her own past exchanges are in that chat; this window is what other people said."
       },
       {
-        "key": "channel.typing_indicator_enabled",
+        "key": "channel.natural_delay",
         "type": "boolean",
-        "label": "Typing indicator",
+        "label": "Natural delay",
         "default": true,
         "tab": "Conversation",
-        "help": "ON (default): shows typing\u2026 before each message, paced like a human typing the reply (roughly 0.5-12 seconds by length). OFF: posts instantly with no indicator."
+        "help": "ON (default): she reads before she types, shows typing\u2026 paced by the reply length, and pauses a beat between chunks \u2014 like a person. OFF: posts instantly."
       },
       {
-        "key": "channel.human_pause_enabled",
+        "key": "bot.allow_all",
         "type": "boolean",
-        "label": "Human pause",
-        "default": true,
+        "label": "Answer any bot",
+        "default": false,
         "tab": "Conversation",
-        "help": "Brief pause before sending, scaled to reply length."
-      },
-      {
-        "key": "channel.read_delay_enabled",
-        "type": "boolean",
-        "label": "Read delay",
-        "default": true,
-        "tab": "Conversation",
-        "help": "Wait as if reading the message before typing starts."
-      },
-      {
-        "key": "bot.enabled",
-        "type": "boolean",
-        "label": "Bot-to-bot replies",
-        "default": true,
-        "tab": "Conversation",
-        "help": "ON (default): messages from bots in the Allowlisted Bots list are treated like anyone else's \u2014 a mention gets a reply, the rest roll the bot organic chance; after 5 bot-triggered replies in a row in one channel she waits for a human to speak. OFF: bot messages are always ignored."
+        "help": "OFF (default): she only answers the bots in the allowlist below (empty list = no bot at all). ON: any bot \u2014 a mention gets a reply, the rest roll the bot organic chance. Either way, after 5 bot-triggered replies in a row with no human in between she ignores bots in that channel until a human speaks."
       },
       {
         "key": "bot.allowlist_ids",
@@ -502,7 +466,7 @@
         "type": "boolean",
         "label": "LLM reaction tags",
         "default": true,
-        "tab": "Social",
+        "tab": "Reactions",
         "help": "ON (default): a [react:emoji] tag she writes into a reply lands as a reaction on the message she answered. OFF: the tag is stripped and ignored."
       },
       {
@@ -510,7 +474,7 @@
         "type": "boolean",
         "label": "Autonomous silent reactions",
         "default": true,
-        "tab": "Social",
+        "tab": "Reactions",
         "help": "React with an emoji without replying \u2014 one roll per message she reads; the emoji follows the message's tone (a small word list, no model)."
       },
       {
@@ -518,7 +482,7 @@
         "type": "number",
         "label": "Reaction chance (%)",
         "default": 10.0,
-        "tab": "Social",
+        "tab": "Reactions",
         "help": "Chance (0-100%) she silently reacts to a message she reads. 0 = never."
       },
       {
@@ -526,7 +490,7 @@
         "type": "number",
         "label": "Reaction cooldown (seconds)",
         "default": 30,
-        "tab": "Social",
+        "tab": "Reactions",
         "help": "Minimum seconds between her self-initiated reactions in the same channel. 0 = no cooldown."
       },
       {
@@ -661,10 +625,10 @@
       {
         "key": "voice.min_silence_seconds",
         "type": "number",
-        "label": "Min silence (seconds)",
+        "label": "Silence before she answers (seconds)",
         "default": 1.5,
         "tab": "Voice",
-        "help": "Silence that ends an utterance before it is transcribed (seconds)."
+        "help": "How long a speaker must stay quiet before their utterance is transcribed. The listener adds a 1.2 s guard on top and never waits less than 1.8 s, so the default 1.5 means 2.7 s of silence."
       },
       {
         "key": "voice.addressing_mode",
@@ -715,22 +679,6 @@
         "help": "How long you must keep talking over her before she stops. A click or thump can't hold this long; a word can",
         "default": 250,
         "tab": "Voice"
-      },
-      {
-        "key": "retention.enabled",
-        "type": "boolean",
-        "label": "Retention purge",
-        "default": false,
-        "tab": "Retention",
-        "help": "OFF (default): nothing is ever purged. ON: a daily purge (4:30 AM server time) deletes the plugin's stored copies of Discord messages older than the day limit below. Bot accounts are never touched."
-      },
-      {
-        "key": "retention.message_days",
-        "type": "number",
-        "label": "Keep messages (days)",
-        "default": 90,
-        "tab": "Retention",
-        "help": "Purge deletes the plugin's stored copies of Discord messages older than this many days (default 90). 0 = keep forever. Nothing is deleted on Discord itself."
       }
     ]
   }

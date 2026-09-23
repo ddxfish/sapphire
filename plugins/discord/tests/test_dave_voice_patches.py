@@ -102,3 +102,37 @@ def test_rollover_patch_and_disconnect_evict_ssrc_state():
     root = Path(__file__).resolve().parents[1]
     assert 'forget_ssrc(old_ssrc)' in (root / 'voice' / 'pycord_patches.py').read_text(encoding='utf-8')
     assert 'forget_ssrcs(' in (root / 'transport' / 'discord_execution.py').read_text(encoding='utf-8')
+
+
+def test_transport_decrypt_failure_diagnostic_names_the_packet_once_per_window(caplog):
+    import logging
+    from plugins.discord.voice import dave_voice_patches as dvp
+    dvp._transport_fail_state.update(allowed_at=0.0, suppressed=0)
+    packet = SimpleNamespace(ssrc=15646, sequence=71, timestamp=960, payload_type=120, extended=True, padding=False,
+                             data=b'x' * 87)
+    with caplog.at_level(logging.WARNING):
+        line = dvp.note_transport_decrypt_failure(packet, ValueError('Decryption failed.'), now=100.0)
+        assert line and 'ssrc=15646 seq=71 ts=960 pt=120 ext=True pad=False len=87' in line
+        assert dvp.note_transport_decrypt_failure(packet, ValueError('x'), now=101.0) is None      # inside the window
+        assert dvp.note_transport_decrypt_failure(packet, ValueError('x'), now=102.0) is None
+        line = dvp.note_transport_decrypt_failure(packet, ValueError('y'), now=106.0)
+        assert line and '+2 more in the last 5s' in line
+    assert sum('failed transport decrypt' in r.getMessage() for r in caplog.records) == 2
+
+
+def test_aead_flood_filter_rewords_and_downgrades_pycords_line():
+    import logging
+    from plugins.discord.voice.pycord_patches import AeadFloodFilter
+    flt = AeadFloodFilter()
+    def rec(msg, args=()):
+        r = logging.LogRecord('discord.voice.receive.reader', logging.ERROR, __file__, 1, msg, args, (ValueError, ValueError('boom'), None))
+        return r
+    first = rec('Critical error at AEAD: %s', ('Decryption failed.',))
+    assert flt.filter(first) is True
+    assert first.levelno == logging.WARNING and first.exc_info is None and 'dropped' in first.getMessage()
+    assert flt.filter(rec('CryptoError while decoding a voice packet')) is False   # same window: counted
+    assert flt.filter(rec('Critical error at AEAD: %s', ('x',))) is False
+    assert flt.filter(rec('some other reader message')) is True                    # untouched
+    flt._allowed_at = 0.0
+    nxt = rec('Critical error at AEAD: %s', ('y',))
+    assert flt.filter(nxt) is True and '+2 more' in nxt.getMessage()

@@ -5,7 +5,7 @@ skipped silently (voice degraded, INFO only); a method that was RENAMED raised
 AttributeError out of apply_*() → lifecycle.start → the whole daemon failed and
 text chat died with it. Now every patch runs through apply_patch(): it never
 raises, and the outcome per patch is recorded for voice_stack_info() and the
-/voice/diagnostics route.
+voice/status route.
 """
 
 from __future__ import annotations

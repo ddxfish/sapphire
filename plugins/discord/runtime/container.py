@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from plugins.discord import hooks_out
+from plugins.discord.accounts import DiscordAccounts
 from plugins.discord.conversation.batching_service import BatchingService
 from plugins.discord.conversation.bot_gate import BotGate
 from plugins.discord.conversation.conversation_service import ConversationService
@@ -25,12 +26,10 @@ from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.greetings import GreetingsClock
 from plugins.discord.models.intentions import LeaveVoiceIntention
 from plugins.discord.models.settings import SettingsStore
-from plugins.discord.observability.llm_debug_service import LlmDebugService
+from plugins.discord.observability.decisions import DecisionLog
 from plugins.discord.sapphire.event_bridge import SapphireEventBridge
 from plugins.discord.sapphire.scheduler_bridge import SapphireSchedulerBridge
 from plugins.discord.sapphire.speech_bridge import SapphireSpeechBridge
-from plugins.discord.storage.repositories import AccountRepository, ChannelRepository, MessageRepository
-from plugins.discord.storage.sqlite import SQLiteService, resolve_default_db_path
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
 from plugins.discord.transport.discord_transport import DiscordTransport
 from plugins.discord.transport.voice_transport import VoiceTransport
@@ -41,7 +40,6 @@ from plugins.discord.voice.voice_gate import VoiceGate
 from plugins.discord.voice.voice_listener_service import VoiceListenerService
 from plugins.discord.voice.voice_service import VoiceService
 from plugins.discord.voice.voice_sessions import VoiceSessions
-from plugins.discord.voice.voice_streaming_playback_service import VoiceStreamingPlaybackService
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +71,16 @@ async def _quiet(coro, message: str) -> None:
 
 
 class RuntimeContainer:
-    def __init__(self, *, plugin_name: str, plugin_loader, settings: dict, loop: asyncio.AbstractEventLoop):
+    def __init__(self, *, plugin_name: str, plugin_loader, settings: dict, loop: asyncio.AbstractEventLoop,
+                 accounts: DiscordAccounts | None = None):
         self.plugin_name = plugin_name
         self.plugin_loader = plugin_loader
         self.settings = dict(settings or {})
         self.loop = loop
         self.health = RuntimeHealth()
         self.tick_seconds = max(1.0, float(self.settings.get('scheduler_interval_seconds', 15)))
-        self.sqlite_service = SQLiteService(self.settings.get('database_path') or resolve_default_db_path(plugin_name))
+        # The bot accounts live in core's credentials manager; the plugin has no database.
+        self.account_repository = accounts or DiscordAccounts()
         self._tick_task: asyncio.Task | None = None
         self._connect_backoff: dict[str, float] = {}
         self._last_voice_reap = 0.0
@@ -92,17 +92,13 @@ class RuntimeContainer:
         loader = self.plugin_loader
         # Core's plugin settings, read live on every resolve (no overlays since S6).
         self.settings_store = SettingsStore()
-        self.account_repository = AccountRepository(self.sqlite_service)
-        self.channel_repository = ChannelRepository(self.sqlite_service)
-        self.message_repository = MessageRepository(self.sqlite_service)
-        self.llm_debug_service = LlmDebugService(limit=10, plugin_loader=loader)
-        self.event_bridge = SapphireEventBridge(loader, llm_debug_service=self.llm_debug_service)
+        self.decisions = DecisionLog()
+        self.event_bridge = SapphireEventBridge(loader)
         self.scheduler_bridge = SapphireSchedulerBridge(loader)
         self.speech_bridge = SapphireSpeechBridge(loader)
         self.voice_gate = VoiceGate(loader)
 
-        self.mention_map_service = MentionMapService(message_repository=self.message_repository,
-                                                     channel_repository=self.channel_repository)
+        self.mention_map_service = MentionMapService()
         self.transport = DiscordTransport(loop=self.loop, account_repository=self.account_repository,
                                           mention_map_service=self.mention_map_service)
         self.mention_map_service.set_transport(self.transport)
@@ -113,16 +109,14 @@ class RuntimeContainer:
         self.reply_style_service = ReplyStyleService()
         self.reactions = Reactions()
         self.gif_service = GifService()
-        self.event_adapter = DiscordEventAdapter(
-            message_repository=self.message_repository, channel_repository=self.channel_repository,
-            image_lane=self.image_lane, settings_store=self.settings_store, mention_map_service=self.mention_map_service,
-        )
+        self.event_adapter = DiscordEventAdapter(image_lane=self.image_lane, settings_store=self.settings_store,
+                                                 mention_map_service=self.mention_map_service)
         self.batching_service = BatchingService(default_window_seconds=self._batch_window())
         self.conversation_service = ConversationService(
-            event_bridge=self.event_bridge, message_repository=self.message_repository, transport=self.transport,
+            event_bridge=self.event_bridge, transport=self.transport,
             settings_store=self.settings_store, reply_style_service=self.reply_style_service,
             gif_service=self.gif_service, reactions=self.reactions, bot_gate=self.bot_gate,
-            mention_map_service=self.mention_map_service, llm_debug_service=self.llm_debug_service,
+            mention_map_service=self.mention_map_service, decisions=self.decisions,
             image_lane=self.image_lane, account_repository=self.account_repository,
         )
         self.message_pipeline = MessagePipelineService(batching_service=self.batching_service,
@@ -135,17 +129,15 @@ class RuntimeContainer:
         # fires them into the task through core's fire_task.
         get_state = getattr(loader, 'get_plugin_state', None)
         self.greetings = GreetingsClock(
-            plugin_loader=loader, transport=self.transport, message_repository=self.message_repository,
-            channel_repository=self.channel_repository, account_repository=self.account_repository,
+            plugin_loader=loader, transport=self.transport, account_repository=self.account_repository,
             state=get_state(self.plugin_name) if callable(get_state) else None,
         )
 
         # Voice: one lane on core's conversation engine, gated by the Realtime rule.
         self.voice_transport = VoiceTransport(discord_transport=self.transport)
         self.voice_sessions = VoiceSessions()
-        self.voice_streaming_playback_service = VoiceStreamingPlaybackService(voice_transport=self.voice_transport)
         self.discord_conversation_runner = DiscordConversationRunner(
-            playback_service=self.voice_streaming_playback_service, transport=self.transport,
+            transport=self.transport,
             settings_store=self.settings_store, sessions=self.voice_sessions, speech_bridge=self.speech_bridge,
             voice_transport=self.voice_transport, gate=self.voice_gate,
         )
@@ -186,8 +178,8 @@ class RuntimeContainer:
 
     async def start(self) -> None:
         try:
-            self.health.mark('starting', 'Opening storage')
-            self.sqlite_service.start()
+            self.health.mark('starting', 'Importing any old account database')
+            self.account_repository.import_legacy()
             self.health.mark('starting', 'Applying voice patches')
             voice_deps.apply_patches()
             self.health.mark('starting', 'Starting message pipeline')
@@ -222,11 +214,6 @@ class RuntimeContainer:
             logger.exception('Voice worker pool shutdown failed')
         self.health.mark('stopping', 'Closing transport')
         await _quiet(self.transport.close_all(), 'Transport close failed')
-        self.health.mark('stopping', 'Closing storage')
-        try:
-            self.sqlite_service.stop()
-        except Exception:
-            logger.exception('Storage close failed')
         self.health.mark('stopped', 'Runtime stopped')
 
     async def _connect_stored_accounts(self) -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import struct
 from typing import Callable
 
 from plugins.discord.transport.discord_audio import (
@@ -50,18 +49,3 @@ class DiscordFrameFeed:
     def reset(self) -> None:
         self._buf = b''
 
-
-def stereo_frame_rms(pcm_stereo: bytes) -> float:
-    if not pcm_stereo:
-        return 0.0
-    count = len(pcm_stereo) // DISCORD_SAMPLE_WIDTH
-    if count < 1:
-        return 0.0
-    samples = struct.unpack(f'<{count}h', pcm_stereo[: count * DISCORD_SAMPLE_WIDTH])
-    if DISCORD_CHANNELS == 2:
-        mono = [abs(samples[i]) for i in range(0, len(samples), 2)]
-    else:
-        mono = [abs(value) for value in samples]
-    if not mono:
-        return 0.0
-    return sum(value * value for value in mono) / len(mono)

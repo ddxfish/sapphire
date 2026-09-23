@@ -17,7 +17,7 @@ class _FakeTransport:
     def list_connected(self):
         return ['alpha']
 
-    async def list_proactive_targets(self):
+    async def list_text_targets(self):
         return self._targets
 
 

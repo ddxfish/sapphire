@@ -8,7 +8,8 @@ DEFAULT_LINE_MAX_CHARS = 1000
 
 
 def format_message_line(row: dict, *, line_max_chars: int = DEFAULT_LINE_MAX_CHARS) -> str:
-    author = (str(row.get('author_name') or row.get('display_name') or row.get('username') or 'Unknown').strip()
+    author = (str(row.get('author_name') or row.get('author') or row.get('display_name') or row.get('username')
+                  or 'Unknown').strip()
               or 'Unknown')
     text = str(row.get('content') or row.get('clean_content') or '').replace('\n', ' ').strip()
     line = f'{author}: {text}' if text else f'{author}:'
@@ -23,11 +24,10 @@ def format_recent_history(rows: list[dict], *, exclude_message_id: str = '',
             if not (exclude_message_id and str(row.get('message_id') or '') == exclude_message_id)]
 
 
-def build_context(message_repository, trigger) -> dict:
-    """One identity for the whole turn: the reply gates key off the newest
+def build_context(rows: list[dict], trigger) -> dict:
+    """`rows` = the channel's recent messages fetched live from Discord (oldest
+    first). One identity for the whole turn: the reply gates key off the newest
     ADDRESSED message, so the transcript exclusion does too (hunt 2.13.0, row 15)."""
-    rows = message_repository.get_recent_messages(trigger.account_name, trigger.channel_id, limit=20) \
-        if message_repository else []
     return {
         'recent_history': format_recent_history(rows, exclude_message_id=trigger.message_id),
         'channel_id': trigger.channel_id,

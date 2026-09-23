@@ -13,9 +13,7 @@ from plugins.discord.conversation.mentions import (
 
 
 class MentionMapService:
-    def __init__(self, *, message_repository=None, channel_repository=None, transport=None):
-        self.message_repository = message_repository
-        self.channel_repository = channel_repository
+    def __init__(self, *, transport=None):
         self.transport = transport
         self._maps: dict[str, dict[str, str]] = {}
         self._lock = threading.Lock()
@@ -39,10 +37,6 @@ class MentionMapService:
             self._maps[key] = stored
         return stored
 
-    def clear_all(self) -> None:
-        with self._lock:
-            self._maps.clear()
-
     def build_for_channel(
         self,
         account_name: str,
@@ -52,23 +46,17 @@ class MentionMapService:
         username: str = '',
         display_name: str = '',
         mentioned_users: list[dict] | None = None,
-        limit: int = 50,
+        rows: list[dict] | None = None,
     ) -> dict[str, str]:
-        rows = []
-        if self.message_repository:
-            rows = self.message_repository.get_recent_messages(account_name, channel_id, limit=limit)
+        """`rows` = the channel's recent messages as fetched live from Discord (author_id +
+        author name per row) — everyone she might @mention in her reply."""
         mention_map = dict(self.get_map(account_name, channel_id))
-        for row in rows:
+        for row in rows or []:
             user_id = str(row.get('author_id') or '').strip()
             if not user_id:
                 continue
-            uname, dname = self._user_names(user_id, row)
-            merge_user_into_mention_map(
-                mention_map,
-                user_id,
-                username=uname,
-                display_name=dname,
-            )
+            name = str(row.get('author') or row.get('author_name') or '').strip()
+            merge_user_into_mention_map(mention_map, user_id, username=name, display_name=name)
         if author_id:
             merge_user_into_mention_map(
                 mention_map,
@@ -123,17 +111,3 @@ class MentionMapService:
 
     def mention_format_hint(self) -> str:
         return build_mention_format_hint()
-
-    def _user_names(self, user_id: str, row: dict) -> tuple[str, str]:
-        username = ''
-        display_name = ''
-        if self.channel_repository:
-            user = self.channel_repository.get_user(user_id) or {}
-            username = str(user.get('username') or '').strip()
-            display_name = str(user.get('display_name') or '').strip()
-        author_name = str(row.get('author_name') or '').strip()
-        if not username:
-            username = author_name
-        if not display_name:
-            display_name = author_name
-        return username, display_name

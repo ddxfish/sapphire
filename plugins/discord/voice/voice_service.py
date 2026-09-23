@@ -24,14 +24,6 @@ class VoiceService:
             return {'status': 'blocked', 'reason': 'no_voice_task'}
         return None
 
-    def ensure_listener(self, account_name: str, channel_id: str, *, guild_id: str = '') -> dict:
-        if (blocked := self._blocked(account_name, channel_id)):
-            return blocked
-        session = self.sessions.start(account_name, guild_id, channel_id)
-        if not self.voice_listener_service:
-            return {'status': 'no_listener'}
-        return self.voice_listener_service.start(session, loop=self.loop)
-
     async def ensure_listener_async(self, account_name: str, channel_id: str, *, guild_id: str = '') -> dict:
         if (blocked := self._blocked(account_name, channel_id)):
             return blocked

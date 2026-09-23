@@ -64,7 +64,7 @@ def test_prompt_always_carries_the_instruction_even_under_a_custom_template():
 
 def _runner_with_session(cues=True):
     playback = MagicMock()
-    playback.start.return_value = {'status': 'streaming'}
+    playback.start_streaming_playback_sync.return_value = {'status': 'streaming'}
     settings = SimpleNamespace(voice=SimpleNamespace(
         conversation_core_enabled=True, max_conversation_sessions=2, addressing_mode='bot_name',
         conversation_prompt_template='', llm_provider='', llm_model='', keep_chat_history=False,
@@ -72,8 +72,7 @@ def _runner_with_session(cues=True):
     ))
     store = MagicMock()
     store.resolve.return_value = settings
-    voice_transport = MagicMock()
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=store, voice_transport=voice_transport)
+    runner = DiscordConversationRunner(settings_store=store, voice_transport=playback)
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system, \
             patch.object(runner, '_build_stack') as build_stack:
         get_system.return_value = MagicMock()
@@ -83,7 +82,7 @@ def _runner_with_session(cues=True):
         session = SimpleNamespace(session_id='sess-1', account_name='bot', guild_id='111', channel_id='222',
                                   mode='conversational')
         assert runner.start(session)['status'] == 'active'
-    return runner, voice_transport
+    return runner, playback
 
 
 def test_runner_leaves_after_the_goodbye_drains_with_the_chime():

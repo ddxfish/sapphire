@@ -122,14 +122,17 @@ def test_loader_without_the_doors_is_a_quiet_no_op():
 
 
 def test_recent_history_labels_her_own_lines_you():
-    rows = [{'message_id': '1', 'author_name': 'alice', 'content': 'hi', 'created_at': 1.0},
-            {'message_id': '2', 'author_name': 'sapph', 'content': 'hello!', 'created_at': 2.0}]
-    repo = SimpleNamespace(get_recent_messages=lambda a, c, limit=20: rows)
+    rows = [{'message_id': '1', 'author': 'alice', 'content': 'hi', 'created_at': 1.0},
+            {'message_id': '2', 'author': 'sapph', 'content': 'hello!', 'created_at': 2.0}]
     transport = SimpleNamespace(list_connected=lambda: ['alpha'],
-                                account_health=lambda name: {'bot_id': '9', 'bot_name': 'sapph'})
-    clock = GreetingsClock(plugin_loader=SimpleNamespace(), transport=transport, message_repository=repo)
-    lines = clock.build_payload('alpha', '111', 'greeting')['recent_history']
+                                account_health=lambda name: {'bot_id': '9', 'bot_name': 'sapph'},
+                                recent_messages=lambda a, c, limit=20: rows,
+                                describe_channel=lambda a, c: {'guild_id': 'g1', 'guild_name': 'G', 'channel_id': c, 'channel_name': 'lounge'})
+    clock = GreetingsClock(plugin_loader=SimpleNamespace(), transport=transport)
+    payload = clock.build_payload('alpha', '111', 'greeting')
+    lines = payload['recent_history']
     assert len(lines) == 2 and lines[1].startswith('You:') and not lines[0].startswith('You:')
+    assert payload['guild_name'] == 'G' and payload['channel_name'] == 'lounge'
 
 
 def test_now_user_follows_config_timezone(monkeypatch):

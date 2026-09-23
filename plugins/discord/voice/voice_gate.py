@@ -13,6 +13,7 @@ chat config (provider, model, toolset, prompt) configures the VC chat;
 from __future__ import annotations
 
 SOURCE = 'discord_voice'
+VOICE_OFF_TEXT = 'Voice is off for this channel — no enabled "Discord: Voice channel" Realtime rule covers it.'
 _ON = ('1', 'true', 'yes', 'on')
 
 

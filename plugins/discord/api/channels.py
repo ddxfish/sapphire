@@ -21,7 +21,7 @@ def _list_targets(**kwargs):
     list_fn = (
         runtime.transport.list_voice_targets
         if channel_type == 'voice'
-        else runtime.transport.list_proactive_targets
+        else runtime.transport.list_text_targets
     )
     try:
         future = run_coroutine(list_fn())

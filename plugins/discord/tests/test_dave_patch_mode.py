@@ -20,9 +20,9 @@ def test_requested_dave_mode_defaults_to_auto(monkeypatch):
     assert patches.requested_dave_mode() == 'auto'
 
 
-def test_requested_dave_mode_legacy(monkeypatch):
+def test_requested_dave_mode_legacy_is_retired(monkeypatch):
     monkeypatch.setenv('DISCORD_VOICE_DAVE_MODE', 'legacy')
-    assert patches.requested_dave_mode() == 'legacy'
+    assert patches.requested_dave_mode() == 'auto'          # the legacy decrypt branch is gone
 
 
 def test_is_valid_opus_packet_rejects_random_f8_prefix():

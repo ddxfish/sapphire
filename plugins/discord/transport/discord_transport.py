@@ -232,14 +232,6 @@ class DiscordTransport:
         state = self._accounts.get(str(account_name or '').strip()) or {}
         return state.get('client')
 
-    def client_map(self) -> dict[str, Any]:
-        """Account name → client for connected (or started) bots. Legacy-compat surface."""
-        return {
-            name: state.get('client')
-            for name, state in self._accounts.items()
-            if state.get('client') is not None
-        }
-
     def account_health(self, name: str) -> dict:
         state = self._accounts.get(name) or {'name': name, 'state': 'disconnected', 'bot_name': '', 'bot_id': '', 'last_error': ''}
         return {'name': name, 'state': state.get('state', 'disconnected'), 'bot_name': state.get('bot_name', ''), 'bot_id': state.get('bot_id', ''), 'last_error': state.get('last_error', '')}
@@ -253,7 +245,7 @@ class DiscordTransport:
                 servers.append({'account': name, 'id': str(getattr(guild, 'id', '')), 'name': getattr(guild, 'name', '')})
         return servers
 
-    async def list_proactive_targets(self) -> list[dict]:
+    async def list_text_targets(self) -> list[dict]:
         """List text channels from connected guilds for proactive target selection."""
         targets: list[dict] = []
         for name, state in sorted(self._accounts.items()):
@@ -452,6 +444,28 @@ class DiscordTransport:
     def read_messages(self, channel, count=20, account_name=None):
         return self._run_on_loop(self._execution.read_messages(channel, count=count, account_name=account_name))
 
+    async def recent_messages_async(self, account_name: str, channel_id: str, *, limit: int = 20) -> list[dict]:
+        """The channel's last `limit` messages straight from Discord, oldest first —
+        the reply prompt's window. ON the loop (an awaited py-cord call); nothing is stored."""
+        return await self._execution.read_messages(str(channel_id), count=limit, account_name=account_name)
+
+    def recent_messages(self, account_name: str, channel_id: str, *, limit: int = 20) -> list[dict]:
+        """Same window from a worker thread (the greetings clock)."""
+        return self._run_on_loop(self.recent_messages_async(account_name, str(channel_id), limit=limit))
+
+    def describe_channel(self, account_name: str, channel_id: str) -> dict | None:
+        """Cache lookup of any channel (no fetch, safe from any thread): its guild and names."""
+        client = self.get_client(account_name)
+        try:
+            channel = client.get_channel(int(channel_id)) if client else None
+        except (TypeError, ValueError):
+            channel = None
+        if channel is None:
+            return None
+        guild = getattr(channel, 'guild', None)
+        return {'guild_id': str(getattr(guild, 'id', '') or ''), 'guild_name': str(getattr(guild, 'name', '') or ''),
+                'channel_id': str(channel_id), 'channel_name': str(getattr(channel, 'name', '') or '')}
+
     def _run_on_loop(self, coro, *, timeout: float = 30):
         try:
             running = asyncio.get_running_loop()
@@ -463,9 +477,6 @@ class DiscordTransport:
             )
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         return future.result(timeout=timeout)
-
-    async def get_voice_channel_state_async(self, account_name: str, channel_id: str) -> dict:
-        return await self._execution.get_voice_channel_state(account_name, channel_id)
 
     async def connect_voice_async(self, account_name: str, channel_id: str) -> dict:
         return await self._execution.connect_voice(account_name, channel_id)
@@ -499,32 +510,6 @@ class DiscordTransport:
             return await self._execution.stop_voice_listener(account_name, channel_id)
         except Exception as exc:
             logger.warning('Voice listener stop failed for %s:%s: %s', account_name, channel_id, exc)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
-    async def play_voice_audio_async(
-        self,
-        account_name: str,
-        channel_id: str,
-        audio_bytes: bytes,
-        *,
-        audio_format: str = 'wav',
-    ) -> dict:
-        try:
-            return await self._execution.play_voice_audio(
-                account_name,
-                channel_id,
-                audio_bytes,
-                audio_format=audio_format,
-            )
-        except Exception as exc:
-            logger.error('Voice playback failed for %s:%s: %s', account_name, channel_id, exc, exc_info=True)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
-    async def stop_voice_playback_async(self, account_name: str, channel_id: str) -> dict:
-        try:
-            return await self._execution.stop_voice_playback(account_name, channel_id)
-        except Exception as exc:
-            logger.debug('Voice playback stop failed for %s:%s: %s', account_name, channel_id, exc)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
     def start_voice_listener_sync(
@@ -581,16 +566,6 @@ class DiscordTransport:
             )
         except Exception as exc:
             logger.error('Voice playback failed for %s:%s: %s', account_name, channel_id, exc, exc_info=True)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
-
-    def stop_voice_playback_sync(self, account_name: str, channel_id: str) -> dict:
-        try:
-            return self._run_on_loop(
-                self._execution.stop_voice_playback(account_name, channel_id),
-                timeout=15,
-            )
-        except Exception as exc:
-            logger.debug('Voice playback stop failed for %s:%s: %s', account_name, channel_id, exc)
             return {'status': 'error', 'error': str(exc), 'channel_id': str(channel_id)}
 
     async def start_streaming_playback_async(self, account_name: str, channel_id: str) -> dict:
@@ -723,16 +698,6 @@ class DiscordTransport:
     def resolve_voice_channel_sync(self, channel_ref, account_name=None):
         return self._run_on_loop(self._execution.resolve_voice_channel(account_name, channel_ref), timeout=30)
 
-    async def send_gif_async(self, channel, query, account_name=None):
-        url = str(query or '').strip()
-        if not url.startswith('http'):
-            return {'status': 'error', 'error': 'GIF URL required', 'channel_id': str(channel)}
-        try:
-            return await self._execution.send_url(channel, url, account_name=account_name)
-        except Exception as exc:
-            logger.error('Discord GIF send failed for channel %s: %s', channel, exc, exc_info=True)
-            return {'status': 'error', 'error': str(exc), 'channel_id': str(channel)}
-
     def send_file_sync(self, channel, data: bytes, filename: str, caption: str = '', account_name=None):
         try:
             return self._run_on_loop(
@@ -749,7 +714,7 @@ class DiscordTransport:
     def list_channels_sync(self, kind: str = 'text') -> list[dict]:
         """Text or voice channels across every connected bot (the tools' door
         to the same roster the Settings pickers use)."""
-        coro = self.list_voice_targets() if kind == 'voice' else self.list_proactive_targets()
+        coro = self.list_voice_targets() if kind == 'voice' else self.list_text_targets()
         return self._run_on_loop(coro, timeout=60)
 
     def send_gif_sync(self, channel, query, account_name=None):

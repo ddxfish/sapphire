@@ -13,7 +13,7 @@ from typing import Any
 
 @dataclass
 class BotInteractionSettings:
-    enabled: bool = True
+    allow_all: bool = False              # ON: answer any bot; OFF: only the allowlist (empty = none)
     allowlist_ids: list = field(default_factory=list)
 
 
@@ -51,12 +51,6 @@ class VoiceSettings:
 
 
 @dataclass
-class RetentionSettings:
-    enabled: bool = False
-    message_days: int = 90
-
-
-@dataclass
 class ConversationSettings:
     reply_mode: str = 'default'
     human_response_chance: float = 15.0
@@ -64,10 +58,8 @@ class ConversationSettings:
     name_match_enabled: bool = False
     name_match_case_sensitive: bool = False
     batching_seconds: int = 8
-    strip_think_tags: bool = True
-    typing_indicator_enabled: bool = True
-    human_pause_enabled: bool = True
-    read_delay_enabled: bool = True
+    context_messages: int = 20          # channel messages fetched live from Discord when she replies
+    natural_delay: bool = True          # read, type, pause like a person; OFF = post instantly
     ignored_channels: list = field(default_factory=list)   # account:channel_id entries
 
 
@@ -80,17 +72,10 @@ class ReactionSettings:
 
 
 @dataclass
-class DebugSettings:
-    llm_debug_enabled: bool = False    # the ring holds full prompts (other people's messages) — opt in
-
-
-@dataclass
 class EffectiveSettings:
     safety: SafetySettings = field(default_factory=SafetySettings)
     media: MediaSettings = field(default_factory=MediaSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
-    retention: RetentionSettings = field(default_factory=RetentionSettings)
-    debug: DebugSettings = field(default_factory=DebugSettings)
     bot: BotInteractionSettings = field(default_factory=BotInteractionSettings)
     reaction: ReactionSettings = field(default_factory=ReactionSettings)
     channel: ConversationSettings = field(default_factory=ConversationSettings)

@@ -1,11 +1,10 @@
-"""Account management routes."""
+"""Account management routes — the bot accounts live in core's credentials manager."""
 
 from __future__ import annotations
 
-
 import logging
 
-from plugins.discord.api.storage_access import open_storage
+from plugins.discord.accounts import DiscordAccounts
 from plugins.discord.daemon import get_runtime, run_coroutine
 from plugins.discord.lib.token_check import check_bot_token
 
@@ -16,18 +15,28 @@ def _sanitize_account_name(raw: str) -> str:
     return ''.join(c for c in str(raw or '').strip().lower() if c.isalnum() or c in '-_')
 
 
+def _accounts() -> DiscordAccounts:
+    runtime = get_runtime()
+    return runtime.account_repository if runtime else DiscordAccounts()
+
+
 def list_accounts(**kwargs):
-    with open_storage() as storage:
-        accounts = storage.account_repository.list_accounts()
-        connected = set()
-        if storage.transport:
-            connected = set(storage.transport.list_connected())
-        for account in accounts:
-            account.pop('token', None)
-            account['connected'] = account['name'] in connected
-            account['value'] = account['name']
-            account['label'] = account['bot_name'] or account['name']
-        return {'accounts': accounts}
+    runtime = get_runtime()
+    transport = runtime.transport if runtime else None
+    rows = _accounts().list_accounts()
+    for account in rows:
+        live = {}
+        if transport:
+            try:
+                live = transport.account_health(account['name']) or {}
+            except Exception:
+                live = {}
+        account['state'] = str(live.get('state') or 'disconnected')
+        account['last_error'] = str(live.get('last_error') or '')
+        account['connected'] = account['state'] == 'connected'
+        account['value'] = account['name']
+        account['label'] = account.get('bot_name') or account['name']
+    return {'accounts': rows}
 
 
 def add_account(**kwargs):
@@ -38,8 +47,7 @@ def add_account(**kwargs):
         return {'error': 'Account name required'}
     if not token:
         return {'error': 'Bot token required'}
-    with open_storage() as storage:
-        storage.account_repository.upsert_account(name, token=token)
+    _accounts().upsert_account(name, token=token)
     from core.event_bus import publish, Events
     publish(Events.SCOPE_CHANGED, {"kind": "discord", "action": "added", "name": name})
     return {'status': 'added', 'account_name': name, 'connected': False,
@@ -57,32 +65,23 @@ def delete_account(**kwargs):
         except Exception as exc:
             # A wedged gateway must not make the account undeletable (M3).
             logger.warning('Discord account %s: disconnect before delete failed (%s) — deleting anyway', name, exc)
-    with open_storage() as storage:
-        removed = storage.account_repository.delete_account(name)
+    removed = _accounts().delete_account(name)
     from core.event_bus import publish, Events
     publish(Events.SCOPE_CHANGED, {"kind": "discord", "action": "deleted", "name": name})
-    return {'status': 'deleted', 'account_name': name, 'removed': removed or {}}
+    return {'status': 'deleted', 'account_name': name, 'removed': removed}
 
 
 async def test_account(**kwargs):
     name = _sanitize_account_name(kwargs.get('name', ''))
-    with open_storage() as storage:
-        account = storage.account_repository.get_account(name)
-        if not account:
-            return {'success': False, 'error': f"Account '{name}' not found"}
-        token = storage.account_repository.get_token(name) or ''
-    result = await check_bot_token(token)
+    accounts = _accounts()
+    account = accounts.get_account(name)
+    if not account:
+        return {'success': False, 'error': f"Account '{name}' not found"}
+    result = await check_bot_token(accounts.get_token(name) or '')
     if result.get('success'):
-        with open_storage() as storage:
-            # A valid token says nothing about the CONNECTION — keep state and
-            # last_error (e.g. missing portal intents) intact, only refresh identity.
-            storage.account_repository.update_connection_state(
-                name,
-                account.get('state') or 'disconnected',
-                bot_name=result.get('bot_name', ''),
-                bot_id=result.get('bot_id', ''),
-                last_error=str(account.get('last_error') or ''),
-            )
+        # A valid token says nothing about the CONNECTION — only refresh the identity.
+        accounts.update_connection_state(name, 'unchanged', bot_name=result.get('bot_name', ''),
+                                         bot_id=result.get('bot_id', ''))
         runtime = get_runtime()
         if runtime and runtime.transport and name not in set(runtime.transport.list_connected()):
             # Token proven good but bot offline — the earlier failure (e.g. portal

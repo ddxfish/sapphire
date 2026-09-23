@@ -35,6 +35,18 @@ class BaseSTTProvider(ABC):
             return None
         return text
 
+    def transcribe_segments(self, audio_path: str, **params) -> list:
+        """Segment-level transcription for consumers that run their own quality
+        gates on per-segment confidence (the Discord voice lane: DAVE-degraded
+        audio needs no_speech_prob / avg_logprob per segment). Returns objects
+        with at least .text, .no_speech_prob and .avg_logprob. NOT hallucination-
+        filtered — the caller decides. Providers with real segments override;
+        this default wraps the plain transcription into one pseudo-segment so
+        every provider answers the same shape."""
+        from types import SimpleNamespace
+        text = str(self._transcribe_impl(audio_path) or '').strip()
+        return [SimpleNamespace(text=text, no_speech_prob=0.0, avg_logprob=0.0)] if text else []
+
     @abstractmethod
     def _transcribe_impl(self, audio_path: str) -> Optional[str]:
         """Provider-specific transcription. Return None / '' on no

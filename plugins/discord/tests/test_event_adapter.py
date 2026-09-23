@@ -6,14 +6,6 @@ from plugins.discord.models.observations import TextMessageObservation, TypingOb
 from plugins.discord.transport.discord_event_adapter import DiscordEventAdapter
 
 
-class FakeMessageRepo:
-    def __init__(self):
-        self.saved = []
-
-    def save_message(self, observation):
-        self.saved.append(observation)
-
-
 class FakeAuthor:
     def __init__(self, user_id, name, display_name, bot=False):
         self.id = user_id
@@ -54,7 +46,7 @@ def _message_with_image():
 
 
 def test_adapt_guild_message_and_persist():
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo())
+    adapter = DiscordEventAdapter()
     message = SimpleNamespace(
         id=111,
         content='hello there',
@@ -71,12 +63,11 @@ def test_adapt_guild_message_and_persist():
     assert isinstance(obs, TextMessageObservation)
     assert obs.account_name == 'alpha'
     assert obs.guild_id == '33'
-    assert obs.channel_name == 'general'
-    assert adapter.message_repository.saved[0].message_id == '111'
+    assert obs.channel_name == 'general' and obs.message_id == '111'
 
 
 def test_ignore_self_authored_message():
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo())
+    adapter = DiscordEventAdapter()
     message = SimpleNamespace(
         id=111,
         content='self',
@@ -91,11 +82,10 @@ def test_ignore_self_authored_message():
     obs = adapter.adapt_message_event('alpha', 99, message)
 
     assert obs is None
-    assert adapter.message_repository.saved == []
 
 
 def test_adapt_dm_typing_event():
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo())
+    adapter = DiscordEventAdapter()
     user = FakeAuthor(7, 'alice', 'Alice')
     channel = FakeChannel(44, 'Direct Message')
 
@@ -118,8 +108,7 @@ def test_adapt_then_fetch_images_off_loop_when_images_in_is_on():
     from plugins.discord.conversation.images import ImageLane
     calls = []
     lane = ImageLane(fetch=lambda url: (calls.append(url) or (b'PNG', 'image/png')))
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(),
-                                  image_lane=lane, settings_store=FakeImagesStore(True))
+    adapter = DiscordEventAdapter(image_lane=lane, settings_store=FakeImagesStore(True))
     obs = adapter.adapt_message_event('alpha', 99, _message_with_image(), fetch_images=False)
     assert isinstance(obs, TextMessageObservation) and obs.attachments and calls == []     # C2: nothing fetched inline
     assert adapter.fetch_images(obs) == 1 and calls == ['https://cdn/a.png']
@@ -130,8 +119,7 @@ def test_images_off_means_no_fetch():
     from plugins.discord.conversation.images import ImageLane
     calls = []
     lane = ImageLane(fetch=lambda url: (calls.append(url) or (b'PNG', 'image/png')))
-    adapter = DiscordEventAdapter(message_repository=FakeMessageRepo(),
-                                  image_lane=lane, settings_store=FakeImagesStore(False))
+    adapter = DiscordEventAdapter(image_lane=lane, settings_store=FakeImagesStore(False))
     obs = adapter.adapt_message_event('alpha', 99, _message_with_image())
     assert isinstance(obs, TextMessageObservation) and calls == [] and lane.cached('https://cdn/a.png') is None
 
@@ -142,7 +130,16 @@ def test_h6_ignored_channels_are_dropped_before_anything_stores_them():
         def resolve(self):
             return SimpleNamespace(channel=SimpleNamespace(ignored_channels=['alpha:22']),
                                    media=SimpleNamespace(images_in_enabled=False, max_images=4))
-    repo = FakeMessageRepo()
-    adapter = DiscordEventAdapter(message_repository=repo, settings_store=Store())
+    adapter = DiscordEventAdapter(settings_store=Store())
     assert adapter.adapt_message_event('alpha', 99, _message_with_image()) is None
-    assert repo.saved == []
+
+
+def test_inbound_messages_never_touch_the_core_event_bus(monkeypatch):
+    """S7 audit: the bus publish carried every message body into core's replay
+    ring (no ephemeral flag, no subscriber). The hook is the one door."""
+    import core.event_bus as bus
+    calls = []
+    monkeypatch.setattr(bus, 'publish', lambda *a, **k: calls.append(a))
+    adapter = DiscordEventAdapter()
+    assert adapter.adapt_message_event('alpha', 99, _message_with_image()) is not None
+    assert calls == []

@@ -5,6 +5,7 @@ import re
 from contextvars import ContextVar
 
 from plugins.discord.daemon import get_runtime, run_coroutine
+from plugins.discord.voice.voice_gate import VOICE_OFF_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,11 @@ def _reach_error(channel: str, account_name: str | None) -> str | None:
     return None
 
 
+class AmbiguousBot(RuntimeError):
+    """Two or more bots are connected and nothing says which one she is — refuse
+    rather than post as whichever bot sorts first (Krem, 2026-09-22)."""
+
+
 def _scope_account() -> str | None:
     try:
         from core.chat.function_manager import scope_discord
@@ -331,6 +337,10 @@ def _default_account() -> str | None:
         connected = runtime.transport.list_connected()
         if len(connected) == 1:
             return connected[0]
+        if len(connected) > 1:
+            raise AmbiguousBot(f"{len(connected)} Discord bots are connected ({', '.join(connected)}) and this chat has no "
+                               "Discord bot scope, so I don't know which bot to act as. Set the chat's Discord scope "
+                               "to the bot you want and try again.")
     return None
 
 
@@ -608,7 +618,7 @@ def discord_join_voice(*, channel: str):
     if status == 'joined':
         return (f"Joined voice channel '{channel_name}'.", True)
     if status == 'blocked':
-        return ('Voice is off for this channel — no enabled "Discord: Voice channel" Realtime rule covers it.', False)
+        return (VOICE_OFF_TEXT, False)
     return (str(result.get('reason') or 'Voice join failed'), False)
 
 
@@ -692,6 +702,13 @@ def execute(function_name, arguments, config=None):
                     _reply_account.set(acct)
     except ImportError:
         pass
+    try:
+        return _dispatch(function_name, arguments)
+    except AmbiguousBot as exc:
+        return (str(exc), False)
+
+
+def _dispatch(function_name, arguments):
     if function_name == 'discord_get_servers':
         return discord_get_servers()
     if function_name == 'discord_list_channels':

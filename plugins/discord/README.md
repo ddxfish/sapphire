@@ -30,12 +30,12 @@ conda env or venv; on plain system Python it shows the pip command). Restart Sap
 
 ## Upgrading
 
-**From 1.x to 2.0:** on first boot the old plugin database is moved aside to
-`user/plugin_state/discord/discord.sqlite3.pre-2.0` and a fresh one takes its place with your
-**bot accounts (tokens) copied**. Everything else the old versions stored (profiles, memories,
-traces, transcripts, per-server overlays) belongs to features that left the host; it stays in the
-old file untouched. Your Continuity tasks keep working. See [CHANGELOG.md](CHANGELOG.md) for the
-full list and the rollback recipe.
+**From 1.x to 2.0:** on first boot your **bot accounts (tokens) are moved into Sapphire's credentials
+manager**, where every other plugin keeps its secrets, and the old plugin database is renamed aside as
+`discord.sqlite3.imported`. The plugin keeps no database of its own any more. Everything else the old
+versions stored (profiles, memories, channel messages, traces, transcripts, per-server overlays)
+belongs to features that left the host; delete the `.imported` file once your bots are online. Your
+Continuity tasks keep working. See [CHANGELOG.md](CHANGELOG.md).
 
 **A hand-installed copy in `user/plugins/discord`** always wins over the shipped one (the log says
 `[PLUGINS] 'discord' (user band) shadows the system copy`). Delete that folder and restart.
@@ -93,13 +93,12 @@ A bot with a Chat-only task and an All-interactions task answers twice by design
 
 | Tab | What it controls |
 |---|---|
-| **Conversation** | reply mode, human/bot organic chance, name match, batching window, think-tag stripping, typing / read / pause delays, ignored channels, bot-to-bot replies + allowlist |
-| **Social** | the `[react:]` tag and silent reactions (chance, cooldown) |
+| **Conversation** | reply mode, human/bot organic chance, name match, batching window, **how many channel messages the AI sees** (fetched live when she replies), natural delay (read, type, pause like a person), ignored channels, **answer any bot** or the bot allowlist |
+| **Reactions** | the `[react:]` tag and silent reactions (chance, cooldown) |
 | **Safety** | DMs (off by default) and the per-person daily DM budget, tools stay in server, reply cooldown |
 | **Media** | images in (the task's model sees attachments), GIFs (provider, key, filter) |
-| **Retention** | the daily purge of stored messages (off by default) |
 | **Voice** | turn cues, silence, addressing mode + aliases, follow-up window, barge-in hold, the voice prompt |
-| **Debug** | the LLM debug ring (opt-in, in memory) |
+| **Debug** | recent decisions — why she answered or stayed quiet, ids only |
 
 ## Tools
 
@@ -146,8 +145,7 @@ Routes under `/api/plugin/discord/`:
 | `GET settings` | daemon state + the built-in voice prompt default |
 | `GET channels/text`, `GET voice/targets`, `GET bots/allowlist` | what the connected bots can see (pickers) |
 | `GET voice/status` | live sessions, connections, the auto-join view, the voice stack |
-| `POST admin/forget-user` | `{user_id}` → delete that person's stored messages |
-| `GET debug/llm`, `POST debug/clear` | the LLM debug ring |
+| `GET debug/decisions`, `POST debug/clear` | the last 20 decisions (ids, stage, reason, chunks) |
 
 See [OPERATIONS.md](OPERATIONS.md) for the runtime, storage, runbooks and recovery.
 
@@ -158,10 +156,10 @@ See [OPERATIONS.md](OPERATIONS.md) for the runtime, storage, runbooks and recove
 | **"Missing: py-cord…"** | click **Install**, or run the command shown; Git on PATH; `discord.py` not installed |
 | **Settings changes do nothing** | an older copy in `user/plugins/discord` shadows the shipped plugin |
 | **Bot shows disconnected** | no enabled Continuity task selects it; invalid token; missing portal intents (the account row shows `last_error`) |
-| **She never replies** | task exists for that bot; filters match; Reply mode allows it; Debug → LLM debug shows the rejection stage |
+| **She never replies** | task exists for that bot; filters match; Reply mode allows it; Debug → Recent decisions names the stage that refused it |
 | **She ignores DMs** | Safety → Allow DMs is off by default |
 | **Voice join fails / "no rule covers it"** | a **Discord: Voice channel** rule for that bot whose filter covers the channel; Connect/Speak permissions |
 | **Voice transcribes but silent** | TTS streaming on; addressing mode may require saying her name |
 | **Bot allowlist empty** | Server Members Intent; refresh with the daemon running |
-| **Reactions not working** | Add Reactions permission; Social → silent reactions on |
+| **Reactions not working** | Add Reactions permission; Reactions → silent reactions on |
 | **GIFs fail** | Media → GIF enabled + API key |

@@ -19,7 +19,7 @@ const DCG_STYLES = `
 .dcg-field label { display: block; font-weight: 500; margin-bottom: 4px; }
 .dcg-field .dcg-input { width: 100%; box-sizing: border-box; }
 .dcg-help { font-size: 0.82em; color: var(--text-muted); margin-top: 2px; }
-.dcg-input, .dcg-select, .dcg-textarea {
+.dcg-input, .dcg-textarea {
   background: var(--input-bg, var(--bg));
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -84,26 +84,6 @@ const DCG_STYLES = `
   display: flex; align-items: center; gap: 8px;
   padding: 3px 0; font-size: 0.84em; cursor: pointer;
 }
-.dcg-debug-list { display: flex; flex-direction: column; gap: 10px; }
-.dcg-debug-entry {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--bg) 92%, var(--accent, #5865f2) 8%);
-}
-.dcg-debug-entry summary { cursor: pointer; font-weight: 600; }
-.dcg-debug-meta { font-size: 0.82em; color: var(--text-muted); margin: 4px 0 8px; }
-.dcg-debug-block {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--input-bg, var(--bg));
-  font-size: 0.82em;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.dcg-debug-label { font-size: 0.78em; font-weight: 600; color: var(--accent, #5865f2); margin-bottom: 4px; }
 .dcg-debug-badge {
   display: inline-block; font-size: 0.72em; padding: 2px 7px; border-radius: 999px;
   border: 1px solid var(--border); margin-right: 6px;
@@ -444,126 +424,70 @@ function bindAccounts(container) {
   });
 }
 
-// ── LLM debug panel (Debug tab slot) ──────────────────────────────────────────
+// ── Debug tab: recent decisions (ids only — why she answered or stayed quiet) ──
 
-let _debugRefreshTimer = null;
+let _decisionsTimer = null;
 
-function debugStatusBadge(status) {
-  const normalized = String(status || 'pending').toLowerCase();
-  if (normalized === 'sent') return '<span class="dcg-debug-badge dcg-debug-badge-ok">sent</span>';
-  if (normalized === 'pending') return '<span class="dcg-debug-badge dcg-debug-badge-pending">pending</span>';
-  return `<span class="dcg-debug-badge dcg-debug-badge-warn">${esc(normalized)}</span>`;
+function decisionBadge(kind) {
+  const k = String(kind || '').toLowerCase();
+  const cls = k === 'sent' ? 'dcg-debug-badge-ok' : (k === 'rejected' || k === 'error') ? 'dcg-debug-badge-warn' : 'dcg-debug-badge-pending';
+  return `<span class="dcg-debug-badge ${cls}">${esc(k || '?')}</span>`;
 }
 
 function formatDebugTimestamp(ts) {
   if (!ts) return '—';
   try {
-    return new Date(Number(ts) * 1000).toLocaleString();
+    return new Date(Number(ts) * 1000).toLocaleTimeString();
   } catch {
     return '—';
   }
 }
 
-function formatLlmSummary(llm) {
-  const resolved = llm || {};
-  const configured = [resolved.configured_primary, resolved.configured_model].filter(Boolean).join(' / ') || 'auto';
-  return resolved.task_name ? `${configured} · task: ${resolved.task_name}` : configured;
-}
-
-function renderDebugEntries(listEl, entries) {
+function renderDecisions(listEl, rows) {
   if (!listEl) return;
-  if (!entries.length) {
-    listEl.innerHTML = '<p class="dcg-help" style="margin:0">No LLM exchanges yet — send a message to the bot while the daemon is running.</p>';
+  if (!rows.length) {
+    listEl.innerHTML = '<p class="dcg-help" style="margin:0">Nothing yet — send the bot a message while the daemon is running.</p>';
     return;
   }
-  listEl.innerHTML = entries.map((entry) => {
-    const prompt = entry.prompt || {};
-    const response = entry.response || {};
-    const delivery = entry.delivery || {};
-    const timing = entry.timing || {};
-    const trigger = entry.trigger || {};
-    const rejection = entry.rejection || {};
-    const location = [entry.account, entry.guild_name || entry.guild_id, entry.channel_name || entry.channel_id]
-      .filter(Boolean).join(' · ');
-    const latency = timing.latency_ms != null ? `${timing.latency_ms} ms` : '—';
-
-    if (entry.kind === 'rejection') {
-      return `
-        <details class="dcg-debug-entry" open>
-          <summary><span class="dcg-debug-badge dcg-debug-badge-warn">rejected</span> ${esc(formatDebugTimestamp(entry.created_at))} · ${esc(rejection.stage || 'policy')}</summary>
-          <div class="dcg-debug-meta">
-            ${esc(location)} · from ${esc(trigger.username || '—')} · reason: ${esc(rejection.reason || trigger.reason || 'blocked')}
-          </div>
-          <div class="dcg-debug-label">Trigger message</div>
-          <div class="dcg-debug-block">${esc(trigger.content || '—')}</div>
-          <div class="dcg-debug-label">Why it never reached the LLM</div>
-          <div class="dcg-debug-block">Stage: ${esc(rejection.stage || 'policy')}
-Reason: ${esc(rejection.reason || 'blocked')}${Object.keys(rejection.detail || {}).length ? `\nDetail: ${esc(JSON.stringify(rejection.detail, null, 2))}` : ''}</div>
-        </details>`;
-    }
-
-    const sentText = delivery.sent_text || (response.parsed_chunks || [])[0] || '';
-    const history = prompt.recent_history || '';
-    const hints = (prompt.reply_hints || []).join('\n\n');
-    return `
-      <details class="dcg-debug-entry" open>
-        <summary>${debugStatusBadge(response.status)} ${esc(formatDebugTimestamp(entry.created_at))} · ${esc(entry.source || 'discord_message')}</summary>
-        <div class="dcg-debug-meta">
-          ${esc(location)} · trigger: ${esc(trigger.reason || trigger.username || '—')} · ${esc(formatLlmSummary(entry.llm))} · latency: ${esc(latency)}
-        </div>
-        <div class="dcg-debug-label">Trigger message</div>
-        <div class="dcg-debug-block">${esc(trigger.content || '—')}</div>
-        <div class="dcg-debug-label">Prompt — user content</div>
-        <div class="dcg-debug-block">${esc(prompt.user_content || '—')}</div>
-        ${history ? `<div class="dcg-debug-label">Prompt — recent history</div><div class="dcg-debug-block">${esc(history)}</div>` : ''}
-        ${hints ? `<div class="dcg-debug-label">Prompt — reply hints</div><div class="dcg-debug-block">${esc(hints)}</div>` : ''}
-        <div class="dcg-debug-label">LLM response (raw)</div>
-        <div class="dcg-debug-block">${esc(response.raw || '—')}</div>
-        ${(response.parsed_chunks || []).length > 1 ? `<div class="dcg-debug-label">Parsed chunks</div><div class="dcg-debug-block">${esc((response.parsed_chunks || []).join('\n---\n'))}</div>` : ''}
-        <div class="dcg-debug-label">Delivery</div>
-        <div class="dcg-debug-block">Sent: ${esc(sentText)}
-${response.strip_think_tags != null ? `\nThink tags stripped: ${response.strip_think_tags ? 'yes' : 'no'}` : ''}
-${delivery.quote_reply_to ? `\nQuote-reply to: ${esc(delivery.quote_reply_to)}` : ''}
-Chunks sent: ${Number(delivery.chunks_sent) || 0}</div>
-      </details>`;
+  listEl.innerHTML = rows.map((r) => {
+    const where = [r.account, r.channel_name || r.channel_id].filter(Boolean).join(' · ');
+    const why = r.kind === 'rejected'
+      ? `${esc(r.stage || 'policy')}: ${esc(r.reason || 'blocked')}`
+      : (r.kind === 'sent' ? `${Number(r.chunks) || 0} chunk(s) posted` : esc(r.reason || r.kind));
+    return `<div class="dcg-row"><span>${decisionBadge(r.kind)} ${esc(formatDebugTimestamp(r.at))} · ${esc(where)} · ${why}</span><code>${esc(r.message_id || '')}</code></div>`;
   }).join('');
 }
 
-async function refreshDebugPanel(container) {
-  const list = container.querySelector('#dcg-debug-list');
-  const status = container.querySelector('#dcg-debug-status');
+async function refreshDecisions(container) {
+  const list = container.querySelector('#dcg-decisions-list');
+  const status = container.querySelector('#dcg-decisions-status');
   if (!list) return;
-  if (status) status.textContent = 'Refreshing…';
   try {
-    const data = await api('debug/llm?limit=10');
-    renderDebugEntries(list, data.entries || []);
-    if (status) {
-      status.textContent = `Updated ${new Date().toLocaleTimeString()} · daemon ${data.daemon_running ? 'running' : 'offline'}`;
-    }
+    const data = await api('debug/decisions?limit=20');
+    renderDecisions(list, data.decisions || []);
+    if (status) status.textContent = `Updated ${new Date().toLocaleTimeString()} · daemon ${data.daemon_running ? 'running' : 'offline'}`;
   } catch (err) {
     if (status) status.textContent = err.message;
-    list.innerHTML = `<p class="dcg-help" style="margin:0;color:var(--error)">${esc(err.message)}</p>`;
   }
 }
 
-function initDebugPanel(container, initialEntries = []) {
-  const list = container.querySelector('#dcg-debug-list');
-  if (!list) return;
-  renderDebugEntries(list, initialEntries);
-  container.querySelector('#dcg-debug-refresh')?.addEventListener('click', () => refreshDebugPanel(container));
-  container.querySelector('#dcg-debug-clear')?.addEventListener('click', async () => {
+function initDecisions(container) {
+  if (!container.querySelector('#dcg-decisions-list')) return;
+  container.querySelector('#dcg-decisions-refresh')?.addEventListener('click', () => refreshDecisions(container));
+  container.querySelector('#dcg-decisions-clear')?.addEventListener('click', async () => {
     try {
-      await api('debug/clear', { method: 'POST', body: {} });
+      await api('debug/clear', { method: 'POST', body: '{}' });
     } catch (err) {
-      const status = container.querySelector('#dcg-debug-status');
+      const status = container.querySelector('#dcg-decisions-status');
       if (status) status.textContent = err.message;
       return;
     }
-    refreshDebugPanel(container);
+    refreshDecisions(container);
   });
-  if (_debugRefreshTimer) clearInterval(_debugRefreshTimer);
-  _debugRefreshTimer = setInterval(() => {
-    if (container.isConnected) refreshDebugPanel(container);
+  refreshDecisions(container);
+  if (_decisionsTimer) clearInterval(_decisionsTimer);
+  _decisionsTimer = setInterval(() => {
+    if (container.isConnected) refreshDecisions(container);
   }, 15000);
 }
 
@@ -671,14 +595,14 @@ function renderShell(container, data) {
 
   const debugSection = `
       <div class="dcg-section">
-        <h4>LLM Debug</h4>
-        <p class="dcg-help">Last 10 LLM-related events — successful exchanges and policy rejections. Shows the task's model, the prompt breakdown, and why blocked messages never reached the LLM. Held in memory only while the ring is on.</p>
+        <h4>Recent decisions</h4>
+        <p class="dcg-help">The last 20 messages she read and what she did with them — answered (how many chunks), or stayed quiet and at which stage (safety, trigger, bot gate, routing, policy, daemon). Ids only; what she saw and said is in the task's chat.</p>
         <div class="dcg-target-toolbar">
-          <button type="button" class="dcg-btn" id="dcg-debug-refresh">Refresh now</button>
-          <button type="button" class="dcg-btn" id="dcg-debug-clear">Clear</button>
-          <span class="dcg-help" id="dcg-debug-status"></span>
+          <button type="button" class="dcg-btn" id="dcg-decisions-refresh">Refresh now</button>
+          <button type="button" class="dcg-btn" id="dcg-decisions-clear">Clear</button>
+          <span class="dcg-help" id="dcg-decisions-status"></span>
         </div>
-        <div id="dcg-debug-list" class="dcg-debug-list">
+        <div id="dcg-decisions-list" class="dcg-target-picker">
           <p class="dcg-help" style="margin:0">Loading…</p>
         </div>
       </div>`;
@@ -700,7 +624,7 @@ function renderShell(container, data) {
   bindAccounts(container);
   const voicePromptField = fieldByData(container, 'voice.conversation_prompt_template');
   if (voicePromptField && voicePromptDefault) voicePromptField.dataset.defaultTemplate = voicePromptDefault;
-  initDebugPanel(container, data.llmDebug?.entries || []);
+  initDecisions(container);
   buildPickers(container);
   ignoredChannels.init(ignoredChannelsList);
   botAllowlist.init(allowlistIds);
@@ -727,11 +651,10 @@ function customSectionValues(container) {
 }
 
 async function loadPanelData() {
-  const [accounts, settings, health, llmDebug, plugins, values] = await Promise.allSettled([
+  const [accounts, settings, health, plugins, values] = await Promise.allSettled([
     api('accounts'),
     api('settings'), // daemon state + built-in defaults only — values live in core
     api('health'),
-    api('debug/llm?limit=10'),
     pluginsAPI.listPlugins(),
     pluginsAPI.getSettings(PLUGIN_NAME),
   ]);
@@ -751,7 +674,6 @@ async function loadPanelData() {
       daemon_state: settingsData.daemon_state || healthData.state || 'unknown',
     },
     health: healthData,
-    llmDebug: val(llmDebug, { entries: [] }),
   };
 }
 

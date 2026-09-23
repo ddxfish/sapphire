@@ -92,12 +92,9 @@ class _MemoryState:
 
 
 class GreetingsClock:
-    def __init__(self, *, plugin_loader, transport=None, message_repository=None,
-                 channel_repository=None, account_repository=None, state=None):
+    def __init__(self, *, plugin_loader, transport=None, account_repository=None, state=None):
         self.plugin_loader = plugin_loader
         self.transport = transport
-        self.message_repository = message_repository
-        self.channel_repository = channel_repository
         self.account_repository = account_repository
         self.state = state if state is not None else _MemoryState()
 
@@ -162,7 +159,7 @@ class GreetingsClock:
 
     # -- the event -------------------------------------------------------------
     def build_payload(self, account: str, channel_id: str, kind: str) -> dict:
-        guild_id, guild_name, channel_name = self._names(channel_id)
+        guild_id, guild_name, channel_name = self._names(account, channel_id)
         return {
             'account': account,
             'guild_id': guild_id,
@@ -171,28 +168,28 @@ class GreetingsClock:
             'channel_name': channel_name,
             'message_id': f'proactive-{kind}-{channel_id}-{int(time.time())}',
             'content': INSTRUCTIONS[kind],
-            'recent_history': self._recent(account, channel_id),
+            'recent_history': self._recent(account, channel_id),   # live from Discord, nothing stored
             'proactive_kind': kind,
         }
 
-    def _names(self, channel_id: str) -> tuple[str, str, str]:
-        if not self.channel_repository:
+    def _names(self, account: str, channel_id: str) -> tuple[str, str, str]:
+        describe = getattr(self.transport, 'describe_channel', None)
+        if not callable(describe):
             return '', '', ''
         try:
-            channel = self.channel_repository.get_channel(channel_id) or {}
-            guild_id = str(channel.get('guild_id') or '')
-            guild_name = self.channel_repository.get_guild_name(guild_id) if guild_id else ''
-            return guild_id, str(guild_name or ''), str(channel.get('name') or '')
+            info = describe(account, channel_id) or {}
+            return str(info.get('guild_id') or ''), str(info.get('guild_name') or ''), str(info.get('channel_name') or '')
         except Exception:
             logger.debug('[DISCORD] channel names unavailable for %s', channel_id, exc_info=True)
             return '', '', ''
 
     def _recent(self, account: str, channel_id: str) -> list[str]:
         """Recent chat so she greets in context — her own lines labelled 'You'."""
-        if not self.message_repository:
+        fetch = getattr(self.transport, 'recent_messages', None)
+        if not callable(fetch):
             return []
         try:
-            rows = self.message_repository.get_recent_messages(account, channel_id, limit=20) or []
+            rows = fetch(account, channel_id, limit=20) or []
         except Exception:
             logger.debug('[DISCORD] recent history unavailable for %s', channel_id, exc_info=True)
             return []

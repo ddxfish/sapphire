@@ -9,8 +9,8 @@ from plugins.discord.voice.discord_conversation_source import DiscordConversatio
 
 def _source(*, playback=None):
     playback = playback or MagicMock()
-    playback.start.return_value = {'status': 'streaming'}
-    playback.feed_chunk.return_value = {'status': 'fed'}
+    playback.start_streaming_playback_sync.return_value = {'status': 'streaming'}
+    playback.feed_streaming_chunk_sync.return_value = {'status': 'fed'}
     return DiscordConversationSource(
         MagicMock(),
         MagicMock(),
@@ -26,16 +26,16 @@ def test_start_restarts_streaming_playback_on_subsequent_turns():
 
     source.start()
 
-    playback.start.assert_called_once_with('remmi', '123')
+    playback.start_streaming_playback_sync.assert_called_once_with('remmi', '123')
 
 
 def test_feed_chunk_logs_when_not_streaming():
     source, playback = _source()
-    playback.feed_chunk.return_value = {'status': 'not_streaming'}
+    playback.feed_streaming_chunk_sync.return_value = {'status': 'not_streaming'}
 
     source.feed_chunk({'audio_b64': 'Zm9v'})
 
-    assert playback.start.call_count == 0
+    assert playback.start_streaming_playback_sync.call_count == 0
     assert source._audio_bytes_fed == 0
 
 
@@ -53,7 +53,7 @@ def test_interrupt_playback_stops_without_closing_source():
 
     source.interrupt_playback()
 
-    playback.stop.assert_called_once_with('remmi', '123')
+    playback.stop_streaming_playback_sync.assert_called_once_with('remmi', '123')
     assert source._stop_flag.is_set()
     assert source._playing is False
     assert source._running is True
@@ -130,6 +130,6 @@ def test_source_stale_generation_gates_feed_finish_wait():
     src.driver._turn_gen = 6
     assert src._stale() is True
     src.feed_chunk({'audio_b64': 'x'})               # returns before touching playback
-    src.playback_service = MagicMock()
+    src.voice_transport = MagicMock()
     src.wait()
-    src.playback_service.wait.assert_not_called()
+    src.voice_transport.wait_streaming_playback_sync.assert_not_called()

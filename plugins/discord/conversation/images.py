@@ -1,6 +1,6 @@
 """Inbound images ride the reply payload — the one image lane (S5, 2026-09-22).
 
-No captions, no vision side lane: the daemon task's own model sees the bytes
+No captions: the daemon task's own model sees the bytes
 (core's plugin-event image contract) when it has vision and ignores them when
 it does not. The transport fetches OFF the gateway loop right after a message
 is adapted (to_thread → fetch); process_batch, ON the loop, only reads the

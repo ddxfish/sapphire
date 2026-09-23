@@ -9,18 +9,9 @@ from plugins.discord.transport.discord_audio import (
     DISCORD_SAMPLE_RATE,
     WHISPER_SAMPLE_RATE,
     _resample_int16,
-    concat_wav_bytes,
     pcm_stereo_to_whisper_wav_bytes,
     prepare_discord_wav_for_stt,
 )
-
-
-def test_concat_wav_bytes_joins_audio():
-    first = pcm_stereo_to_whisper_wav_bytes(b'\x00\x01' * 800)
-    second = pcm_stereo_to_whisper_wav_bytes(b'\x02\x03' * 400)
-    merged = concat_wav_bytes(first, second)
-    assert len(merged) > len(first)
-    assert merged[:4] == b'RIFF'
 
 
 def _sine_pcm(freq_hz: float, duration_s: float = 1.0, sample_rate: int = DISCORD_SAMPLE_RATE, amplitude: float = 0.5) -> bytes:
@@ -40,20 +31,6 @@ def test_resample_48k_to_16k_preserves_length_and_low_freq():
     freqs = np.fft.rfftfreq(len(arr), 1 / WHISPER_SAMPLE_RATE)
     peak = freqs[int(np.argmax(fft))]
     assert 950 <= peak <= 1050, f'1 kHz sine shifted to {peak} Hz'
-
-
-def test_repair_short_pcm_gaps_fills_brief_silence():
-    from plugins.discord.transport.discord_audio import OPUS_FRAME_SAMPLES, repair_short_pcm_gaps
-
-    frame_bytes = OPUS_FRAME_SAMPLES * 2 * 2
-    loud = struct.pack('<h', 5000) * 2 * OPUS_FRAME_SAMPLES
-    silent = b'\x00\x00' * 2 * OPUS_FRAME_SAMPLES
-    pcm = loud + silent + loud
-    repaired = repair_short_pcm_gaps(pcm, max_gap_frames=2)
-    gap_start = frame_bytes
-    gap = repaired[gap_start:gap_start + frame_bytes]
-    gap_rms = float(np.sqrt(np.mean(np.frombuffer(gap, dtype='<i2').astype(np.float64) ** 2)))
-    assert gap_rms > 100.0
 
 
 def test_pcm_stereo_rms_detects_silence_and_speech():

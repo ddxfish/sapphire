@@ -1,7 +1,9 @@
 """Inbound batch → should she answer → the Sapphire event; her reply → Discord (S7 rewrite).
 
-process_batch runs ON the daemon loop (keep it cheap: cache reads only);
-handle_llm_response runs on core's reply thread (it sleeps for typing).
+process_batch runs ON the daemon loop — the gateway loop — so the one Discord
+call it makes (the channel window, only once she has decided to answer) is an
+awaited py-cord call, never a blocking one. handle_llm_response runs on core's
+reply thread (it sleeps for typing).
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ class ConversationService:
         self,
         *,
         event_bridge,
-        message_repository=None,
         transport=None,
         settings_store=None,
         reply_style_service=None,
@@ -41,13 +42,12 @@ class ConversationService:
         reactions=None,
         bot_gate=None,
         mention_map_service=None,
-        llm_debug_service=None,
+        decisions=None,
         image_lane=None,
         account_repository=None,
         cooldown=None,
     ):
         self.event_bridge = event_bridge
-        self.message_repository = message_repository
         self.transport = transport
         self.settings_store = settings_store
         self.reply_style_service = reply_style_service
@@ -55,7 +55,7 @@ class ConversationService:
         self.reactions = reactions
         self.bot_gate = bot_gate
         self.mention_map_service = mention_map_service
-        self.llm_debug_service = llm_debug_service
+        self.decisions = decisions
         self.image_lane = image_lane
         self.account_repository = account_repository
         self.cooldown = cooldown or ReplyCooldown()
@@ -64,7 +64,7 @@ class ConversationService:
 
     # ── inbound ──────────────────────────────────────────────────────────────
 
-    def process_batch(self, batch) -> bool:
+    async def process_batch(self, batch) -> bool:
         trigger = self._trigger(batch)
         settings = self.settings_store.resolve() if self.settings_store else None
         decision = self._decide(trigger, settings)
@@ -79,7 +79,8 @@ class ConversationService:
         if not cooldown.get('allowed'):
             self._reject(trigger, cooldown.get('reason') or 'denied', 'policy', cooldown)
             return False
-        payload = self._payload(batch, trigger, settings, decision)
+        rows = await self._window(trigger, settings)
+        payload = self._payload(batch, trigger, settings, decision, rows)
         if not self.event_bridge.emit_discord_message(payload):
             self._reject(trigger, 'no_daemon_task', 'daemon')
             return False
@@ -148,18 +149,27 @@ class ConversationService:
         return {'respond': True, 'reason': reason, 'stage': 'ok', 'evaluation': evaluation,
                 'author_is_bot': author_is_bot}
 
-    def _payload(self, batch, trigger, settings, decision) -> dict:
-        evaluation = decision['evaluation']
+    async def _window(self, trigger, settings) -> list[dict]:
+        """The last N messages of the channel, live from Discord, once per reply
+        (channel.context_messages; 0 = none). Nothing is stored."""
+        limit = int(getattr(getattr(settings, 'channel', None), 'context_messages', 20) or 0)
+        fetch = getattr(self.transport, 'recent_messages_async', None)
+        if limit <= 0 or not callable(fetch):
+            return []
         try:
-            batch.trigger = trigger   # context doubles with a one-arg build() keep working
-        except Exception:
-            pass
-        context = build_context(self.message_repository, trigger)
+            return list(await fetch(trigger.account_name, trigger.channel_id, limit=max(1, min(50, limit))) or [])
+        except Exception as exc:
+            logger.info('[DISCORD] channel window unavailable for %s: %s', trigger.channel_id, exc)
+            return []
+
+    def _payload(self, batch, trigger, settings, decision, rows: list[dict]) -> dict:
+        evaluation = decision['evaluation']
+        context = build_context(rows, trigger)
         mention_map = {}
         if self.mention_map_service:
             mention_map = self.mention_map_service.build_for_channel(
                 trigger.account_name, trigger.channel_id, author_id=trigger.author_id,
-                username=trigger.username, display_name=trigger.display_name,
+                username=trigger.username, display_name=trigger.display_name, rows=rows,
             )
         payload = {
             'account': trigger.account_name,
@@ -204,8 +214,6 @@ class ConversationService:
         if hints:
             payload['reply_hints'] = hints
             payload['reply_instructions'] = '\n\n'.join(hints)
-        payload['_debug_prompt_context'] = {'source': 'discord_message', 'reason': decision['reason'],
-                                            'batch_size': batch.message_count}
         return payload
 
     @staticmethod
@@ -245,22 +253,11 @@ class ConversationService:
         return True
 
     def _reject(self, trigger, reason: str, stage: str, detail: dict | None = None) -> None:
-        if not self.llm_debug_service:
-            return
-        self.llm_debug_service.record_rejection(
-            message_id=str(getattr(trigger, 'message_id', '') or ''),
-            account=str(getattr(trigger, 'account_name', '') or ''),
-            guild_id=str(getattr(trigger, 'guild_id', '') or ''),
-            guild_name=str(getattr(trigger, 'guild_name', '') or ''),
-            channel_id=str(getattr(trigger, 'channel_id', '') or ''),
-            channel_name=str(getattr(trigger, 'channel_name', '') or ''),
-            username=str(getattr(trigger, 'display_name', '') or getattr(trigger, 'username', '') or ''),
-            author_id=str(getattr(trigger, 'author_id', '') or ''),
-            content=str(getattr(trigger, 'clean_content', '') or getattr(trigger, 'content', '') or ''),
-            reason=str(reason or 'blocked'),
-            stage=str(stage or 'policy'),
-            detail=detail or {},
-        )
+        """Why she stayed quiet — ids only, for the Debug tab; the text is never kept."""
+        if self.decisions:
+            self.decisions.note('rejected', account=getattr(trigger, 'account_name', ''),
+                                channel_id=getattr(trigger, 'channel_id', ''), channel_name=getattr(trigger, 'channel_name', ''),
+                                message_id=getattr(trigger, 'message_id', ''), stage=stage or 'policy', reason=reason or 'blocked')
 
     # ── the pending map ──────────────────────────────────────────────────────
 
@@ -292,31 +289,29 @@ class ConversationService:
         guild_id = str(event_data.get('guild_id', '') or '')
         settings = self.settings_store.resolve() if self.settings_store else None
         delivery = settings.channel if settings else None
-        strip_thinking = delivery.strip_think_tags if delivery else True
         proactive_kind = str(event_data.get('proactive_kind') or '').strip()
-        debug = dict(task=task, event_data=event_data, response_text=response_text, strip_think_tags=strip_thinking)
+        outcome = dict(event_data=event_data)
 
         if self.reply_style_service.should_skip_auto_reply(message_id):
             # A tool already posted the reply; only its tags are still owed.
             tool_text = self.reply_style_service.consume_tool_sent_text(message_id)
             combined = f"{response_text or ''}\n{tool_text or ''}".strip()
             if combined:
-                parsed = self.reply_style_service.parse_llm_output(combined, strip_thinking=strip_thinking)
+                parsed = self.reply_style_service.parse_llm_output(combined)
                 self.deliver_tags(parsed, message_id=message_id, channel_id=channel_id, account_name=account_name,
                                   settings=settings, trigger_message_id='' if proactive_kind else message_id)
-            self._record_debug_response(message_id, status='skipped', **debug)
+            self._note_outcome(message_id, 'skipped', **outcome)
             self._pending.pop(message_id, None)
             return {'status': 'skipped'}
 
-        typing_enabled = delivery.typing_indicator_enabled if delivery else True
-        human_pause_enabled = delivery.human_pause_enabled if delivery else True
-        read_delay_enabled = delivery.read_delay_enabled if delivery else True
-        if read_delay_enabled and not proactive_kind:
+        # One switch for reading, typing and pausing like a person (three booleans until 2026-09-22).
+        natural = bool(delivery.natural_delay) if delivery else True
+        if natural and not proactive_kind:
             time.sleep(read_delay_seconds(len(str(event_data.get('content', '')))))
 
-        parsed = self.reply_style_service.parse_llm_output(response_text, strip_thinking=strip_thinking)
+        parsed = self.reply_style_service.parse_llm_output(response_text)
         if not parsed.chunks:
-            self._record_debug_response(message_id, status='empty', **debug)
+            self._note_outcome(message_id, 'empty', **outcome)
             self._pending.pop(message_id, None)
             return {'status': 'empty'}
 
@@ -347,14 +342,14 @@ class ConversationService:
             hook_delay = 0.0
         if hook_delay:
             time.sleep(hook_delay)
-        if human_pause_enabled:
+        if natural:
             time.sleep(human_pause_seconds())
 
         results, sent_message_ids = [], []
         for index, chunk in enumerate(chunks):
-            if index > 0 and human_pause_enabled:
+            if index > 0 and natural:
                 time.sleep(inter_chunk_pause_seconds())
-            if typing_enabled:
+            if natural:
                 self.transport.hold_typing_sync(channel_id, typing_duration_seconds(len(chunk), text=chunk),
                                                 account_name=account_name or None)
             result = self.transport.send_message_sync(
@@ -370,7 +365,7 @@ class ConversationService:
         # A failed chunk breaks the loop. If NOTHING landed, say so — the daemon
         # once logged "reply delivered" over a 403 while the channel stayed silent.
         if not sent_message_ids and any(r.get('status') == 'error' for r in results):
-            self._record_debug_response(message_id, status='error', parsed_chunks=chunks, **debug)
+            self._note_outcome(message_id, 'error', reason=str(results[-1].get('error') or 'send failed'), **outcome)
             self._pending.pop(message_id, None)
             return {'status': 'error', 'error': (results[-1].get('error') or 'send failed'), 'chunks': 0}
 
@@ -379,12 +374,7 @@ class ConversationService:
             'message_id': message_id, 'proactive_kind': proactive_kind,
             'sent_message_ids': list(sent_message_ids), 'chunks': list(chunks),
         })
-        self._record_debug_response(
-            message_id, status='sent' if sent_message_ids else 'error', parsed_chunks=chunks,
-            delivery={'sent_text': chunks[0] if chunks else '', 'quote_reply_to': reply_to_first,
-                      'chunks_sent': len(sent_message_ids)},
-            **debug,
-        )
+        self._note_outcome(message_id, 'sent' if sent_message_ids else 'error', chunks=len(sent_message_ids), **outcome)
         # A reply_planned handler's reaction lands here; the model's own [react:]
         # tag rides deliver_tags (gated by reaction.enabled).
         if hook_reaction and hook_reaction != (parsed.reaction or '') and not proactive_kind:
@@ -418,11 +408,9 @@ class ConversationService:
         else:
             logger.debug('[DISCORD] GIF search returned no URL for %r', gif_query)
 
-    def _record_debug_response(self, message_id: str, *, task, event_data, response_text, status: str,
-                               strip_think_tags=None, parsed_chunks=None, delivery=None) -> None:
-        if not self.llm_debug_service:
-            return
-        self.llm_debug_service.record_response(
-            message_id, raw_text=response_text or '', parsed_chunks=list(parsed_chunks or []), status=status,
-            strip_think_tags=strip_think_tags, delivery=delivery, task=task, event_data=event_data,
-        )
+    def _note_outcome(self, message_id: str, status: str, *, event_data: dict, reason: str = '', chunks: int = 0) -> None:
+        """What happened to her reply — ids only, for the Debug tab."""
+        if self.decisions:
+            self.decisions.note(status, account=event_data.get('account', ''), channel_id=event_data.get('channel_id', ''),
+                                channel_name=event_data.get('channel_name', ''), message_id=message_id,
+                                reason=reason, chunks=chunks)

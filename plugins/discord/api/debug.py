@@ -1,31 +1,24 @@
-"""Operator debug routes."""
+"""The Debug tab's one feed: recent decisions (ids only, no content)."""
 
 from __future__ import annotations
 
 from plugins.discord.daemon import get_runtime, is_daemon_alive
 
 
-async def list_llm_debug(**kwargs):
+def list_decisions(**kwargs):
     runtime = get_runtime()
-    if not runtime or not runtime.llm_debug_service:
-        return {
-            'entries': [],
-            'daemon_running': is_daemon_alive(),
-        }
+    if not runtime:
+        return {'decisions': [], 'daemon_running': is_daemon_alive()}
     query = kwargs.get('query') or {}
     try:
-        limit = int(query.get('limit', 10))
+        limit = int(query.get('limit', 20))
     except (TypeError, ValueError):
-        limit = 10
-    return {
-        'entries': runtime.llm_debug_service.list_entries(limit=limit),
-        'daemon_running': is_daemon_alive(),
-    }
+        limit = 20
+    return {'decisions': runtime.decisions.list(limit=limit), 'daemon_running': True}
 
 
-def clear_llm_debug(**kwargs):
+def clear_decisions(**kwargs):
     runtime = get_runtime()
-    service = getattr(runtime, 'llm_debug_service', None) if runtime else None
-    if service is None:
+    if not runtime:
         return {'status': 'unavailable', 'cleared': 0}
-    return {'status': 'cleared', 'cleared': service.clear()}
+    return {'status': 'cleared', 'cleared': runtime.decisions.clear()}

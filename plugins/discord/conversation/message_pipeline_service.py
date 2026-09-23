@@ -35,7 +35,7 @@ class MessagePipelineService:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        self.flush_due(time.time())
+        await self.flush_due(time.time())
 
     def handle_message(self, observation: TextMessageObservation) -> None:
         self.batching_service.add_message(observation)
@@ -46,12 +46,12 @@ class MessagePipelineService:
     def handle_typing(self, observation: TypingObservation) -> None:
         self.batching_service.record_typing(observation)
 
-    def flush_due(self, now: float | None = None) -> list[dict]:
+    async def flush_due(self, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
         results = []
         for batch in self.batching_service.flush_ready(now=now):
             try:
-                accepted = self.conversation_service.process_batch(batch)
+                accepted = await self.conversation_service.process_batch(batch)
             except Exception:
                 logger.exception('Failed to process batch for %s/%s', batch.account_name, batch.channel_id)
                 continue
@@ -62,7 +62,7 @@ class MessagePipelineService:
     async def _flush_loop(self) -> None:
         try:
             while not self._stop.is_set():
-                self.flush_due()
+                await self.flush_due()
                 await asyncio.sleep(self.flush_interval_seconds)
         except asyncio.CancelledError:
             raise

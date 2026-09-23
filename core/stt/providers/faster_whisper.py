@@ -103,6 +103,19 @@ class FasterWhisperProvider(BaseSTTProvider):
         except Exception as e:
             raise RuntimeError(f"Failed to initialize STT model: {e}")
 
+    def transcribe_segments(self, audio_path: str, **params) -> list:
+        """faster-whisper's own segments (text, no_speech_prob, avg_logprob, …).
+        Thread-safe. `params` override the defaults (a caller may pass
+        vad_filter=False for audio its own gate already endpointed)."""
+        transcription_params = {
+            'language': config.STT_LANGUAGE,
+            'beam_size': getattr(config, 'FASTER_WHISPER_BEAM_SIZE', 3),
+            **params,
+        }
+        with self._lock:
+            segments, _info = self.model.transcribe(audio_path, **transcription_params)
+            return list(segments)
+
     def _transcribe_impl(self, audio_path: str) -> Optional[str]:
         """Transcribe an audio file. Thread-safe.
 

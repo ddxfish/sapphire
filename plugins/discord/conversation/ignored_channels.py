@@ -6,7 +6,7 @@ from __future__ import annotations
 
 def parse_target(entry) -> tuple[str, str] | None:
     """Return (account_name, channel_id) for an `account:channel_id` entry
-    (or a dict with those keys). Lived in proactive/targets.py until S1."""
+    (or a dict with those keys)."""
     if isinstance(entry, dict):
         account = str(entry.get('account', '')).strip()
         channel_id = str(entry.get('channel_id', '')).strip()

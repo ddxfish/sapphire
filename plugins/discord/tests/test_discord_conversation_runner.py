@@ -15,8 +15,8 @@ def _session(session_id='sess-1', guild_id='111', channel_id='222'):
 
 def test_runner_start_and_stop():
     playback = MagicMock()
-    playback.start.return_value = {'status': 'streaming'}
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    playback.start_streaming_playback_sync.return_value = {'status': 'streaming'}
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
 
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
         system = MagicMock()
@@ -46,7 +46,7 @@ def test_runner_start_async_uses_async_playback():
     import asyncio
 
     playback = MagicMock()
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
 
     async def run():
         with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
@@ -72,8 +72,8 @@ def test_runner_start_async_uses_async_playback():
 
 def test_runner_submit_turn_text_uses_pending_text():
     playback = MagicMock()
-    playback.start.return_value = {'status': 'streaming'}
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    playback.start_streaming_playback_sync.return_value = {'status': 'streaming'}
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
 
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
         system = MagicMock()
@@ -100,7 +100,7 @@ def test_runner_submit_turn_text_uses_pending_text():
 
 def test_runner_interrupt_skips_when_idle():
     playback = MagicMock()
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
 
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
         get_system.return_value = MagicMock()
@@ -122,7 +122,7 @@ def test_runner_interrupt_skips_when_idle():
 
 def test_runner_interrupt_active_turn_cancels_responding():
     playback = MagicMock()
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
 
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
         get_system.return_value = MagicMock()
@@ -144,7 +144,7 @@ def test_runner_interrupt_active_turn_cancels_responding():
 
 def test_runner_stop_command_halts_without_new_turn():
     playback = MagicMock()
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
 
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
         get_system.return_value = MagicMock()
@@ -168,8 +168,8 @@ def test_runner_stop_command_halts_without_new_turn():
 
 def _started_runner(store=None):
     playback = MagicMock()
-    playback.start.return_value = {'status': 'streaming'}
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=store)
+    playback.start_streaming_playback_sync.return_value = {'status': 'streaming'}
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=store)
     get_system = patch('plugins.discord.voice.discord_conversation_runner._get_system')
     build_stack = patch.object(runner, '_build_stack')
     gs = get_system.start()
@@ -252,12 +252,11 @@ def test_transcribe_hook_trusts_the_runner_decision_but_still_gates_raw_pcm():
     # text the runner had already admitted (solo) → "typing…" then silence.
     from types import SimpleNamespace
 
-    runner = DiscordConversationRunner(playback_service=MagicMock(), settings_store=None)
-    driver = SimpleNamespace(_discord_pending_text='Krem: tell me a story')
-    whisper = MagicMock()
-    whisper.transcribe_file.return_value = 'a raw pcm turn with no name'
-    system = SimpleNamespace(whisper_client=whisper)
-    transcribe = runner._build_transcribe_fn(system, driver=driver, settings=None, bot_names=['Remmi'])
+    runner = DiscordConversationRunner(voice_transport=MagicMock(), settings_store=None)
+    # the raw-pcm path is core's driver's (temp WAV → STT); the runner only wraps it
+    driver = SimpleNamespace(_discord_pending_text='Krem: tell me a story',
+                             _whisper_transcribe=lambda pcm: 'a raw pcm turn with no name')
+    transcribe = runner._build_transcribe_fn(driver=driver, settings=None, bot_names=['Remmi'])
 
     assert transcribe(b'') == 'Krem: tell me a story'      # admitted upstream: passes
     assert driver._discord_pending_text is None
@@ -289,7 +288,7 @@ def test_build_stack_rides_the_core_manager():
     tuning pins an empty start word, and a refusal surfaces as an error."""
     from types import SimpleNamespace
     playback = MagicMock()
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None)
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None)
     calls = {}
 
     def start_external(ctor, chat_name=None, source_label='external', session_id=None, tuning=None, tts_split=None):
@@ -323,7 +322,7 @@ def test_prepare_session_needs_a_gate_task_when_gated():
     from types import SimpleNamespace
     playback = MagicMock()
     gate = SimpleNamespace(allowed=lambda account, channel: None)
-    runner = DiscordConversationRunner(playback_service=playback, settings_store=None, gate=gate)
+    runner = DiscordConversationRunner(voice_transport=playback, settings_store=None, gate=gate)
     with patch('plugins.discord.voice.discord_conversation_runner._get_system') as get_system:
         get_system.return_value = MagicMock()
         assert runner.start(_session()) == {'status': 'blocked', 'reason': 'no_voice_task'}

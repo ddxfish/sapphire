@@ -1,4 +1,5 @@
-"""The reply decision and the pending map (S7 rewrite of the conversation service)."""
+"""The reply decision, the live channel window, and the pending map."""
+import asyncio
 import time
 
 from plugins.discord.conversation.batching_service import BatchingService
@@ -17,20 +18,28 @@ class FakeBridge:
         return self.accepted
 
 
-class FakeMessages:
-    def __init__(self, rows=None):
-        self.rows = rows if rows is not None else [{'message_id': 'm0', 'author_name': 'Bob', 'content': 'hi'}]
+class FakeTransport:
+    """The one Discord call the reply path makes: the channel window, live."""
 
-    def get_recent_messages(self, account_name, channel_id, limit=20):
+    def __init__(self, rows=None, fail=False):
+        self.rows = rows if rows is not None else [{'message_id': 'm0', 'author': 'Bob', 'content': 'hi'}]
+        self.fail = fail
+        self.calls = []
+
+    async def recent_messages_async(self, account_name, channel_id, *, limit):
+        self.calls.append((account_name, channel_id, limit))
+        if self.fail:
+            raise RuntimeError('discord down')
         return list(self.rows)
 
 
-class FakeDebug:
+class FakeDecisions:
     def __init__(self):
         self.rejections = []
 
-    def record_rejection(self, **kw):
-        self.rejections.append((kw['stage'], kw['reason']))
+    def note(self, kind, **kw):
+        if kind == 'rejected':
+            self.rejections.append((kw['stage'], kw['reason']))
 
 
 def make_obs(**over):
@@ -51,14 +60,19 @@ def _batch(*obs):
 
 
 def _service(bridge=None, store=None, **kw):
-    return ConversationService(event_bridge=bridge or FakeBridge(), message_repository=FakeMessages(),
-                               settings_store=store or SettingsStore(), llm_debug_service=FakeDebug(), **kw)
+    kw.setdefault('transport', FakeTransport())
+    return ConversationService(event_bridge=bridge or FakeBridge(), settings_store=store or SettingsStore(),
+                               decisions=FakeDecisions(), **kw)
+
+
+def _go(service, batch):
+    return asyncio.run(service.process_batch(batch))
 
 
 def test_mention_emits_the_event_with_the_transcript_and_a_pending_row():
     bridge = FakeBridge()
     service = _service(bridge)
-    assert service.process_batch(_batch(make_obs())) is True
+    assert _go(service, _batch(make_obs())) is True
     payload = bridge.payloads[0]
     assert payload['message_id'] == 'm1' and payload['batch_size'] == 1 and payload['mentioned'] == 'True'
     assert payload['recent_history'] == ['Bob: hi']
@@ -69,15 +83,15 @@ def test_mention_emits_the_event_with_the_transcript_and_a_pending_row():
 def test_rejected_event_does_not_create_pending_metadata():
     bridge = FakeBridge(accepted=False)
     service = _service(bridge)
-    assert service.process_batch(_batch(make_obs())) is False
+    assert _go(service, _batch(make_obs())) is False
     assert service.pending_reply('m1') is None
-    assert service.llm_debug_service.rejections == [('daemon', 'no_daemon_task')]
+    assert service.decisions.rejections == [('daemon', 'no_daemon_task')]
 
 
 def test_unaddressed_message_in_mentions_only_mode_is_dropped_with_the_reason():
     service = _service(store=SettingsStore({'channel': {'reply_mode': 'mentions_only'}}))
-    assert service.process_batch(_batch(make_obs(mentioned=False))) is False
-    assert service.llm_debug_service.rejections == [('trigger', 'mentions_only')]
+    assert _go(service, _batch(make_obs(mentioned=False))) is False
+    assert service.decisions.rejections == [('trigger', 'mentions_only')]
 
 
 def test_the_newest_addressed_message_is_the_trigger():
@@ -85,15 +99,15 @@ def test_the_newest_addressed_message_is_the_trigger():
     service = _service(bridge)
     batch = _batch(make_obs(message_id='m1', mentioned=True, created_at=1.0),
                    make_obs(message_id='m2', mentioned=False, created_at=2.0, clean_content='and then'))
-    assert service.process_batch(batch) is True
+    assert _go(service, batch) is True
     assert bridge.payloads[0]['message_id'] == 'm1' and bridge.payloads[0]['batch_size'] == 2
 
 
 def test_cooldown_runs_after_the_respond_decision():
     service = _service(store=SettingsStore({'safety': {'rate_limit_seconds': 3600}}))
-    assert service.process_batch(_batch(make_obs(message_id='m1'))) is True
-    assert service.process_batch(_batch(make_obs(message_id='m2'))) is False
-    assert service.llm_debug_service.rejections[-1] == ('policy', 'cooldown')
+    assert _go(service, _batch(make_obs(message_id='m1'))) is True
+    assert _go(service, _batch(make_obs(message_id='m2'))) is False
+    assert service.decisions.rejections[-1] == ('policy', 'cooldown')
 
 
 def test_discard_pending_drops_payload_and_latches():
@@ -106,14 +120,14 @@ def test_discard_pending_drops_payload_and_latches():
 
     style = Style()
     service = _service(reply_style_service=style)
-    assert service.process_batch(_batch(make_obs())) is True
+    assert _go(service, _batch(make_obs())) is True
     service.discard_pending('m1')
     assert service.pending_reply('m1') is None and style.discarded == ['m1']
 
 
 def test_sweep_pending_drops_stale_rows():
     service = _service()
-    assert service.process_batch(_batch(make_obs())) is True
+    assert _go(service, _batch(make_obs())) is True
     service._pending['m1']['at'] = time.time() - 7200
     assert service._sweep_pending() == 1 and service.pending_reply('m1') is None
 
@@ -121,6 +135,24 @@ def test_sweep_pending_drops_stale_rows():
 def test_empty_content_never_reaches_the_prompt_empty():
     bridge = FakeBridge()
     service = _service(bridge)
-    service.process_batch(_batch(make_obs(clean_content='', content='',
-                                          attachments=[{'url': 'https://x/y.png', 'content_type': 'image/png'}])))
+    _go(service, _batch(make_obs(clean_content='', content='',
+                                 attachments=[{'url': 'https://x/y.png', 'content_type': 'image/png'}])))
     assert bridge.payloads[0]['content'] == '[The user sent an image with no caption.]'
+
+
+def test_the_window_is_fetched_once_per_reply_and_only_when_she_answers():
+    transport = FakeTransport()
+    service = _service(transport=transport, store=SettingsStore({'channel': {'context_messages': 7}}))
+    assert _go(service, _batch(make_obs(mentioned=False))) is False          # not addressed: no Discord call
+    assert transport.calls == []
+    assert _go(service, _batch(make_obs())) is True
+    assert transport.calls == [('alpha', 'c1', 7)]
+
+
+def test_window_off_or_unavailable_still_replies():
+    bridge = FakeBridge()
+    service = _service(bridge, transport=FakeTransport(), store=SettingsStore({'channel': {'context_messages': 0}}))
+    assert _go(service, _batch(make_obs())) is True and bridge.payloads[0]['recent_history'] == []
+    bridge = FakeBridge()
+    service = _service(bridge, transport=FakeTransport(fail=True))
+    assert _go(service, _batch(make_obs())) is True and bridge.payloads[0]['recent_history'] == []

@@ -20,33 +20,49 @@ what remains.
 | Reply LLM / Vision LLM pickers, the Models tab, side lanes | gone — the task's provider is the brain; images ride the payload |
 | Per-guild / channel / DM settings overlays | gone — daemon tasks + filters |
 | The voice fallback lane, transcript + summary tables | gone — one lane on Sapphire's conversation engine, gated by the **Discord: Voice channel** Realtime rule |
-| Decision traces (table, panel, route) | gone — the LLM debug ring is the one debug surface |
+| Decision traces (table, panel, route) and the LLM debug ring | gone — the Debug tab shows recent decisions, ids only |
 
 ### 2.0.0 itself
 
-- **Storage v2.** Six tables (`accounts`, `guilds`, `channels`, `users`, `messages`,
-  `schema_version`) in one schema file; the 13 stacked migrations are gone. On first boot a v1
-  database is moved aside to `discord.sqlite3.pre-2.0` and the **accounts rows are copied** into a
-  fresh file. If the copy fails the move is undone and the daemon refuses to boot.
+- **No database.** Bot accounts (label → token) live in core's credentials manager beside every
+  other plugin's secrets, scrambled at rest; the plugin's SQLite file and its 13 stacked migrations are
+  gone. **The plugin no longer keeps any Discord message.** The reply prompt's channel window is fetched
+  live from Discord when she answers (Conversation → *Give the AI the last X channel messages*, default
+  20); retention settings, the purge cron and forget-user went with the store. The LLM debug ring
+  (full prompts in memory) is gone too; the Debug tab lists recent decisions, ids only. On first boot the
+  accounts are imported out of the old file into the credentials manager and the file is renamed
+  `discord.sqlite3.imported`; a file that cannot be read refuses the boot rather than lose a bot.
 - **Wiring.** Container, lifecycle, daemon state, scheduler loop and health collapse into
   `runtime/container.py` + `daemon.py`. The conversation service is rewritten with one rejection
   path. The `<<HANG UP>>` door is wired at build (it used to arm on the first tick, so a hang-up in
   the first 15 s after a restart did nothing).
-- **Settings** (45 → 38): removed `retention.transcript_days`, `retention.profile_buffer_days`,
-  `retention.trace_days`, `safety.proactive_cooldown_hours`, `safety.quiet_hours_*`.
+- **Settings** (45 → 33): removed every `retention.*` key, `safety.proactive_cooldown_hours`,
+  `safety.quiet_hours_*`, `debug.llm_debug_enabled` (the ring is gone), `channel.strip_think_tags`
+  (reasoning blocks are always stripped), the three pacing booleans (typing indicator, human pause,
+  read delay → one `channel.natural_delay`), `bot.enabled` (→ `bot.allow_all`: ON answers any bot,
+  OFF the allowlist, empty list = no bot); added `channel.context_messages`.
 - **Routes** (19 → 14): removed `admin/summary`, `admin/purge`, `traces`, `voice/sessions`,
   `voice/diagnostics`, `voice/auto-join`; added `voice/status` (sessions + connections + auto-join
-  view + voice stack). `admin/forget-user` takes `{user_id}` and deletes that person's messages.
+  view + voice stack). `admin/forget-user` and the retention cron are gone with the message store.
 - **Dependencies:** `dateparser` and `vaderSentiment` are no longer required.
 - **Web tab:** the Decision traces panel and the operator JSON dump are gone; the two chip pickers
   share one widget; the Bot Accounts widget is back (it had been lost in an earlier strip).
 - **Voice on disk:** nothing about a voice session is written to the plugin database any more.
 - **Docs:** README and OPERATIONS rewritten; the old roadmap and per-tab docs are archived outside
   the plugin.
+- **Post-audit cleanup (same day):** the inbound-message event-bus publish is gone (it carried every
+  message body into core's replay ring with no subscriber); ~300 lines of dead code removed (unused
+  sync/async twins, a gap-repair experiment, the debug ring's typo fields, intention-scoring vestiges);
+  the streaming-playback forwarder folded into the voice transport; the `Social` tab is now
+  `Reactions`; the silence knob's help text tells the truth;
+  the STT quality gates run on every STT provider through core's new segment door instead of
+  reaching into faster-whisper; the bot token check goes through core's egress door; a per-window
+  diagnostic names any voice packet the transport refuses.
 
 ### Upgrading an existing install (the click-list)
 
-1. Update, restart. The log shows `database upgraded to schema v2: N account(s) copied`.
+1. Update, restart. The log shows `imported N bot account(s) … into the credentials manager`; the old
+   database is renamed `discord.sqlite3.imported`. Delete it once your bots are online.
 2. Settings → Plugins → Discord: your bots are listed; the daemon says running. Stale keys in the
    saved settings file are ignored.
 3. Your Continuity daemon tasks keep working unchanged.
@@ -60,8 +76,7 @@ what remains.
 
 ### Rolling back to 1.x
 
-Stop Sapphire; delete `user/plugin_state/discord/discord.sqlite3` (+ `-wal`, `-shm`); rename
-`discord.sqlite3.pre-2.0` back to `discord.sqlite3`; reinstall the 1.x plugin.
+Reinstall the 1.x plugin and add the bot tokens again on its accounts page.
 
 ## 1.25 – 1.33 — 2026-09-21 … 22
 

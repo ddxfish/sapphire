@@ -30,35 +30,6 @@ GAP_FILL_MAX_FRAMES = 4
 OPUS_FRAME_SAMPLES = 960
 
 
-def _read_wav_pcm(wav_bytes: bytes) -> tuple[bytes, int, int]:
-    buffer = io.BytesIO(wav_bytes)
-    with wave.open(buffer, 'rb') as wav_file:
-        channels = wav_file.getnchannels()
-        sample_rate = wav_file.getframerate()
-        frames = wav_file.readframes(wav_file.getnframes())
-    return frames, sample_rate, channels
-
-
-def concat_wav_bytes(left: bytes, right: bytes) -> bytes:
-    """Concatenate two mono/stereo WAV blobs with matching format."""
-    if not left:
-        return right
-    if not right:
-        return left
-    left_pcm, left_rate, left_channels = _read_wav_pcm(left)
-    right_pcm, right_rate, right_channels = _read_wav_pcm(right)
-    if left_rate != right_rate or left_channels != right_channels:
-        return right
-    merged = left_pcm + right_pcm
-    buffer = io.BytesIO()
-    with wave.open(buffer, 'wb') as wav_file:
-        wav_file.setnchannels(left_channels)
-        wav_file.setsampwidth(DISCORD_SAMPLE_WIDTH)
-        wav_file.setframerate(left_rate)
-        wav_file.writeframes(merged)
-    return buffer.getvalue()
-
-
 def _stereo_to_mono_int16(pcm_stereo: bytes) -> bytes:
     count = len(pcm_stereo) // DISCORD_SAMPLE_WIDTH
     if count < 2:
@@ -128,54 +99,6 @@ def pcm_stereo_peak(pcm_stereo: bytes) -> int:
         return 0
     samples = struct.unpack(f'<{count}h', pcm_stereo)
     return max((abs(sample) for sample in samples), default=0)
-
-
-def repair_short_pcm_gaps(
-    pcm_stereo: bytes,
-    *,
-    rms_threshold: float = 45.0,
-    max_gap_frames: int = GAP_FILL_MAX_FRAMES,
-) -> bytes:
-    """Interpolate brief decode-silence gaps between voiced Opus frames."""
-    if not pcm_stereo:
-        return pcm_stereo
-    frame_bytes = OPUS_FRAME_SAMPLES * DISCORD_SAMPLE_WIDTH * DISCORD_CHANNELS
-    if len(pcm_stereo) < frame_bytes * 3:
-        return pcm_stereo
-    try:
-        import numpy as np
-    except ImportError:
-        return pcm_stereo
-
-    samples = np.frombuffer(pcm_stereo, dtype='<i2')
-    frame_samples = OPUS_FRAME_SAMPLES * DISCORD_CHANNELS
-    usable = (len(samples) // frame_samples) * frame_samples
-    if usable < frame_samples * 3:
-        return pcm_stereo
-    frames = samples[:usable].reshape(-1, OPUS_FRAME_SAMPLES, DISCORD_CHANNELS).astype(np.float64)
-    n_frames = len(frames)
-
-    def frame_rms(index: int) -> float:
-        chunk = frames[index]
-        return float(np.sqrt(np.mean(chunk ** 2)))
-
-    silent = [frame_rms(index) < rms_threshold for index in range(n_frames)]
-    index = 0
-    while index < n_frames:
-        if not silent[index]:
-            index += 1
-            continue
-        gap_start = index
-        while index < n_frames and silent[index]:
-            index += 1
-        gap_len = index - gap_start
-        if 0 < gap_len <= max_gap_frames and gap_start > 0 and index < n_frames:
-            left = frames[gap_start - 1]
-            right = frames[index]
-            for offset in range(gap_len):
-                alpha = (offset + 1) / (gap_len + 1)
-                frames[gap_start + offset] = left * (1.0 - alpha) + right * alpha
-    return np.clip(frames, -32768, 32767).astype('<i2').reshape(-1).tobytes()
 
 
 def pcm_stereo_rms(pcm_stereo: bytes) -> float:

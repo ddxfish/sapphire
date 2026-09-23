@@ -453,3 +453,39 @@ def test_send_message_tags_ride_the_conversation_service(monkeypatch):
     tools._reply_message_id.set('1521787194761678918')
     msg, ok = tools.execute('discord_send_message', {'channel': 'c1', 'text': 'hello [react:🔥]'})
     assert ok is True and len(seen) == 1 and seen[0][1]['channel_id'] == 'c1'
+
+
+def test_two_connected_bots_and_no_scope_refuses_instead_of_guessing(monkeypatch):
+    """Operator chat, two bots up, no Discord scope on the chat: the tools used to
+    post as whichever bot sorted first. Now they say so and do nothing."""
+    runtime = FakeRuntime()
+    runtime.transport._connected = ['alpha', 'leona_bot_test']
+    monkeypatch.setattr(tools, 'get_runtime', lambda: runtime)
+    tools._reply_account.set(None)
+    tools._reply_channel_id.set(None)
+
+    scope_var = ContextVar('scope_discord', default='default')
+    fm_mod = types.ModuleType('core.chat.function_manager')
+    fm_mod.scope_discord = scope_var
+    for pkg in ('core', 'core.chat'):
+        if pkg not in sys.modules:
+            monkeypatch.setitem(sys.modules, pkg, types.ModuleType(pkg.split('.')[-1]))
+    monkeypatch.setitem(sys.modules, 'core.chat.function_manager', fm_mod)
+
+    class NoEvent:
+        @staticmethod
+        def get():
+            return {}
+
+    monkeypatch.setattr('core.continuity.executor.current_event_data', NoEvent())
+
+    for name, args in (('discord_send_message', {'channel': 'c1', 'text': 'hello'}),
+                       ('discord_read_messages', {'channel': 'c1'}),
+                       ('discord_add_reaction', {'channel': 'c1', 'emoji': '🔥', 'message_id': '1'})):
+        msg, ok = tools.execute(name, args)
+        assert ok is False and 'which bot' in msg and 'alpha' in msg and 'leona_bot_test' in msg, (name, msg)
+    assert not [c for c in runtime.transport.calls if c[0] not in ('list_servers',)]
+
+    # One bot connected: the old single-bot default still holds.
+    runtime.transport._connected = ['alpha']
+    assert tools._default_account() == 'alpha'

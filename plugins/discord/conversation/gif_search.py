@@ -1,4 +1,4 @@
-"""GIF search — Klipy (default), Giphy, or legacy Tenor."""
+"""GIF search — Klipy (default), Giphy, or Tenor."""
 
 from __future__ import annotations
 

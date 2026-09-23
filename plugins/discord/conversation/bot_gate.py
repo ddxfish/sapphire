@@ -1,8 +1,8 @@
-"""Replies to other bots: on/off + allowlist + a cascade brake (S4, 2026-09-22).
+"""Replies to other bots: the allowlist (or "answer any bot") + a cascade brake (S4, 2026-09-22).
 
-The debate sessions are gone. An allowlisted bot's message flows like a
-human's (mention → reply, otherwise the channel's bot organic chance). The
-brake: after MAX_CONSECUTIVE replies in a row triggered by bots in one channel
+An allowed bot's message flows like a human's (mention → reply, otherwise the
+channel's bot organic chance). `bot.allow_all` ON = every bot; OFF (default) =
+only the allowlist, and an empty allowlist means no bot at all. The brake: after MAX_CONSECUTIVE replies in a row triggered by bots in one channel
 with no human in between, bots are ignored there until a human speaks.
 """
 from __future__ import annotations
@@ -25,13 +25,12 @@ class BotGate:
             self._streak.pop(key, None)                 # a human speaking resets the brake
             return {'allowed': True, 'reason': 'human_message'}
         bot = getattr(settings, 'bot', None) if settings else None
-        if bot is None or not getattr(bot, 'enabled', True):
-            return {'allowed': False, 'reason': 'bot_interaction_disabled'}
-        if str(getattr(observation, 'author_id', '') or '') not in _ids(getattr(bot, 'allowlist_ids', [])):
+        allow_all = bool(getattr(bot, 'allow_all', False)) if bot is not None else False
+        if not allow_all and str(getattr(observation, 'author_id', '') or '') not in _ids(getattr(bot, 'allowlist_ids', []) if bot else []):
             return {'allowed': False, 'reason': 'bot_not_allowlisted'}
         if self._streak.get(key, 0) >= MAX_CONSECUTIVE:
             return {'allowed': False, 'reason': 'bot_cascade_cap'}
-        return {'allowed': True, 'reason': 'bot_allowlisted'}
+        return {'allowed': True, 'reason': 'bot_allowed_all' if allow_all else 'bot_allowlisted'}
 
     def note_reply(self, account_name: str, channel_id: str, *, author_is_bot: bool) -> None:
         key = (str(account_name), str(channel_id))

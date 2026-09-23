@@ -69,7 +69,7 @@ def voice_stack_info() -> dict:
         from discord.voice.receive.reader import PacketDecryptor
 
         info['dave_patches'] = bool(
-            getattr(PacketDecryptor.decrypt_rtp, '_discord_cognitive_dave_patched', False)
+            getattr(PacketDecryptor.decrypt_rtp, '_discord_host_dave_patched', False)
         )
     except ImportError:
         pass
@@ -77,7 +77,7 @@ def voice_stack_info() -> dict:
         from discord.voice.receive.router import PacketRouter
 
         info['router_patches'] = bool(
-            getattr(PacketRouter.run, '_discord_cognitive_patched', False)
+            getattr(PacketRouter.run, '_discord_host_patched', False)
         )
     except ImportError:
         pass
@@ -85,7 +85,7 @@ def voice_stack_info() -> dict:
         from discord.opus import PacketDecoder
 
         info['opus_pcm_patch'] = bool(
-            getattr(PacketDecoder._decode_packet, '_discord_cognitive_skip_pcm_dave', False)
+            getattr(PacketDecoder._decode_packet, '_discord_host_skip_pcm_dave', False)
         )
     except ImportError:
         info['opus_pcm_patch'] = False

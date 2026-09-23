@@ -7,10 +7,7 @@ from plugins.discord.models.observations import TextMessageObservation, TypingOb
 
 
 class DiscordEventAdapter:
-    def __init__(self, *, message_repository, channel_repository=None, image_lane=None, settings_store=None,
-                 mention_map_service=None):
-        self.message_repository = message_repository
-        self.channel_repository = channel_repository
+    def __init__(self, *, image_lane=None, settings_store=None, mention_map_service=None):
         self.image_lane = image_lane
         self.settings_store = settings_store
         self.mention_map_service = mention_map_service
@@ -57,32 +54,15 @@ class DiscordEventAdapter:
         if self.settings_store and is_channel_ignored(observation.account_name, observation.channel_id,
                                                       self.settings_store.resolve()):
             return None
-        if self.channel_repository:
-            # The guild / channel / user caches the pickers and mention map read.
-            if observation.guild_id:
-                self.channel_repository.upsert_guild(observation.guild_id, observation.guild_name)
-            self.channel_repository.upsert_channel(observation.channel_id, observation.guild_id, observation.channel_name)
-            self.channel_repository.upsert_user(observation.author_id, observation.username, observation.display_name)
-        if self.message_repository:
-            self.message_repository.save_message(observation)
         if fetch_images:
             self.fetch_images(observation)
         if self.mention_map_service:
             self.mention_map_service.update_from_discord_message(account_name, message, observation)
-        # Companion seam: other plugins can observe every processed inbound
-        # message on core's event bus without touching this pipeline.
-        try:
-            from core.event_bus import publish
-            publish('discord_message_observed', {
-                'account': account_name, 'guild_id': observation.guild_id, 'guild_name': observation.guild_name,
-                'channel_id': observation.channel_id, 'channel_name': observation.channel_name,
-                'author_id': observation.author_id, 'username': observation.username,
-                'display_name': observation.display_name, 'message_id': observation.message_id,
-                'content': observation.clean_content, 'is_dm': observation.is_dm,
-                'mentioned': observation.mentioned, 'author_is_bot': observation.author_is_bot,
-            })
-        except Exception:
-            pass
+        # Add-ons hear every inbound message through the discord_message_observed
+        # HOOK (hooks_out, fired by the pipeline). The old second door — the same
+        # payload on core's event bus — had no subscriber and no ephemeral flag,
+        # so every message body sat in the bus replay ring for any later web
+        # tab (found by the S7 audit, 2026-09-22). One door.
         return observation
 
     async def adapt_typing_event(self, account_name: str, self_user_id: int | str | None, channel, user,
