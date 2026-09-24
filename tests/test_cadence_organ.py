@@ -263,7 +263,6 @@ def test_images_ephemeral_persists_the_words_only():
     mock_main.tool_engine.extract_function_call_from_text.return_value = None
     frames = [{'data': 'aGk=', 'media_type': 'image/jpeg'}]
     with patch('core.chat.chat_streaming.get_generation_params', return_value={}), \
-         patch.object(config, 'FORCE_THINKING', False, create=True), \
          patch.object(config, 'TTS_ENABLED', False, create=True), \
          patch.object(config, 'TTS_STREAMING_ENABLED', False, create=True), \
          patch('core.voice_privacy.tts_gate_reason', return_value=''), \

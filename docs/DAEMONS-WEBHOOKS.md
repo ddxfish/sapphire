@@ -350,12 +350,14 @@ Every daemon and webhook task has the same AI settings as scheduled tasks:
 
 ## Limits
 
-| | Max |
-|---|---|
-| Total tasks (all types) | 25 |
-| Daemon tasks | 10 |
-| Webhook tasks | 10 |
-| Heartbeat tasks | 4 |
+| | Default | Change it |
+|---|---|---|
+| Total tasks (all types) | 25 | Settings › System › Advanced › Max Total Tasks |
+| Daemon tasks (Realtime rules share this cap) | 10 | Settings › System › Advanced › Max Daemon Tasks |
+| Webhook tasks | 10 | fixed |
+| Heartbeat tasks | 4 | fixed |
+
+Both settings apply to new tasks immediately, no restart. Raising the daemon cap past the total cap does nothing until the total is raised too.
 
 ---
 
@@ -403,7 +405,7 @@ WEBHOOK:
 - payload cap 1 MB (413 above); JSON bodies parsed, other bodies raw text, GET query params as JSON
 - success returns {"status": "triggered", ...}; unknown path/method or disabled task = 404
 
-LIMITS: 25 tasks total; 10 daemon; 10 webhook; 4 heartbeat.
+LIMITS: 25 tasks total and 10 daemon are defaults (Settings › System › Advanced: MAX_TOTAL_TASKS / MAX_DAEMON_TASKS, hot, no restart). Realtime rules count as daemon tasks. Webhook 10 and heartbeat 4 are fixed.
 
 TROUBLESHOOTING:
 - try an empty filter {} first to confirm events arrive; filter field names must match the daemon's emitted fields

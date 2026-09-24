@@ -593,8 +593,7 @@ class TestChatReadsAllScopes:
             chat_obj.tool_engine = MagicMock()
             chat_obj.tool_engine.extract_function_call_from_text.return_value = None
 
-            with patch('core.chat.chat_streaming.get_generation_params', return_value={}), \
-                 patch.object(config, 'FORCE_THINKING', False, create=True):
+            with patch('core.chat.chat_streaming.get_generation_params', return_value={}):
                 result = chat_obj.chat("test input")
 
         # The consumer returns the final event's text

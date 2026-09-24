@@ -134,7 +134,7 @@ Runtime config
 | rag / memory | `RAG_SIMILARITY_THRESHOLD`, `MEMORY_DEDUP_THRESHOLD` |
 | plugins | `ALLOW_UNSIGNED_PLUGINS`, `PLUGIN_KEYS_URL` |
 | store | `STORE_ENABLED`, `STORE_URL` |
-| server | `WEB_UI_HOST`, `WEB_UI_PORT`, `LOG_LEVEL` |
+| server | `WEB_UI_HOST`, `WEB_UI_PORT`, `LOG_LEVEL`, `MAX_DAEMON_TASKS`, `MAX_TOTAL_TASKS` |
 | backups | `BACKUPS_ENABLED`, `BACKUPS_KEEP_DAILY`, etc. |
 
 Two things that look like settings but aren't:
@@ -160,7 +160,7 @@ The settings manager tracks which changes need restart via `get_pending_restart_
 ```json
 {
   "LLM_PROVIDERS": {
-    "claude": { "provider": "claude", "model": "claude-opus-5", "enabled": false },
+    "claude": { "provider": "claude", "model": "claude-opus-5-5", "enabled": false },
     "openai": { "provider": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-5.6-terra", "enabled": false },
     "gemini": { "provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash", "enabled": false }
   },

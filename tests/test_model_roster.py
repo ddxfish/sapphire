@@ -83,6 +83,7 @@ def test_core_defaults_are_in_their_own_dropdown():
 def test_current_flagships_are_offered():
     opts = _core_options()
     assert 'claude-opus-5' in opts['claude'] and 'claude-fable-5-1' in opts['claude']
+    assert 'claude-opus-5-5' in opts['claude']
     assert 'claude-haiku-4-5' in opts['claude']
     assert 'gpt-6-astra' in opts['openai'] and 'gpt-5.6-terra' in opts['openai']
     assert 'gemini-3.8-flash' in opts['gemini']
@@ -186,6 +187,23 @@ def test_probe_kwargs_only_say_disabled_where_the_family_accepts_it():
     assert _claude('claude-opus-5')._probe_kwargs() == {'thinking': {'type': 'disabled'}}
     assert _claude('claude-fable-5-1')._probe_kwargs() == {}
     assert _claude('claude-haiku-4-5')._probe_kwargs() == {}
+
+
+def test_opus55_rides_the_always_on_contract():
+    """Opus 5.5 (2026-09-23) cannot disable thinking: {type:disabled} and
+    budget_tokens 400 at every effort. Same lane as Fable — OFF = omit the
+    param, never strip history, probes send nothing. A plain roster row
+    would have failed its own health check via the adaptive lane."""
+    from core.chat.llm_providers.claude import thinking_family
+    assert thinking_family('claude-opus-5-5') == 'always'
+    assert thinking_family('claude-opus-5') == 'adaptive'
+    kw = _kw('claude-opus-5-5')
+    assert _claude('claude-opus-5-5')._apply_thinking(kw, True, True) is False
+    assert 'thinking' not in kw and 'output_config' not in kw
+    kw = _kw('claude-opus-5-5')
+    _claude('claude-opus-5-5', reasoning_effort='xhigh')._apply_thinking(kw, True, False)
+    assert kw['thinking']['type'] == 'adaptive' and kw['output_config'] == {'effort': 'xhigh'}
+    assert _claude('claude-opus-5-5')._probe_kwargs() == {}
 
 
 def test_request_path_carries_the_switchboard_result():

@@ -373,6 +373,7 @@ class SettingsManager:
         'WEB_UI_HOST', 'WEB_UI_PORT', 'WEB_UI_SSL_ADHOC',
         'WAKE_WORD_ENABLED', 'AUDIO_INPUT_DEVICE', 'AUDIO_OUTPUT_DEVICE',
         'ALLOW_UNSIGNED_PLUGINS',
+        'MAX_DAEMON_TASKS', 'MAX_TOTAL_TASKS',
     }
 
     def is_managed(self):
@@ -713,7 +714,6 @@ class SettingsManager:
             'GENERATION_DEFAULTS', 'MODEL_GENERATION_PROFILES',
             'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',
             'IMAGE_MEMORY_TURNS', 'WEB_IMAGES_SAFESEARCH',
-            'FORCE_THINKING', 'THINKING_PREFILL',
             'CLAUDE_THINKING_ENABLED', 'SPICE_DELIVERY',
             'PRIVATE_ALLOW_UNFLAGGED_TOOLS',
             'LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
@@ -725,6 +725,8 @@ class SettingsManager:
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
             # Tool settings - read per-request
             'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS',
+            # Continuity caps - the scheduler reads them at task-create time
+            'MAX_DAEMON_TASKS', 'MAX_TOTAL_TASKS',
             'TOOL_HISTORY_MAX_ENTRIES', 'RAG_SIMILARITY_THRESHOLD',
             # AI self-switch gates + roster - read per-request by the
             # function_manager settings-gate and the meta tools

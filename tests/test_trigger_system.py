@@ -123,19 +123,34 @@ class TestSchedulerTypeField:
         assert updated["trigger_config"]["path"] == "my-hook"
 
     def test_daemon_limit(self, tmp_path):
-        """Cannot exceed MAX_DAEMONS."""
+        """Cannot exceed MAX_DAEMON_TASKS (a setting since 2026-09-23)."""
+        from unittest.mock import patch
+        import config
         sched = self._make_scheduler(tmp_path)
-        for i in range(sched.MAX_DAEMONS):
-            sched.create_task({
-                "name": f"Daemon {i}", "type": "daemon",
-                "schedule": "0 0 31 2 *",
-                "trigger_config": {"source": f"src_{i}"},
-            })
-        with pytest.raises(ValueError, match="Maximum daemon"):
-            sched.create_task({
-                "name": "One Too Many", "type": "daemon",
-                "schedule": "0 0 31 2 *",
-            })
+        with patch.object(config, 'MAX_DAEMON_TASKS', 3, create=True), \
+             patch.object(config, 'MAX_TOTAL_TASKS', 25, create=True):
+            for i in range(3):
+                sched.create_task({
+                    "name": f"Daemon {i}", "type": "daemon",
+                    "schedule": "0 0 31 2 *",
+                    "trigger_config": {"source": f"src_{i}"},
+                })
+            with pytest.raises(ValueError, match="Maximum daemon"):
+                sched.create_task({
+                    "name": "One Too Many", "type": "daemon",
+                    "schedule": "0 0 31 2 *",
+                })
+
+    def test_total_limit(self, tmp_path):
+        """MAX_TOTAL_TASKS caps every type together (a setting since 2026-09-23)."""
+        from unittest.mock import patch
+        import config
+        sched = self._make_scheduler(tmp_path)
+        with patch.object(config, 'MAX_TOTAL_TASKS', 2, create=True):
+            sched.create_task({"name": "A", "schedule": "0 9 * * *"})
+            sched.create_task({"name": "B", "schedule": "0 9 * * *"})
+            with pytest.raises(ValueError, match="Maximum tasks"):
+                sched.create_task({"name": "C", "schedule": "0 9 * * *"})
 
 
 # ============================================================================

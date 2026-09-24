@@ -339,9 +339,11 @@ class ContinuityScheduler:
         with self._lock:
             return self._tasks.get(task_id)
     
-    MAX_TASKS = 25
+    # Total and daemon caps are settings (Settings > System > Advanced, hot):
+    # MAX_TOTAL_TASKS / MAX_DAEMON_TASKS. Realtime rules are daemon-type
+    # tasks, so they share the daemon cap (2026-09-23). Heartbeat and
+    # webhook caps stay fixed.
     MAX_HEARTBEATS = 4
-    MAX_DAEMONS = 10
     MAX_WEBHOOKS = 10
 
     @staticmethod
@@ -388,6 +390,9 @@ class ContinuityScheduler:
             data = {k: v for k, v in data.items() if k != "chat_target"}
         self._check_llm_provider(data)
         task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
+        import config
+        max_daemons = int(config.MAX_DAEMON_TASKS)
+        max_total = int(config.MAX_TOTAL_TASKS)
 
         with self._lock:
             total = len(self._tasks)
@@ -396,11 +401,12 @@ class ContinuityScheduler:
                 tt = t.get("type", "heartbeat" if t.get("heartbeat") else "task")
                 type_counts[tt] = type_counts.get(tt, 0) + 1
 
-            limits = {"heartbeat": self.MAX_HEARTBEATS, "daemon": self.MAX_DAEMONS, "webhook": self.MAX_WEBHOOKS}
+            limits = {"heartbeat": self.MAX_HEARTBEATS, "daemon": max_daemons, "webhook": self.MAX_WEBHOOKS}
             if task_type in limits and type_counts.get(task_type, 0) >= limits[task_type]:
-                raise ValueError(f"Maximum {task_type} tasks reached ({limits[task_type]})")
-            if total >= self.MAX_TASKS:
-                raise ValueError(f"Maximum tasks reached ({self.MAX_TASKS})")
+                hint = " - raise Max Daemon Tasks in Settings > System > Advanced" if task_type == "daemon" else ""
+                raise ValueError(f"Maximum {task_type} tasks reached ({limits[task_type]}){hint}")
+            if total >= max_total:
+                raise ValueError(f"Maximum tasks reached ({max_total}) - raise Max Total Tasks in Settings > System > Advanced")
 
         task = {
             "id": str(uuid.uuid4()),

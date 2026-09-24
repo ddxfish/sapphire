@@ -69,7 +69,6 @@ def _run(provider_events, tts=False, chat_settings=None, hook_stub=None,
     out, published = [], []
     patches = [
         patch('core.chat.chat_streaming.get_generation_params', return_value={}),
-        patch.object(config, 'FORCE_THINKING', False, create=True),
         patch.object(config, 'TTS_ENABLED', tts, create=True),
         patch.object(config, 'TTS_STREAMING_ENABLED', tts, create=True),
         patch('core.voice_privacy.tts_gate_reason', return_value=""),

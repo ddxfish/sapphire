@@ -66,7 +66,6 @@ def _run(provider_events=(), *, continue_from="T1", prefill=PREFILL, raise_exc=N
     out = []
     patches = [
         patch('core.chat.chat_streaming.get_generation_params', return_value={}),
-        patch.object(config, 'FORCE_THINKING', False, create=True),
         patch.object(config, 'TTS_ENABLED', False, create=True),
         patch.object(config, 'TTS_STREAMING_ENABLED', False, create=True),
         patch('core.voice_privacy.tts_gate_reason', return_value=""),
@@ -232,8 +231,7 @@ class TestEngine:
                 {"function_call": {"name": "t", "arguments": {}}}, None, None, None]
             te.execute_text_based_tool_call.return_value = (None, [])
             sc = StreamingChat(mock_main)
-            with patch.object(config, 'FORCE_THINKING', False, create=True), \
-                 patch.object(config, 'TTS_ENABLED', False, create=True), \
+            with patch.object(config, 'TTS_ENABLED', False, create=True), \
                  patch.object(config, 'TTS_STREAMING_ENABLED', False, create=True), \
                  patch('core.voice_privacy.tts_gate_reason', return_value=""), \
                  patch('core.chat.chat_streaming.publish', lambda *a, **k: None):

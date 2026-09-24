@@ -569,15 +569,6 @@ class StreamingChat:
             elif has_prefill:
                 logger.info(f"[CONTINUE] in place from {continue_from}: {len(prefill)} char prefill")
             
-            # Handle forced thinking prefill - disabled when continuing
-            force_prefill = None
-            if getattr(config, 'FORCE_THINKING', False) and not has_prefill:
-                force_prefill = getattr(config, 'THINKING_PREFILL', '<think>')
-                # Strip trailing whitespace for Claude compatibility
-                messages.append({"role": "assistant", "content": force_prefill.rstrip()})
-                logger.info(f"[THINK] Forced thinking prefill: {force_prefill}")
-                yield {"type": "content", "text": force_prefill}
-            
             # Set scopes for this chat context
             # Reset first to prevent bleed across chats when plugin scopes come and go
             # (a chat saved before a plugin was enabled wouldn't have its scope key in settings,
@@ -1180,9 +1171,6 @@ class StreamingChat:
                     if has_prefill and (inline_prefill or in_place):
                         full_content = prefill + full_content
 
-                    if force_prefill:
-                        full_content = force_prefill + full_content
-
                     # post_llm hook — plugins can mutate response before save + TTS
                     if hook_runner.has_handlers("post_llm"):
                         llm_event = hook_runner.fire("post_llm", HookEvent(
@@ -1381,7 +1369,7 @@ class StreamingChat:
                                 final_metadata["tokens"][k] = resp_usage[k]
                 
                 if final_content:
-                    full_final = (force_prefill or "") + final_content
+                    full_final = final_content
                 else:
                     # Empty content after tool calls — short placeholder + toast.
                     # Old text ("I used N tools and gathered information") was

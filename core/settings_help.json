@@ -356,14 +356,6 @@
     "short": "How the rotating spice reaches the AI",
     "long": "Ghost message (default): spice arrives in a per-turn app-context message labeled as coming from Sapphire's own app - prompt-cache friendly on cloud models, but the AI knows it's injected and may mention that. System prompt: spice is woven unattributed into the system prompt, so the AI wears it as its own inclination - feels most natural, but the prompt changes on every spice rotation, which re-tokenizes history on cache-billed cloud models (fine and free on local models)."
   },
-  "FORCE_THINKING": {
-    "short": "Override the AI's initial think tags to force it to think a certain way",
-    "long": "When enabled, prepends THINKING_PREFILL to every prompt to encourage the model to think a certain way. Useful for debugging or understanding decision-making. May make responses longer and slower. Most modern models don't need this."
-  },
-  "THINKING_PREFILL": {
-    "short": "Text to prepend for thinking mode",
-    "long": "Opening text that triggers the model's chain-of-thought reasoning. Only used if FORCE_THINKING is enabled. Should start with a <think> tag or similar, then an INCOMPLETE sentence so the AI finishes it."
-  },
   "CLAUDE_THINKING_ENABLED": {
     "short": "Enable Claude adaptive thinking",
     "long": "When enabled, Claude uses adaptive thinking — the model decides when and how deeply to reason per request, steered by the provider's Reasoning Effort setting. Shows summarized thinking in collapsible accordions. Only applies to Claude models, ignored by other providers."
@@ -419,6 +411,14 @@
   "WEB_UI_PORT": {
     "short": "Web interface port number",
     "long": "Port number for the web interface. Default is 8073. Access the UI at https://hostname:port after restart. Requires restart to take effect."
+  },
+  "MAX_DAEMON_TASKS": {
+    "short": "Cap on daemon tasks (Realtime rules count too)",
+    "long": "Daemon tasks and Realtime rules share this cap: a Realtime rule is a daemon task whose source is live (phone calls, Discord voice). Raising this does not raise Max Total Tasks. Applies to new tasks immediately; nothing existing is removed."
+  },
+  "MAX_TOTAL_TASKS": {
+    "short": "Cap on all Continuity tasks combined",
+    "long": "Scheduled, heartbeat, daemon, Realtime and webhook tasks together. Heartbeats stay capped at 4 and webhooks at 10. Applies to new tasks immediately."
   },
   "WEB_UI_SSL_ADHOC": {
     "short": "Use self-signed SSL certificate",

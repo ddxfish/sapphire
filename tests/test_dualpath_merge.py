@@ -341,7 +341,6 @@ def _engine_run(provider_events, suppress_tts=False, cancel_via=None,
 
     patches = [
         patch('core.chat.chat_streaming.get_generation_params', return_value={}),
-        patch.object(config, 'FORCE_THINKING', False, create=True),
     ]
     if hook_stub is not None:
         patches.append(patch('core.chat.chat_streaming.hook_runner', hook_stub))
@@ -450,8 +449,7 @@ class TestEngineFinalEvent:
 
         sc = StreamingChat(mock_main)
         out = []
-        with patch('core.chat.chat_streaming.get_generation_params', return_value={}), \
-             patch.object(config, 'FORCE_THINKING', False, create=True):
+        with patch('core.chat.chat_streaming.get_generation_params', return_value={}):
             with pytest.raises(ConnectionError):
                 for ev in sc.chat_stream("hello"):
                     out.append(ev)

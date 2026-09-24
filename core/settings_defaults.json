@@ -144,7 +144,9 @@
     "WEB_UI_HOST": "0.0.0.0",
     "WEB_UI_PORT": 8073,
     "WEB_UI_SSL_ADHOC": true,
-    "LOG_LEVEL": "INFO"
+    "LOG_LEVEL": "INFO",
+    "MAX_DAEMON_TASKS": 10,
+    "MAX_TOTAL_TASKS": 25
   },
   
   "llm": {
@@ -156,7 +158,7 @@
         "provider": "claude",
         "display_name": "Claude",
         "api_key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-opus-5",
+        "model": "claude-opus-5-5",
         "timeout": 10.0,
         "enabled": false,
         "use_as_fallback": true,
@@ -208,6 +210,7 @@
       "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096 },
       
       "claude-fable-5-1": { "max_tokens": 16000 },
+      "claude-opus-5-5": { "max_tokens": 16000 },
       "claude-opus-5": { "max_tokens": 16000 },
       "claude-sonnet-5": { "max_tokens": 16000 },
       "claude-haiku-4-5": { "max_tokens": 16000 },
@@ -269,8 +272,6 @@
       "MiniMaxAI/MiniMax-M3": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "meta-llama/Llama-3.3-70B-Instruct": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
     },
-    "FORCE_THINKING": false,
-    "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",
     "CLAUDE_THINKING_ENABLED": true,
     "SPICE_DELIVERY": "ghost",
     "IMAGE_UPLOAD_MAX_WIDTH": 1920

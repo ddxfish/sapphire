@@ -40,10 +40,12 @@ except ImportError:
 #             so the old omit-to-disable was silent billed thinking with an
 #             empty display. "disabled" is accepted only at effort ≤ high, so
 #             no output_config rides with it.
-#   always    Fable 5 / 5.1 (and Mythos) — thinking cannot be turned off:
-#             {type:"disabled"} and budget_tokens both 400. OFF = omit the
-#             param (still thinks, display omitted). History's thinking blocks
-#             are never stripped: preserved thinking treats that as an edit.
+#   always    Fable 5 / 5.1 (and Mythos), Opus 5.5 — thinking cannot be turned
+#             off: {type:"disabled"} and budget_tokens both 400 at every
+#             effort. OFF = omit the param (still thinks, display omitted).
+#             History's thinking blocks are never stripped: preserved thinking
+#             treats that as an edit. Opus 5.5 (launch 2026-09-23) defaults to
+#             effort=medium — we always send one, so nothing drifts.
 #   budget    Haiku 4.5 — extended thinking only: {type:"enabled",
 #             budget_tokens:N} with 1024 ≤ N < max_tokens; adaptive, display
 #             and output_config.effort all 400. OFF = omit (Haiku's default).
@@ -55,7 +57,7 @@ def thinking_family(model: str) -> str:
     m = (model or '').lower()
     if 'haiku' in m:
         return 'budget'
-    if 'fable' in m or 'mythos' in m:
+    if 'fable' in m or 'mythos' in m or 'opus-5-5' in m:
         return 'always'
     return 'adaptive'
 
