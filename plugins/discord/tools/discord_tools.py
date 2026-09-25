@@ -194,6 +194,35 @@ TOOLS = [
             },
         },
     },
+    {
+        'type': 'function',
+        'is_local': 'endpoint',
+        'network': True,
+        'function': {
+            'name': 'discord_remind',
+            'description': (
+                'Set a Discord reminder for the person you are talking to: when due the bot posts '
+                '"@them Reminder: <text>" in this channel. action=add with text= and either delay= '
+                '("2h", "30m", "1d 2h") or at= ("18:30", local time; tomorrow if already past). '
+                'action=list shows their pending reminders; action=cancel removes one by id= or every '
+                'one whose text contains text=. Inside a Discord conversation everything is about the '
+                "asker; from the operator's chat pass user= (id) and channel= for add."
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'action': {'type': 'string', 'enum': ['add', 'list', 'cancel'], 'description': 'What to do.'},
+                    'text': {'type': 'string', 'description': 'What to remind them of (add), or text to match (cancel).'},
+                    'delay': {'type': 'string', 'description': 'How long from now: "2h", "45m", "1d 2h", "90 minutes".'},
+                    'at': {'type': 'string', 'description': 'A clock time HH:MM (local); used when delay is empty.'},
+                    'id': {'type': 'integer', 'description': 'Reminder id to cancel (from list).'},
+                    'user': {'type': 'string', 'description': "Discord user id — operator's chat only."},
+                    'channel': {'type': 'string', 'description': "Channel id to post in — operator's chat only (add)."},
+                },
+                'required': ['action'],
+            },
+        },
+    },
 ]
 
 AVAILABLE_FUNCTIONS = {item['function']['name'] for item in TOOLS}
@@ -680,6 +709,80 @@ def discord_add_reaction(*, emoji: str, channel=None, message_id=None):
     return (f'Reacted {emoji} to message {message_id}.', True)
 
 
+def _fmt_reminder(row: dict) -> str:
+    import time as _time
+    left = float(row['due_ts']) - _time.time()
+    when = f'in {int(left // 3600)}h {int(left % 3600 // 60)}m' if left > 0 else 'due now'
+    return f"#{row['id']} {when}: {row['text']}"
+
+
+def discord_remind(*, action: str, text: str = '', delay: str = '', at: str = '', id=None,
+                   user: str = '', channel: str = ''):
+    """Bound to the asker inside a Discord conversation (their reminders, their channel);
+    a turn with no human author has no reach. Operator chat: user= and channel=."""
+    import time as _time
+    from plugins.discord import reminders as rem
+
+    runtime = get_runtime()
+    store = getattr(runtime, 'reminders', None) if runtime else None
+    if store is None:
+        return ('Discord runtime is not available', False)
+    try:
+        if not runtime.settings_store.resolve().reminders.enabled:
+            return ('Reminders are off (Settings > Discord > Reminders).', False)
+    except Exception:
+        return ('Reminders are off (Settings > Discord > Reminders).', False)
+    ev = _event_data()
+    if ev and not str(ev.get('author_id') or '').strip():
+        return ('This turn has no one asking (a scheduled post) — reminders are not available here.', False)
+    if ev:
+        acct = str(ev.get('account') or '').strip()
+        uid = str(ev.get('author_id') or '').strip()
+        chan = str(ev.get('channel_id') or '').strip()
+    else:
+        acct = _default_account() or ''
+        uid = str(user or '').strip()
+        chan = _resolve_channel_id(str(channel or '')) if str(channel or '').strip() else ''
+        if not acct or not uid:
+            return ("Operator chat: pass user= (Discord user id); set the chat's Discord scope to pick the bot.", False)
+    action = str(action or '').strip().lower()
+    text = str(text or '').strip()
+    if action == 'list':
+        rows = store.pending(acct, uid)
+        if not rows:
+            return ('No pending reminders.', True)
+        return ('\n'.join(['Pending reminders:'] + [f'- {_fmt_reminder(r)}' for r in rows]), True)
+    if action == 'add':
+        if not text:
+            return ('add needs text.', False)
+        if len(text) > rem.MAX_TEXT:
+            return (f'Keep a reminder under {rem.MAX_TEXT} characters.', False)
+        if not chan:
+            return ('add needs channel= (where to post it).', False)
+        seconds = rem.due_in_seconds(delay=delay, at=at)
+        if seconds is None:
+            return ('When? Give delay= like "2h", "30m", "1d 2h" — or at= like "18:30".', False)
+        if seconds > rem.MAX_DAYS * 86400:
+            return (f'Reminders reach at most {rem.MAX_DAYS} days ahead.', False)
+        if len(store.pending(acct, uid)) >= rem.MAX_PENDING:
+            return (f'They already have {rem.MAX_PENDING} pending reminders — cancel one first.', False)
+        row = store.add(acct, chan, uid, text, _time.time() + seconds)
+        return (f'Reminder #{row["id"]} set: "{text}" {_fmt_reminder(row).split(": ", 1)[0].split(" ", 1)[1]}. '
+                'Confirm it briefly; the bot will post it when due.', True)
+    if action == 'cancel':
+        if id is not None and str(id).strip():
+            try:
+                n = store.cancel(acct, uid, reminder_id=int(id))
+            except (TypeError, ValueError):
+                return ('id must be a number (from list).', False)
+        elif len(text) >= 3:
+            n = store.cancel(acct, uid, match=text)
+        else:
+            return ('cancel needs id= or text= (3+ characters of the reminder).', False)
+        return (f'Cancelled {n} reminder(s).', True) if n else ('Nothing pending matched.', True)
+    return ('Unknown action — use add, list, or cancel.', False)
+
+
 def execute(function_name, arguments, config=None):
     arguments = arguments or {}
     try:
@@ -748,5 +851,12 @@ def _dispatch(function_name, arguments):
             emoji=str(arguments.get('emoji', '')),
             channel=_default_channel(arguments),
             message_id=arguments.get('message_id'),
+        )
+    if function_name == 'discord_remind':
+        return discord_remind(
+            action=str(arguments.get('action', '') or ''), text=str(arguments.get('text', '') or ''),
+            delay=str(arguments.get('delay', '') or ''), at=str(arguments.get('at', '') or ''),
+            id=arguments.get('id'), user=str(arguments.get('user', '') or ''),
+            channel=str(arguments.get('channel', '') or ''),
         )
     return (f'Unknown function: {function_name}', False)

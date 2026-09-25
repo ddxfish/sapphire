@@ -9,7 +9,9 @@ def test_defaults_are_the_manifest_story():
     assert s.channel.context_messages == 20
     assert s.media.images_in_enabled is False and s.channel.natural_delay is True and s.bot.allow_all is False
     assert s.voice.addressing_mode == 'bot_name' and s.reaction.silent_enabled is True
-    assert set(s.to_dict()) == {'safety', 'media', 'voice', 'bot', 'reaction', 'channel'}
+    assert set(s.to_dict()) == {'safety', 'media', 'voice', 'bot', 'reaction', 'channel', 'presence', 'reminders'}
+    assert s.reminders.enabled is False
+    assert s.presence.enabled is False and s.presence.cycle_minutes == 30 and s.presence.away_line == 'away'
 
 
 def test_overrides_flat_or_nested():

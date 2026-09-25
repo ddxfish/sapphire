@@ -2,6 +2,10 @@
 // Response routing is implicit: daemons always reply to source, webhooks always reply via HTTP.
 // Chat history + TTS are configured in the existing Chat/Voice accordions (from ai-config).
 
+import { renderActiveHours, wireActiveHours, readActiveHours } from './trigger-cron.js';
+
+const DAEMON_HOURS_TIP = 'Only answer between these hours. Outside them, incoming events are skipped (a Discord bot shows away). Supports overnight (e.g. 8PM-4AM).';
+
 import { editableFocused } from '../dom-guard.js';
 
 // Cache sources data so filter hints update on source change
@@ -80,7 +84,8 @@ export function renderEventTrigger(t, opts = {}) {
                 <div id="ed-filter-rows" class="filter-rows"></div>
                 <button type="button" class="btn-sm" id="ed-filter-add" style="margin-top:6px">+ Add filter</button>
             </div></div>
-        </details>`;
+        </details>
+        <div class="sched-modifiers">${renderActiveHours(t, DAEMON_HOURS_TIP)}</div>`;
 }
 
 /**
@@ -136,6 +141,7 @@ export function wireEventTrigger(modal, opts = {}) {
         // and _updateFilterPreview needs the preview selector _wireFilterRows stamps.
         _wireFilterRows(modal, '#ed-filter-rows', '#ed-filter-add', '#ed-filter-preview');
         _loadEventSources(modal, triggerConfig?.filter);
+        wireActiveHours(modal);
 
         // Rebuild filter key dropdowns + task fields when source changes
         modal.querySelector('#ed-event-source')?.addEventListener('change', e => {
@@ -193,8 +199,7 @@ export function readEventTrigger(modal) {
         },
         schedule: '0 0 31 2 *', // never fires via cron
         chance: 100,
-        active_hours_start: null,
-        active_hours_end: null,
+        ...readActiveHours(modal),
     };
 }
 

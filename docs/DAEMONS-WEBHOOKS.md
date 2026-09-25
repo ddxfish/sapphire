@@ -31,6 +31,7 @@ Daemons are background listeners that react to events from connected platforms. 
 - **Source** — which event to listen for (e.g. "Discord Message", "New Email")
 - **Filter** — JSON object to narrow which events fire the task
 - **Source Settings** — plugin-specific options (e.g. auto-reply toggle)
+- **Active hours** — optional window (your timezone, overnight allowed). Outside it, incoming events are skipped; a Discord bot with Presence on shows away there
 
 **AI section:**
 - Prompt, toolset, voice, scopes — same as any scheduled task

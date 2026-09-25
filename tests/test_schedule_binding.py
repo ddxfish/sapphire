@@ -105,7 +105,10 @@ def test_discord_manifest_has_no_proactive_legs_left():
     names = {s["name"] for s in caps["schedule"]}
     assert names == set()   # 2.0: no schedule legs at all — the message store and its purge are gone
     keys = {s["key"] for s in caps["settings"] if "key" in s}
-    assert not any(k.startswith(("proactive.", "presence.", "profile.")) for k in keys)
+    assert not any(k.startswith(("proactive.", "profile.")) for k in keys)
+    # 2.1.0 (2026-09-25): presence is back in the host, on the Chat task's Active hours — four keys, no clock of its own
+    assert {"presence.enabled", "presence.statuses", "presence.cycle_minutes", "presence.away_line"} <= keys
+    assert not any(k.startswith("presence.") and k.endswith(("_start", "_end", "_hour")) for k in keys)
     sources = {s["name"]: s for s in caps["daemon"]["event_sources"]}
     # One source, one mechanism: the combined "All interactions" source left 2026-09-22.
     assert set(sources) == {"discord_message", "discord_greetings", "discord_voice"}

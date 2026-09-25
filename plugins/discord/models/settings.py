@@ -72,6 +72,20 @@ class ReactionSettings:
 
 
 @dataclass
+class PresenceSettings:
+    # Awake/away is the Chat task's Active hours (presence.py); these are the lines.
+    enabled: bool = False
+    statuses: str = 'listening: chat\nwatching: the server\nplaying: with ideas\ndaydreaming\nlistening: lo-fi beats\njust vibing'
+    cycle_minutes: int = 30
+    away_line: str = 'away'
+
+
+@dataclass
+class RemindersSettings:
+    enabled: bool = False              # the discord_remind tool + the tick delivery (reminders.py)
+
+
+@dataclass
 class EffectiveSettings:
     safety: SafetySettings = field(default_factory=SafetySettings)
     media: MediaSettings = field(default_factory=MediaSettings)
@@ -79,6 +93,8 @@ class EffectiveSettings:
     bot: BotInteractionSettings = field(default_factory=BotInteractionSettings)
     reaction: ReactionSettings = field(default_factory=ReactionSettings)
     channel: ConversationSettings = field(default_factory=ConversationSettings)
+    presence: PresenceSettings = field(default_factory=PresenceSettings)
+    reminders: RemindersSettings = field(default_factory=RemindersSettings)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

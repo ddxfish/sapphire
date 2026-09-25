@@ -24,6 +24,8 @@ from plugins.discord.conversation.message_pipeline_service import MessagePipelin
 from plugins.discord.conversation.reactions import Reactions
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.greetings import GreetingsClock
+from plugins.discord.presence import PresenceClock
+from plugins.discord.reminders import Reminders
 from plugins.discord.models.intentions import LeaveVoiceIntention
 from plugins.discord.models.settings import SettingsStore
 from plugins.discord.observability.decisions import DecisionLog
@@ -128,10 +130,16 @@ class RuntimeContainer:
         # S1: greeting / goodnight times live on the daemon tasks; the clock
         # fires them into the task through core's fire_task.
         get_state = getattr(loader, 'get_plugin_state', None)
+        state = get_state(self.plugin_name) if callable(get_state) else None
         self.greetings = GreetingsClock(
             plugin_loader=loader, transport=self.transport, account_repository=self.account_repository,
-            state=get_state(self.plugin_name) if callable(get_state) else None,
+            state=state,
         )
+        # Presence (2026-09-25): awake/away follows the Chat task's Active hours.
+        self.presence = PresenceClock(plugin_loader=loader, transport=self.transport,
+                                      settings_store=self.settings_store)
+        # Reminders (2026-09-25): rows in memory, mirrored into the same state file.
+        self.reminders = Reminders(state=state)
 
         # Voice: one lane on core's conversation engine, gated by the Realtime rule.
         self.voice_transport = VoiceTransport(discord_transport=self.transport)
@@ -238,8 +246,9 @@ class RuntimeContainer:
             await _quiet(self.transport.connect_account(name, token), f'Failed to connect stored account {name}')
 
     async def _on_account_connected(self, account_name: str) -> None:
-        # Presence is the discord-personality plugin's job (its presence
-        # module sets it on the next tick); the host connects plain online.
+        # A (re)connect is plain online on Discord's side; the presence clock
+        # re-applies on the next tick.
+        self.presence.forget(account_name)
         logger.debug('[DISCORD] account %s connected', account_name)
 
     # ── the tick ─────────────────────────────────────────────────────────────
@@ -261,6 +270,15 @@ class RuntimeContainer:
         except Exception:
             logger.exception('Greetings clock tick failed')
         for account_name in self.transport.list_connected():
+            try:
+                await self.presence.tick_async(account_name)
+            except Exception:
+                logger.exception('Presence tick failed for %s', account_name)
+            try:
+                if self.settings_store.resolve().reminders.enabled:
+                    await self.reminders.deliver_async(account_name, self.transport)
+            except Exception:
+                logger.exception('Reminder delivery failed for %s', account_name)
             try:
                 await self.voice_auto_join_service.tick_async(account_name)
             except Exception:

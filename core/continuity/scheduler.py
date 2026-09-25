@@ -47,6 +47,21 @@ def _get_croniter():
     return croniter
 
 
+def task_in_active_hours(task, hour=None) -> bool:
+    """Is `hour` (default: now, user timezone) inside the task's active hours?
+    No window = always. End is exclusive; start > end wraps overnight (20→04).
+    Module-level so a daemon plugin can read its own task's window (the Discord
+    bot shows "away" while its Chat task is outside it)."""
+    start = task.get("active_hours_start")
+    end = task.get("active_hours_end")
+    if start is None or end is None:
+        return True
+    hour = hour if hour is not None else _user_now().hour
+    if start <= end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
 def _user_now():
     """Get current time in user's configured timezone."""
     try:
@@ -767,14 +782,7 @@ class ContinuityScheduler:
 
     def _in_active_hours(self, task, check_hour=None):
         """Check if an hour is within the task's active hours window."""
-        start = task.get("active_hours_start")
-        end = task.get("active_hours_end")
-        if start is None or end is None:
-            return True  # no restriction
-        hour = check_hour if check_hour is not None else _user_now().hour
-        if start <= end:
-            return start <= hour < end
-        return hour >= start or hour < end  # wrap-around (e.g. 20→04)
+        return task_in_active_hours(task, check_hour)
 
     def _check_and_run(self):
         """Single check cycle - evaluate all tasks, run eligible ones."""
@@ -972,6 +980,14 @@ class ContinuityScheduler:
                     return {"success": False, "error": "Account mismatch"}
             except (json.JSONDecodeError, TypeError):
                 pass
+
+        # Active hours (2026-09-25): an event task answers only inside its window
+        # (the daemon editor's "Active hours"; Discord shows the bot away outside
+        # it). The owner's own clock (skip_filter — greetings) fires a task, not
+        # a message, and is not gated.
+        if not skip_filter and not task_in_active_hours(task):
+            logger.debug(f"[Continuity] '{task_name}' outside active hours, event skipped")
+            return {"success": False, "error": "Outside active hours"}
 
         # Check filter (daemon and webhook tasks)
         # skip_filter: plugin_loader.fire_task — the owning daemon's own clock

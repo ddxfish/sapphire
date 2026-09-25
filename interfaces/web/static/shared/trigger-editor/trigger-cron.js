@@ -69,16 +69,7 @@ export function renderCronTrigger(t, opts = {}) {
         </div>
 
         <div class="sched-modifiers">
-            <label class="sched-modifier">
-                <input type="checkbox" id="ed-active-hours-on" ${t.active_hours_start != null ? 'checked' : ''}>
-                Active hours
-                <span class="help-tip" data-tip="Restrict to a time window. Outside these hours, cron matches are skipped. Supports overnight (e.g. 8PM-4AM).">?</span>
-                <span class="sched-modifier-inputs" id="ed-active-hours-row" ${t.active_hours_start == null ? 'style="display:none"' : ''}>
-                    <select id="ed-active-start">${_hourOptions(t.active_hours_start ?? 20)}</select>
-                    to
-                    <select id="ed-active-end">${_hourOptions(t.active_hours_end ?? 4)}</select>
-                </span>
-            </label>
+            ${renderActiveHours(t, 'Restrict to a time window. Outside these hours, cron matches are skipped. Supports overnight (e.g. 8PM-4AM).')}
             <label class="sched-modifier">
                 <input type="checkbox" id="ed-chance-on" ${(t.chance ?? 100) < 100 ? 'checked' : ''}>
                 Chance
@@ -157,11 +148,7 @@ export function wireCronTrigger(modal, opts = {}) {
         .forEach(el => el.addEventListener('change', updatePreview));
     updatePreview();
 
-    // Active hours toggle
-    modal.querySelector('#ed-active-hours-on')?.addEventListener('change', () => {
-        const row = modal.querySelector('#ed-active-hours-row');
-        if (row) row.style.display = modal.querySelector('#ed-active-hours-on').checked ? '' : 'none';
-    });
+    wireActiveHours(modal);
 
     // Chance toggle
     modal.querySelector('#ed-chance-on')?.addEventListener('change', () => {
@@ -184,8 +171,41 @@ export function readCronTrigger(modal, getCurrentCron) {
     return {
         schedule: getCurrentCron(),
         chance: chanceOn ? (parseInt(modal.querySelector('#ed-chance')?.value) || 100) : 100,
-        active_hours_start: modal.querySelector('#ed-active-hours-on')?.checked ? parseInt(modal.querySelector('#ed-active-start')?.value) : null,
-        active_hours_end: modal.querySelector('#ed-active-hours-on')?.checked ? parseInt(modal.querySelector('#ed-active-end')?.value) : null,
+        ...readActiveHours(modal),
+    };
+}
+
+// ── Active hours modifier (shared with the daemon editor, 2026-09-25) ──
+// One checkbox + two hour selects; the task stores active_hours_start/end
+// (ints, user timezone, end exclusive, overnight wraps). Cron tasks skip
+// matches outside the window; daemon tasks skip incoming events.
+
+export function renderActiveHours(t, tip) {
+    return `
+            <label class="sched-modifier">
+                <input type="checkbox" id="ed-active-hours-on" ${t.active_hours_start != null ? 'checked' : ''}>
+                Active hours
+                <span class="help-tip" data-tip="${tip}">?</span>
+                <span class="sched-modifier-inputs" id="ed-active-hours-row" ${t.active_hours_start == null ? 'style="display:none"' : ''}>
+                    <select id="ed-active-start">${_hourOptions(t.active_hours_start ?? 20)}</select>
+                    to
+                    <select id="ed-active-end">${_hourOptions(t.active_hours_end ?? 4)}</select>
+                </span>
+            </label>`;
+}
+
+export function wireActiveHours(modal) {
+    modal.querySelector('#ed-active-hours-on')?.addEventListener('change', () => {
+        const row = modal.querySelector('#ed-active-hours-row');
+        if (row) row.style.display = modal.querySelector('#ed-active-hours-on').checked ? '' : 'none';
+    });
+}
+
+export function readActiveHours(modal) {
+    const on = modal.querySelector('#ed-active-hours-on')?.checked;
+    return {
+        active_hours_start: on ? parseInt(modal.querySelector('#ed-active-start')?.value) : null,
+        active_hours_end: on ? parseInt(modal.querySelector('#ed-active-end')?.value) : null,
     };
 }
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.1.0 — 2026-09-25
+
+- **Presence is back in the host** (was `discord-personality`), rebuilt on Continuity: **Active hours**
+  on the bot's **Discord: Chat** task (the daemon editor now has the same Active hours modifier as
+  cron tasks, and the scheduler honours it on event fires — a core change) is her Discord day. Outside the window core refuses the task's messages,
+  the bot stays online, and with **Settings → Discord → Presence** on she shows as idle with the away
+  line; inside it her status line is picked at random from the list every N minutes. Four settings,
+  off by default: `presence.enabled`, `presence.statuses`, `presence.cycle_minutes`,
+  `presence.away_line`. No sleep schedule, no wake buffer — a task outside its hours simply does not
+  answer. Greetings are never gated by Active hours (the owner's clock fires a task, not a message).
+- **Reminders are back in the host** (was `discord-personality`), slim: the `discord_remind` tool
+  (add / list / cancel; `delay=2h` or `at=18:30`) bound to the person asking and the channel they asked
+  in; when due the bot posts "@them Reminder: …" there — no LLM. Rows live in memory and are mirrored
+  into the plugin's state file, so a restart keeps what was pending. One toggle, `reminders.enabled`,
+  off by default; add the tool to the Chat task's toolset. Caps: 20 pending per person, 30 days
+  ahead, 300 characters.
+
 ## 2.0.1 — 2026-09-25
 
 - **A reply is at most 8 messages** from paragraph splitting; past that, paragraphs are packed into
@@ -21,9 +38,10 @@ what remains.
 | Feature | Now |
 |---|---|
 | Greetings, goodnights, proactive schedule | the **Discord: Greetings** daemon task (times in Source Settings) |
-| Birthdays, presence cycling | `discord-personality` |
+| Birthdays | `discord-personality` |
+| Presence cycling | `discord-personality` until 2.1.0, then back in the host on Active hours |
 | People memory (profiles, facts, pinned memories) | `discord-personality` (`discord_people`) |
-| Reminders ("remind me in 2h") | `discord-personality` (`discord_remind`) |
+| Reminders ("remind me in 2h") | `discord-personality` until 2.1.0, then back in the host (`discord_remind`, in memory + state file) |
 | Typos, post-send edits, quote chance | `discord-personality` |
 | Ambient distill, lore, milestones, interests, quiet outreach, sleep schedule, bot-to-bot debates, channel situation, intention scoring, relationship policy | gone |
 | Reply LLM / Vision LLM pickers, the Models tab, side lanes | gone — the task's provider is the brain; images ride the payload |

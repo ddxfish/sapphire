@@ -2,12 +2,12 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "min_core_version": "2.13.0",
-  "description": "Discord bot \u2014 accounts (the only thing it stores), conversation, images in and out, GIFs, silent reactions, and voice channels on Sapphire's conversation engine. Chat and greetings are daemon tasks (Discord: Chat / Greetings), voice is a Realtime rule (Discord: Voice channel); personality modules live in the discord-personality plugin.",
+  "description": "Discord bot — accounts (the only thing it stores), conversation, images in and out, GIFs, silent reactions, presence, reminders, and voice channels on Sapphire's conversation engine. Chat and greetings are daemon tasks (Discord: Chat / Greetings), voice is a Realtime rule (Discord: Voice channel); personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
-  "icon": "\ud83c\udfae",
+  "icon": "🎮",
   "priority": 50,
   "default_enabled": false,
   "pip_dependencies": [
@@ -45,7 +45,7 @@
           "filter_fields": [
             {
               "key": "mentioned",
-              "label": "bot was addressed \u2014 @mention or name match (True/False)"
+              "label": "bot was addressed — @mention or name match (True/False)"
             },
             {
               "key": "guild_name",
@@ -122,7 +122,7 @@
               "label": "Channels (ids, comma-separated)",
               "required": true,
               "placeholder": "123456789012345678, 234567890123456789",
-              "help": "Text channel ids the daily posts go to. In Discord: Settings \u2192 Advanced \u2192 Developer Mode, then right-click a channel \u2192 Copy Channel ID."
+              "help": "Text channel ids the daily posts go to. In Discord: Settings → Advanced → Developer Mode, then right-click a channel → Copy Channel ID."
             },
             {
               "key": "greeting_time",
@@ -145,7 +145,7 @@
         {
           "name": "discord_voice",
           "label": "Discord: Voice channel",
-          "description": "Gate: an enabled rule turns voice ON for the channels its filter covers (no filter = every voice channel the bot can see). She joins on /voice join or her join tool \u2014 or on her own when Auto-join is on and someone is in the channel \u2014 converses live on Sapphire's conversation engine (this rule's persona, provider, model and toolset configure the voice chat), and leaves on <<HANG UP>>, /voice leave, or when the channel empties. Never fires a one-shot reply.",
+          "description": "Gate: an enabled rule turns voice ON for the channels its filter covers (no filter = every voice channel the bot can see). She joins on /voice join or her join tool — or on her own when Auto-join is on and someone is in the channel — converses live on Sapphire's conversation engine (this rule's persona, provider, model and toolset configure the voice chat), and leaves on <<HANG UP>>, /voice leave, or when the channel empties. Never fires a one-shot reply.",
           "realtime": true,
           "filter_fields": [
             {
@@ -278,19 +278,19 @@
         "help": "First gate before the LLM. Mentions only is the usual choice for public servers. Default also rolls Human/Bot organic reply chance on unaddressed channel messages.",
         "options": [
           {
-            "label": "Default \u2014 reply when addressed, plus organic chance",
+            "label": "Default — reply when addressed, plus organic chance",
             "value": "default"
           },
           {
-            "label": "Mentions only \u2014 require @mention or name match",
+            "label": "Mentions only — require @mention or name match",
             "value": "mentions_only"
           },
           {
-            "label": "Reply to all \u2014 answer every allowed message",
+            "label": "Reply to all — answer every allowed message",
             "value": "all"
           },
           {
-            "label": "Disabled \u2014 never auto-reply in channels",
+            "label": "Disabled — never auto-reply in channels",
             "value": "disabled"
           }
         ]
@@ -348,7 +348,7 @@
         "label": "Give the AI the last X channel messages",
         "default": 20,
         "tab": "Conversation",
-        "help": "When she replies, the last X messages of that channel are fetched live from Discord and shown to the AI as 'Recent chat' (0-50; 0 = only the message that triggered her). Nothing is stored \u2014 the plugin keeps no copy of anyone's messages. If the task also keeps a chat, her own past exchanges are in that chat; this window is what other people said."
+        "help": "When she replies, the last X messages of that channel are fetched live from Discord and shown to the AI as 'Recent chat' (0-50; 0 = only the message that triggered her). Nothing is stored — the plugin keeps no copy of anyone's messages. If the task also keeps a chat, her own past exchanges are in that chat; this window is what other people said."
       },
       {
         "key": "channel.natural_delay",
@@ -356,7 +356,7 @@
         "label": "Natural delay",
         "default": true,
         "tab": "Conversation",
-        "help": "ON (default): she reads before she types, shows typing\u2026 paced by the reply length, and pauses a beat between chunks \u2014 like a person. OFF: posts instantly."
+        "help": "ON (default): she reads before she types, shows typing… paced by the reply length, and pauses a beat between chunks — like a person. OFF: posts instantly."
       },
       {
         "key": "bot.allow_all",
@@ -364,7 +364,7 @@
         "label": "Answer any bot",
         "default": false,
         "tab": "Conversation",
-        "help": "OFF (default): she only answers the bots in the allowlist below (empty list = no bot at all). ON: any bot \u2014 a mention gets a reply, the rest roll the bot organic chance. Either way, after 5 bot-triggered replies in a row with no human in between she ignores bots in that channel until a human speaks."
+        "help": "OFF (default): she only answers the bots in the allowlist below (empty list = no bot at all). ON: any bot — a mention gets a reply, the rest roll the bot organic chance. Either way, after 5 bot-triggered replies in a row with no human in between she ignores bots in that channel until a human speaks."
       },
       {
         "key": "bot.allowlist_ids",
@@ -387,7 +387,7 @@
         "label": "Autonomous silent reactions",
         "default": true,
         "tab": "Reactions",
-        "help": "React with an emoji without replying \u2014 one roll per message she reads; the emoji follows the message's tone (a small word list, no model)."
+        "help": "React with an emoji without replying — one roll per message she reads; the emoji follows the message's tone (a small word list, no model)."
       },
       {
         "key": "reaction.reaction_chance",
@@ -411,7 +411,7 @@
         "label": "Allow DMs",
         "default": false,
         "tab": "Safety",
-        "help": "OFF (default): she won't reply to direct messages \u2014 anyone who shares a server can DM a bot, so it is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM)."
+        "help": "OFF (default): she won't reply to direct messages — anyone who shares a server can DM a bot, so it is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM)."
       },
       {
         "key": "safety.dm_daily_budget",
@@ -427,7 +427,7 @@
         "label": "Tools stay in the server",
         "default": true,
         "tab": "Safety",
-        "help": "ON (default): while she is replying inside a Discord server, her Discord tools can only read or post in THAT server \u2014 a message in one server can't make her post into another, or into someone's DMs. From your own chats she can reach any channel. OFF: no reach limit inside events."
+        "help": "ON (default): while she is replying inside a Discord server, her Discord tools can only read or post in THAT server — a message in one server can't make her post into another, or into someone's DMs. From your own chats she can reach any channel. OFF: no reach limit inside events."
       },
       {
         "key": "safety.rate_limit_seconds",
@@ -461,7 +461,7 @@
         "label": "GIF replies",
         "default": false,
         "tab": "Media",
-        "help": "ON: she can reply with real GIFs \u2014 she writes [gif:search terms] or calls the send-GIF tool and it's swapped for a GIF from your provider. Requires a GIF API key."
+        "help": "ON: she can reply with real GIFs — she writes [gif:search terms] or calls the send-GIF tool and it's swapped for a GIF from your provider. Requires a GIF API key."
       },
       {
         "key": "media.gif_api_key",
@@ -591,6 +591,47 @@
         "help": "How long you must keep talking over her before she stops. A click or thump can't hold this long; a word can",
         "default": 250,
         "tab": "Voice"
+      },
+      {
+        "key": "presence.enabled",
+        "type": "boolean",
+        "label": "Presence",
+        "default": false,
+        "tab": "Presence",
+        "help": "ON: her status line rotates while she is awake and shows the away line while she is not. Awake = the bot's Discord: Chat task is inside its Active hours (Continuity → the task → Active hours; no window = always awake). Outside the window she stays online in Discord, shows away, and does not answer. OFF (default): the plugin never touches presence."
+      },
+      {
+        "key": "presence.statuses",
+        "type": "textarea",
+        "rows": 6,
+        "label": "Status lines",
+        "default": "listening: chat\nwatching: the server\nplaying: with ideas\ndaydreaming\nlistening: lo-fi beats\njust vibing",
+        "tab": "Presence",
+        "help": "One per line, picked at random. Prefixes set the Discord activity type: 'listening: …', 'watching: …', 'playing: …', 'competing: …'; anything else is a custom status."
+      },
+      {
+        "key": "presence.cycle_minutes",
+        "type": "number",
+        "label": "Change every (minutes)",
+        "default": 30,
+        "min": 1,
+        "tab": "Presence"
+      },
+      {
+        "key": "presence.away_line",
+        "type": "string",
+        "label": "Away line",
+        "default": "away",
+        "tab": "Presence",
+        "help": "The status shown (as idle) outside the Chat task's Active hours. Blank = idle with no line."
+      },
+      {
+        "key": "reminders.enabled",
+        "type": "boolean",
+        "label": "Reminders",
+        "default": false,
+        "tab": "Reminders",
+        "help": "\"Remind me in 2 hours to…\" — she calls the discord_remind tool (add it to the Chat task's toolset); when due the bot posts \"@them Reminder: …\" in the channel they asked in. Bound to the person asking. No LLM involved. Pending reminders survive a restart. OFF (default): the tool refuses and nothing posts."
       }
     ]
   }
