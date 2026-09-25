@@ -89,7 +89,7 @@ class OpenAIResponsesProvider(BaseProvider):
         counts as reachable — a broken /models doesn't mean completions are down.
         Only a genuine connection/DNS/timeout error marks it unhealthy."""
         try:
-            self._client.models.list(timeout=self.health_check_timeout)
+            self._client.models.list(timeout=self.health_check_timeout, **self._hdr_kwargs())
             return True
         except Exception as e:
             if http_status(e) in AUTH_DEAD_STATUSES:   # refused key = dead (scout F2, 2026-09-20)
@@ -261,6 +261,7 @@ class OpenAIResponsesProvider(BaseProvider):
         logger.info(f"[RESPONSES] Non-streaming: {len(input_items)} items to {request_kwargs['model']}")
         
         # Use responses.create
+        request_kwargs.update(self._hdr_kwargs())   # extra_headers ({session}/{version}), if configured
         response = retry_on_rate_limit(
             self._client.responses.create,
             **request_kwargs
@@ -309,6 +310,7 @@ class OpenAIResponsesProvider(BaseProvider):
         
         logger.info(f"[RESPONSES] Streaming to {request_kwargs['model']} (effort={self.reasoning_effort})")
         
+        request_kwargs.update(self._hdr_kwargs())   # extra_headers ({session}/{version}), if configured
         try:
             stream = retry_on_rate_limit(
                 self._client.responses.create,

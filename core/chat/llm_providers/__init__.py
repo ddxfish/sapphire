@@ -276,7 +276,6 @@ class ProviderRegistry(_BaseRegistry):
             'reasoning_effort': config.get('reasoning_effort', 'high' if provider_type == 'claude' else 'medium'),
             'reasoning_summary': config.get('reasoning_summary', 'auto'),
             # Config hints from presets
-            'session_affinity': config.get('session_affinity', False),
             'strip_penalties': config.get('strip_penalties', False),
             # Universal thinking-disable (per-provider, best-effort family dispatch)
             # + raw extra_body passthrough — read by openai_compat's
@@ -284,6 +283,9 @@ class ProviderRegistry(_BaseRegistry):
             # `disable_thinking_qwen` kept for back-compat migration. Opt-in.
             'disable_thinking': config.get('disable_thinking', False),
             'extra_body': config.get('extra_body'),
+            # Per-request headers — same escape-hatch shape as extra_body; both
+            # take {session} / {version} (BaseProvider.fill). 2026-09-25.
+            'extra_headers': config.get('extra_headers'),
             'disable_thinking_qwen': config.get('disable_thinking_qwen', False),
             # Vision override — config-driven supports_images, read by
             # BaseProvider.supports_images (and openai_compat's heuristic chain).

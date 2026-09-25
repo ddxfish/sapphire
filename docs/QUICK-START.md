@@ -25,8 +25,9 @@ If you skip the wizard, everything is reachable later: LLM in Settings → LLM, 
 | **OpenAI** (cloud) | Conversations sent to OpenAI | API key | General purpose |
 | **Gemini** (cloud) | Conversations sent to Google | API key | Fast, multimodal |
 | **Fireworks** (cloud) | Conversations sent to Fireworks | API key | Fast, open models |
+| **OpenCode Go / Zen** (cloud) | Conversations sent to OpenCode | API key (Go: $10/mo subscription, Zen: credits; both list free models) | Many open models behind one key |
 
-Claude, OpenAI, and Gemini are built in. LM Studio, Ollama, Fireworks, and many more are one click away as curated presets in Settings → LLM.
+Claude, OpenAI, and Gemini are built in. LM Studio, Ollama, Fireworks, OpenCode, and many more are one click away as curated presets in Settings → LLM. (OpenCode Go is marketed for coding agents — read their terms before leaning on it for a companion.)
 
 Local: Install [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/), load a model, enable the API. Sapphire connects automatically.
 

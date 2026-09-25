@@ -240,10 +240,37 @@ class SettingsManager:
         except Exception as e:
             logger.error(f"[SETTINGS] Failed to persist migration: {e}")
 
+    def _migrate_fireworks_affinity(self):
+        """Fireworks session affinity moved from a host-sniff in openai_compat
+        (per-API-key `user` field) to the generic `{session}` placeholder in
+        extra_body (per-chat, 2026-09-25). Existing Fireworks custom providers
+        get the field once; a hand-typed `user` or broken JSON is left alone."""
+        custom = self._user.get('LLM_CUSTOM_PROVIDERS')
+        if not isinstance(custom, dict):
+            return
+        changed = 0
+        for key, cfg in custom.items():
+            if not isinstance(cfg, dict) or 'fireworks.ai' not in str(cfg.get('base_url') or '').lower():
+                continue
+            raw = cfg.get('extra_body')
+            try:
+                body = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(body, dict) or 'user' in body:
+                continue
+            body['user'] = '{session}'
+            cfg['extra_body'] = body if (isinstance(raw, dict) or not raw) else json.dumps(body)
+            changed += 1
+        if changed:
+            logger.info(f"[SETTINGS] Fireworks affinity -> extra_body {{session}} on {changed} provider(s)")
+            self.save()
+
     def _merge_settings(self):
         """Merge defaults with user overrides, deep-merging LLM_PROVIDERS"""
         # Run migration before merge
         self._migrate_providers()
+        self._migrate_fireworks_affinity()
 
         self._config = {**self._defaults, **self._user}
 

@@ -12,7 +12,6 @@ Handles:
 This is the default provider and your 99% use case.
 """
 
-import hashlib
 import json
 import logging
 import threading
@@ -118,12 +117,10 @@ class OpenAICompatProvider(BaseProvider):
             http_client=_shared_http_client(self.base_url),
         )
 
-        # Fireworks prompt caching: stable session ID for replica affinity
-        if 'fireworks.ai' in (self.base_url or '').lower():
-            key_hash = hashlib.sha256((self.api_key or '').encode()).hexdigest()[:12]
-            self._fireworks_session_id = f"sapphire-{key_hash}"
-        else:
-            self._fireworks_session_id = None
+        # Session affinity (Fireworks `user`, OpenCode `x-opencode-session`, …)
+        # is config now: `{session}` in extra_body / extra_headers, filled per
+        # request by BaseProvider.fill. The Fireworks host-sniff that used to
+        # live here retired 2026-09-25 (settings_manager migrates old configs).
 
         # Optional params this endpoint has refused (learn-once, see OPTIONAL_PARAMS).
         # Process-lifetime memory keyed by endpoint+model: the provider object is
@@ -251,7 +248,7 @@ class OpenAICompatProvider(BaseProvider):
                 timeout=self.request_timeout,
                 http_client=_shared_http_client(corrected),
             )
-            test_client.models.list(timeout=self.health_check_timeout)
+            test_client.models.list(timeout=self.health_check_timeout, **self._hdr_kwargs())
         except Exception:
             return False
         logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")
@@ -276,7 +273,7 @@ class OpenAICompatProvider(BaseProvider):
         - connection/DNS/timeout → /v1 auto-correct, else dead.
         """
         try:
-            self._client.models.list(timeout=self.health_check_timeout)
+            self._client.models.list(timeout=self.health_check_timeout, **self._hdr_kwargs())
             return True
         except Exception as e:
             status = http_status(e)
@@ -294,7 +291,7 @@ class OpenAICompatProvider(BaseProvider):
     def list_models(self) -> Optional[list]:
         """Discover available models via /v1/models endpoint."""
         try:
-            response = self._client.models.list(timeout=self.health_check_timeout)
+            response = self._client.models.list(timeout=self.health_check_timeout, **self._hdr_kwargs())
             models = []
             for m in response.data:
                 models.append({
@@ -400,6 +397,7 @@ class OpenAICompatProvider(BaseProvider):
         optional params: strip what this endpoint already refused, try,
         and on a refusal naming an optional param remember it, warn once
         (log + toast), retry once without it."""
+        request_kwargs.update(self._hdr_kwargs())   # extra_headers ({session}/{version}), if configured
         self._strip_rejected(request_kwargs)
         try:
             return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
@@ -648,10 +646,6 @@ class OpenAICompatProvider(BaseProvider):
             **params
         }
 
-        # Fireworks: session affinity for prompt caching
-        if self._fireworks_session_id:
-            request_kwargs["user"] = self._fireworks_session_id
-
         # Add reasoning_effort for Fireworks reasoning models
         if self._is_fireworks_reasoning_model():
             request_kwargs["reasoning_effort"] = params.get("reasoning_effort", "medium")
@@ -725,7 +719,7 @@ class OpenAICompatProvider(BaseProvider):
 
         if raw:
             try:
-                rb = raw if isinstance(raw, dict) else json.loads(raw)
+                rb = self.fill(raw if isinstance(raw, dict) else json.loads(raw))   # {session}/{version}
                 if isinstance(rb, dict):
                     extra.update(rb)                              # user's raw extra_body wins
                 else:
@@ -774,10 +768,6 @@ class OpenAICompatProvider(BaseProvider):
             "stream_options": {"include_usage": True},
             **params
         }
-
-        # Fireworks: session affinity for prompt caching
-        if self._fireworks_session_id:
-            request_kwargs["user"] = self._fireworks_session_id
 
         # Add reasoning_effort for Fireworks reasoning models to enable thinking output
         if self._is_fireworks_reasoning_model():

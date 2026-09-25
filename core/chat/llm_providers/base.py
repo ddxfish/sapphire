@@ -6,11 +6,14 @@ All providers must implement these methods to ensure consistent behavior
 across OpenAI-compatible APIs, Claude, and others.
 """
 
+import hashlib
+import json
 import logging
 import time
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Generator, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -125,6 +128,41 @@ def _extract_status_code(exception: Exception) -> Optional[int]:
     return None
 
 
+# ── Request identity: placeholders + session affinity (2026-09-25) ───────────
+# A provider's `extra_headers` (and `extra_body`) config may carry two
+# placeholders, filled per request:
+#   {session}  a stable id for THIS conversation — gateways key replica routing
+#              and prompt-cache affinity on it (OpenCode Go rejects a request
+#              without one; Fireworks reads it from the `user` body field).
+#   {version}  Sapphire's version, for a self-identifying User-Agent.
+# The conversation name is stamped on the provider by the ONE resolver
+# (resolve.py) and hashed with the API key as salt: the wire never sees a
+# chat name, and two installs never collide on 'default'. No name stamped
+# (Test button, one-shot lanes) → a stable per-install id, so a gateway that
+# REQUIRES the header still gets one.
+
+def _read_version() -> str:
+    try:
+        return (Path(__file__).parent.parent.parent.parent / 'VERSION').read_text(encoding='utf-8').strip() or '?'
+    except Exception:
+        return '?'
+
+
+SAPPHIRE_VERSION = _read_version()
+
+
+def fill_placeholders(obj, session: str, version: str = SAPPHIRE_VERSION):
+    """Substitute {session} / {version} inside string values, recursively.
+    Non-strings and unknown {tokens} pass through untouched."""
+    if isinstance(obj, str):
+        return obj.replace('{session}', session).replace('{version}', version)
+    if isinstance(obj, dict):
+        return {k: fill_placeholders(v, session, version) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [fill_placeholders(v, session, version) for v in obj]
+    return obj
+
+
 @dataclass
 class ToolCall:
     """Normalized tool call representation."""
@@ -196,6 +234,9 @@ class BaseProvider(ABC):
         self.health_check_timeout = llm_config.get('timeout', 3.0)
         self.request_timeout = request_timeout
         self._client = None
+        # Which conversation this (per-turn) instance serves — stamped by the
+        # resolver; feeds {session}. None = no conversation (fallback id).
+        self.conversation = None
     
     @property
     def provider_name(self) -> str:
@@ -216,6 +257,41 @@ class BaseProvider(ABC):
         if override is not None:
             return bool(override)
         return False
+
+    # ── Request identity (see fill_placeholders) ─────────────────────────────
+
+    def session_id(self) -> str:
+        """Stable per-conversation id for session-affinity headers/fields:
+        sha256(api_key | conversation) — never the raw chat name."""
+        raw = f"{self.api_key or ''}|{self.conversation or ''}"
+        return 'sapphire-' + hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
+
+    def fill(self, obj):
+        """Resolve {session} / {version} in a config value (dict/list/str)."""
+        return fill_placeholders(obj, self.session_id(), SAPPHIRE_VERSION)
+
+    def request_headers(self) -> Dict[str, str]:
+        """Per-request headers from the provider's `extra_headers` config
+        (JSON string from the UI or a dict from a preset), placeholders
+        filled. {} when unset or unparseable (logged)."""
+        raw = self.config.get('extra_headers')
+        if not raw:
+            return {}
+        try:
+            hdrs = raw if isinstance(raw, dict) else json.loads(raw)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"[{self.provider_name}] extra_headers config not valid JSON, ignoring: {e}")
+            return {}
+        if not isinstance(hdrs, dict):
+            logger.warning(f"[{self.provider_name}] extra_headers config is not a JSON object; ignoring")
+            return {}
+        return {str(k): str(v) for k, v in self.fill(hdrs).items()}
+
+    def _hdr_kwargs(self) -> Dict[str, Any]:
+        """`{'extra_headers': ...}` to splat into an SDK call, or {} so a
+        provider with no headers configured sends byte-identical requests."""
+        hdrs = self.request_headers()
+        return {'extra_headers': hdrs} if hdrs else {}
     
     @abstractmethod
     def health_check(self) -> bool:

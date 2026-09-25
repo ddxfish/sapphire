@@ -173,6 +173,8 @@ The settings manager tracks which changes need restart via `get_pending_restart_
 
 Core providers (claude, openai, gemini) live in `LLM_PROVIDERS`. Custom/user-added providers (lmstudio default) live in `LLM_CUSTOM_PROVIDERS`. Plugins can also register LLM providers via `capabilities.providers`. Providers are tried in fallback order. Each chat can override to use a specific provider.
 
+**Request headers & session affinity.** Every custom provider takes an optional `extra_headers` JSON object (Settings → LLM → the provider → Advanced), the header-side twin of `extra_body`. Two placeholders are filled per request, in both fields: `{session}` — a stable per-chat id (a salted hash; the chat name never leaves the machine) that gateways use for replica routing and prompt-cache affinity — and `{version}`, Sapphire's version, for a self-identifying `User-Agent`. Blank means the SDK's own headers, byte-identical to before. The OpenCode Go / Zen presets send `x-opencode-session: {session}` (the gateway answers 400 `MissingSessionID` without it) plus `User-Agent: sapphire/{version}`; the Fireworks preset sends `{session}` in the `user` body field. Any lane with a chat (web, voice, phone, continuity tasks with a target chat, compression) keys on that chat; lanes without one use a per-install id so a required header is always present.
+
 ### Claude-Friendly Settings
 
 **For prompt caching (up to 90% cost savings on cached input):**

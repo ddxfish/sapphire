@@ -797,6 +797,9 @@ class LLMChat:
             # streams — the wrong chat).
             prompt_name=chat_settings.get('prompt') or GLOBAL,
             timeout=_rt,
+            # Session affinity ({session}): the EFFECTIVE chat, same one the
+            # settings above came from — a phone stream keys its own chat.
+            conversation=self.session_manager._effective_chat_name(),
         ).as_tuple()
 
     def reset(self):

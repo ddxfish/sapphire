@@ -319,7 +319,10 @@ class ExecutionContext:
         requires_privacy = bool(getattr(self, '_prompt_privacy_required', False))
         try:
             sel = resolve(provider_key, model_override, private=requires_privacy,
-                          timeout=self.task_settings.get("llm_request_timeout"))
+                          timeout=self.task_settings.get("llm_request_timeout"),
+                          # {session} affinity keys on the target chat; a task
+                          # with no chat rides the per-install fallback id.
+                          conversation=self.task_settings.get("chat_target") or None)
         except PrivacyRefused as e:
             raise PrivacyRefused(
                 f"Task requires privacy (private target chat, or prompt "

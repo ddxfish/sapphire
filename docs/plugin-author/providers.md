@@ -280,6 +280,8 @@ Your plugin doesn't have to do anything special — this all works as long as yo
 
 LLM providers are more complex. See the existing providers in `core/chat/llm_providers/` for reference.
 
+Every instance is built per turn by the ONE resolver, which stamps `self.conversation` (the chat or task name, or `None`). `self.request_headers()` returns the user's `extra_headers` config with `{session}` (a salted per-conversation hash from `self.session_id()`) and `{version}` filled — pass it as `extra_headers=` on your SDK calls, or splat `self._hdr_kwargs()`; `self.fill(obj)` does the same substitution for a body dict. Nothing configured → `{}`, send nothing extra.
+
 ```python
 from core.chat.llm_providers.base import BaseProvider, LLMResponse, ToolCall
 

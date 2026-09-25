@@ -27,6 +27,10 @@ Contract
                   2026-09-21 — the per-chat timeout used to reach the pinned
                   path only), and the override is dropped: auto never asks a
                   provider it picked for a model pinned for another.
+  conversation  → the caller's chat/task name, stamped on the built provider
+                  (provider.conversation) so session-affinity placeholders
+                  ({session} in extra_headers / extra_body) hash to a stable
+                  per-conversation id. Never sent raw. None = fallback id.
   never reads the active chat — the caller hands in the pin it read from its
   own settings, so a background lane cannot ride the browser tab's brain.
 
@@ -157,7 +161,8 @@ def _prompt_gate(prompt_name, private: bool) -> None:
 
 def resolve(primary, model: str = '', *, private: bool = False, prompt_name=None,
             timeout=None, health: str = 'cached', require_images: bool = False,
-            fallback_order=None, cfg: Optional[Dict[str, Dict[str, Any]]] = None) -> Selection:
+            fallback_order=None, cfg: Optional[Dict[str, Dict[str, Any]]] = None,
+            conversation: Optional[str] = None) -> Selection:
     """See the module docstring. health: 'cached' (60s TTL, the default),
     'probe' (always ask), 'skip' (never ask — per-image lanes, dry runs)."""
     import config
@@ -178,11 +183,11 @@ def resolve(primary, model: str = '', *, private: bool = False, prompt_name=None
         raise LLMDisabled("LLM disabled for this chat (llm_primary=none)")
 
     if primary != 'auto':
-        return _pinned(primary, model, cfg, private, timeout, health, require_images)
-    return _auto(cfg, fallback_order, private, timeout, health, require_images)
+        return _pinned(primary, model, cfg, private, timeout, health, require_images, conversation)
+    return _auto(cfg, fallback_order, private, timeout, health, require_images, conversation)
 
 
-def _pinned(key, model, cfg, private, timeout, health, require_images) -> Selection:
+def _pinned(key, model, cfg, private, timeout, health, require_images, conversation=None) -> Selection:
     conf = cfg.get(key) or {}
     name = display_name(key, conf)
     if private:
@@ -198,6 +203,7 @@ def _pinned(key, model, cfg, private, timeout, health, require_images) -> Select
     provider = _lp().get_provider_by_key(key, cfg, timeout, model_override=model)
     if not provider:
         raise ProviderUnavailable(f"Provider '{name}' not configured or disabled")
+    provider.conversation = conversation or None
     if require_images and not provider_sees(provider):
         raise ProviderUnavailable(f"Provider '{name}' does not support images")
     if health != 'skip':
@@ -221,7 +227,7 @@ def _pinned(key, model, cfg, private, timeout, health, require_images) -> Select
     return Selection(key, provider, model)
 
 
-def _auto(cfg, order, private, timeout, health, require_images) -> Selection:
+def _auto(cfg, order, private, timeout, health, require_images, conversation=None) -> Selection:
     import config
     if order is None:
         order = getattr(config, 'LLM_FALLBACK_ORDER', None) or list(cfg.keys())
@@ -236,6 +242,7 @@ def _auto(cfg, order, private, timeout, health, require_images) -> Selection:
             "No LLM providers available"
             + (" — this turn is private, only providers marked local qualify" if private else ""))
     key, provider = result
+    provider.conversation = conversation or None
     logger.info(f"Auto mode: using '{key}' ({getattr(provider, 'model', '')})")
     return Selection(key, provider, '')
 

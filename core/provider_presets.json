@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated presets for common providers. These pre-fill the Add Provider form. Not providers themselves. suggested_models = ids verified on each vendor's own model page 2026-09-20 (Fireworks: only serverless ids — a dedicated-GPU-only id 404s on a pay-per-token key).",
+  "_comment": "Curated presets for common providers. These pre-fill the Add Provider form. Not providers themselves. suggested_models = ids verified on each vendor's own model page 2026-09-20 (Fireworks: only serverless ids — a dedicated-GPU-only id 404s on a pay-per-token key). OpenCode ids from the public /models lists 2026-09-25; {session}/{version} in config_hints are filled per request (BaseProvider.fill).",
   "presets": {
     "lmstudio": {
       "template": "openai",
@@ -37,8 +37,48 @@
         {"id": "accounts/fireworks/models/minimax-m3", "name": "MiniMax M3"},
         {"id": "accounts/fireworks/models/gpt-oss-120b", "name": "GPT-OSS 120B"}
       ],
-      "config_hints": {"session_affinity": true},
+      "config_hints": {"extra_body": {"user": "{session}"}},
       "generation_defaults": {"temperature": 0.75, "top_p": 0.9, "max_tokens": 8192}
+    },
+    "opencode_go": {
+      "template": "openai",
+      "display_name": "OpenCode Go",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY",
+      "auto_discover_models": true,
+      "suggested_models": [
+        {"id": "kimi-k3", "name": "Kimi K3"},
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+        {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash"},
+        {"id": "qwen3.8-max", "name": "Qwen 3.8 Max"},
+        {"id": "glm-5.3", "name": "GLM 5.3"},
+        {"id": "minimax-m3", "name": "MiniMax M3"},
+        {"id": "grok-4.7", "name": "Grok 4.7"},
+        {"id": "gpt-6-luna", "name": "GPT-6 Luna"},
+        {"id": "space-bunny-free", "name": "Space Bunny (free)"}
+      ],
+      "config_hints": {"extra_headers": {"x-opencode-session": "{session}", "User-Agent": "sapphire/{version}"}},
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+    },
+    "opencode_zen": {
+      "template": "openai",
+      "display_name": "OpenCode Zen",
+      "base_url": "https://opencode.ai/zen/v1",
+      "api_key_env": "OPENCODE_API_KEY",
+      "auto_discover_models": true,
+      "suggested_models": [
+        {"id": "claude-opus-5-5", "name": "Claude Opus 5.5"},
+        {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra"},
+        {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+        {"id": "kimi-k3", "name": "Kimi K3"},
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+        {"id": "glm-5.3", "name": "GLM 5.3"},
+        {"id": "big-pickle", "name": "Big Pickle (free)"},
+        {"id": "deepseek-v4-flash-free", "name": "DeepSeek V4 Flash (free)"},
+        {"id": "space-bunny-free", "name": "Space Bunny (free)"}
+      ],
+      "config_hints": {"extra_headers": {"x-opencode-session": "{session}", "User-Agent": "sapphire/{version}"}},
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
     },
     "featherless": {
       "template": "openai",

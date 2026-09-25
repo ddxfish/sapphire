@@ -1,3 +1,7 @@
+# 2.13.2 - Provider headers
+- Custom providers take extra HTTP headers (Settings → LLM → Advanced → Extra headers) with `{session}` / `{version}` placeholders — stable per-chat session affinity and a self-identifying User-Agent, blank = unchanged
+- OpenCode Go and OpenCode Zen presets (the gateway requires `x-opencode-session`); model lists auto-discover
+- Fireworks session affinity moved from a hidden host-sniff to the same rail — per-chat now, existing configs migrated on boot
 # 2.13.1 - Discord Simplify
 - Removed Discord memory
 - Routed Discord through Daemons and Realtime

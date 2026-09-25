@@ -385,7 +385,7 @@ class TestCompressChat:
         msgs[0]["content"] += " lorem ipsum dolor" * 100
         mgr.append_messages_to_chat("bigone", msgs)
         monkeypatch.setattr(compress, "make_provider",
-                            lambda k, m: MockProvider())
+                            lambda k, m, **kw: MockProvider())
         report = compress._compress_chat(mgr, "bigone", "whole", "mock", "",
                                          5000, 1, backup=True)
         out = mgr.export_chat("bigone")["messages"]
@@ -413,7 +413,7 @@ class TestCompressChat:
         before = mgr.export_chat("precious")
         monkeypatch.setattr(compress, "CHUNK_INPUT_TOKENS", 10)  # force multi-call
         monkeypatch.setattr(compress, "make_provider",
-                            lambda k, m: FailingProvider())
+                            lambda k, m, **kw: FailingProvider())
         with pytest.raises(RuntimeError, match="fell over"):
             compress._compress_chat(mgr, "precious", "whole", "mock", "",
                                     5000, 1, backup=True)
@@ -427,7 +427,7 @@ class TestCompressChat:
         mgr.create_chat("tiny")
         mgr.append_messages_to_chat("tiny", turn(1))
         monkeypatch.setattr(compress, "make_provider",
-                            lambda k, m: MockProvider())
+                            lambda k, m, **kw: MockProvider())
         with pytest.raises(ValueError, match="kept tail"):
             compress._compress_chat(mgr, "tiny", "whole", "mock", "",
                                     5000, 10, backup=False)
@@ -451,7 +451,7 @@ class TestCompressChat:
                 return resp
 
         monkeypatch.setattr(compress, "make_provider",
-                            lambda k, m: TalkativeProvider())
+                            lambda k, m, **kw: TalkativeProvider())
         with pytest.raises(RuntimeError, match="changed during"):
             compress._compress_chat(mgr, "livewire", "whole", "mock", "",
                                     5000, 1, backup=False)
@@ -467,7 +467,7 @@ class TestCompressChat:
         mgr = chat_env()
         mgr.create_chat("tiny")
         mgr.append_messages_to_chat("tiny", turn(1) + turn(2))
-        monkeypatch.setattr(compress, "make_provider", lambda k, m: MockProvider())
+        monkeypatch.setattr(compress, "make_provider", lambda k, m, **kw: MockProvider())
         before = mgr.export_chat("tiny")["messages"]
         with pytest.raises(RuntimeError, match="grow"):
             compress._compress_chat(mgr, "tiny", "whole", "mock", "",

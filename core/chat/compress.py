@@ -111,14 +111,15 @@ def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]]) -> List[Dict[
 
 # ── LLM plumbing ───────────────────────────────────────────────────────────
 
-def make_provider(provider_key: str, model: str = ""):
+def make_provider(provider_key: str, model: str = "", conversation: str = None):
     """One-shot provider for summarize calls via the ONE resolver (2026-09-21):
     no health probe (the summary call is the signal), the route already
     refused auto/none and applied the private→local rule. Raises ValueError
     on unknown/unbuildable provider."""
     from core.chat.llm_providers.resolve import resolve, ProviderRefused
     try:
-        return resolve(provider_key, model, timeout=REQUEST_TIMEOUT, health='skip').provider
+        return resolve(provider_key, model, timeout=REQUEST_TIMEOUT, health='skip',
+                       conversation=conversation).provider
     except ProviderRefused as e:
         raise ValueError(str(e)) from e
 
@@ -283,7 +284,7 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     if backup and _private:
         logger.info(f"[COMPRESS] Skipping plaintext backup for private chat '{chat_name}'")
     backup_path = _write_backup(session_manager, chat_name, exported) if (backup and not _private) else None
-    provider = make_provider(provider_key, model)  # fail BEFORE any LLM spend
+    provider = make_provider(provider_key, model, conversation=chat_name)  # fail BEFORE any LLM spend
     pairs = compress_messages(head, mode, provider, int(target_tokens),
                               on_progress=on_progress)
 

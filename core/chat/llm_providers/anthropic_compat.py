@@ -89,7 +89,8 @@ class AnthropicCompatProvider(BaseProvider):
                 model=self.model,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "hi"}],
-                timeout=self.health_check_timeout
+                timeout=self.health_check_timeout,
+                **self._hdr_kwargs()
             )
             return True
         except Exception as e:
@@ -103,7 +104,8 @@ class AnthropicCompatProvider(BaseProvider):
                 model=self.model,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": "Say hello in exactly 5 words."}],
-                timeout=self.health_check_timeout
+                timeout=self.health_check_timeout,
+                **self._hdr_kwargs()
             )
             # Skip thinking blocks — reasoning models (e.g. MiniMax M3) return a
             # ThinkingBlock first, which has no `.text`. Grab the first text block.
@@ -320,6 +322,7 @@ class AnthropicCompatProvider(BaseProvider):
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
 
+        request_kwargs.update(self._hdr_kwargs())   # extra_headers ({session}/{version}), if configured
         response = retry_on_rate_limit(self._client.messages.create, **request_kwargs)
         return self._parse_response(response)
 
@@ -374,6 +377,8 @@ class AnthropicCompatProvider(BaseProvider):
         usage = None
         in_thinking_block = False
         first_chunk_time = None
+
+        request_kwargs.update(self._hdr_kwargs())   # extra_headers ({session}/{version}), if configured
 
         def _create_stream():
             return self._client.messages.stream(**request_kwargs)

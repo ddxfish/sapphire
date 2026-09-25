@@ -346,6 +346,7 @@ function _advancedFieldsHtml(prefix, v = {}) {
                 </div>`).join('');
     const noThink = v.disable_thinking ? 'checked' : '';
     const extraBody = v.extra_body ? (typeof v.extra_body === 'string' ? v.extra_body : JSON.stringify(v.extra_body)) : '';
+    const extraHeaders = v.extra_headers ? (typeof v.extra_headers === 'string' ? v.extra_headers : JSON.stringify(v.extra_headers)) : '';
     return `
         <details style="margin-bottom:8px">
             <summary style="cursor:pointer;font-size:var(--font-sm);color:var(--text-muted)">Advanced</summary>
@@ -382,12 +383,20 @@ function _advancedFieldsHtml(prefix, v = {}) {
                 <div class="text-muted" style="font-size:0.8em;margin-left:24px;margin-top:2px">
                     Advanced escape hatch — merged verbatim into the request. Use if the checkbox doesn't cover your model (it wins over the checkbox).
                 </div>
+                <div class="field-row" style="margin-top:8px;align-items:flex-start">
+                    <label style="padding-top:4px">Extra headers (JSON)</label>
+                    <textarea id="${prefix}-extra-headers" rows="2" style="flex:1;font-family:monospace;font-size:0.85em"
+                        placeholder='{"x-opencode-session": "{session}", "User-Agent": "sapphire/{version}"}'>${extraHeaders}</textarea>
+                </div>
+                <div class="text-muted" style="font-size:0.8em;margin-left:24px;margin-top:2px">
+                    HTTP headers sent on every request to this provider. <code>{session}</code> becomes a stable per-chat id (a salted hash — the chat name never leaves the machine) that gateways use for routing and prompt-cache affinity; <code>{version}</code> is Sapphire's version for a self-identifying User-Agent. Both also work inside Extra body. Blank = the SDK's own headers.
+                </div>
             </div>
         </details>`;
 }
 
 // Read the shared Advanced fields back out. Returns {ok, generation_params,
-// disable_thinking, extra_body} or {ok:false, error} on invalid extra_body JSON.
+// disable_thinking, extra_body, extra_headers} or {ok:false, error} on invalid JSON.
 function _readAdvancedFields(root, prefix) {
     const g = id => root.querySelector(`#${prefix}-${id}`);
     const temp = parseFloat(g('temp')?.value);
@@ -409,7 +418,16 @@ function _readAdvancedFields(root, prefix) {
         try { JSON.parse(rawExtra); extra_body = rawExtra; }
         catch (e) { return { ok: false, error: 'Extra body is not valid JSON' }; }
     }
-    return { ok: true, generation_params, disable_thinking, extra_body };
+    const rawHeaders = (g('extra-headers')?.value || '').trim();
+    let extra_headers = '';
+    if (rawHeaders) {
+        try {
+            const parsed = JSON.parse(rawHeaders);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+            extra_headers = rawHeaders;
+        } catch (e) { return { ok: false, error: 'Extra headers must be a JSON object of header: value' }; }
+    }
+    return { ok: true, generation_params, disable_thinking, extra_body, extra_headers };
 }
 
 // ── Unified Add/Edit provider form ───────────────────────────────────────────
@@ -463,6 +481,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
             top_k: gen.top_k,
             disable_thinking: (config.disable_thinking ?? config.disable_thinking_qwen),
             extra_body: config.extra_body,
+            extra_headers: config.extra_headers,
         })}
         <div style="display:flex;gap:8px;align-items:center">
             <button class="btn btn-primary btn-sm" id="${prefix}-save">${isAdd ? 'Add' : 'Save'}</button>
@@ -523,6 +542,7 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         if (g('fallback')) g('fallback').checked = true;
         if (g('no-think')) g('no-think').checked = false;
         if (g('extra-body')) g('extra-body').value = '';
+        if (g('extra-headers')) g('extra-headers').value = '';
         if (g('temp')) g('temp').value = 0.7;
         if (g('maxtok')) g('maxtok').value = 4096;
         if (g('topp')) g('topp').value = 0.9;
@@ -549,6 +569,11 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
             // Visible pre-fill for loopback presets (LM Studio, Ollama) — the
             // checkbox is the source of truth, user can untick before saving
             g('local').checked = /127\.0\.0\.1|localhost/.test(preset.base_url || '');
+            // JSON hints land IN the form (Advanced), visible and editable —
+            // e.g. OpenCode's session header, Fireworks' `user` affinity field.
+            const hints = preset.config_hints || {};
+            if (g('extra-body') && hints.extra_body) g('extra-body').value = JSON.stringify(hints.extra_body);
+            if (g('extra-headers') && hints.extra_headers) g('extra-headers').value = JSON.stringify(hints.extra_headers);
             const suggested = preset.suggested_models || [];
             if (suggested.length) {
                 g('suggested').innerHTML = '<small class="text-muted">Suggested: ' +
@@ -627,6 +652,7 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
             use_as_fallback: g('fallback')?.checked ?? true,
             disable_thinking: adv.disable_thinking,
             extra_body: adv.extra_body,
+            extra_headers: adv.extra_headers,
         };
         const apiKey = g('key')?.value?.trim();
         if (apiKey) common.api_key = apiKey;
@@ -664,7 +690,12 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
 
         const body = { ...common, name, display_name: name, template: selectedTemplate };
         if (Object.keys(adv.generation_params).length) body.generation_params = adv.generation_params;
-        if (selectedPreset && presets[selectedPreset]?.config_hints) Object.assign(body, presets[selectedPreset].config_hints);
+        if (selectedPreset && presets[selectedPreset]?.config_hints) {
+            // extra_body / extra_headers were pre-filled into the form on pick — the
+            // textarea is the value (the user may have edited it), not the hint.
+            const { extra_body: _hb, extra_headers: _hh, ...hints } = presets[selectedPreset].config_hints;
+            Object.assign(body, hints);
+        }
         if (selectedPreset && presets[selectedPreset]?.api_key_env) body.api_key_env = presets[selectedPreset].api_key_env;
         if (selectedPreset && presets[selectedPreset]?.auto_discover_models) body.auto_discover_models = true;
 
