@@ -210,6 +210,8 @@ This is the rail that keeps spice/datetime/plugin context cache-friendly. Plugin
 
 **Cross-provider:** Thinking blocks are stripped from history when switching to non-Claude providers.
 
+**Outbound lanes (continuity tasks):** `ExecutionContext` only hands a reply to Discord, Telegram, email or TTS when a person would see an answer in it. Think-only text, reasoning substituted for an empty answer (`LLMResponse.content_is_reasoning`), and degenerate output (a wall of `...`, a line on repeat, a two-token stub after reasoning spent `max_tokens`) get one fresh decode, then the run ends degraded with an empty reply and the reason in the log and the chat bubble. The web chat renders thinking itself and is not gated.
+
 ---
 
 ## Authentication & Credentials

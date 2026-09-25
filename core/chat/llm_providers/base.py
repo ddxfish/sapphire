@@ -201,6 +201,10 @@ class LLMResponse:
     # emits `reasoning_content`, and the next API call after tool execution
     # fails with 400 "Missing reasoning_content field". 2026-05-14.
     thinking: Optional[str] = None
+    # True when `content` is the reasoning stream substituted for an empty
+    # visible answer (openai_compat's DashScope-style fallback). The web chat
+    # renders it; outbound lanes (ExecutionContext) treat it as no answer.
+    content_is_reasoning: bool = False
     
     @property
     def has_tool_calls(self) -> bool:

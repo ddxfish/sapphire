@@ -2,7 +2,7 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "min_core_version": "2.13.0",
   "description": "Discord bot \u2014 accounts (the only thing it stores), conversation, images in and out, GIFs, silent reactions, and voice channels on Sapphire's conversation engine. Chat and greetings are daemon tasks (Discord: Chat / Greetings), voice is a Realtime rule (Discord: Voice channel); personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",

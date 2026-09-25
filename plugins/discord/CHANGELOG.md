@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.1 — 2026-09-25
+
+- **A reply is at most 8 messages** from paragraph splitting; past that, paragraphs are packed into
+  1900-char posts (a long code dump still gets every byte). **Punctuation-only paragraphs are dropped**
+  (a lone `...` or `?!` reply survives). A model that collapsed into `...` paragraphs used to drip them
+  out one message at a time, with a typing pause each, for as long as its token budget lasted; the
+  log now says `dropped N punctuation-only paragraph(s)` when that happens. Core (2.13.2) also stops
+  such a reply upstream, before any lane sees it.
+
 ## 2.0.0 — 2026-09-22
 
 The consolidation release. Between 1.25 and 1.33 the host shed every feature that was not the

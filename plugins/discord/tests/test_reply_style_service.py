@@ -57,3 +57,46 @@ def test_chunker_closes_and_reopens_code_fences():
     for chunk in chunks:
         assert chunk.count('```') % 2 == 0, chunk
     assert chunks[1].startswith('```')
+
+
+# ── 2026-09-25: a wall of '...' paragraphs dripped out as ~1500 messages ────
+from plugins.discord.conversation.reply_style_service import MAX_MESSAGES_PER_REPLY
+
+
+def test_wall_of_dots_is_dropped():
+    svc = ReplyStyleService()
+    wall = "\n\n".join(["..."] * 30 + ["We", "......", "Sorry..."] + ["..."] * 30)
+    assert svc.parse_llm_output(wall).chunks == ["We", "Sorry..."]
+
+
+def test_lone_pause_and_emoji_replies_survive():
+    svc = ReplyStyleService()
+    assert svc.parse_llm_output("...").chunks == ["..."]
+    assert svc.parse_llm_output("?!").chunks == ["?!"]
+    assert svc.parse_llm_output("🔥🔥🔥").chunks == ["🔥🔥🔥"]
+    assert svc.parse_llm_output("hey\n\n...\n\nanyway").chunks == ["hey", "anyway"]
+
+
+def test_long_wall_with_no_words_sends_nothing():
+    assert ReplyStyleService().parse_llm_output("." * 500).chunks == []
+    assert ReplyStyleService().parse_llm_output("...\n\n...").chunks == []
+
+
+def test_paragraph_flood_is_packed_under_the_cap():
+    svc = ReplyStyleService(message_limit=1900)
+    flood = "\n\n".join(f"line {i}" for i in range(60))
+    chunks = svc.parse_llm_output(flood).chunks
+    assert len(chunks) <= MAX_MESSAGES_PER_REPLY
+    assert "\n\n".join(chunks) == flood
+
+
+def test_eight_paragraphs_still_post_one_by_one():
+    text = "\n\n".join(f"para {i}" for i in range(MAX_MESSAGES_PER_REPLY))
+    assert ReplyStyleService().parse_llm_output(text).chunks == text.split("\n\n")
+
+
+def test_long_code_dump_keeps_every_byte_past_the_cap():
+    svc = ReplyStyleService(message_limit=100)
+    text = "\n\n".join("x" * 90 for _ in range(20))
+    chunks = svc.parse_llm_output(text).chunks
+    assert len(chunks) == 20 and all(len(c) <= 100 for c in chunks)

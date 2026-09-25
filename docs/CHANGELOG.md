@@ -2,6 +2,9 @@
 - Custom providers take extra HTTP headers (Settings → LLM → Advanced → Extra headers) with `{session}` / `{version}` placeholders — stable per-chat session affinity and a self-identifying User-Agent, blank = unchanged
 - OpenCode Go and OpenCode Zen presets (the gateway requires `x-opencode-session`); model lists auto-discover
 - Fireworks session affinity moved from a hidden host-sniff to the same rail — per-chat now, existing configs migrated on boot
+- Continuity tasks no longer relay a degenerate reply: a wall of `...`, a line on repeat, a two-token stub after reasoning spent the budget, or reasoning substituted for an empty answer gets one fresh decode, then an empty reply carrying the reason (Discord, Telegram, email and TTS lanes)
+- Discord: a reply is at most 8 messages from paragraph splitting (longer ones are packed); punctuation-only paragraphs are dropped. Plugin 2.0.1
+- The LLM log line reports reasoning tokens for OpenAI-compatible providers (it always said 0)
 # 2.13.1 - Discord Simplify
 - Removed Discord memory
 - Routed Discord through Daemons and Realtime

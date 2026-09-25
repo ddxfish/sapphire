@@ -1,13 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
+import string
 
 
 from plugins.discord.conversation.gif_service import strip_placeholder_gif_urls
 from plugins.discord.conversation.think_tags import strip_think_tags
 
+logger = logging.getLogger(__name__)
+
 _FENCE_LINE_RE = re.compile(r'(?m)^[ \t]*```')
+# A reply is at most this many Discord messages from paragraph splitting; past
+# it, paragraphs are packed into message_limit-sized posts (length alone still
+# decides the count of a long code dump). A degenerate reply of 1500 "..."
+# paragraphs used to drip out one message at a time for an hour (2026-09-25).
+MAX_MESSAGES_PER_REPLY = 8
+_FILLER = frozenset(string.punctuation + string.whitespace + '…—–·•')
+_STYLISTIC_MAX = 12   # a lone "...", "?!", "—" is a reply; a 1900-char wall is not
+
+
+def _has_content(text: str) -> bool:
+    return any(c not in _FILLER for c in text)
 
 
 @dataclass
@@ -63,7 +78,35 @@ class ReplyStyleService:
             if not part:
                 continue
             chunks.extend(self._split_discord_length(part))
+        chunks = self._drop_filler(chunks)
+        if len(chunks) > MAX_MESSAGES_PER_REPLY:
+            chunks = self._pack(chunks)
         return self._rebalance_fences(chunks)
+
+    @staticmethod
+    def _drop_filler(chunks: list[str]) -> list[str]:
+        """Punctuation-only paragraphs ('...', '......') are dropped; a reply
+        that is ONLY one short one (a dramatic pause, '?!') is kept as-is."""
+        kept = [c for c in chunks if _has_content(c)]
+        if not kept and len(chunks) == 1 and len(chunks[0]) <= _STYLISTIC_MAX:
+            return chunks
+        dropped = len(chunks) - len(kept)
+        if dropped:
+            logger.warning('[DISCORD] dropped %d punctuation-only paragraph(s) from a reply '
+                           '— the model output looks degenerate', dropped)
+        return kept
+
+    def _pack(self, chunks: list[str]) -> list[str]:
+        """Join consecutive paragraphs into message_limit-sized posts."""
+        out: list[str] = []
+        for chunk in chunks:
+            if out and len(out[-1]) + 2 + len(chunk) <= self.message_limit:
+                out[-1] = out[-1] + '\n\n' + chunk
+            else:
+                out.append(chunk)
+        logger.info('[DISCORD] reply had %d paragraphs — packed into %d message(s) (cap %d)',
+                    len(chunks), len(out), MAX_MESSAGES_PER_REPLY)
+        return out
 
     @staticmethod
     def _rebalance_fences(chunks: list[str]) -> list[str]:

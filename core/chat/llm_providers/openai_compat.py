@@ -825,6 +825,10 @@ class OpenAICompatProvider(BaseProvider):
                         usage["cache_read_tokens"] = cached
                         usage["prompt_tokens"] = max(0, usage["prompt_tokens"] - cached)
                         logger.info(f"[CACHE] Stream usage: {cached} cached of {usage['prompt_tokens'] + cached} prompt tokens")
+                _ctd = getattr(chunk.usage, 'completion_tokens_details', None)
+                _rt = getattr(_ctd, 'reasoning_tokens', None) if _ctd else None
+                if _rt:
+                    usage["reasoning_tokens"] = int(_rt)
 
             if not chunk.choices:
                 continue
@@ -895,15 +899,18 @@ class OpenAICompatProvider(BaseProvider):
         # If no visible content but we have thinking, use thinking as content
         # This handles providers that put the full response in reasoning_content
         # (e.g., DashScope Qwen3 thinking mode)
+        content_is_reasoning = False
         if not full_content and full_thinking:
             logger.info(f"[REASONING] No content but have thinking ({len(full_thinking)} chars) — using as content")
             full_content = full_thinking
+            content_is_reasoning = True
 
         final_response = LLMResponse(
             content=full_content if full_content else None,
             tool_calls=final_tool_calls,
             finish_reason=finish_reason,
-            usage=usage
+            usage=usage,
+            content_is_reasoning=content_is_reasoning,
         )
 
         done_event = {"type": "done", "response": final_response}
@@ -922,6 +929,7 @@ class OpenAICompatProvider(BaseProvider):
         # Check for reasoning_content (Fireworks reasoning models)
         # Prepend as <think> tags to match streaming behavior
         reasoning = getattr(message, 'reasoning_content', None)
+        content_is_reasoning = False
         if reasoning:
             logger.info(f"[REASONING] Non-stream response has reasoning_content ({len(reasoning)} chars)")
             content = message.content or ""
@@ -931,6 +939,7 @@ class OpenAICompatProvider(BaseProvider):
                 # No visible content — use reasoning as the response
                 # (some providers put everything in reasoning_content)
                 message_content = reasoning
+                content_is_reasoning = True
         else:
             message_content = message.content
 
@@ -960,6 +969,10 @@ class OpenAICompatProvider(BaseProvider):
                 if cached > 0:
                     usage["cache_read_tokens"] = cached
                     usage["prompt_tokens"] = max(0, usage["prompt_tokens"] - cached)
+            _ctd = getattr(response.usage, 'completion_tokens_details', None)
+            _rt = getattr(_ctd, 'reasoning_tokens', None) if _ctd else None
+            if _rt:
+                usage["reasoning_tokens"] = int(_rt)
 
         return LLMResponse(
             content=message_content,
@@ -967,4 +980,5 @@ class OpenAICompatProvider(BaseProvider):
             finish_reason=choice.finish_reason,
             usage=usage,
             thinking=reasoning,  # raw reasoning_content for DeepSeek round-trip
+            content_is_reasoning=content_is_reasoning,
         )

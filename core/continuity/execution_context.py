@@ -7,6 +7,8 @@
 # Prompt, tools, scopes, provider are all resolved at construction time.
 
 import logging
+import re
+import string
 import time
 from contextvars import ContextVar
 from datetime import datetime
@@ -25,6 +27,44 @@ current_task_persona: ContextVar[Optional[str]] = ContextVar('current_task_perso
 
 # Warn once per process about a loop-guard version skew (see helper below).
 _loop_guard_skew_warned = False
+
+
+_THINK_BLOCK_RE = re.compile(r'<(?:seed:)?think[^>]*>[\s\S]*?</(?:seed:think|seed:cot_budget_reflect|think)>', re.I)
+_THINK_OPEN_RE = re.compile(r'^\s*<(?:seed:)?think[^>]*>[\s\S]*$', re.I)
+_THINK_LEAD_RE = re.compile(r'^[\s\S]*?</(?:seed:think|seed:cot_budget_reflect|think)>', re.I)
+_THINK_OPENER_RE = re.compile(r'<(?:seed:)?think', re.I)
+_FILLER = frozenset(string.punctuation + string.whitespace + '\u2026\u2014\u2013\u00b7\u2022')
+_LENGTH_FINISH = ('length', 'max_tokens', 'incomplete')   # openai-compat / anthropic / responses
+
+
+def visible_answer(text: str) -> str:
+    """What a person would see of a reply: think blocks gone — a complete
+    block anywhere, an unclosed opener that starts the reply, a closer with no
+    opener (the scheduler's and the Discord plugin's shapes)."""
+    t = _THINK_BLOCK_RE.sub('', text or '')
+    t = _THINK_OPEN_RE.sub('', t)
+    if not _THINK_OPENER_RE.search(t):
+        t = _THINK_LEAD_RE.sub('', t)
+    return t.strip()
+
+
+def degenerate_reason(text: str, finish=None) -> Optional[str]:
+    """Why `text` is not an answer, or None. The shapes seen in the wild: a
+    wall of '...' paragraphs (a Discord bot dripped 1500 of them, 2026-09-25),
+    the same line on repeat, a two-token stub left after reasoning spent the
+    budget. Emoji-only and short stylistic replies ('...', '?!') pass."""
+    t = (text or '').strip()
+    if not t:
+        return 'empty'
+    n = len(t)
+    if n >= 12 and sum(c not in _FILLER for c in t) < n * 0.2:
+        return 'punctuation wall'
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    if len(lines) >= 6 and max(lines.count(ln) for ln in set(lines)) >= len(lines) * 0.6:
+        return 'repeated line'
+    if finish in _LENGTH_FINISH and n < 8:
+        return 'truncated fragment'
+    return None
 
 
 def _exec_with_loop_counts(fn, *args, loop_counts=None, **kwargs):
@@ -578,6 +618,14 @@ class ExecutionContext:
                 logger.info(f"[ExecCtx] cancelled after round {i+1}'s LLM reply — dropping it")
                 break
 
+            # What a person would see. Reasoning substituted for an empty
+            # answer (openai_compat's fallback) and think-only text are NOT
+            # answers on this lane: every outbound door (Discord, Telegram,
+            # email, TTS) is downstream of here. The web chat renders those
+            # itself and never comes through this loop.
+            _reasoning_only = getattr(response_msg, 'content_is_reasoning', False) is True
+            _visible = '' if _reasoning_only else visible_answer(response_msg.content or '')
+
             if response_msg.has_tool_calls:
                 filtered = filter_to_thinking_only(response_msg.content or "")
                 tool_calls = response_msg.get_tool_calls_as_dicts()[:max_parallel]
@@ -619,7 +667,7 @@ class ExecutionContext:
                     break
                 continue
 
-            elif response_msg.content:
+            elif response_msg.content and _visible:
                 fn_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
                 if fn_data:
                     self.tool_log.append(fn_data.get('name', '?'))
@@ -649,17 +697,33 @@ class ExecutionContext:
                 # openai_responses says 'incomplete' (fixer-scout, 2026-07-19 —
                 # matching only 'length' left the b12 class live elsewhere).
                 _finish = getattr(response_msg, 'finish_reason', None)
-                if _finish in ('length', 'max_tokens', 'incomplete') and self.tools:
+                # A wall of '...', a line on repeat, a two-token stub after
+                # reasoning spent the budget: not an answer on ANY lane. Same
+                # one rescue decode; a second failure DROPS it — an empty
+                # bubble carrying the reason beats 1500 Discord messages of
+                # dots (VIP report, 2026-09-25).
+                _garbage = degenerate_reason(_visible, _finish)
+                if _garbage or (_finish in _LENGTH_FINISH and self.tools):
                     if llm_retries < 1 and i + 1 < max_iterations:
                         # (last-iteration length-deaths skip the retry — the
                         # continue would exit the loop and DROP the text the
                         # audit contract promises to keep.)
                         llm_retries += 1
+                        _what = (f"output looks degenerate ({_garbage})" if _garbage
+                                 else f"finish={_finish} with no tool call")
                         logger.warning(
-                            f"[ExecCtx] finish={_finish} with no tool call "
-                            f"({len(response_msg.content)} chars) — retrying "
-                            f"turn once with a fresh decode.")
+                            f"[ExecCtx] {_what} ({len(response_msg.content)} chars, "
+                            f"finish={_finish}) — retrying turn once with a fresh decode.")
                         continue
+                    if _garbage:
+                        self.degraded_reason = (
+                            f"LLM output looked degenerate ({_garbage}; "
+                            f"{len(response_msg.content)} chars, finish={_finish}) "
+                            f"— dropped, nothing sent.")
+                        logger.warning(f"[ExecCtx] {self.degraded_reason}")
+                        final_content = ""
+                        messages.append({"role": "assistant", "content": ""})
+                        break
                     self.degraded_reason = (
                         "LLM hit max_tokens without completing a tool call "
                         "(truncated text kept for audit)."
@@ -670,22 +734,23 @@ class ExecutionContext:
                 messages.append({"role": "assistant", "content": final_content})
                 break
             else:
-                # Provider returned no content AND no tool_calls. This is
-                # rare but happens with some smaller / quantized models or
-                # when a provider trims to fit its own input cap and has
-                # no budget left for output. Same rescue as the length-death
-                # above: empty is never a legitimate answer, so spend the
-                # run's one retry before breaking degraded. Scout 2 #3.
+                # No answer and no tool_calls: empty content (a small /
+                # quantized model, a provider that trimmed to its input cap),
+                # reasoning substituted for content, or a think block with
+                # nothing after it (the budget went to thinking). Same rescue
+                # as the length-death above: spend the run's one retry, then
+                # break degraded. Scout 2 #3.
+                _why = ('reasoning only' if _reasoning_only
+                        else 'thinking only' if response_msg.content else 'empty content')
                 if llm_retries < 1 and i + 1 < max_iterations:
                     llm_retries += 1
                     logger.warning(
-                        "[ExecCtx] LLM returned empty content with no tool "
-                        "calls — retrying turn once.")
+                        f"[ExecCtx] LLM returned {_why} with no tool calls — retrying turn once.")
                     continue
                 self.degraded_reason = (
-                    "LLM returned empty content with no tool calls "
-                    "(provider may have hit its own input cap or model "
-                    "produced no output)."
+                    f"LLM returned {_why} with no tool calls "
+                    "(provider may have hit its own input cap, spent the "
+                    "budget thinking, or produced no output)."
                 )
                 logger.warning(f"[ExecCtx] {self.degraded_reason}")
                 break
@@ -780,7 +845,9 @@ class ExecutionContext:
                     )
                 elif overflow_reason:
                     self.degraded_reason = overflow_reason
-                else:
+                elif not self.degraded_reason:
+                    # (an in-loop reason — empty / reasoning-only / degenerate
+                    # output — used to be overwritten here with "exhausted")
                     self.degraded_reason = (
                         f"Tool loop exhausted after {max_iterations} rounds without "
                         f"a final reply. Tools called: {', '.join(self.tool_log) or '(none)'}."

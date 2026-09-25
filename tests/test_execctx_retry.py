@@ -168,3 +168,82 @@ def test_length_on_no_tool_task_is_accepted_without_retry():
     )
     assert result == "A very long essay tha"
     assert ctx.degraded_reason is None
+
+
+# ── 2026-09-25: a Discord bot dripped '...' for an hour — ONE reply of ~1500
+# punctuation paragraphs, relayed faithfully. Not an answer on any lane:
+# one rescue decode, then drop it with the reason. ─────────────────────────
+WALL = "\n\n".join(["..."] * 40 + ["We", "......", "Sorry..."] + ["..."] * 40)
+
+
+def _no_tools(responses):
+    return _build_ctx({"prompt": "discord", "toolset": "none"}, responses, tools=[])
+
+
+def test_punctuation_wall_is_retried_then_dropped():
+    ctx, te = _no_tools([_text_response(WALL, finish="length"), _text_response(WALL, finish="stop")])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        result = ctx.run("hey bot")
+    assert te.call_llm_with_metrics.call_count == 2, "one rescue decode, no more"
+    assert result == "", f"garbage must not reach Discord/TTS: {result[:40]!r}"
+    assert "degenerate" in (ctx.degraded_reason or ""), ctx.degraded_reason
+    assert ctx.new_messages[-1] == {"role": "assistant", "content": ""}
+
+
+def test_punctuation_wall_recovers_on_retry():
+    ctx, te = _no_tools([_text_response(WALL, finish="stop"), _text_response("hey! what's up", finish="stop")])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        result = ctx.run("hey bot")
+    assert result == "hey! what's up"
+    assert ctx.degraded_reason is None
+
+
+def test_two_token_stub_after_reasoning_ate_the_budget_is_dropped():
+    ctx, te = _no_tools([_text_response("We", finish="length"), _text_response("Sorry", finish="length")])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        result = ctx.run("hey bot")
+    assert result == "" and "truncated fragment" in ctx.degraded_reason
+
+
+def test_repeated_line_is_dropped():
+    ctx, te = _no_tools([_text_response("I'm here!\n" * 12, finish="stop")] * 2)
+    with patch("core.chat.history.count_tokens", return_value=10):
+        assert ctx.run("hey bot") == ""
+    assert "repeated line" in ctx.degraded_reason
+
+
+def test_reasoning_substituted_for_content_is_not_an_answer():
+    r1 = _text_response("Let me think about what to say here...", finish="length")
+    r1.content_is_reasoning = True
+    r2 = _text_response("The user wants a greeting.", finish="length")
+    r2.content_is_reasoning = True
+    ctx, te = _no_tools([r1, r2])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        result = ctx.run("hey bot")
+    assert te.call_llm_with_metrics.call_count == 2
+    assert result == "", "raw reasoning must never be posted"
+    assert "reasoning only" in ctx.degraded_reason, ctx.degraded_reason
+
+
+def test_think_only_reply_is_not_an_answer():
+    ctx, te = _no_tools([_text_response("<think>hmm</think>", finish="stop"), _text_response("hi!", finish="stop")])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        result = ctx.run("hey bot")
+    assert result == "hi!" and ctx.degraded_reason is None
+
+
+def test_short_and_emoji_replies_pass_the_gate():
+    for text in ("...", "🔥🔥🔥", "ok", "?!", "sure — on it."):
+        ctx, te = _no_tools([_text_response(text)])
+        with patch("core.chat.history.count_tokens", return_value=10):
+            assert ctx.run("hey bot") == text, text
+        assert ctx.degraded_reason is None, text
+
+
+def test_in_loop_reason_survives_the_post_loop_pass():
+    """Double-empty used to end as 'Tool loop exhausted' — the post-loop pass
+    overwrote the reason the loop had just written."""
+    ctx, te = _no_tools([_text_response("", finish="stop"), _text_response("", finish="stop")])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        ctx.run("hey bot")
+    assert "empty content" in ctx.degraded_reason, ctx.degraded_reason
