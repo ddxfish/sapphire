@@ -347,9 +347,21 @@ class ProviderRegistry(_BaseRegistry):
                 'base_url': config.get('base_url', ''),
                 'supports_reasoning': metadata.get('supports_reasoning', False),
                 'generation_params': config.get('generation_params'),
+                'supports_images': self._sees(key, providers_config),
             })
 
         return result
+
+    def _sees(self, key: str, providers_config: Dict[str, Dict[str, Any]]) -> bool:
+        """The vision verdict the UI shows (Images › describer picker): build the
+        enabled provider and ask it — class default (claude, gemini), the 👁
+        checkbox, or openai_compat's host/model heuristic. Disabled = False."""
+        try:
+            from core.chat.llm_providers.resolve import provider_sees
+            provider = self.get_provider_by_key(key, providers_config)
+            return bool(provider) and provider_sees(provider)
+        except Exception:
+            return False
 
     def get_core_keys(self) -> list:
         """Return list of core provider keys."""

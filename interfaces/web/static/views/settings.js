@@ -40,6 +40,7 @@ let overrides = [];
 let defaults = {};
 let pendingChanges = {};
 let wakewordModels = [];
+let visionProviders = [];   // [key, name] of enabled providers that see images (Images › describer)
 let availableThemes = ['dark'];
 let avatarPaths = { user: null, assistant: null }; // kept for plugin compat
 let providerMeta = {};
@@ -230,7 +231,12 @@ async function loadWakewordModels() {
 async function loadProviderMeta() {
     try {
         const res = await fetch('/api/llm/providers');
-        if (res.ok) { const d = await res.json(); providerMeta = d.metadata || {}; }
+        if (res.ok) {
+            const d = await res.json();
+            providerMeta = d.metadata || {};
+            visionProviders = (d.providers || []).filter(p => p.enabled && p.supports_images)
+                .map(p => [p.key, p.display_name || p.key]);
+        }
     } catch {}
 }
 
@@ -530,6 +536,16 @@ function renderInput(key, value, type) {
         ];
         return `<select id="${id}" data-key="${key}">
             ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
+    if (key === 'IMAGE_DESCRIBE_ENGINE') {
+        const opts = [
+            ['clip', 'CLIP — local atmospheric read, no LLM call (default)'],
+            ...visionProviders.map(([k, n]) => [k, `${n} — vision model, literal caption`]),
+        ];
+        if (value && !opts.some(([v]) => v === value)) opts.push([value, `${value} (not enabled, or no vision)`]);
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${escapeAttr(v)}" ${value === v ? 'selected' : ''}>${escapeAttr(l)}</option>`).join('')}
         </select>`;
     }
     if (key === 'WEB_IMAGES_SAFESEARCH') {

@@ -7,8 +7,8 @@ export default {
     id: 'images',
     name: 'Images',
     icon: '\u{1F5BC}\uFE0F',
-    description: 'Image memory, web image search, and upload size',
-    keys: ['IMAGE_MEMORY_TURNS', 'WEB_IMAGES_SAFESEARCH', 'IMAGE_UPLOAD_MAX_WIDTH'],
+    description: 'Image memory, the describer for text-only models, web image search, and upload size',
+    keys: ['IMAGE_MEMORY_TURNS', 'IMAGE_DESCRIBE_ENGINE', 'WEB_IMAGES_SAFESEARCH', 'IMAGE_UPLOAD_MAX_WIDTH'],
 
     render(ctx) {
         return `
@@ -18,6 +18,9 @@ export default {
                     Every image in a chat stays visible to you forever. The model sees an
                     image the turn it arrives, and again for the next few turns (below).
                     Anything older she can re-view by its handle (<code>img:&hellip;</code>).
+                    When the model answering has no vision, the <b>image describer</b> tells it
+                    what is in the picture: CLIP (local, atmospheric) or one of your
+                    vision-capable providers (a literal caption).
                 </p>
             </div>
             ${ctx.renderFields(this.keys)}

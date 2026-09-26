@@ -16,6 +16,8 @@ class BaseIntention:
 @dataclass
 class AddReactionIntention(BaseIntention):
     emoji: str = ''
+    text: str = ''            # deferred scoring only (roberta): the message, cleared once scored
+    engine: str = 'lexicon'
 
 
 @dataclass

@@ -401,8 +401,9 @@ class ExecutionContext:
                               If None, runs ephemeral (system + user only).
             images: Optional plugin-supplied images [{"data": b64, "media_type": str}].
                     Shown to the LLM as base64 blocks THIS turn only, gated on
-                    provider vision support; non-vision falls back to a CLIP vibe
-                    description. new_messages always persists the marker form.
+                    provider vision support; non-vision gets the image described in
+                    words (core.image_describe: CLIP or a vision provider).
+                    new_messages always persists the marker form.
         """
         # filter_to_thinking_only from its real home — chat.py stopped
         # re-exporting it when the blocking engine died (merge 2026-08-17).
@@ -441,15 +442,17 @@ class ExecutionContext:
                     "media_type": img.get("media_type", "image/jpeg"),
                 })
             return content, user_input
-        # No vision: describe the image(s) so the model gets the vibe, not a drop.
+        # No vision: describe the image(s) in words so the model gets them, not a
+        # drop. Same privacy the task's own brain was resolved with (_resolve_provider).
         import base64
         vibe_parts = []
+        private = bool(getattr(self, '_prompt_privacy_required', False))
         for img in images:
             try:
-                from core import vibes as _vibes
-                vibe_parts.append(_vibes.describe(base64.b64decode(img["data"])))
+                from core import image_describe
+                vibe_parts.append(image_describe.describe(base64.b64decode(img["data"]), private=private))
             except Exception as e:
-                logger.warning(f"[EVENT-IMG] vibe describe failed: {e}")
+                logger.warning(f"[EVENT-IMG] describe failed: {e}")
         augmented = user_input
         if vibe_parts:
             augmented = (user_input + "\n\n" + "\n\n".join(p for p in vibe_parts if p)).strip()

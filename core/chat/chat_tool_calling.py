@@ -245,7 +245,7 @@ def _extract_tool_images(result, history=None, provider=None, function_name=None
         supports_vision = bool(provider and getattr(provider, 'supports_images', False))
         logger.info(f"[VISION-DEBUG] tool returned {len(result['images'])} image(s); "
                     f"provider={type(provider).__name__ if provider else None} "
-                    f"supports_vision={supports_vision} → {'LLM sees them' if supports_vision else 'CLIP fallback'}")
+                    f"supports_vision={supports_vision} → {'LLM sees them' if supports_vision else 'described (Settings › Images)'}")
         # Save images to DB and embed markers in text
         # Images with display_only=True are saved for user gallery but not sent to LLM
         llm_images = []
@@ -267,17 +267,17 @@ def _extract_tool_images(result, history=None, provider=None, function_name=None
                 # "wrong image" to literal models → regeneration loops. 2026-08-09.
                 hidden_to_vibe.append(img)
         if hidden_to_vibe:
-            # Generate a CLIP-based atmospheric description so the model still
-            # gets the "vibe" of what was captured/produced.
+            # Describe the image in words so the model still gets it — CLIP vibe or
+            # a vision provider, Settings › Images › Image describer (core.image_describe).
             vibe_parts = []
             for img in hidden_to_vibe:
                 try:
                     import base64 as _b64
-                    from core import vibes as _vibes
+                    from core import image_describe
                     raw = _b64.b64decode(img["data"])
-                    vibe_parts.append(_vibes.describe(raw))
+                    vibe_parts.append(image_describe.describe(raw))
                 except Exception as e:
-                    logger.warning(f"[VIBES] failed to describe image: {e}")
+                    logger.warning(f"[DESCRIBE] failed to describe image: {e}")
             if vibe_parts:
                 text = (text + "\n\n" + "\n\n".join(vibe_parts)).strip()
             elif not supports_vision:

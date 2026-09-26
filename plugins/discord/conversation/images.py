@@ -1,8 +1,8 @@
 """Inbound images ride the reply payload — the one image lane (S5, 2026-09-22).
 
-No captions: the daemon task's own model sees the bytes
-(core's plugin-event image contract) when it has vision and ignores them when
-it does not. The transport fetches OFF the gateway loop right after a message
+No captions here: the daemon task's own model sees the bytes (core's
+plugin-event image contract) when it has vision; when it does not, core's image
+describer (Settings › Images: CLIP or a vision provider) tells it what is there. The transport fetches OFF the gateway loop right after a message
 is adapted (to_thread → fetch); process_batch, ON the loop, only reads the
 cache (broadsword H5: a fetch there froze every account). Images only, 10 MB
 each, no redirects.

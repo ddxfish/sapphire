@@ -46,16 +46,42 @@ _TIER_ORDER = ('very_negative', 'very_positive', 'funny', 'negative', 'positive'
 _WORD = re.compile(r"[a-z']+")
 
 
-def tone(text: str) -> str:
-    """Rough tone of one message: a tier name or '' (nothing worth reacting to)."""
+ENGINES = ('lexicon', 'roberta')
+
+
+def _cue_hit(tier: str, words: set, lowered: str) -> bool:
+    return any((cue in words) if ' ' not in cue and cue.isalpha() else (cue in lowered) for cue in _LEXICON[tier])
+
+
+def _tier_from_compound(compound: float) -> str:
+    if compound >= 0.5:
+        return 'very_positive'
+    if compound >= 0.1:
+        return 'positive'
+    if compound <= -0.5:
+        return 'very_negative'
+    if compound <= -0.1:
+        return 'negative'
+    return ''
+
+
+def tone(text: str, engine: str = 'lexicon') -> str:
+    """Rough tone of one message: a tier name or '' (nothing worth reacting to).
+    engine 'roberta' asks the sentiment model first (funny stays the word list's:
+    a model reads "lol that sucks" as negative); neutral or unavailable → word list."""
     lowered = ' '.join(str(text or '').lower().split())
     if not lowered:
         return ''
     words = set(_WORD.findall(lowered))
+    if engine == 'roberta' and not _cue_hit('funny', words, lowered):
+        from plugins.discord.conversation import sentiment
+        compound = sentiment.compound(lowered)
+        tier = _tier_from_compound(compound) if compound is not None else ''
+        if tier:
+            return tier
     for tier in _TIER_ORDER:
-        for cue in _LEXICON[tier]:
-            if (cue in words) if ' ' not in cue and cue.isalpha() else (cue in lowered):
-                return tier
+        if _cue_hit(tier, words, lowered):
+            return tier
     if '?' in lowered:
         return 'curious'
     if lowered.endswith('!') and len(lowered) > 3:
@@ -63,8 +89,8 @@ def tone(text: str) -> str:
     return ''
 
 
-def pick_emoji(text: str, rng=random) -> str:
-    tier = tone(text)
+def pick_emoji(text: str, rng=random, engine: str = 'lexicon') -> str:
+    tier = tone(text, engine)
     return rng.choice(_EMOJIS[tier]) if tier else ''
 
 
@@ -83,14 +109,23 @@ class Reactions:
         chance = max(0.0, min(100.0, float(getattr(reaction, 'reaction_chance', 0) or 0)))
         if chance <= 0 or random.random() >= chance / 100.0:
             return None
-        emoji = pick_emoji(text)
-        if not emoji:
+        engine = str(getattr(reaction, 'sentiment_engine', 'lexicon') or 'lexicon')
+        # The word list is instant; the model is scored at execute time, off the
+        # gateway loop (a first-use download or a torch call must never block it).
+        emoji = pick_emoji(text) if engine != 'roberta' else ''
+        if engine != 'roberta' and not emoji:
             return None
         return AddReactionIntention(
             intention_type='add_reaction', account_name=trigger.account_name, channel_id=trigger.channel_id,
-            message_id=trigger.message_id, reason='silent_reaction', emoji=emoji,
+            message_id=trigger.message_id, reason='silent_reaction', emoji=emoji, text=text, engine=engine,
             metadata={'guild_id': trigger.guild_id, 'author_id': trigger.author_id},
         )
+
+    @staticmethod
+    def _score(intention) -> str:
+        """Resolve a deferred (model-scored) emoji; the text is dropped once read."""
+        text, intention.text = intention.text, ''
+        return pick_emoji(text, engine=intention.engine or 'lexicon')
 
     def execute_silent(self, intention, *, transport, settings=None) -> dict:
         if not transport:
@@ -102,6 +137,10 @@ class Reactions:
         if running is not None and getattr(transport, 'loop', None) is running:
             asyncio.create_task(self._execute_async(intention, transport), name='discord-silent-reaction')
             return {'status': 'scheduled'}
+        if not intention.emoji:
+            intention.emoji = self._score(intention)
+            if not intention.emoji:
+                return {'status': 'skipped', 'reason': 'no_tone'}
         delay = random.uniform(REACTION_DELAY_MIN, REACTION_DELAY_MAX)
         time.sleep(delay)
         result = transport.add_reaction_sync(intention.channel_id, intention.message_id, intention.emoji,
@@ -109,6 +148,10 @@ class Reactions:
         return self._record(intention, result=result, delay=delay)
 
     async def _execute_async(self, intention, transport) -> dict:
+        if not intention.emoji:
+            intention.emoji = await asyncio.to_thread(self._score, intention)
+            if not intention.emoji:
+                return {'status': 'skipped', 'reason': 'no_tone'}
         delay = random.uniform(REACTION_DELAY_MIN, REACTION_DELAY_MAX)
         await asyncio.sleep(delay)
         add = getattr(transport, 'add_reaction_async', None)

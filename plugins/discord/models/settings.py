@@ -69,6 +69,7 @@ class ReactionSettings:
     silent_enabled: bool = True
     reaction_chance: float = 10.0
     reaction_cooldown_seconds: int = 30
+    sentiment_engine: str = 'lexicon'     # lexicon | roberta (conversation/sentiment.py)
 
 
 @dataclass

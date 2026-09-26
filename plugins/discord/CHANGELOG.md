@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.0 — 2026-09-26
+
+- **Tone engine for silent reactions** (Reactions → *Tone engine*): the word list stays the default;
+  **RoBERTa** (`cardiffnlp/twitter-roberta-base-sentiment-latest`) reads the message's sentiment
+  instead. No new packages — torch and transformers are already in the tree for CLIP and TTS — the
+  model downloads once (~500 MB) into the Hugging Face cache and loads at boot on a thread. Scoring
+  happens when the reaction is executed, off the gateway loop; jokes still go by the word list and a
+  neutral or unavailable model falls back to it. Emoji pools unchanged.
+- Images a text-only task model was meant to see are now described by core's image describer
+  (Settings → Images: CLIP or a vision provider) — the docstring that said they were ignored was wrong.
+
 ## 2.1.1 — 2026-09-26
 
 - **Reminders have no toggle.** The `discord_remind` tool in a toolset IS the switch — the same way

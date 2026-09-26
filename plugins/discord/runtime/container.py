@@ -22,6 +22,7 @@ from plugins.discord.conversation.images import ImageLane
 from plugins.discord.conversation.mention_map_service import MentionMapService
 from plugins.discord.conversation.message_pipeline_service import MessagePipelineService
 from plugins.discord.conversation.reactions import Reactions
+from plugins.discord.conversation import sentiment
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
 from plugins.discord.greetings import GreetingsClock
 from plugins.discord.presence import PresenceClock
@@ -110,6 +111,8 @@ class RuntimeContainer:
         self.bot_gate = BotGate()
         self.reply_style_service = ReplyStyleService()
         self.reactions = Reactions()
+        if str(getattr(self.settings_store.resolve().reaction, 'sentiment_engine', '') or '') == 'roberta':
+            sentiment.warmup_async()      # the ~500 MB first-use download happens at boot, off the loop
         self.gif_service = GifService()
         self.event_adapter = DiscordEventAdapter(image_lane=self.image_lane, settings_store=self.settings_store,
                                                  mention_map_service=self.mention_map_service)

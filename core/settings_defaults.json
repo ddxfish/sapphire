@@ -279,7 +279,8 @@
 
   "images": {
     "IMAGE_MEMORY_TURNS": 3,
-    "WEB_IMAGES_SAFESEARCH": "off"
+    "WEB_IMAGES_SAFESEARCH": "off",
+    "IMAGE_DESCRIBE_ENGINE": "clip"
   },
   
   "tools": {

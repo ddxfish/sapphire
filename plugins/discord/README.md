@@ -97,7 +97,7 @@ on she shows the away line. Greetings are not gated by it.
 | Tab | What it controls |
 |---|---|
 | **Conversation** | reply mode, human/bot organic chance, name match, batching window, **how many channel messages the AI sees** (fetched live when she replies), natural delay (read, type, pause like a person), ignored channels, **answer any bot** or the bot allowlist |
-| **Reactions** | the `[react:]` tag and silent reactions (chance, cooldown) |
+| **Reactions** | the `[react:]` tag and silent reactions (chance, cooldown, tone engine: word list or the RoBERTa sentiment model) |
 | **Safety** | DMs (off by default) and the per-person daily DM budget, tools stay in server, reply cooldown |
 | **Media** | images in (the task's model sees attachments), GIFs (provider, key, filter) |
 | **Voice** | turn cues, silence, addressing mode + aliases, follow-up window, barge-in hold, the voice prompt |
