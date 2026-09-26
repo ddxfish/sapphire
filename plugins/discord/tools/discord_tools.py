@@ -201,8 +201,9 @@ TOOLS = [
         'function': {
             'name': 'discord_remind',
             'description': (
-                'Set a Discord reminder for the person you are talking to: when due the bot posts '
-                '"@them Reminder: <text>" in this channel. action=add with text= and either delay= '
+                '"Remind me…" → call this; a reminder exists ONLY after it answers "Reminder #N set" — '
+                'never claim one is set otherwise. When due the bot posts "@them Reminder: <text>" in '
+                'this channel. action=add with text= and either delay= '
                 '("2h", "30m", "1d 2h") or at= ("18:30", local time; tomorrow if already past). '
                 'action=list shows their pending reminders; action=cancel removes one by id= or every '
                 'one whose text contains text=. Inside a Discord conversation everything is about the '
@@ -727,11 +728,6 @@ def discord_remind(*, action: str, text: str = '', delay: str = '', at: str = ''
     store = getattr(runtime, 'reminders', None) if runtime else None
     if store is None:
         return ('Discord runtime is not available', False)
-    try:
-        if not runtime.settings_store.resolve().reminders.enabled:
-            return ('Reminders are off (Settings > Discord > Reminders).', False)
-    except Exception:
-        return ('Reminders are off (Settings > Discord > Reminders).', False)
     ev = _event_data()
     if ev and not str(ev.get('author_id') or '').strip():
         return ('This turn has no one asking (a scheduled post) — reminders are not available here.', False)

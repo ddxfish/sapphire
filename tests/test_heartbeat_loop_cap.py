@@ -214,42 +214,49 @@ def test_max_parallel_tools_zero_falls_through_to_config_default():
     )
 
 
-def test_context_limit_zero_still_means_unlimited():
-    """Regression guard: `context_limit = 0` historically means 'no limit'
-    (per the comment that's been there since the rewrite). The fix to
-    rounds/parallel must not change context_limit's semantics.
-    """
+def test_context_limit_zero_follows_the_global_setting():
+    """[REGRESSION_GUARD] 2026-09-26: a task's `context_limit = 0` means the
+    global CONTEXT_LIMIT — what the editor's "0 = app default" always promised.
+    It used to mean NO limit, so every default-created task shipped its whole
+    chat (Discord Chat at 271k tokens a turn; Movie Night blew LM Studio's
+    window with no trim log). Unlimited now lives only in the global setting."""
     from core.continuity.execution_context import ExecutionContext
 
-    fm = MagicMock()
-    fm.all_possible_tools = []
-    fm._apply_mode_filter = lambda x: x
+    def _run(global_limit):
+        fm = MagicMock()
+        fm.all_possible_tools = []
+        fm._apply_mode_filter = lambda x: x
+        te = MagicMock()
+        te.call_llm_with_metrics.return_value = _text_response("ok")
+        te.extract_function_call_from_text.return_value = None
+        with patch.object(ExecutionContext, "_build_prompt", return_value="sys"), \
+             patch.object(ExecutionContext, "_resolve_provider",
+                          return_value=("k", MagicMock(), "")), \
+             patch.object(ExecutionContext, "_build_gen_params", return_value={}), \
+             patch.object(ExecutionContext, "_resolve_tools",
+                          return_value=[{"function": {"name": "x"}}]), \
+             patch.object(ExecutionContext, "_build_scopes", return_value={}), \
+             patch.object(config, "CONTEXT_LIMIT", global_limit, create=True):
+            ctx = ExecutionContext(fm, te, {"prompt": "agent", "toolset": "all", "context_limit": 0})
+            ctx._allowed_tool_names = {"x"}
+            # Astronomical token count: only an unlimited budget lets the LLM run.
+            with patch("core.chat.history.count_tokens", return_value=10**9):
+                result = ctx.run("hi")
+        return te.call_llm_with_metrics.call_count, result, ctx.degraded_reason
 
-    te = MagicMock()
-    te.call_llm_with_metrics.return_value = _text_response("ok")
-    te.extract_function_call_from_text.return_value = None
+    calls, _, reason = _run(1000)
+    assert calls == 0 and "Context overflow" in str(reason), "task 0 must inherit the global 1000-token cap"
+    calls, result, _ = _run(0)
+    assert calls == 1 and result == "ok", "global 0 is the one place unlimited still lives"
 
-    task_settings = {"prompt": "agent", "toolset": "all", "context_limit": 0}
 
-    with patch.object(ExecutionContext, "_build_prompt", return_value="sys"), \
-         patch.object(ExecutionContext, "_resolve_provider",
-                      return_value=("k", MagicMock(), "")), \
-         patch.object(ExecutionContext, "_build_gen_params", return_value={}), \
-         patch.object(ExecutionContext, "_resolve_tools",
-                      return_value=[{"function": {"name": "x"}}]), \
-         patch.object(ExecutionContext, "_build_scopes", return_value={}):
-        ctx = ExecutionContext(fm, te, task_settings)
-        ctx._allowed_tool_names = {"x"}
-        # Astronomical token count — if 0 weren't honored as "unlimited" the
-        # loop would never call the LLM.
-        with patch("core.chat.history.count_tokens", return_value=10**9):
-            result = ctx.run("hi")
-
-    assert te.call_llm_with_metrics.call_count == 1, (
-        "context_limit=0 must mean 'no limit' — the LLM should still get "
-        "called even with absurd token counts."
-    )
-    assert result == "ok"
+def test_executor_hands_the_reader_none_for_a_zero_task_limit():
+    """[REGRESSION_GUARD] history.read_chat_messages treats a literal 0 as
+    'never trim' and None as 'global CONTEXT_LIMIT' — the executor must pass
+    None for a task's 0, or the read-time trim silently vanishes again."""
+    import inspect
+    from core.continuity import executor
+    assert 'context_limit=task_settings.get("context_limit") or None' in inspect.getsource(executor)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

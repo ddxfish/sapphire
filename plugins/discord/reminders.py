@@ -5,7 +5,8 @@ channel they asked in. Every runtime tick the due rows are posted as a plain
 "<@user> Reminder: text" and dropped; a failed post is logged, never retried.
 Rows live in memory and are mirrored into the plugin's state JSON (the
 greetings latch's file) on every change, so a restart keeps what was pending.
-Off by default (`reminders.enabled`); off = the tool refuses and nothing posts.
+No toggle (2026-09-26): the tool's presence in a toolset is the switch, like every
+other tool; nothing is ever posted that nobody asked for.
 """
 from __future__ import annotations
 
@@ -64,6 +65,45 @@ def due_in_seconds(*, delay: str = '', at: str = '', now: datetime | None = None
         when = parse_at(at, now)
         return (when - now).total_seconds() if when else None
     return None
+
+
+HINT = ('Reminders: when someone asks to be reminded of something, call the discord_remind tool '
+        '(action=add, text=, delay="2h" or at="18:30"). A reminder exists ONLY after the tool answers '
+        '"Reminder #N set" — never say one is set without that.')
+SOURCE_CHAT = 'discord_message'
+TOOL = 'discord_remind'
+
+
+def _resolve_via_core(toolset, extras):
+    from core.api_fastapi import get_system
+    return get_system().function_manager.resolve_tools(toolset, extras)
+
+
+def chat_tasks_carry_the_tool(account: str, plugin_loader, resolve=None) -> bool:
+    """Does any enabled Discord: Chat task for `account` resolve `discord_remind`
+    in its toolset (+ extra_toolsets)? Read-only, same resolver the executor uses."""
+    tasks_for = getattr(plugin_loader, 'tasks_for_source', None)
+    if not callable(tasks_for):
+        return False
+    resolve = resolve or _resolve_via_core
+    for task in tasks_for(SOURCE_CHAT) or []:
+        if str((task.get('trigger_config') or {}).get('account') or '') != str(account):
+            continue
+        try:
+            tools = resolve(task.get('toolset') or 'none', task.get('extra_toolsets') or []) or []
+        except Exception:
+            continue
+        if any((t.get('function') or {}).get('name') == TOOL for t in tools):
+            return True
+    return False
+
+
+def build_reminder_hint(account: str, plugin_loader, resolve=None) -> str:
+    """The reply-prompt usage rule, only when the account's Chat task carries the
+    tool (2026-09-26: with "reply naturally, no tool call needed" in a task's
+    Instructions the model promised reminders it never set; the tool being in
+    the toolset is the switch (2.1.1), so the rule rides exactly then)."""
+    return HINT if chat_tasks_carry_the_tool(account, plugin_loader, resolve) else ''
 
 
 class Reminders:

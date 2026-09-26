@@ -491,8 +491,9 @@ class ExecutionContext:
         # Chaos scout #5/#10 (2026-04-20) protected against literal-0 cap-out
         # but mistook the scheduler's 0-default as a real value — preserved
         # the safety here by falling through to config defaults instead.
-        # context_limit IS different: 0 there legitimately means "unlimited"
-        # and the downstream `if context_limit > 0` check expects that.
+        # context_limit follows the same `or`: 0 / missing = the global
+        # CONTEXT_LIMIT, which is what the task editor promises ("0 = app
+        # default"). Unlimited is only reachable by setting THAT to 0.
         # Tool-image sink: only when the caller set a stream-brain override is
         # the effective chat genuinely this run's chat — without one, the sink
         # would key images to the OPERATOR'S open chat (P3-T4 mis-cascade), so
@@ -504,8 +505,10 @@ class ExecutionContext:
         max_iterations = max(1, _rounds)
         _parallel = self.task_settings.get("max_parallel_tools") or config.MAX_PARALLEL_TOOLS
         max_parallel = max(1, _parallel)
-        _ctx = self.task_settings.get("context_limit")
-        context_limit = _ctx if _ctx is not None else getattr(config, 'CONTEXT_LIMIT', 0)
+        # Before 2026-09-26 a task's 0 meant NO limit, so every default-created
+        # task shipped its whole chat: Discord Chat reached 271k tokens a turn
+        # and Movie Night blew LM Studio's window with no trim log to say why.
+        context_limit = self.task_settings.get("context_limit") or getattr(config, 'CONTEXT_LIMIT', 0)
 
         # Tool schemas are part of the actual API payload, so they MUST be
         # included in the budget. Without this, a task with 158 tools loaded

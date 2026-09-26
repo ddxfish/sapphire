@@ -5,8 +5,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from core.continuity.executor import current_event_data
-from plugins.discord.models.settings import RemindersSettings
-from plugins.discord.reminders import MAX_PENDING, Reminders, due_in_seconds, parse_at, parse_delay
+from plugins.discord.reminders import HINT, MAX_PENDING, Reminders, build_reminder_hint, due_in_seconds, parse_at, parse_delay
 from plugins.discord.tools import discord_tools as tools
 
 
@@ -80,10 +79,10 @@ def test_delivery_takes_rows_before_posting_and_survives_a_failure():
     assert [x['text'] for x in rows] == ['lost'] and [x['text'] for x in r.pending('alpha')] == ['later']   # never retried
 
 
-def _runtime(enabled=True):
+def _runtime():
     store = Reminders(state=FakeState())
     return SimpleNamespace(transport=FakeTransport(), reminders=store,
-                           settings_store=SimpleNamespace(resolve=lambda: SimpleNamespace(reminders=RemindersSettings(enabled=enabled))))
+                           settings_store=SimpleNamespace(resolve=lambda: SimpleNamespace()))
 
 
 def _in_event(monkeypatch, runtime, **ev):
@@ -112,7 +111,7 @@ def test_tool_inside_a_conversation_is_the_askers_own(monkeypatch):
         current_event_data.reset(token)
 
 
-def test_tool_refuses_authorless_turns_and_the_off_switch(monkeypatch):
+def test_tool_refuses_authorless_turns(monkeypatch):
     runtime = _runtime()
     token = _in_event(monkeypatch, runtime, author_id='')
     try:
@@ -120,13 +119,16 @@ def test_tool_refuses_authorless_turns_and_the_off_switch(monkeypatch):
         assert not ok and 'no one asking' in msg
     finally:
         current_event_data.reset(token)
-    runtime = _runtime(enabled=False)
-    token = _in_event(monkeypatch, runtime)
-    try:
-        msg, ok = tools.execute('discord_remind', {'action': 'list'})
-        assert not ok and 'off' in msg.lower()
-    finally:
-        current_event_data.reset(token)
+
+
+def test_no_toggle_the_tool_in_a_toolset_is_the_switch():
+    """[REGRESSION_GUARD] 2026-09-26: reminders.enabled is gone. A stale saved
+    value is ignored (retired-section class) and the tool has no off state."""
+    from plugins.discord.models.settings import SettingsStore
+    s = SettingsStore({'reminders.enabled': False}).resolve()
+    assert not hasattr(s, 'reminders')
+    import inspect
+    assert 'reminders.enabled' not in inspect.getsource(tools.discord_remind)
 
 
 def test_tool_from_the_operator_chat_needs_user_and_channel(monkeypatch):
@@ -152,3 +154,30 @@ def test_pending_cap(monkeypatch):
         assert not ok and 'cancel one first' in msg
     finally:
         current_event_data.reset(token)
+
+
+def test_the_usage_rule_rides_only_when_the_chat_task_carries_the_tool():
+    """2026-09-26: she promised reminders she never set (the task said "no tool
+    call needed"). No toggle: the hint keys off the Chat task's toolset."""
+    def task(account, toolset):
+        return {'enabled': True, 'toolset': toolset, 'trigger_config': {'source': 'discord_message', 'account': account}}
+    sets = {'help': [{'function': {'name': 'search_help_docs'}}, {'function': {'name': 'discord_remind'}}],
+            'plain': [{'function': {'name': 'save_memory'}}]}
+    resolve = lambda name, extras: sets.get(name)
+    assert build_reminder_hint('alpha', FakeLoader([task('alpha', 'help')]), resolve) == HINT
+    assert 'discord_remind' in HINT and 'Reminder #N set' in HINT
+    assert build_reminder_hint('alpha', FakeLoader([task('alpha', 'plain')]), resolve) == ''
+    assert build_reminder_hint('alpha', FakeLoader([task('beta', 'help')]), resolve) == ''      # another bot's task
+    assert build_reminder_hint('alpha', FakeLoader([task('alpha', 'none')]), resolve) == ''
+    assert build_reminder_hint('alpha', None, resolve) == ''
+    def boom(name, extras):
+        raise RuntimeError('no system')
+    assert build_reminder_hint('alpha', FakeLoader([task('alpha', 'help')]), boom) == ''
+
+
+class FakeLoader:
+    def __init__(self, tasks):
+        self.tasks = tasks
+
+    def tasks_for_source(self, source):
+        return [t for t in self.tasks if t['trigger_config']['source'] == source]

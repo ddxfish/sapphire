@@ -2,7 +2,7 @@
   "name": "discord",
   "short_name": "Discord",
   "short_display_name": "Discord",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "min_core_version": "2.13.0",
   "description": "Discord bot — accounts (the only thing it stores), conversation, images in and out, GIFs, silent reactions, presence, reminders, and voice channels on Sapphire's conversation engine. Chat and greetings are daemon tasks (Discord: Chat / Greetings), voice is a Realtime rule (Discord: Voice channel); personality modules live in the discord-personality plugin.",
   "author": "zeebie-the-zebra",
@@ -624,14 +624,6 @@
         "default": "away",
         "tab": "Presence",
         "help": "The status shown (as idle) outside the Chat task's Active hours. Blank = idle with no line."
-      },
-      {
-        "key": "reminders.enabled",
-        "type": "boolean",
-        "label": "Reminders",
-        "default": false,
-        "tab": "Reminders",
-        "help": "\"Remind me in 2 hours to…\" — she calls the discord_remind tool (add it to the Chat task's toolset); when due the bot posts \"@them Reminder: …\" in the channel they asked in. Bound to the person asking. No LLM involved. Pending reminders survive a restart. OFF (default): the tool refuses and nothing posts."
       }
     ]
   }

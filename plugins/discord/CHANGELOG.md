@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1 — 2026-09-26
+
+- **Reminders have no toggle.** The `discord_remind` tool in a toolset IS the switch — the same way
+  every other tool in Sapphire is enabled. `reminders.enabled` and its Settings tab are gone (a saved
+  value is ignored, retired-section class); the tick delivers whatever is pending. Found live: the
+  toggle was on, the tool was not in the Chat task's toolset, and she promised a reminder she could
+  not set. Two switches guarding one feature, the second one only in help text.
+
 ## 2.1.0 — 2026-09-25
 
 - **Presence is back in the host** (was `discord-personality`), rebuilt on Continuity: **Active hours**

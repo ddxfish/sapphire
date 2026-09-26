@@ -142,7 +142,8 @@ def test_empty_content_never_reaches_the_prompt_empty():
 
 def test_the_window_is_fetched_once_per_reply_and_only_when_she_answers():
     transport = FakeTransport()
-    service = _service(transport=transport, store=SettingsStore({'channel': {'context_messages': 7}}))
+    # human_response_chance pinned to 0: the organic roll made this assertion a 15 % flake (2026-09-26)
+    service = _service(transport=transport, store=SettingsStore({'channel': {'context_messages': 7, 'human_response_chance': 0}}))
     assert _go(service, _batch(make_obs(mentioned=False))) is False          # not addressed: no Discord call
     assert transport.calls == []
     assert _go(service, _batch(make_obs())) is True

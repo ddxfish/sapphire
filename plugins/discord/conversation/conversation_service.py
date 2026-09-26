@@ -14,6 +14,7 @@ import time
 from plugins.discord import hooks_out
 from plugins.discord.conversation.context import ReplyCooldown, build_context
 from plugins.discord.conversation.gif_service import build_gif_reply_hint
+from plugins.discord.reminders import build_reminder_hint
 from plugins.discord.conversation.images import image_urls
 from plugins.discord.conversation.trigger_service import evaluate_organic_chance, evaluate_reply_trigger
 from plugins.discord.conversation.typing_indicator import (
@@ -202,6 +203,9 @@ class ConversationService:
             gif_hint = build_gif_reply_hint(settings)
             if gif_hint:
                 hints.append(gif_hint)
+        reminder_hint = build_reminder_hint(trigger.account_name, getattr(self.event_bridge, 'plugin_loader', None))
+        if reminder_hint:
+            hints.append(reminder_hint)
         # S0 door: add-ons append to the reply prompt (synchronous — the result
         # is used right here; handlers run on the daemon loop, keep them cheap).
         ctx_ev = hooks_out.fire('discord_prompt_context', {

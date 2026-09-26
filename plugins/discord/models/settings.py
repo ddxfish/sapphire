@@ -81,11 +81,6 @@ class PresenceSettings:
 
 
 @dataclass
-class RemindersSettings:
-    enabled: bool = False              # the discord_remind tool + the tick delivery (reminders.py)
-
-
-@dataclass
 class EffectiveSettings:
     safety: SafetySettings = field(default_factory=SafetySettings)
     media: MediaSettings = field(default_factory=MediaSettings)
@@ -94,7 +89,6 @@ class EffectiveSettings:
     reaction: ReactionSettings = field(default_factory=ReactionSettings)
     channel: ConversationSettings = field(default_factory=ConversationSettings)
     presence: PresenceSettings = field(default_factory=PresenceSettings)
-    reminders: RemindersSettings = field(default_factory=RemindersSettings)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

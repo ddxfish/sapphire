@@ -102,15 +102,18 @@ on she shows the away line. Greetings are not gated by it.
 | **Media** | images in (the task's model sees attachments), GIFs (provider, key, filter) |
 | **Voice** | turn cues, silence, addressing mode + aliases, follow-up window, barge-in hold, the voice prompt |
 | **Presence** | off by default; status lines rotated while awake, the away line outside the Chat task's Active hours |
-| **Reminders** | off by default; the `discord_remind` tool (add it to the Chat task's toolset) — "remind me in 2h" becomes an @mention post when due, no LLM, survives a restart |
 | **Debug** | recent decisions — why she answered or stayed quiet, ids only |
 
 ## Tools
 
 `discord_get_servers`, `discord_list_channels`, `discord_read_messages`, `discord_send_message`,
 `discord_send_image`, `discord_send_gif`, `discord_add_reaction`, `discord_join_voice`,
-`discord_leave_voice`, `discord_remind` (needs Settings → Discord → Reminders on). Add them to the task's toolset. Inside a server event her tools reach only
+`discord_leave_voice`, `discord_remind`. Add them to the task's toolset. Inside a server event her tools reach only
 that server (Safety → tools stay in server).
+
+`discord_remind` is the whole reminders feature — in the toolset means on, out means off, no
+separate switch. "Remind me in 2h to…" becomes an @mention post in that channel when due; no LLM,
+survives a restart. Caps: 20 pending per person, 30 days ahead, 300 characters.
 
 Reply tags she may use in a normal reply: `[react:🔥]` and `[gif:search words]`.
 

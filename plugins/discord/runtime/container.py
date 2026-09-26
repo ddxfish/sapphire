@@ -275,8 +275,9 @@ class RuntimeContainer:
             except Exception:
                 logger.exception('Presence tick failed for %s', account_name)
             try:
-                if self.settings_store.resolve().reminders.enabled:
-                    await self.reminders.deliver_async(account_name, self.transport)
+                # No toggle: rows exist only if discord_remind was in a toolset
+                # and called, so delivering whatever is due IS the switch.
+                await self.reminders.deliver_async(account_name, self.transport)
             except Exception:
                 logger.exception('Reminder delivery failed for %s', account_name)
             try:
