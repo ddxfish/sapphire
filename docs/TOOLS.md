@@ -145,7 +145,7 @@ Pixels only reach the model if the provider is known to accept them — tick the
 | `ssh_run_command` | ssh_tool.py | Execute remote command |
 | `calendar_today` | calendar.py | Today's Google Calendar schedule |
 | `calendar_range` | calendar.py | Events for a date range |
-| `calendar_add` | calendar.py | Add a calendar event |
+| `calendar_add` | calendar.py | Add a calendar event; `attendees` invites email-whitelisted People contacts (Google emails them) |
 | `calendar_delete` | calendar.py | Delete a calendar event |
 
 ### Utilities

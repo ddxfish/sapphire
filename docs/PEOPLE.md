@@ -94,13 +94,14 @@ TOOLS:
 FIELDS:
 - name (required, unique per scope case-insensitive)
 - relationship, phone, email, address, notes (all optional text)
-- email_whitelisted (boolean — controls email tool access)
+- email_whitelisted (boolean — gates send_email AND calendar_add guest invites)
 - scope (via scope_people ContextVar)
 
 PRIVACY MODEL:
 - get_recipients returns IDs + names only
 - send_email requires recipient_id (looked up server-side)
 - Only email_whitelisted=true people appear in recipient list
+- calendar_add(attendees=[names or ids]) [google-calendar plugin] resolves guests server-side through the same whitelist; Google emails the invite
 
 SCOPES:
 - Scoped via scope_people ContextVar

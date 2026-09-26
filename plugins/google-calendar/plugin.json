@@ -1,8 +1,8 @@
 {
   "name": "google-calendar",
   "short_display_name": "Google Calendar",
-  "version": "1.1.0",
-  "description": "Google Calendar — view schedule, add and remove events",
+  "version": "1.2.0",
+  "description": "Google Calendar — view schedule, add events, invite guests, remove events",
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
   "icon": "\ud83d\udcc5",

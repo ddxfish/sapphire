@@ -1,7 +1,9 @@
 # Google Calendar tools
 # Pure REST via requests — no Google client libraries needed.
 
+import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -46,7 +48,7 @@ TOOLS = [
         "network": True,
         "function": {
             "name": "calendar_today",
-            "description": "Today's calendar events with times and free hours.",
+            "description": "Today's events (numbered for calendar_delete) with times, guest RSVPs, free hours.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -60,7 +62,7 @@ TOOLS = [
         "network": True,
         "function": {
             "name": "calendar_range",
-            "description": "Calendar events for a date range (YYYY-MM-DD).",
+            "description": "Events for a date range (YYYY-MM-DD), numbered for calendar_delete.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -102,6 +104,11 @@ TOOLS = [
                     "description": {
                         "type": "string",
                         "description": "Notes"
+                    },
+                    "attendees": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Guests to invite, by contact name from People (or id). Google emails them an invite. Only contacts with 'Allow AI to send email' resolve."
                     }
                 },
                 "required": ["title", "start"]
@@ -314,8 +321,8 @@ def _api_get(endpoint_template, params=None):
     return _api_call('GET', endpoint_template, params=params)
 
 
-def _api_post(endpoint_template, data):
-    return _api_call('POST', endpoint_template, body=data)
+def _api_post(endpoint_template, data, params=None):
+    return _api_call('POST', endpoint_template, params=params, body=data)
 
 
 def _api_delete(endpoint_template):
@@ -365,9 +372,123 @@ def _resolve_event_id(raw: str):
     return raw, None
 
 
+# === Guests ===
+# Invite resolution rides the People whitelist exactly like email/phone: the
+# only path to an address is a contact with 'Allow AI to send email' checked
+# in Mind -> People. No direct-address mode.
+
+_RSVP = {'accepted': 'yes', 'declined': 'no', 'tentative': 'maybe', 'needsAction': 'pending'}
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def _get_people_scope():
+    """None when unset/disabled — refuse, never fall back to a real scope
+    (silent-default class invariant, same as email/phone)."""
+    try:
+        from core.chat.function_manager import scope_people
+        return scope_people.get()
+    except Exception as e:
+        logger.debug(f"gcal: people scope resolution failed: {e}")
+        return None
+
+
+def _split_guests(raw):
+    """Normalize the attendees argument to a list of strings. Models sometimes
+    hand over one string — 'Rob, Sam' / 'Rob and Sam' — instead of a list."""
+    if raw is None:
+        return []
+    if isinstance(raw, (int, float)):
+        return [str(int(raw))]
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if raw.startswith('['):
+            # Some models JSON-encode the array as a string (GLM, live 2026-09-26).
+            try:
+                return _split_guests(json.loads(raw))
+            except ValueError:
+                pass
+        return [s for s in re.split(r'\s*(?:,|;|&|\band\b)\s*', raw) if s.strip()]
+    return [str(x) for x in raw if str(x).strip()]
+
+
+def _match_person(key, people):
+    """One name/id -> (person, None) or (None, err). Exact name (case-insensitive)
+    first, then a unique substring match so 'Rob' finds 'Rob Smith'. Ambiguity
+    is an error that names the candidates — never a silent guess."""
+    key = key.strip().lstrip('#')
+    if key.isdigit():
+        pid = int(key)
+        person = next((p for p in people if p.get('id') == pid), None)
+        return (person, None) if person else (None, f"Contact id {pid} not found.")
+    low = key.lower()
+    names = lambda ps: ', '.join(f"{p['name']} [id:{p.get('id')}]" for p in ps)
+    exact = [p for p in people if (p.get('name') or '').strip().lower() == low]
+    if len(exact) == 1:
+        return exact[0], None
+    if exact:
+        return None, f"'{key}' matches several contacts: {names(exact)}. Use the id."
+    partial = [p for p in people if low in (p.get('name') or '').lower()]
+    if len(partial) == 1:
+        return partial[0], None
+    if partial:
+        return None, f"'{key}' matches several contacts: {names(partial)}. Use the full name or id."
+    return None, f"No contact named '{key}'."
+
+
+def _resolve_attendees(raw):
+    """People names/ids -> Google attendee dicts. Returns (attendees, err);
+    err is a full user-facing message and attendees is None on error."""
+    wanted = _split_guests(raw)
+    if not wanted:
+        return [], None
+    scope = _get_people_scope()
+    if scope is None:
+        return None, "People contacts are disabled for this chat, so guests can't be resolved."
+    from core.contacts import get_people
+    people = get_people(scope)
+    invitable = [p for p in people if p.get('email_whitelisted') and p.get('email')]
+    hint = ("\nInvitable contacts: " + ', '.join(p['name'] for p in invitable)) if invitable else (
+        "\nNo contacts are allowed yet — tick 'Allow AI to send email' on them in Mind → People.")
+    out, seen = [], set()
+    for key in wanted:
+        person, err = _match_person(key, people)
+        if err:
+            return None, err + hint
+        name = person.get('name') or key
+        if not person.get('email_whitelisted'):
+            return None, f"{name} isn't allowed for invites — tick 'Allow AI to send email' on them in Mind → People."
+        email = (person.get('email') or '').strip()
+        if not email:
+            return None, f"{name} has no email address in Mind → People."
+        if not _EMAIL_RE.match(email):
+            return None, f"{name}'s email '{email}' isn't a valid address — fix it in Mind → People."
+        if email.lower() in seen:
+            continue
+        seen.add(email.lower())
+        out.append({'email': email, 'displayName': name})
+    return out, None
+
+
+def _format_guests(event, limit=8):
+    """'  [guests: Rob (yes), Sam (pending)]' or ''. Skips the calendar
+    owner's own row and meeting-room resources."""
+    guests = [a for a in event.get('attendees') or [] if not a.get('self') and not a.get('resource')]
+    if not guests:
+        return ''
+    parts = [f"{a.get('displayName') or a.get('email') or '?'} ({_RSVP.get(a.get('responseStatus'), 'pending')})"
+             for a in guests[:limit]]
+    if len(guests) > limit:
+        parts.append(f"+{len(guests) - limit} more")
+    return f"  [guests: {', '.join(parts)}]"
+
+
 def _format_events(events, title_line, now=None):
     """Format a list of events into AI-digestible text. Labels past/current if now is provided."""
     if not events:
+        # Clear the stale number map too — otherwise "delete #1" after an
+        # empty day would hit whatever #1 was in the previous listing.
+        with _id_maps_guard:
+            _id_maps[_get_gcal_scope()] = {}
         return f"{title_line}\nNo events scheduled."
 
     id_map = {}
@@ -403,7 +524,7 @@ def _format_events(events, title_line, now=None):
         else:
             time_str = "All day"
 
-        lines.append(f"  #{i}  {time_str}  {summary}{label}")
+        lines.append(f"  #{i}  {time_str}  {summary}{label}{_format_guests(event)}")
 
     # Summary line
     hours_busy = total_minutes / 60
@@ -504,7 +625,10 @@ def execute(function_name, arguments, config, plugin_settings=None):
             days.setdefault(date_str, []).append(event)
 
         lines = [f"Schedule: {start.strftime('%b %d')} – {end.strftime('%b %d')}"]
-        total_events = 0
+        # Numbered #1.. across the whole range into the same map calendar_delete
+        # reads. Before 2026-09-26 range printed raw Google ids and never wrote
+        # the map, so "delete #3 from next week" 404'd (README promised numbers).
+        id_map = {}
 
         # Walk each day in the range, show events or "free"
         current = start
@@ -514,21 +638,23 @@ def execute(function_name, arguments, config, plugin_settings=None):
             if date_key in days:
                 lines.append(f"\n{day_label}:")
                 for event in days[date_key]:
+                    n = len(id_map) + 1
+                    id_map[str(n)] = event.get('id', '')
                     summary = event.get('summary', '(No title)')
-                    event_id = event.get('id', '')
                     e_start = event.get('start', {})
                     e_end = event.get('end', {})
                     if e_start.get('dateTime'):
-                        start_time = _format_time(e_start['dateTime'])
-                        end_time = _format_time(e_end.get('dateTime', ''))
-                        lines.append(f"  {start_time}–{end_time}  {summary}  (id: {event_id})")
+                        time_str = f"{_format_time(e_start['dateTime'])}–{_format_time(e_end.get('dateTime', ''))}"
                     else:
-                        lines.append(f"  All day  {summary}  (id: {event_id})")
-                    total_events += 1
+                        time_str = "All day"
+                    lines.append(f"  #{n}  {time_str}  {summary}{_format_guests(event)}")
             else:
                 lines.append(f"\n{day_label}:\n  No events — free all day")
             current += timedelta(days=1)
 
+        with _id_maps_guard:
+            _id_maps[_get_gcal_scope()] = id_map
+        total_events = len(id_map)
         lines.append(f"\n{total_events} event{'s' if total_events != 1 else ''} total")
         return '\n'.join(lines), True
 
@@ -542,6 +668,12 @@ def execute(function_name, arguments, config, plugin_settings=None):
             return "Event title is required.", False
         if not start_str:
             return "Start time is required.", False
+
+        # Resolve guests BEFORE anything hits Google — a bad name must not
+        # leave a guest-less event behind.
+        attendees, err = _resolve_attendees(arguments.get('attendees'))
+        if err:
+            return err, False
 
         # Build event body
         event = {'summary': title}
@@ -585,9 +717,20 @@ def execute(function_name, arguments, config, plugin_settings=None):
                 end_dt = start_dt + timedelta(hours=1)
                 event['end'] = {'dateTime': end_dt.isoformat(), 'timeZone': tz}
 
-        data, err = _api_post('/calendars/{calendar_id}/events', event)
+        params = None
+        if attendees:
+            event['attendees'] = attendees
+            # Google's default is OFF: without this the guests are listed on
+            # the event but nobody gets an email (events.insert ref, 2026-09-26).
+            params = {'sendUpdates': 'all'}
+
+        data, err = _api_post('/calendars/{calendar_id}/events', event, params=params)
         if err:
             return err, False
+
+        invited = ''
+        if attendees:
+            invited = "\nInvited (Google is emailing them): " + ', '.join(a['displayName'] for a in attendees)
 
         # Format confirmation
         e_start = data.get('start', {})
@@ -600,9 +743,9 @@ def execute(function_name, arguments, config, plugin_settings=None):
                 day_str = day.strftime('%A %b %d')
             except Exception:
                 day_str = ''
-            return f"Added: \"{title}\" — {day_str}, {start_display}–{end_display}\n(id: {data.get('id', '')})", True
+            return f"Added: \"{title}\" — {day_str}, {start_display}–{end_display}\n(id: {data.get('id', '')}){invited}", True
         else:
-            return f"Added: \"{title}\" — all day event\n(id: {data.get('id', '')})", True
+            return f"Added: \"{title}\" — all day event\n(id: {data.get('id', '')}){invited}", True
 
     elif function_name == 'calendar_delete':
         event_id, err = _resolve_event_id(arguments.get('event_id', ''))

@@ -130,12 +130,31 @@ that chat has selected in the sidebar:
 |------|-------------|
 | `calendar_today` | Show today's schedule with times and free hours |
 | `calendar_range` | Show events for a date range (defaults to next 7 days) |
-| `calendar_add` | Add an event (timed or all-day) |
+| `calendar_add` | Add an event (timed or all-day), optionally inviting guests from People |
 | `calendar_delete` | Delete an event by its number from the last listing (or a raw Google event ID) |
 
 `calendar_today` and `calendar_range` number what they list (#1, #2...) — that
 number is what `calendar_delete` takes. The numbering is dropped on restart, so
-ask for the list again before deleting.
+ask for the list again before deleting. Events with guests show each guest's
+RSVP (yes / no / maybe / pending).
+
+## Inviting guests
+
+"Put lunch with Rob and Sam on Thursday at noon" creates the event with Rob
+and Sam as guests, and Google emails them the invite from your account — the
+same invite they'd get if you added them in Google Calendar yourself.
+
+Guests come from **Mind → People**. A contact is invitable only when both are
+true:
+
+- they have an email address on their card
+- **Allow AI to send email** is ticked on that card (the same switch the email
+  plugin uses)
+
+The AI names guests by contact name (or id); it never types raw addresses.
+An unknown or ambiguous name comes back with the names that would work, so
+"Sam" with both a Sam and a Samantha in People asks for the full name instead
+of guessing.
 
 ## Troubleshooting
 
@@ -163,6 +182,16 @@ The redirect URI in Google Console doesn't exactly match what Sapphire sends. Ma
 
 **404 Not Found when using a named calendar**
 The Calendar ID isn't the display name. It's a long string like `abc123@group.calendar.google.com`. Find it in Google Calendar > calendar settings > Integrate calendar.
+
+**"Rob isn't allowed for invites"**
+Open Rob's card in Mind → People, add an email address if missing, and tick
+**Allow AI to send email**. Guests never resolve any other way.
+
+**Guests were added but nobody got an email**
+Sapphire sends invites with Google's `sendUpdates=all`; if Google shows the
+guests on the event but they got nothing, check the address on their People
+card, and their spam folder — consumer Gmail sometimes files invites from
+unfamiliar senders there.
 
 **"No current event listing to resolve #3 against"**
 Ask for today's schedule (or the range) again, then delete using the fresh
