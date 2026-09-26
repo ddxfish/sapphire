@@ -110,3 +110,24 @@ def test_transport_failure_leaves_no_state_and_forget_reapplies():
     asyncio.run(c.tick_async('alpha', _at(12)))
     c.forget('alpha')
     assert asyncio.run(c.tick_async('alpha', _at(12))) is not None          # reconnect → set again
+
+
+def test_presence_planned_hook_can_retint_the_line_but_not_break_the_status():
+    import asyncio
+    from core.hooks import hook_runner
+    transport = FakeTransport()
+    clock = _clock(tasks=[_task()], cfg=PresenceSettings(enabled=True, statuses=['a line'], cycle_minutes=30),
+                   transport=transport)
+
+    def retint(ev):
+        assert ev.metadata['account'] == 'alpha' and ev.metadata['away'] is False
+        ev.metadata['activity'] = 'reading the room'
+        ev.metadata['status'] = 'sideways'
+    hook_runner.register('discord_presence_planned', retint, priority=60, plugin_name='t-presence')
+    try:
+        want = asyncio.run(clock.tick_async('alpha', now=_at(12)))
+    finally:
+        hook_runner.unregister_plugin('t-presence')
+
+    assert transport.calls == [('alpha', 'online', 'reading the room')]
+    assert want['activity'] == 'reading the room' and want['status'] == 'online'

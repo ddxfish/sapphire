@@ -1405,3 +1405,28 @@ class ContinuityScheduler:
             "past": sorted(past, key=lambda x: x["timestamp"], reverse=True),
             "future": future
         }
+
+
+def tasks_matching(tasks, event_obj, hour=None) -> list:
+    """The enabled event tasks that WOULD fire for `event_obj` — fire_event_task's
+    gates (account match, active hours, message filter) as a read-only question.
+    A host hands the answer to its add-ons before a message is emitted (Discord
+    2.3.0: which task, hence which memory scope, is about to answer)."""
+    if not isinstance(event_obj, dict):
+        return []
+    out = []
+    for task in tasks or []:
+        if not task.get("enabled", True):
+            continue
+        tc = task.get("trigger_config") or {}
+        want = str(tc.get("account") or "")
+        got = str(event_obj.get("account") or "")
+        if want and got and got != want:
+            continue
+        if not task_in_active_hours(task, hour):
+            continue
+        flt = tc.get("filter")
+        if flt and isinstance(flt, dict) and not ContinuityScheduler.filter_matches(flt, event_obj, str(task.get("name") or "")):
+            continue
+        out.append(task)
+    return out

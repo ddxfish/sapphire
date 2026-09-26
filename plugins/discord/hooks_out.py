@@ -1,20 +1,30 @@
-"""Doors for add-on plugins (S0, 2026-09-21).
+"""Doors for add-on plugins (S0, 2026-09-21; nine doors since 2.3.0).
 
-Six free-form hooks the host FIRES through core's hook_runner (precedent:
+Free-form hooks the host FIRES through core's hook_runner (precedent:
 twilio_call_ended). Any plugin registers a handler by name in its manifest —
 ``"hooks": {"discord_message_observed": "hooks.py"}`` — and never imports
 transport: every event carries ``metadata['api']``, the DiscordAPI facade.
 
     discord_message_observed  every inbound message, before trigger eval  read-only
+    discord_reply_decided     she decided to answer or not (2.3.0)        respond · reason — veto any reply;
+                                                                          claim only a `forceable` skip
     discord_prompt_context    building a triggered reply's payload        append metadata['context_parts']
     discord_reply_planned     reply parsed into chunks, before send       chunks · quote_reply · reaction · delay_s
     discord_reply_sent        after send                                  read-only
+    discord_reaction_observed someone reacted to a message (2.3.0)        read-only
     discord_voice_utterance   post-STT text in a voice channel            read-only
+    discord_presence_planned  a presence line about to be set (2.3.0)     status · activity
     discord_tick              runtime loop, per connected account (~15 s) read-only
 
-Threads: observed + tick handlers run on a worker thread (their fire sites
-sit on the daemon's asyncio loop); prompt_context runs ON the loop and is
-synchronous because its result is used inline — keep handlers cheap there.
+reply_decided and prompt_context carry `tasks`: the Continuity tasks that
+would answer this message (id, name, scopes) — so an add-on knows which
+memory scope she is about to think in. reply_planned / reply_sent carry
+the trigger's author and the one `task` that did answer.
+
+Threads: observed, reaction_observed + tick handlers run on a worker thread
+(their fire sites sit on the daemon's asyncio loop); reply_decided,
+prompt_context and presence_planned run ON the loop and are synchronous
+because their result is used inline — keep handlers cheap there.
 reply_planned / reply_sent / voice_utterance already run on worker threads.
 The facade is loop-aware: a write called from the loop is queued and answers
 {'status': 'queued'}; a read from the loop answers empty (nothing to await).
@@ -33,8 +43,9 @@ from core.hooks import HookEvent, hook_runner
 logger = logging.getLogger(__name__)
 
 HOOKS = (
-    'discord_message_observed', 'discord_prompt_context', 'discord_reply_planned',
-    'discord_reply_sent', 'discord_voice_utterance', 'discord_tick',
+    'discord_message_observed', 'discord_reply_decided', 'discord_prompt_context', 'discord_reply_planned',
+    'discord_reply_sent', 'discord_reaction_observed', 'discord_voice_utterance', 'discord_presence_planned',
+    'discord_tick',
 )
 _announced: set = set()
 
@@ -86,6 +97,27 @@ def fire_threaded(name: str, payload: dict) -> None:
     loop.run_in_executor(None, fire, name, payload)
 
 
+def live(name: str) -> bool:
+    """Does any add-on listen on `name`? Lets the host skip preparing a payload nobody wants."""
+    return bool(hook_runner.has_handlers(name))
+
+
+def task_summary(task) -> dict:
+    """What an add-on may know about a Continuity task: id, name and the scopes
+    the owner gave it (memory_scope, knowledge_scope, …) — never its prompt,
+    tools or provider. `scopes` is where an add-on reads which mind she is
+    thinking in; it never invents one (memory rule, 2026-09-25)."""
+    task = task if isinstance(task, dict) else {}
+    try:
+        from core.chat.function_manager import scope_setting_keys
+        keys = set(scope_setting_keys())
+    except Exception:
+        keys = set()
+    keys |= {k for k in task if str(k).endswith('_scope')}
+    return {'id': str(task.get('id') or ''), 'name': str(task.get('name') or ''),
+            'scopes': {k: task.get(k) for k in sorted(keys) if k in task}}
+
+
 def observed_payload(obs) -> dict:
     """The read-only view of an inbound message every hook shares."""
     return {
@@ -104,6 +136,10 @@ def observed_payload(obs) -> dict:
         'mentioned': bool(getattr(obs, 'mentioned', False)),
         'timestamp': obs.created_at,
         'attachments': len(getattr(obs, 'attachments', []) or []),
+        'attachment_urls': [str(a.get('url') or '') for a in (getattr(obs, 'attachments', []) or [])
+                            if isinstance(a, dict) and a.get('url')],
+        'reply_to_message_id': str(getattr(obs, 'reply_to_message_id', '') or ''),
+        'mention_user_ids': [str(u) for u in (getattr(obs, 'mention_user_ids', None) or [])],
     }
 
 
@@ -210,6 +246,21 @@ class DiscordAPI:
         return self._write(
             lambda t: t.send_file_sync(cid, data, name, caption=caption or '', account_name=account),
             lambda t: t.execution.send_file(cid, data, name, caption=caption or '', account_name=account))
+
+    def typing(self, channel_id, seconds: float = 3.0, account=None) -> dict:
+        """Show the typing indicator for up to 15 s (an afterthought about to land)."""
+        cid, dur = str(channel_id), max(0.5, min(15.0, float(seconds or 0)))
+        return self._write(
+            lambda t: t.hold_typing_sync(cid, dur, account_name=account),
+            lambda t: t._execution.hold_typing(account, cid, dur))
+
+    def text_channels(self, account=None) -> list:
+        """Text channels the connected bots can see (account, guild_id, guild_name,
+        channel_id, channel_name) — for one account when given. Read: worker threads only."""
+        rows = self._read(lambda t: t.list_channels_sync('text'), [])
+        if account:
+            rows = [r for r in rows if str(r.get('account') or r.get('account_name') or '') == str(account)]
+        return list(rows)
 
     # -- voice -------------------------------------------------------------
     def _voice(self):

@@ -266,6 +266,12 @@ class FakeLoopTransport:
     def list_connected(self):
         return ['alpha']
 
+    def hold_typing_sync(self, cid, dur, account_name=None):
+        return {'status': 'typing', 'duration': dur}
+
+    def list_channels_sync(self, kind='text'):
+        return [{'account': 'alpha', 'channel_id': '1'}, {'account': 'beta', 'channel_id': '2'}]
+
 
 def test_api_is_loop_aware_and_never_raises(monkeypatch):
     api = hooks_out.DiscordAPI()
@@ -304,6 +310,158 @@ def test_api_send_image_refuses_disk_paths(monkeypatch):
 
 def test_hooks_list_is_the_contract():
     assert hooks_out.HOOKS == (
-        'discord_message_observed', 'discord_prompt_context', 'discord_reply_planned',
-        'discord_reply_sent', 'discord_voice_utterance', 'discord_tick',
+        'discord_message_observed', 'discord_reply_decided', 'discord_prompt_context', 'discord_reply_planned',
+        'discord_reply_sent', 'discord_reaction_observed', 'discord_voice_utterance', 'discord_presence_planned',
+        'discord_tick',
     )
+
+
+# ── 2.3.0: the doors a whole personality plugin needs ────────────────────────
+
+def test_observed_carries_reply_target_mentions_and_attachment_urls():
+    seen = []
+    _listen('discord_message_observed', lambda ev: seen.append(dict(ev.metadata)))
+    pipeline = MessagePipelineService(batching_service=FakeBatching(), conversation_service=None)
+
+    pipeline.handle_message(make_obs(reply_to_message_id='m0', mention_user_ids=['b1'],
+                                     attachments=[{'url': 'https://x/a.png', 'content_type': 'image/png'}, {'nourl': 1}]))
+
+    md = seen[0]
+    assert md['reply_to_message_id'] == 'm0' and md['mention_user_ids'] == ['b1']
+    assert md['attachment_urls'] == ['https://x/a.png'] and md['attachments'] == 2
+
+
+def test_reply_decided_can_veto_a_reply_she_was_going_to_make():
+    from plugins.discord.models.settings import SettingsStore
+    seen = []
+
+    def veto(ev):
+        seen.append(dict(ev.metadata))
+        ev.metadata['respond'] = False
+        ev.metadata['reason'] = 'react_instead'
+    _listen('discord_reply_decided', veto)
+    bridge = FakeBridge()
+    service = ConversationService(event_bridge=bridge, transport=FakeHistory(), settings_store=SettingsStore())
+
+    assert asyncio.run(service.process_batch(_batch())) is False
+
+    assert bridge.payloads == []
+    assert seen[0]['respond'] is True and seen[0]['reason'] == 'mentioned' and seen[0]['forceable'] is False
+    assert seen[0]['author_id'] == 'u1' and seen[0]['tasks'] == []
+    assert service.decision_log()[-1]['reason'] == 'react_instead' if hasattr(service, 'decision_log') else True
+
+
+def test_reply_decided_can_claim_a_forceable_skip(monkeypatch):
+    from plugins.discord.models.settings import SettingsStore
+    monkeypatch.setattr('plugins.discord.conversation.conversation_service.evaluate_organic_chance',
+                        lambda trigger, settings: {'allowed': False, 'reason': 'organic_chance'})
+    decided, ctx = [], []
+
+    def claim(ev):
+        decided.append(dict(ev.metadata))
+        ev.metadata['respond'] = True
+        ev.metadata['reason'] = 'warm_to_this_person'
+    _listen('discord_reply_decided', claim)
+    _listen('discord_prompt_context', lambda ev: ctx.append(dict(ev.metadata)))
+    bridge = FakeBridge()
+    service = ConversationService(event_bridge=bridge, transport=FakeHistory(), settings_store=SettingsStore())
+    bs = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
+    bs.add_message(make_obs(mentioned=False))
+
+    assert asyncio.run(service.process_batch(bs.flush_ready(now=10.0)[0])) is True
+
+    assert decided[0]['respond'] is False and decided[0]['forceable'] is True
+    assert ctx[0]['reply_reason'] == 'warm_to_this_person'
+    assert bridge.payloads[0]['mentioned'] == 'False'
+
+
+def test_reply_decided_never_forces_past_the_ignore_list_and_never_fires_on_safety():
+    from plugins.discord.models.settings import SettingsStore
+    seen = []
+
+    def force(ev):
+        seen.append(dict(ev.metadata))
+        ev.metadata['respond'] = True
+    _listen('discord_reply_decided', force)
+
+    ignored = ConversationService(event_bridge=FakeBridge(), transport=FakeHistory(),
+                                  settings_store=SettingsStore({'channel.ignored_channels': ['alpha:c1']}))
+    assert asyncio.run(ignored.process_batch(_batch())) is False
+    assert len(seen) == 1 and seen[0]['forceable'] is False and seen[0]['stage'] == 'trigger'
+
+    dm = ConversationService(event_bridge=FakeBridge(), transport=FakeHistory(),
+                             settings_store=SettingsStore({'safety.allow_direct_messages': False}))
+    bs = BatchingService(default_window_seconds=5, typing_extension_seconds=4)
+    bs.add_message(make_obs(is_dm=True, mentioned=False, guild_id='', guild_name=''))
+    assert asyncio.run(dm.process_batch(bs.flush_ready(now=10.0)[0])) is False
+    assert len(seen) == 1          # a DM refused on policy never reaches the door
+
+
+def test_prompt_context_and_decided_carry_the_tasks_that_would_answer():
+    from plugins.discord.models.settings import SettingsStore
+    probes, ctx = [], []
+
+    def tasks_matching(source, ev):
+        probes.append((source, dict(ev)))
+        return [{'id': 't1', 'name': 'Chat', 'memory_scope': 'discord', 'prompt': 'secret', 'toolset': 'all'}]
+    _listen('discord_prompt_context', lambda ev: ctx.append(dict(ev.metadata)))
+    bridge = FakeBridge()
+    bridge.plugin_loader = SimpleNamespace(tasks_matching=tasks_matching)
+    service = ConversationService(event_bridge=bridge, transport=FakeHistory(), settings_store=SettingsStore())
+
+    assert asyncio.run(service.process_batch(_batch())) is True
+
+    assert probes[0][0] == 'discord_message' and probes[0][1]['mentioned'] == 'True' and probes[0][1]['account'] == 'alpha'
+    assert ctx[0]['tasks'] == [{'id': 't1', 'name': 'Chat', 'scopes': {'memory_scope': 'discord'}}]
+
+
+def test_tasks_are_not_computed_when_nobody_listens():
+    from plugins.discord.models.settings import SettingsStore
+    bridge = FakeBridge()
+    bridge.plugin_loader = SimpleNamespace(tasks_matching=lambda s, e: (_ for _ in ()).throw(AssertionError('called')))
+    service = ConversationService(event_bridge=bridge, transport=FakeHistory(), settings_store=SettingsStore())
+
+    assert asyncio.run(service.process_batch(_batch())) is True
+
+
+def test_reply_planned_and_sent_carry_the_author_and_the_answering_task(monkeypatch):
+    planned, sent = [], []
+    _listen('discord_reply_planned', lambda ev: planned.append(dict(ev.metadata)))
+    _listen('discord_reply_sent', lambda ev: sent.append(dict(ev.metadata)))
+    service = _delivery_service(FakeTransport(), monkeypatch)
+    task = {'id': 't1', 'name': 'Chat', 'memory_scope': 'discord', 'prompt': 'secret', 'provider': 'x'}
+    event = {**EVENT, 'author_id': 'u1', 'username': 'alice', 'display_name': 'Alice',
+             'guild_name': 'Guild', 'channel_name': 'general'}
+
+    service.handle_llm_response(task, event, 'hi')
+
+    for md in (planned[0], sent[0]):
+        assert md['author_id'] == 'u1' and md['username'] == 'alice' and md['display_name'] == 'Alice'
+        assert md['guild_name'] == 'Guild' and md['channel_name'] == 'general'
+        assert md['task'] == {'id': 't1', 'name': 'Chat', 'scopes': {'memory_scope': 'discord'}}
+
+
+def test_reaction_observed_fires_from_the_pipeline_with_the_api():
+    seen = []
+    _listen('discord_reaction_observed', lambda ev: seen.append(dict(ev.metadata)))
+    pipeline = MessagePipelineService(batching_service=FakeBatching(), conversation_service=None)
+
+    pipeline.handle_reaction({'account': 'alpha', 'channel_id': 'c1', 'message_id': 'm1', 'user_id': 'u2', 'emoji': '👍'})
+
+    assert seen[0]['emoji'] == '👍' and seen[0]['user_id'] == 'u2' and 'api' in seen[0]
+
+
+def test_api_typing_and_text_channels(monkeypatch):
+    api = hooks_out.DiscordAPI()
+    loop = asyncio.new_event_loop()
+    t = FakeLoopTransport(loop)
+    monkeypatch.setattr(hooks_out, '_runtime', lambda: SimpleNamespace(transport=t))
+
+    assert api.typing('c1', 99, account='alpha') == {'status': 'typing', 'duration': 15.0}
+    assert api.text_channels('alpha') == [{'account': 'alpha', 'channel_id': '1'}]
+    assert len(api.text_channels()) == 2
+
+    async def on_loop():
+        return api.text_channels('alpha')
+    assert loop.run_until_complete(on_loop()) == []
+    loop.close()

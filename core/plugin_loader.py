@@ -2229,6 +2229,15 @@ class PluginLoader:
             return []
         return self._scheduler.find_tasks_by_event(source_name)
 
+    def tasks_matching(self, source_name: str, event_obj: dict) -> List[dict]:
+        """The enabled tasks on `source_name` that would answer `event_obj`
+        (account, active hours, filter) — what emit_daemon_event is about to
+        fire, as a read-only question. Empty before the scheduler exists."""
+        if not self._scheduler:
+            return []
+        from core.continuity.scheduler import tasks_matching
+        return tasks_matching(self._scheduler.find_tasks_by_event(source_name), event_obj)
+
     def fire_task(self, task_id: str, payload, *, plugin: str = None) -> dict:
         """A daemon fires ONE named task it owns (S0 doors, 2026-09-21).
 

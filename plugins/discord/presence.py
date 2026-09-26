@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE = 'discord_message'
 AWAKE_STATUS, AWAY_STATUS = 'online', 'idle'
+STATUSES = ('online', 'idle', 'dnd', 'invisible')
 DEFAULT_STATUSES = ['listening: chat', 'watching: the server', 'playing: with ideas',
                     'daydreaming', 'listening: lo-fi beats', 'just vibing']
 
@@ -77,11 +78,29 @@ class PresenceClock:
             index = (index + 1) % len(pool)
         return {'status': AWAKE_STATUS, 'activity': pool[index], 'away': False, 'index': index}
 
+    @staticmethod
+    def _planned(account: str, want: dict) -> dict:
+        """S0 door discord_presence_planned (2.3.0): an add-on may retint the
+        line or the status about to be set (a situation-aware presence). The
+        host still owns the clock, the away window and the pool."""
+        from plugins.discord import hooks_out
+        if not hooks_out.live('discord_presence_planned'):
+            return want
+        ev = hooks_out.fire('discord_presence_planned', {
+            'account': account, 'status': want['status'], 'activity': want['activity'], 'away': bool(want.get('away')),
+        })
+        status = str(ev.metadata.get('status') or want['status'])
+        activity = ev.metadata.get('activity')
+        return {**want, 'status': status if status in STATUSES else want['status'],
+                'activity': str(activity if activity is not None else want['activity'])[:128]}
+
     async def tick_async(self, account: str, now=None) -> dict | None:
         cfg = self.settings_store.resolve().presence
         want = self.choose(account, cfg, now)
         if want is None:
             return None
+        if not want.get('clear'):
+            want = self._planned(account, want)
         try:
             await self.transport.change_presence_async(account, status=want['status'], activity=want['activity'])
         except Exception as exc:

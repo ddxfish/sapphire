@@ -69,6 +69,8 @@ class ConversationService:
         trigger = self._trigger(batch)
         settings = self.settings_store.resolve() if self.settings_store else None
         decision = self._decide(trigger, settings)
+        tasks = self._tasks_for_hooks(trigger, decision)
+        decision = self._decided(trigger, decision, tasks)
         if decision['stage'] != 'safety':
             # One reaction roll per message, answered or not (never for a DM she
             # refuses on safety grounds).
@@ -81,7 +83,7 @@ class ConversationService:
             self._reject(trigger, cooldown.get('reason') or 'denied', 'policy', cooldown)
             return False
         rows = await self._window(trigger, settings)
-        payload = self._payload(batch, trigger, settings, decision, rows)
+        payload = self._payload(batch, trigger, settings, decision, rows, tasks)
         if not self.event_bridge.emit_discord_message(payload):
             self._reject(trigger, 'no_daemon_task', 'daemon')
             return False
@@ -108,8 +110,14 @@ class ConversationService:
     def _decide(self, trigger, settings) -> dict:
         """Every reason she would not answer, in order: DM safety, the reply
         trigger (ignore list / reply mode), the bot gate, addressing, the organic roll."""
-        def no(reason, stage, detail=None):
-            return {'respond': False, 'reason': reason, 'stage': stage, 'detail': detail}
+        evaluation = None
+
+        def no(reason, stage, detail=None, forceable=False):
+            # forceable: a skip an add-on may claim through discord_reply_decided —
+            # only the organic roll and plain not-addressed. Never safety, the
+            # ignore list, the reply mode or the bot gate: those are the owner's.
+            return {'respond': False, 'reason': reason, 'stage': stage, 'detail': detail,
+                    'evaluation': evaluation, 'forceable': forceable}
 
         evaluation = evaluate_reply_trigger(trigger, settings, transport=self.transport,
                                             account_repository=self.account_repository)
@@ -143,12 +151,63 @@ class ConversationService:
         if not respond and reply_mode == 'default' and not trigger.is_dm and (not author_is_bot or bot_allowed):
             chance = evaluate_organic_chance(trigger, settings)
             if not chance['allowed']:
-                return no(str(chance.get('reason') or 'chance'), 'trigger', chance)
+                return no(str(chance.get('reason') or 'chance'), 'trigger', chance, forceable=True)
             respond, reason, evaluation = True, 'organic', {**evaluation, **chance}
         if not respond:
-            return no('not_addressed', 'routing')
+            return no('not_addressed', 'routing', forceable=True)
         return {'respond': True, 'reason': reason, 'stage': 'ok', 'evaluation': evaluation,
                 'author_is_bot': author_is_bot}
+
+    def _matched_tasks(self, event_obj: dict) -> list:
+        """The Continuity tasks that would answer `event_obj` (core's own gates,
+        read-only). Empty when the bridge has no loader (unit tests, standalone)."""
+        fn = getattr(getattr(self.event_bridge, 'plugin_loader', None), 'tasks_matching', None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn('discord_message', event_obj) or [])
+        except Exception:
+            logger.debug('[DISCORD] task match unavailable', exc_info=True)
+            return []
+
+    def _tasks_for_hooks(self, trigger, decision: dict) -> list:
+        """Computed once per batch, only when an add-on listens (2.3.0)."""
+        if not (hooks_out.live('discord_reply_decided') or hooks_out.live('discord_prompt_context')):
+            return []
+        ev = decision.get('evaluation') or {}
+        probe = {**hooks_out.observed_payload(trigger),
+                 'mentioned': str(bool(ev.get('respond_trigger', getattr(trigger, 'mentioned', False))))}
+        return self._matched_tasks(probe)
+
+    def _decided(self, trigger, decision: dict, tasks: list) -> dict:
+        """S0 door discord_reply_decided (2.3.0): add-ons may veto any reply she
+        was going to make, or claim one she was going to skip for lack of
+        addressing or a failed organic roll (`forceable`). Never past safety —
+        the hook does not even fire for a DM she refuses on policy — and never
+        past the ignore list, the reply mode or the bot gate."""
+        if decision.get('stage') == 'safety' or not hooks_out.live('discord_reply_decided'):
+            return decision
+        ev = hooks_out.fire('discord_reply_decided', {
+            **hooks_out.observed_payload(trigger),
+            'respond': bool(decision['respond']), 'reason': str(decision.get('reason') or ''),
+            'stage': str(decision.get('stage') or ''), 'forceable': bool(decision.get('forceable')),
+            'tasks': [hooks_out.task_summary(t) for t in tasks],
+        })
+        want = bool(ev.metadata.get('respond'))
+        reason = str(ev.metadata.get('reason') or '').strip()
+        changed = reason and reason != str(decision.get('reason') or '')
+        if want == bool(decision['respond']):
+            return decision
+        if not want:
+            return {**decision, 'respond': False, 'stage': 'addon', 'reason': reason if changed else 'addon_veto'}
+        if not decision.get('forceable'):
+            logger.debug('[DISCORD] add-on tried to claim a reply past %s (%s) — refused',
+                         decision.get('stage'), decision.get('reason'))
+            return decision
+        evaluation = decision.get('evaluation') or {}
+        return {'respond': True, 'reason': reason if changed else 'addon', 'stage': 'ok',
+                'evaluation': {'respond_trigger': False, 'name_matched': False, **evaluation},
+                'author_is_bot': bool(getattr(trigger, 'author_is_bot', False))}
 
     async def _window(self, trigger, settings) -> list[dict]:
         """The last N messages of the channel, live from Discord, once per reply
@@ -163,7 +222,7 @@ class ConversationService:
             logger.info('[DISCORD] channel window unavailable for %s: %s', trigger.channel_id, exc)
             return []
 
-    def _payload(self, batch, trigger, settings, decision, rows: list[dict]) -> dict:
+    def _payload(self, batch, trigger, settings, decision, rows: list[dict], tasks: list | None = None) -> dict:
         evaluation = decision['evaluation']
         context = build_context(rows, trigger)
         mention_map = {}
@@ -213,6 +272,7 @@ class ConversationService:
             'reply_reason': decision['reason'],
             'recent_history': context.get('recent_history') or [],
             'context_parts': list(hints),
+            'tasks': [hooks_out.task_summary(t) for t in (tasks or [])],
         })
         hints = [str(p) for p in (ctx_ev.metadata.get('context_parts') or []) if str(p).strip()]
         if hints:
@@ -295,6 +355,11 @@ class ConversationService:
         delivery = settings.channel if settings else None
         proactive_kind = str(event_data.get('proactive_kind') or '').strip()
         outcome = dict(event_data=event_data)
+        # 2.3.0: who she is answering and which task did the thinking, for the delivery doors.
+        who = {'author_id': str(event_data.get('author_id') or ''), 'username': str(event_data.get('username') or ''),
+               'display_name': str(event_data.get('display_name') or ''),
+               'guild_name': str(event_data.get('guild_name') or ''), 'channel_name': str(event_data.get('channel_name') or ''),
+               'task': hooks_out.task_summary(task)}
 
         if self.reply_style_service.should_skip_auto_reply(message_id):
             # A tool already posted the reply; only its tags are still owed.
@@ -329,7 +394,7 @@ class ConversationService:
         # never silence it.
         plan_ev = hooks_out.fire('discord_reply_planned', {
             'account': account_name, 'guild_id': guild_id, 'channel_id': channel_id,
-            'message_id': message_id, 'proactive_kind': proactive_kind,
+            'message_id': message_id, 'proactive_kind': proactive_kind, **who,
             'is_dm': str(event_data.get('is_dm', '')).lower() in {'true', '1'},
             'trigger_content': str(event_data.get('content', '')),
             'chunks': list(chunks), 'quote_reply': reply_to_default,
@@ -375,7 +440,7 @@ class ConversationService:
 
         hooks_out.fire('discord_reply_sent', {
             'account': account_name, 'guild_id': guild_id, 'channel_id': channel_id,
-            'message_id': message_id, 'proactive_kind': proactive_kind,
+            'message_id': message_id, 'proactive_kind': proactive_kind, **who,
             'sent_message_ids': list(sent_message_ids), 'chunks': list(chunks),
         })
         self._note_outcome(message_id, 'sent' if sent_message_ids else 'error', chunks=len(sent_message_ids), **outcome)

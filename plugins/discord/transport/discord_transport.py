@@ -158,6 +158,22 @@ class DiscordTransport:
                     if observation and self._message_pipeline:
                         self._message_pipeline.handle_typing(observation)
 
+            @client.event
+            async def on_raw_reaction_add(payload):
+                # S0 door (2.3.0): someone reacted — never the bot's own reaction.
+                if not self._message_pipeline or str(getattr(payload, 'user_id', '') or '') == str(state.get('bot_id') or ''):
+                    return
+                member = getattr(payload, 'member', None)
+                self._message_pipeline.handle_reaction({
+                    'account': name, 'guild_id': str(getattr(payload, 'guild_id', '') or ''),
+                    'channel_id': str(getattr(payload, 'channel_id', '') or ''),
+                    'message_id': str(getattr(payload, 'message_id', '') or ''),
+                    'user_id': str(getattr(payload, 'user_id', '') or ''),
+                    'display_name': str(getattr(member, 'display_name', '') or getattr(member, 'name', '') or ''),
+                    'is_bot': bool(getattr(member, 'bot', False)),
+                    'emoji': str(getattr(payload, 'emoji', '') or ''),
+                })
+
         async def runner():
             try:
                 await client.start(token)

@@ -144,7 +144,7 @@ def test_tone_engine_setting_defaults_to_the_word_list():
     m = json.loads((Path(rx.__file__).resolve().parents[1] / 'plugin.json').read_text(encoding='utf-8'))
     entry = next(s for s in m['capabilities']['settings'] if s['key'] == 'reaction.sentiment_engine')
     assert entry['default'] == 'lexicon' and {o['value'] for o in entry['options']} == set(rx.ENGINES)
-    assert m['version'] == '2.2.0'
+    assert m['version'] == '2.3.0'
     assert not any(d.startswith(('vader', 'transformers', 'torch')) for d in m['pip_dependencies'])   # no new deps
 
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.3.0 — 2026-09-26
+
+- **Three more add-on doors**, so a personality plugin can do its whole job through hooks instead
+  of a parallel pipeline: `discord_reply_decided` (after the host decides to answer or not — an
+  add-on may veto any reply, or claim one she was skipping for a failed organic roll or plain
+  not-addressed; never past safety, the ignore list, the reply mode or the bot gate),
+  `discord_reaction_observed` (someone reacted to a message; never the bot's own) and
+  `discord_presence_planned` (retint the status line about to be set; the host keeps the clock).
+- **Richer payloads.** `reply_decided` and `prompt_context` carry `tasks` — the Continuity tasks
+  that would answer (id, name, scopes), so an add-on knows which memory scope she thinks in
+  (core: `plugin_loader.tasks_matching`, the scheduler's gates as a read-only question).
+  `reply_planned` / `reply_sent` carry the trigger's `author_id`, `username`, `display_name`,
+  `guild_name`, `channel_name` and the `task` that answered. `message_observed` adds
+  `reply_to_message_id`, `mention_user_ids` and `attachment_urls`.
+- **Facade:** `typing(channel_id, seconds)` and `text_channels(account)`.
+
 ## 2.2.0 — 2026-09-26
 
 - **Tone engine for silent reactions** (Reactions → *Tone engine*): the word list stays the default;

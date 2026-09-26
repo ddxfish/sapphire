@@ -135,12 +135,17 @@ Voice needs TTS streaming on in Sapphire and a working DAVE stack; the log line
 
 ## Add-ons
 
-Other plugins extend the host through six hooks fired via core's hook runner —
-`discord_message_observed`, `discord_prompt_context`, `discord_reply_planned`,
-`discord_reply_sent`, `discord_voice_utterance`, `discord_tick` — each carrying
-`metadata['api']`, a small facade (send, react, image, presence, join / leave voice, recent
-messages). `hooks_out.py` documents the payloads. The `discord-personality` plugin is the
-reference add-on.
+Other plugins extend the host through nine hooks fired via core's hook runner —
+`discord_message_observed`, `discord_reply_decided`, `discord_prompt_context`,
+`discord_reply_planned`, `discord_reply_sent`, `discord_reaction_observed`,
+`discord_voice_utterance`, `discord_presence_planned`, `discord_tick` — each carrying
+`metadata['api']`, a small facade (send, edit, react, typing, image, presence, join / leave
+voice, recent messages, text channels). An add-on may veto a reply or claim one she was
+going to skip (never past safety, the ignore list or the bot gate), append to her prompt,
+reshape the outgoing chunks, retint a presence line, and sees which Continuity task (and
+so which memory scope) is answering. `hooks_out.py` documents the payloads. The
+`discord-personality` plugin is the reference add-on; its `DESIGN-PRINCIPLES.md` is the
+bar for an add-on that ships with Sapphire.
 
 ## Operator & Diagnostics
 

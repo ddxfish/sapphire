@@ -46,6 +46,10 @@ class MessagePipelineService:
     def handle_typing(self, observation: TypingObservation) -> None:
         self.batching_service.record_typing(observation)
 
+    def handle_reaction(self, payload: dict) -> None:
+        """S0 door (2.3.0): someone reacted to a message (worker thread; never the bot's own)."""
+        hooks_out.fire_threaded('discord_reaction_observed', dict(payload or {}))
+
     async def flush_due(self, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
         results = []
