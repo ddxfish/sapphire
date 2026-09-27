@@ -2,6 +2,7 @@
 
 import * as Images from './ui-images.js';
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
+import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 
 let globalThinkCounter = 0;
 
@@ -621,6 +622,10 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
     globalThinkCounter = 0;
 
     let txt = typeof msg === 'string' ? msg : (msg.content || '');
+    // Attachments in the message's own text (shared/files-marker.js): a take the
+    // user played lands in their bubble with its player. The text drops the marker.
+    const { groups: textFiles, text: txtNoFiles } = parseFilesMarker(txt);
+    txt = txtNoFiles;
     // Strip avatar tags from rendered text if setting is enabled
     if (window._avatarStripTags) {
         txt = txt.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
@@ -629,7 +634,8 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
     const userImages = (typeof msg === 'object' && msg.images) ? msg.images : [];
     const userFiles = (typeof msg === 'object' && msg.files) ? msg.files : [];
 
-    if (!txt && parts.length === 0 && userImages.length === 0 && userFiles.length === 0) {
+    if (!txt && parts.length === 0 && userImages.length === 0 && userFiles.length === 0
+            && textFiles.length === 0) {
         el.textContent = '';
         return;
     }
@@ -651,9 +657,12 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
     
     if (parts.length > 0) {
         let thinkCnt = 0;
+        const partGroups = [];      // the parts ARE the text here; msg.content repeats them
         parts.forEach(part => {
             if (part.type === 'content') {
-                let partText = part.text;
+                const partFiles = parseFilesMarker(part.text);
+                let partText = partFiles.text;
+                partGroups.push(...partFiles.groups);
                 if (window._avatarStripTags) {
                     partText = partText.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
                 }
@@ -664,12 +673,14 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
         });
         cloneImagesInline(el);
         wrapImageGalleries(el);
+        appendFiles(el, partGroups);
         return;
     }
 
     renderContentText(el, txt, isHistoryRender, scrollCallback, 0);
     cloneImagesInline(el);
     wrapImageGalleries(el);
+    appendFiles(el, textFiles);
 };
 
 const addToolDeleteButton = (acc, toolCallId) => {
@@ -707,8 +718,9 @@ const renderToolResult = (el, part) => {
     const toolName = part.name || 'Unknown Tool';
     const toolCallId = part.tool_call_id;
     // Tiles ride a UI marker (shared/gallery-marker.js); the accordion text drops it.
-    const { entries: galleryEntries, title: galleryTitle, text: fullResult } =
+    const { entries: galleryEntries, title: galleryTitle, text: galleryStripped } =
         parseGalleryMarker(part.content || part.result || '');
+    const { groups: fileGroups, text: fullResult } = parseFilesMarker(galleryStripped);
 
     // Get truncation limit based on tool
     const maxLen = toolName === 'web_search' ? 1000 :
@@ -760,6 +772,7 @@ const renderToolResult = (el, part) => {
         // accordions — a sheet AND a row would show the pictures twice).
         if (galleryEntries.length) acc.dataset.gallery = '1';
         appendGallery(el, galleryEntries, galleryTitle);
+        appendFiles(el, fileGroups);
         return;
     }
 
@@ -788,6 +801,12 @@ const renderToolResult = (el, part) => {
     el.appendChild(acc);
 
     appendGallery(el, galleryEntries, galleryTitle);
+    appendFiles(el, fileGroups);
+};
+
+// Players + download buttons — the ONE renderer (shared/files-marker.js).
+const appendFiles = (el, groups) => {
+    buildFilesRows(groups).forEach(row => el.appendChild(row));
 };
 
 // Tiles under a tool result — the ONE renderer (history + live stream share it).

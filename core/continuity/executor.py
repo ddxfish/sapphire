@@ -562,6 +562,7 @@ class ContinuityExecutor:
                     # Marker = the UI's; the receipt line is the model's handle
                     # (core.images contract) so a plugin-delivered image can be
                     # filed with memory_save_image(source='img:...'). 2026-09-13.
+                    img["id"] = img_id      # the describer keys the caption to this row
                     markers.append(f"<<IMG::tool:{img_id}>>\n(image img:{img_id})")
                 else:
                     # DB write failed — don't append a marker pointing at a blob

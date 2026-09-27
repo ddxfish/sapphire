@@ -637,6 +637,17 @@ class StreamingChat:
 
             provider_key, provider, model_override = self.main_chat._select_provider()
 
+            # A model with no vision reads a description in place of each stored
+            # image on the wire — pasted this turn or replayed by the vision
+            # window (Settings › Images › Image describer). The caption lives on
+            # the image's row: described once. 2026-09-26.
+            try:
+                from core import image_describe
+                image_describe.caption_blind(messages, provider,
+                                             store=self.main_chat.session_manager)
+            except Exception as e:
+                logger.warning(f"[DESCRIBE] caption pass skipped: {e}")
+
             # Determine effective model (per-chat override or provider default)
             effective_model = model_override if model_override else provider.model
 

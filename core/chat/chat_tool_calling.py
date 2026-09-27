@@ -58,10 +58,13 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     # tool appends for the browser — see shared/gallery-marker.js) is UI-only
     # too: the model already has the numbered URL list above it. It rides the
     # keep_img rule for the same reason IMG does. 2026-09-09.
+    # The FILES marker (core/attachments.py: a player / download row) rides
+    # the same two rules. 2026-09-26.
     if keep_img:
         marker_pattern = r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*'
     else:
-        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
+        marker_pattern = (r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
+                          r'|<!--FILES:\{[^\n]*\}-->\s*')
 
     # Remove all markers
     clean = re.sub(marker_pattern, '', content)
@@ -265,17 +268,20 @@ def _extract_tool_images(result, history=None, provider=None, function_name=None
                 # vision. display_only images are deliberately hidden; describing
                 # them defeats the point, and CLIP's subject-blind guesses read as
                 # "wrong image" to literal models → regeneration loops. 2026-08-09.
-                hidden_to_vibe.append(img)
+                hidden_to_vibe.append((img, img_id))
         if hidden_to_vibe:
             # Describe the image in words so the model still gets it — CLIP vibe or
             # a vision provider, Settings › Images › Image describer (core.image_describe).
             vibe_parts = []
-            for img in hidden_to_vibe:
+            for img, stored_id in hidden_to_vibe:
                 try:
                     import base64 as _b64
                     from core import image_describe
                     raw = _b64.b64decode(img["data"])
-                    vibe_parts.append(image_describe.describe(raw))
+                    # A stored image keeps its description on its own row (one
+                    # describe per image, ever); a history-less lane just describes.
+                    vibe_parts.append(image_describe.for_image(stored_id, raw, store=history) if stored_id
+                                      else image_describe.describe(raw))
                 except Exception as e:
                     logger.warning(f"[DESCRIBE] failed to describe image: {e}")
             if vibe_parts:

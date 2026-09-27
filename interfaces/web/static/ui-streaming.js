@@ -2,6 +2,7 @@
 
 import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
+import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { openImageModal } from './ui-images.js';
 
 // Streaming state
@@ -524,7 +525,9 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
 const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     let toolData = state.toolAccordions[toolId];
     // Tiles ride a UI marker; the accordion shows the text without it.
-    const { entries: galleryEntries, title: galleryTitle, text: shownResult } = parseGalleryMarker(result);
+    const { entries: galleryEntries, title: galleryTitle, text: galleryStripped } = parseGalleryMarker(result);
+    // Players / download buttons ride their own marker (shared/files-marker.js).
+    const { groups: fileGroups, text: shownResult } = parseFilesMarker(galleryStripped);
 
     if (!toolData) {
         // Fallback: create accordion now
@@ -567,6 +570,8 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
             toolData.acc.dataset.gallery = '1';    // the row shows the set; no inline clone
             toolData.acc.after(gallery);
         }
+        let anchor = gallery || toolData.acc;
+        buildFilesRows(fileGroups).forEach(row => { anchor.after(row); anchor = row; });
     }
 
     if (scrollCallback) scrollCallback();

@@ -4356,6 +4356,51 @@ a.gallery-caption:hover {
     }
 }
 
+/* Files row (shared/files-marker.js, 2026-09-26): files a tool or a plugin's
+   own turn hands the user. Audio gets a player, every file a download button. */
+.files-row {
+    margin: 10px 0;
+    max-width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-md);
+}
+
+.files-row .files-title {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    margin: 0 0 8px 2px;
+}
+
+.files-row .files-audio {
+    display: block;
+    width: 100%;
+    max-width: 460px;
+    height: 40px;
+    margin: 0 0 8px 0;
+}
+
+.files-row .files-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.files-row .files-chip {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--text-secondary);
+    color: var(--text-secondary);
+    font-size: var(--font-sm);
+    text-decoration: none;
+    transition: opacity var(--transition-fast);
+}
+
+.files-row .files-chip:hover {
+    opacity: 0.75;
+}
+
 /* Gallery row (shared/gallery-marker.js v3, 2026-09-10): one titled strip per
    tool call — tiles numbered like her contact sheet, fixed height, scrolls
    sideways inside the bubble. The masonry .image-gallery above stays for runs

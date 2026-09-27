@@ -369,8 +369,8 @@
     "long": "Every image she or you put in the chat is shown to the model again for this many turns after it arrived — pasted images and the pictures her tools showed her (contact sheets, viewed images). She can refer back to them without re-viewing. Each replayed image costs roughly 1.5k tokens per turn, so 3 keeps a browsing session cheap. Older images stay in the chat forever and she can re-view any of them by handle (img:...)."
   },
   "IMAGE_DESCRIBE_ENGINE": {
-    "short": "Who tells a text-only model what is in an image",
-    "long": "When the model answering has no vision, every image it was meant to see (pasted, from a tool, from Discord or Telegram) is described to it in words instead. CLIP (default) is a local atmospheric read — lighting, mood, colours, whether a person is in frame — with no LLM call. Pick one of your vision-capable providers for a literal caption: what is shown, any text, the setting. That provider is asked once per image (about 300 tokens); in a private chat only a provider marked local qualifies, and any refusal or failure falls back to CLIP with a log line. Animated GIFs are described from their first frame."
+    "short": "Which model describes images for a model that cannot see",
+    "long": "When the model answering cannot see images, each image is described to it in words: images you paste, images from tools (camera, screenshot, search) and images from Discord or Telegram. CLIP (default) is built in and makes no model call; it reads mood, colours and whether a person is in frame. Or pick any of your models from the list (the same lines as the chat sidebar) for a literal description: what is shown, any text, the setting. Pick one that can see images. Each image is described once and the description is kept with the image. In a private chat only a model marked local is used. If the model fails or refuses, CLIP is used and the log says why. Animated GIFs are described from their first frame."
   },
   "WEB_IMAGES_SAFESEARCH": {
     "short": "Adult-content filter for web image search",

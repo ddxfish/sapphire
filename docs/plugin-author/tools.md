@@ -123,6 +123,27 @@ def execute(function_name, arguments, config):
 - Tiles for the user without spending model tokens: append ONE marker, `<!--GALLERY:{"title": "…", "items": [{"handle": "img:<id>", "full": "<lightbox url>", "title": "…", "page": "<source url>"}, ...]}-->`. Tiles with a `handle` are served from the store (vault-aware, offline); an item may carry `thumb` instead for a URL you already serve. Items render as a numbered row — number them the same way as your sheet. The older array forms (`[{thumb, full, title, page}]`, `["url", …]`) still render. Browser-facing external image URLs go through `ci.proxied(url)` — the browser never hot-links a third party. The marker is stripped from the model's copy.
 - **All of the above in one call**: `images, tail = ci.gallery(title, entries, view=True)` — `entries` in sheet order, each `{raw, title, page, full?, thumb?, show?, stash?}`. It stashes every `raw` (sets `entry['handle']`), builds the marker and the sheet (or the one image), and returns her pixels plus the note-and-marker tail. Write your own numbered lines with the handles in hand and return `ci.result(text + "\n" + tail, images)` when `images` is non-empty, else the plain string. `stash: False` + `thumb` = a row you already serve (library); `thumb` alone = the fallback tile when the stash refuses. The web image search, the library query and the local-folder view all ride it — don't hand-roll a fourth.
 
+## Returning Files
+
+A tool that wants the user to have a file (a song, an export, a recording) serves it from one of its own [routes](routes.md) and appends ONE marker line to its result:
+
+```python
+from core import attachments
+
+def execute(function_name, arguments, config):
+    row = attachments.marker("Copper Light", [
+        {"url": "/api/plugin/my-plugin/song/ab12.mp3", "name": "copper-light.mp3"},
+        {"url": "/api/plugin/my-plugin/song/ab12.mid", "name": "copper-light.mid"},
+    ])
+    return "Saved Copper Light.\n" + row, True
+```
+
+- The chat renders the marker as a row under the tool result: audio files (`mp3`, `wav`, `ogg`, `oga`, `m4a`, `flac`) get a player, every file gets a download button named by `name`. The player fetches nothing until play is pressed.
+- **URLs are your own plugin routes only** (`/api/plugin/<name>/...`). `attachments.marker` raises `ValueError` on anything else, and the browser renderer drops it too. A tool result can carry text from the open web, so the marker can never point the browser at a third party.
+- The marker is UI-only. It stays in history for the browser and is stripped from every copy the model reads, so say in plain words what you saved. Up to 12 files per marker.
+- The same marker works in the text of a turn your plugin starts itself (`core.cadence.fire_once`). The row then shows on that message.
+- Serve the bytes with a `FileResponse` so seeking works, and keep them where the user's data lives (`user/plugin_state/<name>_*`). Files outside the chat database are not covered by a private chat's vault, so refuse to write them when `scope_private` is set.
+
 ## Networking from Plugins
 
 Make HTTP calls through the network facade instead of bare `requests`:
@@ -354,6 +375,7 @@ Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](.
 ## Reference for AI
 
 - Tool file exports: `ENABLED`, `EMOJI`, `AVAILABLE_FUNCTIONS`, `TOOLS`, `execute(function_name, arguments, config, plugin_settings=None, credentials=None)` → `(message: str, success: bool)`. Signature is inspected — declare 3, 4, or 5 params; extras are passed only if accepted. Optional `get_tools()` returns TOOLS-shaped schemas from current settings.
+- Files for the user: `from core import attachments`; append `attachments.marker(title, [{url, name}, ...])` to the result text. URLs must be the plugin's own routes (`/api/plugin/<name>/...`, else `ValueError`); audio renders a player, every file a download button; max 12; UI-only (stripped from the model's copy). Also valid in the text of a `core.cadence.fire_once` turn.
 - Schema flags: `is_local` `True|False|"endpoint"` gates PRIVATE chats only (True runs; False/"endpoint" refused; unset refused unless `PRIVATE_ALLOW_UNFLAGGED_TOOLS`); `network: true` = UI "network tools" labeling only; `hidden: true` = out of the Toolsets picker but still registered and callable. No flag routes traffic.
 - Networking: `from core import net` — `net.get/post/put/delete/request(url, ...)` (requests-shaped), `net.session_for(url)` (pooled, lane-fixed), `net.wan_session()` (WAN lane, browser profile). Host classification is syntactic, never resolves DNS: LAN = loopback / RFC1918 / link-local / `*.local` / `*.lan` / `*.home.arpa` / single-label names / registered direct hosts → direct, redirects refused by default; WAN = everything else → proxy env when SOCKS is on. Register LAN FQDNs: `core.socks_proxy.register_direct_hosts(zero_arg_callable, owner=plugin_name)`; keyed by owner (replace-on-reregister), auto-unregistered on plugin unload.
 - `get_tools()` live refresh: re-run on settings save; only `description`/`parameters` update in place; tool names never change; add/remove needs a reload. Keep a static `TOOLS` fallback.

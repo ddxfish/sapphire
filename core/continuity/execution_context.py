@@ -403,7 +403,8 @@ class ExecutionContext:
                     Shown to the LLM as base64 blocks THIS turn only, gated on
                     provider vision support; non-vision gets the image described in
                     words (core.image_describe: CLIP or a vision provider).
-                    new_messages always persists the marker form.
+                    new_messages persists the marker form, plus that description
+                    when a text-only model needed one.
         """
         # filter_to_thinking_only from its real home — chat.py stopped
         # re-exporting it when the blocking engine died (merge 2026-08-17).
@@ -426,8 +427,11 @@ class ExecutionContext:
         """Build the user message content the LLM sees this turn.
 
         Returns (llm_content, persist_content). llm_content carries base64 image
-        blocks for vision models (or vibe-augmented text otherwise); persist_content
-        is always the marker-string `user_input` so chat history never stores base64.
+        blocks for vision models (or the described text otherwise). persist_content
+        never holds base64: the marker-string `user_input` for a vision model, and
+        for a text-only model the same described text she read — the caption stays
+        in history, so the next turn still knows what the image was (2026-09-26;
+        the chat lane always did: its caption rides the tool result).
         """
         if not images:
             return user_input, user_input
@@ -450,15 +454,19 @@ class ExecutionContext:
         for img in images:
             try:
                 from core import image_describe
-                vibe_parts.append(image_describe.describe(base64.b64decode(img["data"]), private=private))
+                raw = base64.b64decode(img["data"])
+                # A saved event image keeps its description on its own row.
+                vibe_parts.append(image_describe.for_image(img["id"], raw, private=private) if img.get("id")
+                                  else image_describe.describe(raw, private=private))
             except Exception as e:
                 logger.warning(f"[EVENT-IMG] describe failed: {e}")
         augmented = user_input
         if vibe_parts:
             augmented = (user_input + "\n\n" + "\n\n".join(p for p in vibe_parts if p)).strip()
-        # Persist the marker form (user_input), but the LLM this turn sees the
-        # vibe-augmented text. Persisting the marker keeps replay clean.
-        return augmented, user_input
+        # The description is persisted WITH the markers: a text-only model gets
+        # no image on replay, so a caption that lived one turn left her with an
+        # id and nothing else. Text only — never base64.
+        return augmented, augmented
 
     def _run_inner(self, user_input, history_messages, filter_to_thinking_only, _inject_tool_images,
                    images=None):
@@ -878,7 +886,8 @@ class ExecutionContext:
         # rounds, but history must persist the MARKER form (text + <<IMG::...>>),
         # never inline base64 — otherwise every replay re-sends the image and
         # bloats the chat. Swap the anchored user message's content to the marker
-        # form. No-op when no images were passed (persist_content == llm_content).
+        # form. No-op when no images were passed, and for a text-only model that
+        # read a description (persist_content == llm_content both times).
         if images and len(messages) > cur_idx:
             _um = messages[cur_idx]
             if _um.get("role") == "user":

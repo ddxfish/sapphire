@@ -78,11 +78,25 @@ def test_vision_llm_gets_image_block_history_gets_marker():
     assert GOOD_B64 not in persist
 
 
-def test_no_vision_persists_marker_no_base64():
-    # vibe path may load CLIP; we only assert no base64 leaks into either form
+def test_no_vision_persists_the_description_with_the_marker(monkeypatch):
+    # 2026-09-26: a text-only model gets no image on replay, so the caption she
+    # read this turn stays in history — text only, never base64.
+    from core import image_describe
+    monkeypatch.setattr(image_describe, 'describe', lambda data, private=None: 'Vibes: a red barn at dusk.')
     llm, persist = _ctx(_NoVisionProvider())._build_user_message(MARKER_MSG, IMGS)
     assert isinstance(llm, str) and GOOD_B64 not in llm
-    assert persist == MARKER_MSG and GOOD_B64 not in persist
+    assert persist == llm == MARKER_MSG + '\n\nVibes: a red barn at dusk.'
+    assert GOOD_B64 not in persist
+
+
+def test_no_vision_describer_failure_persists_the_marker_alone(monkeypatch):
+    from core import image_describe
+
+    def boom(data, private=None):
+        raise RuntimeError('no describer')
+    monkeypatch.setattr(image_describe, 'describe', boom)
+    llm, persist = _ctx(_NoVisionProvider())._build_user_message(MARKER_MSG, IMGS)
+    assert llm == persist == MARKER_MSG
 
 
 def test_no_images_is_identical_passthrough():

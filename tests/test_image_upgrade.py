@@ -217,7 +217,9 @@ def test_window_replays_exactly_what_she_saw():
     msgs = _transcript().get_messages_for_llm(image_window=3, image_loader=_loader(STORE))
     # pasted image rides its own row
     assert msgs[0]["content"][0] == {"type": "text", "text": "look\n\n(image img:p1.jpg)"}
-    assert msgs[0]["content"][1] == {"type": "image", "data": _b64(b'PASTED'), "media_type": "image/jpeg"}
+    # id: the block names its row (2026-09-26), so a model with no vision can be given the caption
+    assert msgs[0]["content"][1] == {"type": "image", "data": _b64(b'PASTED'), "media_type": "image/jpeg",
+                                     "id": "p1.jpg"}
     # the tool batch's sheet comes back as ONE pseudo-user message after the tool row
     i = next(k for k, m in enumerate(msgs) if m["role"] == "tool")
     replay = msgs[i + 1]

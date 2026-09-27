@@ -1,15 +1,22 @@
 """Describe an image for a brain that cannot see it (2026-09-26).
 
-ONE door for every lane that hands a text-only model an image: chat tool
-images (core/chat/chat_tool_calling.py) and daemon-event images
-(core/continuity/execution_context.py — Discord, Telegram, any plugin payload).
+ONE door for every lane that hands a text-only model an image: tool images
+(core/chat/chat_tool_calling.py), daemon-event images
+(core/continuity/execution_context.py — Discord, Telegram, any plugin payload)
+and, through caption_blind(), the images a user pastes plus the vision
+window's replays (core/chat/chat_streaming.py).
 Settings › Images › Image describer (IMAGE_DESCRIBE_ENGINE) picks the engine:
 
     'clip'          core.vibes — CLIP atmospheric read, local, no LLM (default)
-    <provider key>  that vision-capable provider captions the image literally,
-                    through the ONE resolver (require_images; the turn's privacy
-                    honoured — a private turn refuses a provider not marked
-                    local). Blind, refused, down or empty → CLIP, logged.
+    <provider key>  that model line captions the image literally, through the
+                    ONE resolver (the turn's privacy honoured — a private turn
+                    refuses a provider not marked local). Picking a line here
+                    IS the statement that it can see: vision is forced on for
+                    this one call. Refused, down, rejected or empty → CLIP, logged.
+
+The caption lives ON THE IMAGE (tool_images.caption): described once, read
+back ever after, deleted with the image. Images with no row (perception
+frames, history-less lanes) are described without being kept, or left blind.
 
 An animated GIF is cut to its first frame (PNG) before a provider sees it;
 anything that is not JPEG / PNG / WEBP is re-encoded to PNG the same way.
@@ -72,9 +79,14 @@ def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
     """The provider's literal caption, or '' when it cannot (every reason logged)."""
     from core.chat.llm_providers import get_generation_params
     from core.chat.llm_providers.resolve import ProviderRefused, display_name, providers_config, resolve
+    cfg = providers_config()
+    if key in cfg:
+        # The vision checkbox describes the entry's everyday use; being picked as
+        # the describer is the owner saying this one sees.
+        cfg = {**cfg, key: {**cfg[key], 'supports_images': True}}
     try:
         sel = resolve(key, '', private=private, prompt_name=None, timeout=TIMEOUT,
-                      health='skip', require_images=True)
+                      health='skip', require_images=True, cfg=cfg)
     except ProviderRefused as e:
         logger.warning(f"[DESCRIBE] {display_name(key)} refused ({e}) — CLIP instead")
         return ''
@@ -83,7 +95,7 @@ def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
         {'type': 'text', 'text': PROMPT},
         {'type': 'image', 'data': base64.b64encode(data).decode('ascii'), 'media_type': media_type},
     ]}]
-    params = {**get_generation_params(sel.key, sel.effective_model, providers_config()), 'max_tokens': MAX_TOKENS}
+    params = {**get_generation_params(sel.key, sel.effective_model, cfg), 'max_tokens': MAX_TOKENS}
     try:
         response = sel.provider.chat_completion(messages, None, params)
     except Exception as e:
@@ -109,3 +121,116 @@ def describe(image_bytes: bytes, *, private: bool | None = None) -> str:
         if text:
             return text
     return _clip(image_bytes)
+
+
+# ── the caption lives on the image ───────────────────────────────────────────
+
+def _store():
+    """The chat image store (session manager), or None outside a running Sapphire."""
+    try:
+        from core import images as ci
+        return ci._session_manager()
+    except Exception:
+        return None
+
+
+def for_image(image_id, image_bytes=None, *, private: bool | None = None, store=None) -> str:
+    """The description of a STORED image: read from its row, or made once and
+    written there. image_bytes may be raw bytes or base64 text; without them the
+    store supplies the pixels. A lane with no store just describes."""
+    image_id = str(image_id or '').strip()
+    if store is None and image_id:
+        store = _store()
+    read = getattr(store, 'image_caption', None)
+    if image_id and callable(read):
+        try:
+            cached = read(image_id)
+        except Exception:
+            cached = None
+        if isinstance(cached, str) and cached.strip():
+            return cached
+    raw = image_bytes
+    if isinstance(raw, str):
+        raw = base64.b64decode(raw) if raw else None
+    if not raw and image_id:
+        fetch = getattr(store, 'get_tool_image', None)
+        got = fetch(image_id) if callable(fetch) else None
+        raw = got[0] if got else None
+    if not raw:
+        return ''
+    text = describe(raw, private=private)
+    write = getattr(store, 'set_image_caption', None)
+    if text and image_id and callable(write):
+        try:
+            write(image_id, text)
+        except Exception as e:
+            logger.debug(f"[DESCRIBE] caption for {image_id} not stored: {e}")
+    return text
+
+
+def _text_of(messages) -> str:
+    parts = []
+    for m in messages:
+        c = m.get('content') if isinstance(m, dict) else None
+        if isinstance(c, str):
+            parts.append(c)
+        elif isinstance(c, list):
+            parts.extend(str(b.get('text') or '') for b in c if isinstance(b, dict) and b.get('type') == 'text')
+    return '\n'.join(parts)
+
+
+def caption_blind(messages, provider, *, private: bool | None = None, store=None) -> int:
+    """A provider with no vision reads a description in place of every STORED
+    image on the wire (a block that names its row: block['id']) — this turn's
+    pasted images and the vision window's replays alike. A caption the wire
+    already carries is not repeated. Blocks with no id (perception frames,
+    legacy inline rows) are left alone: the provider says it cannot see them.
+    Mutates `messages`; returns how many images were answered in words."""
+    from core.chat.llm_providers.resolve import provider_sees
+    if provider is None or not messages or provider_sees(provider):
+        return 0
+    try:
+        from core.chat.history import _REPLAY_NOTE
+    except Exception:
+        _REPLAY_NOTE = ''
+    wire, done = None, 0
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        content = msg.get('content') if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        out, touched = [], False
+        for block in content:
+            is_image = isinstance(block, dict) and block.get('type') == 'image'
+            image_id = str(block.get('id') or '') if is_image else ''
+            if not image_id:
+                out.append(block)
+                continue
+            try:
+                text = for_image(image_id, block.get('data'), private=private, store=store)
+            except Exception as e:
+                logger.warning(f"[DESCRIBE] image {image_id} not described: {e}")
+                text = ''
+            if not text:
+                out.append(block)
+                continue
+            touched, done = True, done + 1
+            if wire is None:
+                wire = _text_of(messages)
+            if text not in wire:
+                out.append({'type': 'text', 'text': text})
+                wire += '\n' + text
+        if not touched:
+            continue
+        if all(isinstance(b, dict) and b.get('type') == 'text' for b in out):
+            texts = [str(b.get('text') or '') for b in out if str(b.get('text') or '').strip()]
+            if not texts or texts == [_REPLAY_NOTE]:
+                del messages[i]          # a replay note with nothing left to introduce
+                continue
+            msg['content'] = '\n\n'.join(texts)
+        else:
+            msg['content'] = out
+    if done:
+        logger.info(f"[DESCRIBE] {done} image(s) answered in words for a model with no vision")
+    return done
+

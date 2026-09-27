@@ -40,7 +40,7 @@ let overrides = [];
 let defaults = {};
 let pendingChanges = {};
 let wakewordModels = [];
-let visionProviders = [];   // [key, name] of enabled providers that see images (Images › describer)
+let visionProviders = [];   // [key, name] of every enabled model line, the chat sidebar's list (Images › describer)
 let availableThemes = ['dark'];
 let avatarPaths = { user: null, assistant: null }; // kept for plugin compat
 let providerMeta = {};
@@ -234,8 +234,11 @@ async function loadProviderMeta() {
         if (res.ok) {
             const d = await res.json();
             providerMeta = d.metadata || {};
-            visionProviders = (d.providers || []).filter(p => p.enabled && p.supports_images)
-                .map(p => [p.key, p.display_name || p.key]);
+            // Every enabled line: picking one here IS saying it can see (the
+            // describer forces vision on for that call). The eye marks the
+            // ones already flagged as vision models.
+            visionProviders = (d.providers || []).filter(p => p.enabled)
+                .map(p => [p.key, (p.display_name || p.key) + (p.supports_images ? ' \u{1F441}' : '')]);
         }
     } catch {}
 }
@@ -540,10 +543,10 @@ function renderInput(key, value, type) {
     }
     if (key === 'IMAGE_DESCRIBE_ENGINE') {
         const opts = [
-            ['clip', 'CLIP — local atmospheric read, no LLM call (default)'],
-            ...visionProviders.map(([k, n]) => [k, `${n} — vision model, literal caption`]),
+            ['clip', 'CLIP — built in, no model call (default)'],
+            ...visionProviders.map(([k, n]) => [k, n]),
         ];
-        if (value && !opts.some(([v]) => v === value)) opts.push([value, `${value} (not enabled, or no vision)`]);
+        if (value && !opts.some(([v]) => v === value)) opts.push([value, `${value} (not enabled)`]);
         return `<select id="${id}" data-key="${key}">
             ${opts.map(([v, l]) => `<option value="${escapeAttr(v)}" ${value === v ? 'selected' : ''}>${escapeAttr(l)}</option>`).join('')}
         </select>`;

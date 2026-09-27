@@ -589,6 +589,13 @@ class LLMChat:
                 messages.insert(1, {"role": "system", "content": dynamic_context, "_dynamic": True})
             return messages
 
+        # A FILES marker in the turn's own text (a plugin's turn that hands
+        # the user a player: core/attachments.py) is the browser's, not hers.
+        # History keeps it; this turn's wire copy drops it, as replay does.
+        if user_input and '<!--FILES:' in user_input:
+            from core import attachments
+            user_input = attachments.strip(user_input)
+
         # Receipts for pasted images (the store's img: handles) ride the wire
         # text too, so she can hand THIS turn's image to any image tool.
         receipts = [f"(image {h})" for h in (image_handles or []) if h]
@@ -612,12 +619,20 @@ class LLMChat:
             user_content = []
             if user_input:
                 user_content.append({"type": "text", "text": user_input})
-            for img in images:
-                user_content.append({
+            handles = list(image_handles or [])
+            for idx, img in enumerate(images):
+                block = {
                     "type": "image",
                     "data": img.get("data", ""),
                     "media_type": img.get("media_type", "image/jpeg")
-                })
+                }
+                # A stored image names its row, so a model with no vision can be
+                # told what it shows (core.image_describe.caption_blind). Perception
+                # frames are never stored: no id, they stay blind.
+                handle = str(handles[idx] or '') if idx < len(handles) else ''
+                if handle.startswith('img:'):
+                    block["id"] = handle[4:]
+                user_content.append(block)
         else:
             user_content = user_input
 

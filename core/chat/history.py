@@ -307,8 +307,10 @@ def _replay_images(msgs, refs, window, loader):
                 continue
             got = loader(ref[1])
             if got:
+                # id: the block names its row, so a model with no vision can be
+                # handed the caption (core.image_describe.caption_blind).
                 out.append({"type": "image", "data": _b64.b64encode(got[0]).decode('ascii'),
-                            "media_type": got[1] or 'image/jpeg'})
+                            "media_type": got[1] or 'image/jpeg', "id": ref[1]})
         return out
 
     def flush(pending):
@@ -332,7 +334,8 @@ def _replay_images(msgs, refs, window, loader):
     return out
 
 
-_UI_MARKER_RE = re.compile(r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*')
+_UI_MARKER_RE = re.compile(r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
+                           r'|<!--FILES:\{[^\n]*\}-->\s*')
 _LIVE_IMAGE_RE = re.compile(
     r'<<IMG::tool:([^>]+)>>|\bimg:([A-Za-z0-9][\w-]*(?:\.[A-Za-z0-9]+)*)')
 
@@ -564,6 +567,7 @@ class ConversationHistory:
         context_limit: int = None,
         image_window: int = 0,
         image_loader=None,
+        caption_loader=None,
     ) -> List[Dict[str, Any]]:
         """
         Get messages formatted for LLM with TRIMMING applied.
@@ -584,6 +588,9 @@ class ConversationHistory:
                 arrived). Text-only providers strip the blocks at conversion.
             image_loader: id → (bytes, media_type) | None — the manager's
                 visible_tool_image (visible=1 rows only). None = no window.
+            caption_loader: id → the image's stored description | None — the
+                manager's image_caption. A pasted image that has one carries
+                it beside its receipt line on every turn.
         
         Notes:
             - Thinking is NEVER sent to LLMs (they don't need previous reasoning)
@@ -673,7 +680,10 @@ class ConversationHistory:
                                 handle = str(block.get('handle') or '')
                                 if handle.startswith('img:'):
                                     refs_here.append(('id', handle[4:]))
-                                    text_parts.append(f"(image {handle})")
+                                    # The caption rides beside the receipt on every
+                                    # turn once the image has one (2026-09-26).
+                                    caption = caption_loader(handle[4:]) if caption_loader else None
+                                    text_parts.append(f"(image {handle})" + (f"\n{caption}" if caption else ""))
                                 elif block.get('data'):
                                     refs_here.append(('inline', block['data'],
                                                       block.get('media_type') or 'image/jpeg'))
@@ -693,7 +703,7 @@ class ConversationHistory:
             # text (2026-08-09 for <<>>; the gallery JSON rode along unnoticed
             # until 2026-09-10). Same pattern as strip_ui_markers.
             c = llm_msg.get("content")
-            if isinstance(c, str) and ('<<' in c or '<!--GALLERY:' in c):
+            if isinstance(c, str) and ('<<' in c or '<!--GALLERY:' in c or '<!--FILES:' in c):
                 llm_msg["content"] = _UI_MARKER_RE.sub('', c).strip()
 
             msgs.append(llm_msg)
@@ -1421,7 +1431,8 @@ class ChatSessionManager:
                         data BLOB NOT NULL,
                         media_type TEXT NOT NULL DEFAULT 'image/jpeg',
                         created_at TEXT NOT NULL,
-                        visible INTEGER NOT NULL DEFAULT 1
+                        visible INTEGER NOT NULL DEFAULT 1,
+                        caption TEXT
                     )
                 """)
 
@@ -1524,6 +1535,11 @@ class ChatSessionManager:
                 img_cols = {r[1] for r in conn.execute("PRAGMA table_info(tool_images)")}
                 if "visible" not in img_cols:
                     conn.execute("ALTER TABLE tool_images ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
+                # caption (2026-09-26): the image in words, written the first time a
+                # model with no vision was meant to see it (core.image_describe).
+                # On the image's own row, so it lives and dies with the image.
+                if "caption" not in img_cols:
+                    conn.execute("ALTER TABLE tool_images ADD COLUMN caption TEXT")
 
                 conn.commit()
             logger.debug(f"Database initialized at {self._db_path}")
@@ -4254,6 +4270,7 @@ class ChatSessionManager:
             in_tool_cycle=self._in_tool_cycle,
             image_window=window,
             image_loader=self.visible_tool_image,
+            caption_loader=self.image_caption,
         )
 
     def get_turn_count(self) -> int:
@@ -5392,6 +5409,44 @@ class ChatSessionManager:
         if not row or not row[0]:
             return None
         return self.get_tool_image(image_id)
+
+    def image_caption(self, image_id: str) -> Optional[str]:
+        """The image's description in words (core.image_describe), or None.
+        Same gates as the pixels: a hidden or sealed owner answers None."""
+        self._ensure_db()
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT caption, chat_name FROM tool_images WHERE id = ?",
+                                   (image_id,)).fetchone()
+        except Exception as e:
+            logger.debug(f"image_caption '{image_id}': {e}")
+            return None
+        if not row or not row[0] or self._vault_hidden(row[1]):
+            return None
+        return self._dec_value(row[0], "image caption", row[1]) or None
+
+    def set_image_caption(self, image_id: str, caption: str) -> bool:
+        """Write the description onto the image's own row, so it lives and dies
+        with the image. Encrypted like the pixels when the owner chat is
+        vaulted (a sealed vault refuses — never plaintext). False when the row
+        does not exist (history-less lanes) or the write fails."""
+        text = str(caption or '').strip()
+        if not image_id or not text:
+            return False
+        self._ensure_db()
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT chat_name FROM tool_images WHERE id = ?",
+                                   (image_id,)).fetchone()
+                if not row:
+                    return False
+                payload = self._enc_value(text) if self._is_vaulted_conn(conn, row[0]) else text
+                conn.execute("UPDATE tool_images SET caption = ? WHERE id = ?", (payload, image_id))
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Caption for image '{image_id}' not saved: {e}")
+            return False
 
     def last_tool_image_id(self, chat_name: str = None) -> Optional[str]:
         """Newest tool image id for a chat (default: the effective chat) — the
