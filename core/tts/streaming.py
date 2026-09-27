@@ -49,11 +49,9 @@ PAUSE_AFTER_MS = {
 }
 
 # Block-level openers that are hidden entirely. Each (opener, closer) pair.
-BLOCK_TAGS: list = [
-    ("<think>", "</think>"),
-    ("<reasoning>", "</reasoning>"),
-    ("<tools>", "</tools>"),
-]
+# The thinking pairs come from core.think (the one list of those tags).
+from core import think as _think
+BLOCK_TAGS: list = [*_think.PAIRS, ("<tools>", "</tools>")]
 
 # Secondary punctuation splits when the chunk has grown past this fraction
 # of max_chars. Avoids splitting "Yes:" into its own tiny chunk.
@@ -289,8 +287,7 @@ _AVATAR_RE = re.compile(r"<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d
 # no prosodic cue, which sounded flat.
 _INLINE_PATTERNS = [
     (_AVATAR_RE, " "),                                      # avatar display tokens
-    (re.compile(r"<think>.*?</think>", re.DOTALL), " "),
-    (re.compile(r"<reasoning>.*?</reasoning>", re.DOTALL), " "),
+    (_think.BLOCK_RE, " "),                                # a whole thinking block, any tag name
     (re.compile(r"<tools>.*?</tools>", re.DOTALL), " "),
     (re.compile(r"```[\s\S]*?```"), " "),
     (re.compile(r"`[^`]+`"), " "),                          # inline code

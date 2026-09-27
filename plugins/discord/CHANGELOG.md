@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.1 — 2026-09-27
+
+- **Think-tag stripping moved into core** (`core/think.py`). The plugin's stripper was the best one in
+  the app (a tag typed in backticks is a word, not a block), so its rules became the one reader every
+  lane uses: chat history, the web UI, TTS, Telegram, email, tasks, agents. `conversation/think_tags.py`
+  is gone; replies are cleaned by `core.think.strip`. Gained on the way: `<reasoning>` blocks, tags
+  inside a fenced code block are words too, and a reply with several think blocks keeps the prose
+  between them.
+
 ## 2.3.0 — 2026-09-26
 
 - **Three more add-on doors**, so a personality plugin can do its whole job through hooks instead

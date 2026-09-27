@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "files": {
     "README.md": "sha256:ae374d9cc7654a2bcc8e0ca062e9207ae5f2c0e32b89f72145df80f541387d11",
-    "daemon.py": "sha256:4934aadeda7493c8b2919f969b57babb1e1de26989c34f661ee3ffe798b38e02",
+    "daemon.py": "sha256:34425a7bc2d8aef313992c4e5018e784e8fb4d188f1ccdffb8306bfdfa908f82",
     "plugin.json": "sha256:c7adf1fda120d41b0e2081b1119d54b785d252389bdbbfd005dd9d87ab95b3ca",
     "tests/test_archive_partial_success.py": "sha256:04f3d1e9f3c68a5fbb56ced21656cfc7a55877e54190fe120594113327948470",
     "tests/test_delete_emails.py": "sha256:f3bf4af555fc00f68bc9020521f9cf92e0f017d0ca608de198da5e67310c32b3",
@@ -14,5 +14,5 @@
     "tools/email_tool.py": "sha256:feec9bf1fcf8c8cf1df760d962d6a08b118e394f870d13d7f73f8da9215709e5",
     "web/index.js": "sha256:376002392e2790776e7f286b2129e3d30a812b6a91b2b5f72fa014b16a49448a"
   },
-  "signature": "7Ouf7aIdUTH0zmeymDDqu9xbssyCIRQC0ipboydnxEn/EepKRI7DpjR10dUci8fHuW72e6tzEH+f/XNu5H4IDg=="
+  "signature": "w3EogE602BoXSLhSlb3I1WheVxmXjBztQTkgvjdqFhb/5kUDYNxm+F7Vq3+h5sMVTLLUW6BGRuEtJcGyfwyKCQ=="
 }

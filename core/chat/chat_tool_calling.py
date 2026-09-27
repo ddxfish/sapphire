@@ -12,27 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 def filter_to_thinking_only(content: str) -> str:
-    """
-    Extract only <think> tags, removing all other content.
-    Used for assistant messages with tool_calls to prevent premature responses.
-    """
-    if not content:
-        return ""
-    
-    think_pattern = r'<(?:seed:)?think[^>]*>.*?</(?:seed:)?think[^>]*>'
-    think_matches = re.findall(think_pattern, content, re.DOTALL | re.IGNORECASE)
-    
-    filtered = "\n\n".join(think_matches) if think_matches else ""
-    
-    # If no think tags but there's content, wrap FULL content (don't truncate!)
-    if not filtered and content:
-        filtered = f"<think>{content.strip()}</think>"
-        logger.info(f"No think tags found, wrapped full content in think block")
-    
-    if filtered != content:
-        logger.info(f"Stripped prose: {len(content)} -> {len(filtered)} chars")
-    
+    """Thinking only, prose gone: the stored form of an assistant message that
+    called a tool (its prose is a promise the tool result repeats). A reply
+    with no thinking is wrapped whole, never cut. core.think does the reading."""
+    from core import think
+    filtered = think.only(content)
+    if filtered != (content or ''):
+        logger.info(f"Stripped prose: {len(content or '')} -> {len(filtered)} chars")
     return filtered
+
 
 def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     """

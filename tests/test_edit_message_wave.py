@@ -91,7 +91,7 @@ class TestClientWiring:
         h = _src("interfaces/web/static/handlers/message-handlers.js")
         assert "ui.replaceMessage(msgEl, payload, idx, total)" in h
         assert "if (chat.takeHeldRefresh()) await refresh(false)" in h
-        assert "text.replace(THINK_RE, '')" in h
+        assert "text = stripThink(text)" in h          # the editor shows prose only (shared/think.js)
         assert "exitEditMode" not in h
 
     def test_editor_keeps_the_tool_half_and_has_keys(self):

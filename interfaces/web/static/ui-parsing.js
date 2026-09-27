@@ -3,6 +3,7 @@
 import * as Images from './ui-images.js';
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
+import { thinkSegments, stripThink, isSeedThink } from './shared/think.js';
 
 let globalThinkCounter = 0;
 
@@ -109,7 +110,7 @@ export const extractProseText = (el) => {
     let txt = clone.textContent.trim();
     
     // Strip any remaining think tags
-    txt = txt.replace(/<(?:seed:)?think>.*?<\/(?:seed:think|seed:cot_budget_reflect|think)>/gs, '');
+    txt = stripThink(txt);
     
     // Strip any HTML tags that leaked through
     txt = txt.replace(/<[^>]+>/g, '');
@@ -847,7 +848,34 @@ const addExpandToggle = (contentEl, prefix, shortText, fullText) => {
 
 const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) => {
     if (!txt) return;
-    
+    // Thinking first, on the RAW text (shared/think.js, the twin of
+    // core/think.py). A think block is her scratch paper: it renders as plain
+    // text. No markdown, no images, no code blocks, so nothing inside it can
+    // break the page; a tag she TYPED while thinking is a word (2026-09-27).
+    const segs = thinkSegments(txt);
+    if (!segs.some(s => s.type === 'think')) {
+        renderProse(el, txt, isHistoryRender, scrollCallback);
+        return;
+    }
+    segs.forEach(s => {
+        if (s.type === 'think') renderThink(el, s);
+        else renderProse(el, s.text, isHistoryRender, scrollCallback);
+    });
+};
+
+const renderThink = (el, seg) => {
+    const text = seg.text.trim();
+    if (!text) return;
+    globalThinkCounter++;
+    const label = isSeedThink(seg.name) ? 'Seed Think' : 'Think';
+    const { acc, content } = createAccordion('think', `${label} (Step ${globalThinkCounter})`, '');
+    content.textContent = text;          // plain text: .accordion-inner is pre-wrap
+    el.appendChild(acc);
+};
+
+const renderProse = (el, txt, isHistoryRender, scrollCallback) => {
+    if (!txt || !txt.trim()) return;
+
     // Step 1: Extract code blocks first (before any other processing)
     const { processed: textWithoutCode, codeBlocks } = extractCodeBlocks(txt);
     txt = textWithoutCode;
@@ -900,101 +928,6 @@ const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) =
             }
         });
     };
-    
-    // Handle think blocks
-    if (txt.includes('<think>') || txt.includes('<seed:think>')) {
-        let processed = txt.replace(/<\/seed:cot_budget_reflect>(.*?)<\/seed:think>/gs, '$1</seed:think>');
-
-        // Detect imbalanced think tags (GLM quirk: <think>A</think>B</think>C)
-        const openCount = (processed.match(/<(?:seed:)?think>/g) || []).length;
-        const closeCount = (processed.match(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g) || []).length;
-
-        if (closeCount > openCount) {
-            // Greedy match: first <think> to LAST </think>
-            const m = processed.match(/^([\s\S]*?)<(?:seed:)?think>([\s\S]*)<\/(?:seed:think|seed:cot_budget_reflect|think)>([\s\S]*)$/);
-            if (m) {
-                const isSeed = processed.indexOf('<seed:think>') < processed.indexOf('<think>') || !processed.includes('<think>');
-                const thinkContent = m[2].replace(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g, '').trim();
-
-                if (m[1]?.trim()) {
-                    const p = createElem('p');
-                    p.innerHTML = safeReplaceImagePlaceholders(m[1].trim());
-                    Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
-                    replaceCodePlaceholders(p);
-                    el.appendChild(p);
-                }
-                if (thinkContent) {
-                    globalThinkCounter++;
-                    const label = isSeed ? 'Seed Think' : 'Think';
-                    const { acc } = createAccordion('think', `${label} (Step ${globalThinkCounter})`, '');
-                    const contentDiv = acc.querySelector('div');
-                    contentDiv.innerHTML = safeReplaceImagePlaceholders(thinkContent);
-                    Images.replaceImagePlaceholdersInElement(contentDiv, images, isHistoryRender, scrollCallback);
-                    replaceCodePlaceholders(contentDiv);
-                    el.appendChild(acc);
-                }
-                if (m[3]?.trim()) {
-                    const p = createElem('p');
-                    p.innerHTML = safeReplaceImagePlaceholders(m[3].trim());
-                    Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
-                    replaceCodePlaceholders(p);
-                    el.appendChild(p);
-                }
-                return;
-            }
-        }
-
-        const parts = processed.split(/<(?:seed:)?think>|<\/(?:seed:think|seed:cot_budget_reflect|think)>/);
-
-        parts.forEach((part, i) => {
-            const trimmed = part.trim();
-            if (!trimmed) return;
-
-            if (i % 2 === 1) {
-                globalThinkCounter++;
-                const isSeed = processed.substring(0, processed.indexOf(part)).includes('<seed:think>');
-                const { acc } = createAccordion('think', `${isSeed ? 'Seed Think' : 'Think'} (Step ${globalThinkCounter})`, '');
-                const contentDiv = acc.querySelector('div');
-                contentDiv.innerHTML = safeReplaceImagePlaceholders(trimmed);
-                Images.replaceImagePlaceholdersInElement(contentDiv, images, isHistoryRender, scrollCallback);
-                replaceCodePlaceholders(contentDiv);
-                el.appendChild(acc);
-            } else {
-                const p = createElem('p');
-                p.innerHTML = safeReplaceImagePlaceholders(trimmed);
-                Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
-                replaceCodePlaceholders(p);
-                el.appendChild(p);
-            }
-        });
-        return;
-    }
-    
-    // Handle orphan think close tags
-    const orphanMatch = [...txt.matchAll(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g)];
-    if (orphanMatch.length > 0) {
-        const last = orphanMatch[orphanMatch.length - 1];
-        const thought = txt.substring(0, last.index).trim();
-        const after = txt.substring(last.index + last[0].length).trim();
-        
-        if (thought) {
-            const label = last[0].includes('seed') ? 'Seed Thoughts' : 'Thoughts';
-            const { acc } = createAccordion('think', label, '');
-            const contentDiv = acc.querySelector('div');
-            contentDiv.innerHTML = safeReplaceImagePlaceholders(thought);
-            Images.replaceImagePlaceholdersInElement(contentDiv, images, isHistoryRender, scrollCallback);
-            replaceCodePlaceholders(contentDiv);
-            el.appendChild(acc);
-        }
-        if (after) {
-            const p = createElem('p');
-            p.innerHTML = safeReplaceImagePlaceholders(after);
-            Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
-            replaceCodePlaceholders(p);
-            el.appendChild(p);
-        }
-        return;
-    }
     
     // Regular paragraphs
     const paragraphs = txt.split(/\n\s*\n/).filter(p => p.trim());

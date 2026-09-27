@@ -347,62 +347,17 @@ def _live_image_ids(text: str) -> set:
 
 
 def _extract_thinking_from_content(content: str) -> tuple:
-    """
-    Extract thinking from content that uses <think> tags.
-    Used for backward compatibility with old messages and non-Claude providers.
-    
-    Returns:
-        (clean_content, thinking_text) - thinking_text is empty if none found
-    """
-    if not content:
-        return content, ""
-    
-    thinking_parts = []
-    
-    # Extract all think blocks (standard and seed variants)
-    pattern = r'<(?:seed:)?think[^>]*>(.*?)</(?:seed:think|seed:cot_budget_reflect|think)>'
-    
-    def extract_match(match):
-        thinking_parts.append(match.group(1))
-        return ''
-    
-    clean = re.sub(pattern, extract_match, content, flags=re.DOTALL | re.IGNORECASE)
-    
-    # Handle orphan close tags - content before them is thinking
-    orphan_close = re.search(
-        r'^(.*?)</(?:seed:think|seed:cot_budget_reflect|think)>',
-        clean, flags=re.DOTALL | re.IGNORECASE
-    )
-    if orphan_close:
-        thinking_parts.append(orphan_close.group(1))
-        clean = clean[orphan_close.end():]
-    
-    # Handle orphan open tags - content after them is thinking
-    orphan_open = re.search(
-        r'<(?:seed:)?think[^>]*>(.*)$',
-        clean, flags=re.DOTALL | re.IGNORECASE
-    )
-    if orphan_open:
-        thinking_parts.append(orphan_open.group(1))
-        clean = clean[:orphan_open.start()]
-    
-    clean = clean.strip()
-    thinking = "\n\n".join(thinking_parts).strip()
-    
-    return clean, thinking
+    """(clean_content, thinking_text) for content that carries think tags: old
+    rows, and providers that inline their reasoning. The reading is core.think's,
+    the ONE place that knows the tag shapes."""
+    from core import think
+    return think.split(content)
 
 
 def _reconstruct_thinking_content(content: str, thinking: str) -> str:
-    """
-    Reconstruct content with <think> tags for UI display.
-    """
-    if not thinking:
-        return content or ""
-    
-    think_block = f"<think>{thinking}</think>"
-    if content:
-        return f"{think_block}\n\n{content}"
-    return think_block
+    """Content with its thinking put back as a think block, for UI display."""
+    from core import think
+    return think.wrap(thinking, content)
 
 
 class ConversationHistory:
@@ -620,7 +575,7 @@ class ConversationHistory:
                     content = ' '.join(text_parts).strip()
                 
                 # Backward compat: extract thinking from old messages with embedded tags
-                if not msg.get("thinking") and content and '<think' in content.lower():
+                if not msg.get("thinking") and content and '<' in content:
                     content, _ = _extract_thinking_from_content(content)
                 
                 llm_msg = {"role": "assistant", "content": content}
@@ -5423,14 +5378,16 @@ class ChatSessionManager:
             return None
         if not row or not row[0] or self._vault_hidden(row[1]):
             return None
-        return self._dec_value(row[0], "image caption", row[1]) or None
+        from core import think
+        return think.strip(self._dec_value(row[0], "image caption", row[1])) or None
 
     def set_image_caption(self, image_id: str, caption: str) -> bool:
         """Write the description onto the image's own row, so it lives and dies
         with the image. Encrypted like the pixels when the owner chat is
         vaulted (a sealed vault refuses — never plaintext). False when the row
         does not exist (history-less lanes) or the write fails."""
-        text = str(caption or '').strip()
+        from core import think
+        text = think.strip(caption)              # a caption never carries thinking
         if not image_id or not text:
             return False
         self._ensure_db()

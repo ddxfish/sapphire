@@ -1,5 +1,5 @@
 from plugins.discord.conversation.reply_style_service import ReplyStyleService
-from plugins.discord.conversation.think_tags import strip_think_tags
+from core.think import strip as strip_think_tags
 
 
 def test_strip_redacted_thinking_block():

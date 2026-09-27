@@ -31,6 +31,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 
 | Guide | What's Inside |
 |-------|--------------|
+| [Design Principles](design-principles.md) | Read first: one system, route through core, settings at a glance, scopes, privacy — what a plugin must do to ship with Sapphire |
 | [Manifest](manifest.md) | `plugin.json` reference — fields, priority bands, directory structure |
 | [Hooks](hooks.md) | All hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
 | [Voice Commands](voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |
@@ -41,6 +42,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Subprocesses](subprocesses.md) | Running & supervising external programs — ProcessManager lifecycle, process-group cleanup, advanced async helper |
 | [Providers](providers.md) | Custom TTS, STT, Embedding, LLM backends — base classes, manifest, lifecycle |
 | [Memory Layers](memory-layers.md) | Plugins adding layers to the Mind Palace |
+| [Thinking Blocks](thinking.md) | `core.think` — the one reader of think tags: strip / split / wrap, the four rules, the web twin |
 | [Prompt Packs](prompts.md) | Shipping prompts with a plugin |
 | [Widgets](widgets.md) | Dashboard panels — manifest, render contract, settings schema, sample plugin |
 | [Games](games.md) | Game Room games — engine contract, sealed seat, board modules, sessions-are-chats |

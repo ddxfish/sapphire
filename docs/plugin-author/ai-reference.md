@@ -44,3 +44,12 @@ When creating or modifying plugins:
 - Web UI modules available: `plugin-registry.js`, `plugins-api.js`, `toast.js`, `modal.js`, `danger-confirm.js`, `fetch.js`
 - CSS variables for theming: `--bg`, `--text`, `--border`, `--trim`, `--success`, `--error`, etc.
 - Always guard system access with `hasattr()` checks — subsystems may be None if disabled
+
+## Thinking blocks (think tags)
+
+ONE reader: `core/think.py` (web twin `interfaces/web/static/shared/think.js`). Never write a think-tag regex.
+- `from core import think` — `think.strip(text)` = the answer (use before sending, speaking, parsing JSON, storing); `think.split(text)` = `(answer, thinking)`; `think.has`, `think.segments`, `think.wrap(thinking, answer)`, `think.only`, `think.unfinished(buf)`, `think.PAIRS`, `think.BLOCK_RE`.
+- Tags: `think`, `seed:think`, `thinking`, `redacted_thinking`, `reasoning` (+ closer `seed:cot_budget_reflect`).
+- Rules: a tag in backticks or in a fenced code block is a word; opener + later closer = block; a closer with nothing open folds the text since the last block into thinking (never across a block); an unclosed opener is thinking only at a block start.
+- Side jobs: `disable_thinking: True` in generation params, treat `response.content_is_reasoning` as empty, strip anyway.
+- Full guide: [thinking.md](thinking.md). Design rules for plugins: [design-principles.md](design-principles.md).

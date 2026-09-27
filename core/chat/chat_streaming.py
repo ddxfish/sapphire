@@ -5,6 +5,7 @@ import time
 from typing import Generator, Union, Dict, Any
 import config
 from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text
+from core import think as _think
 from .llm_providers import LLMResponse, get_generation_params
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
@@ -734,7 +735,7 @@ class StreamingChat:
                             text = event.get("text", "")
                             # Close thinking tag if transitioning from think to prose
                             if in_thinking:
-                                yield {"type": "content", "text": "</think>\n\n"}
+                                yield {"type": "content", "text": _think.CLOSE + "\n\n"}
                                 in_thinking = False
                             current_content += text
                             yield {"type": "content", "text": text}
@@ -751,14 +752,14 @@ class StreamingChat:
 
                             # Emit thinking wrapped in tags for UI rendering
                             if not in_thinking:
-                                yield {"type": "content", "text": "<think>"}
+                                yield {"type": "content", "text": _think.OPEN}
                                 in_thinking = True
                             yield {"type": "content", "text": text}
 
                         elif event_type == "tool_call":
                             # Close thinking tag if open before tool calls
                             if in_thinking:
-                                yield {"type": "content", "text": "</think>\n\n"}
+                                yield {"type": "content", "text": _think.CLOSE + "\n\n"}
                                 in_thinking = False
                             
                             idx = event.get("index", 0)
@@ -786,7 +787,7 @@ class StreamingChat:
                         elif event_type == "done":
                             # Close thinking tag if still open
                             if in_thinking:
-                                yield {"type": "content", "text": "</think>\n\n"}
+                                yield {"type": "content", "text": _think.CLOSE + "\n\n"}
                                 in_thinking = False
                             
                             final_response = event.get("response")
@@ -923,7 +924,7 @@ class StreamingChat:
                     # so providers whose reasoning lives in thinking_raw (Claude) are
                     # untouched and never get their prose wrapped. Only `content` changes;
                     # thinking_raw/thinking are preserved. 2026-06-14.
-                    if "<think" in (full_content or "").lower():
+                    if _think.has(full_content):
                         stored_content = filter_to_thinking_only(full_content)
                     else:
                         stored_content = full_content
@@ -1316,7 +1317,7 @@ class StreamingChat:
                     if event_type == "content":
                         chunk = event.get("text", "")
                         if in_thinking:
-                            yield {"type": "content", "text": "</think>\n\n"}
+                            yield {"type": "content", "text": _think.CLOSE + "\n\n"}
                             in_thinking = False
                         final_content += chunk
                         yield {"type": "content", "text": chunk}
@@ -1327,13 +1328,13 @@ class StreamingChat:
                         text = event.get("text", "")
                         final_thinking += text
                         if not in_thinking:
-                            yield {"type": "content", "text": "<think>"}
+                            yield {"type": "content", "text": _think.OPEN}
                             in_thinking = True
                         yield {"type": "content", "text": text}
                     
                     elif event_type == "done":
                         if in_thinking:
-                            yield {"type": "content", "text": "</think>\n\n"}
+                            yield {"type": "content", "text": _think.CLOSE + "\n\n"}
                         if event.get("thinking"):
                             final_thinking = event["thinking"]
                         if event.get("metadata"):

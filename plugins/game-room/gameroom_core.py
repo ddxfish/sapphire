@@ -1132,7 +1132,8 @@ def _call_llm(system, user, cfg):
     content = getattr(resp, 'content', None) or ''
     # Thinking models leak <think>...</think> into content (sometimes unclosed
     # when truncated) — strip before JSON extraction.
-    return re.sub(r'<think>.*?(?:</think>|$)', '', content, flags=re.DOTALL)
+    from core import think
+    return think.strip(content)
 
 
 # ---------------------------------------------------------------- orchestration

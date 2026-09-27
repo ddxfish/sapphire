@@ -1011,7 +1011,6 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
 # is to give the model every excuse to think, so a lack of thinking is meaningful.
 _THINKING_PROBE = ("Reason through this step by step using your thinking, then give a "
                    "one-line final answer: is 91 a prime number?")
-_THINK_TAG_RE = re.compile(r'<think>(.*?)</think>', re.DOTALL | re.IGNORECASE)
 
 
 def _clean_llm_error(e) -> str:
@@ -1032,11 +1031,11 @@ def _analyze_thinking(resp) -> dict:
     content = resp.content or ''
     reasoning = (getattr(resp, 'thinking', None) or '').strip()
     prose = content
-    m = _THINK_TAG_RE.search(content)
-    if m:
-        if not reasoning:
-            reasoning = m.group(1).strip()
-        prose = _THINK_TAG_RE.sub('', content).strip()
+    from core import think
+    answer, inline = think.split(content)
+    if inline:
+        reasoning = reasoning or inline
+        prose = answer
     usage = getattr(resp, 'usage', None) or {}
     return {
         'had_reasoning': bool(reasoning),

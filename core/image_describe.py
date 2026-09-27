@@ -30,7 +30,7 @@ from io import BytesIO
 logger = logging.getLogger(__name__)
 
 CLIP = 'clip'
-MAX_TOKENS = 300
+MAX_TOKENS = 600          # room for a describer that reasons anyway; the caption itself is short
 TIMEOUT = 60.0
 PROMPT = ("Describe this image for someone who cannot see it: what it shows, any text in it, "
           "the setting and the mood. Two to four sentences, plain and literal, no preamble.")
@@ -95,13 +95,20 @@ def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
         {'type': 'text', 'text': PROMPT},
         {'type': 'image', 'data': base64.b64encode(data).decode('ascii'), 'media_type': media_type},
     ]}]
-    params = {**get_generation_params(sel.key, sel.effective_model, cfg), 'max_tokens': MAX_TOKENS}
+    params = {**get_generation_params(sel.key, sel.effective_model, cfg), 'max_tokens': MAX_TOKENS,
+              'disable_thinking': True}
     try:
         response = sel.provider.chat_completion(messages, None, params)
     except Exception as e:
         logger.warning(f"[DESCRIBE] {sel.display_name} failed ({e}) — CLIP instead")
         return ''
-    text = str(getattr(response, 'content', '') or '').strip()
+    # A describer that reasons first must not hand its scratch work over as the
+    # caption (2026-09-27: GLM Flash's think block rode into the chat): thinking
+    # is asked off, stripped if it comes anyway, and a reply that was ALL
+    # reasoning counts as nothing.
+    from core import think
+    text = '' if getattr(response, 'content_is_reasoning', False) is True \
+        else think.strip(getattr(response, 'content', '') or '')
     if not text:
         logger.warning(f"[DESCRIBE] {sel.display_name} returned nothing — CLIP instead")
         return ''

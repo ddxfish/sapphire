@@ -166,7 +166,8 @@ def _summarize(provider, prompt_template: str, text: str, budget: int) -> str:
                            "temperature": 0.3})
     out = (resp.content or "").strip()
     # Local models sometimes leak reasoning into content despite extraction.
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL).strip()
+    from core import think
+    out = think.strip(out)
     if not out:
         raise RuntimeError("Summarizer returned empty content")
     return out

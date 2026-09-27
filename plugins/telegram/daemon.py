@@ -467,12 +467,9 @@ def _reply_handler(task, event_data: dict, response_text: str):
         logger.warning("[TELEGRAM] Reply handler missing chat_id or account")
         return
 
-    # Strip think tags — greedy to last close tag (handles nested/malformed)
-    import re
-    clean = re.sub(r'<(?:seed:)?think[^>]*>[\s\S]*</(?:seed:think|seed:cot_budget_reflect|think)>', '', response_text, flags=re.IGNORECASE)
-    clean = re.sub(r'<(?:seed:)?think[^>]*>.*$', '', clean, flags=re.DOTALL | re.IGNORECASE)
-    clean = re.sub(r'^[\s\S]*</(?:seed:think|seed:cot_budget_reflect|think)>', '', clean, flags=re.IGNORECASE)
-    clean = clean.strip()
+    # Thinking out (core.think: the one reader of those tags)
+    from core import think
+    clean = think.strip(response_text)
     if not clean:
         logger.warning(
             f"[TELEGRAM] Empty reply after think-tag strip — raw response was "

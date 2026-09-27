@@ -249,8 +249,8 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 def clean_text(text):
     """Cleans text by removing think blocks, stripping HTML, and filtering characters."""
     # Stage 1: Remove thinking blocks
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<seed:think>.*?</seed:think>', '', text, flags=re.DOTALL)
+    from core import think
+    text = think.strip(text)
 
     # Stage 2: Strip all HTML tags
     text = re.sub(r'<[^>]+>', '', text)

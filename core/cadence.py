@@ -40,10 +40,6 @@ EVENT_FLOOR_S = 3.0      # event mode's only clock: a breath between her turns, 
 # unattended turn has no one to wait for it (Krem's 8K-token think loop
 # that then read the inside of the tag aloud, 2026-09-09).
 THINK_BUDGET_CHARS = 6000
-_THINK_OPEN = re.compile(r'<(?:seed:)?think>')
-_THINK_BLOCK = re.compile(r'<(?:seed:)?think>.*?</(?:seed:think|seed:cot_budget_reflect|think)>\s*', re.DOTALL)
-_THINK_TAIL = re.compile(r'<(?:seed:)?think>.*$', re.DOTALL)
-_THINK_CLOSE_ORPHAN = re.compile(r'^.*?</(?:seed:think|seed:cot_budget_reflect|think)>\s*', re.DOTALL)
 
 _lock = threading.RLock()
 _records = {}                   # chat -> dict
@@ -69,22 +65,14 @@ def _gap(rec, stretch=False):
 def visible_text(text):
     """What she actually said: think blocks gone (closed, unclosed, or an
     orphaned close from a stream that opened before we looked)."""
-    t = str(text or '')
-    t = _THINK_BLOCK.sub('', t)
-    t = _THINK_CLOSE_ORPHAN.sub('', t)
-    t = _THINK_TAIL.sub('', t)
-    return t.strip()
+    from core import think
+    return think.strip(text)
 
 
 def _unfinished_thinking(buf):
     """Chars of thinking still open at the end of `buf` (0 = none open)."""
-    m = None
-    for m in _THINK_OPEN.finditer(buf):
-        pass
-    if m is None:
-        return 0
-    tail = buf[m.end():]
-    return 0 if re.search(r'</(?:seed:think|seed:cot_budget_reflect|think)>', tail) else len(tail)
+    from core import think
+    return think.unfinished(buf)
 
 
 def _live_row_count(sm, chat):

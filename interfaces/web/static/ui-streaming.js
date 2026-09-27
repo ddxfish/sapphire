@@ -4,6 +4,7 @@ import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries }
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { openImageModal } from './ui-images.js';
+import { nextThinkCloser, nextThinkOpener, isSeedThink } from './shared/think.js';
 
 // Streaming state
 let streamMsg = null;
@@ -291,20 +292,12 @@ export const appendStream = (chunk, scrollCallback) => {
         
         // Inside think block
         if (state.inThink) {
-            let endPos = -1;
-            let endTag = '';
-            
-            if (state.thinkType === 'seed:think') {
-                const ends = [
-                    [newContent.indexOf('</seed:think>', i), '</seed:think>'],
-                    [newContent.indexOf('</think>', i), '</think>'],
-                    [newContent.indexOf('</seed:cot_budget_reflect>', i), '</seed:cot_budget_reflect>']
-                ].filter(e => e[0] !== -1).sort((a, b) => a[0] - b[0]);
-                if (ends.length > 0) [endPos, endTag] = ends[0];
-            } else {
-                endPos = newContent.indexOf('</think>', i);
-                endTag = '</think>';
-            }
+            // The closer comes from shared/think.js (twin of core/think.py): any
+            // close tag, and one typed in backticks is a word, not the end. Asked
+            // of the whole stream so the character before the tag is in view.
+            const closeHit = nextThinkCloser(streamContent, state.procIdx + i);
+            const endPos = closeHit ? closeHit.index - state.procIdx : -1;
+            const endTag = closeHit ? closeHit.text : '';
             
             if (endPos === -1) {
                 state.thinkBuf += newContent.slice(i);
@@ -319,8 +312,10 @@ export const appendStream = (chunk, scrollCallback) => {
             // GLM quirk: <think>A</think>B</think> - premature close
             // If another </think> follows without a <think>, skip this close
             const afterClose = newContent.slice(endPos + endTag.length);
-            const nextCloseIdx = afterClose.search(/<\/(?:seed:think|think)>/);
-            const nextOpenIdx = afterClose.search(/<(?:seed:)?think>/);
+            const nextClose = nextThinkCloser(afterClose, 0);
+            const nextOpen = nextThinkOpener(afterClose, 0);
+            const nextCloseIdx = nextClose ? nextClose.index : -1;
+            const nextOpenIdx = nextOpen ? nextOpen.index : -1;
             if (nextCloseIdx !== -1 && (nextOpenIdx === -1 || nextCloseIdx < nextOpenIdx)) {
                 i = endPos + endTag.length;
                 state.thinkBuf += '\n';
@@ -347,14 +342,16 @@ export const appendStream = (chunk, scrollCallback) => {
         
         // Normal content - look for code fence, think tags
         const codePos = newContent.indexOf('```', i);
-        const thinkPos = newContent.indexOf('<think>', i);
-        const seedPos = newContent.indexOf('<seed:think>', i);
+        // An opener only where a block can start, never one typed in backticks
+        // (shared/think.js). Asked of the whole stream for the same reason.
+        const opener = nextThinkOpener(streamContent, state.procIdx + i);
         
         // Find earliest marker
         const markers = [
             [codePos, 'code', 3],
-            [thinkPos, 'think', 7],
-            [seedPos, 'seed:think', 12]
+            [opener ? opener.index - state.procIdx : -1,
+             opener && isSeedThink(opener.name) ? 'seed:think' : 'think',
+             opener ? opener.text.length : 0]
         ].filter(m => m[0] !== -1).sort((a, b) => a[0] - b[0]);
         
         if (markers.length === 0) {

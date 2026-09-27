@@ -539,7 +539,8 @@ class AnthropicCompatProvider(BaseProvider):
             }
 
         if thinking_text:
-            final_content = f"<think>{thinking_text}</think>\n\n{content_text}"
+            from core import think as _think
+            final_content = _think.wrap(thinking_text, content_text)
         else:
             final_content = content_text
 

@@ -29,23 +29,15 @@ current_task_persona: ContextVar[Optional[str]] = ContextVar('current_task_perso
 _loop_guard_skew_warned = False
 
 
-_THINK_BLOCK_RE = re.compile(r'<(?:seed:)?think[^>]*>[\s\S]*?</(?:seed:think|seed:cot_budget_reflect|think)>', re.I)
-_THINK_OPEN_RE = re.compile(r'^\s*<(?:seed:)?think[^>]*>[\s\S]*$', re.I)
-_THINK_LEAD_RE = re.compile(r'^[\s\S]*?</(?:seed:think|seed:cot_budget_reflect|think)>', re.I)
-_THINK_OPENER_RE = re.compile(r'<(?:seed:)?think', re.I)
 _FILLER = frozenset(string.punctuation + string.whitespace + '\u2026\u2014\u2013\u00b7\u2022')
 _LENGTH_FINISH = ('length', 'max_tokens', 'incomplete')   # openai-compat / anthropic / responses
 
 
 def visible_answer(text: str) -> str:
-    """What a person would see of a reply: think blocks gone — a complete
-    block anywhere, an unclosed opener that starts the reply, a closer with no
-    opener (the scheduler's and the Discord plugin's shapes)."""
-    t = _THINK_BLOCK_RE.sub('', text or '')
-    t = _THINK_OPEN_RE.sub('', t)
-    if not _THINK_OPENER_RE.search(t):
-        t = _THINK_LEAD_RE.sub('', t)
-    return t.strip()
+    """What a person would see of a reply: think blocks gone (core.think, the
+    one reader of those tags)."""
+    from core import think
+    return think.strip(text)
 
 
 def degenerate_reason(text: str, finish=None) -> Optional[str]:

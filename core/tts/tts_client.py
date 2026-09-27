@@ -209,12 +209,11 @@ class TTSClient:
 
     def _process_text_for_tts(self, text):
         """Strip markdown/tags and normalize text for speech."""
-        processed_text = text
+        from core import think
+        processed_text = think.strip(text)       # thinking out first (the one reader)
 
         # Remove block-level content entirely
         block_patterns = [
-            r'<think>.*?</think>',           # Think tags
-            r'<reasoning>.*?</reasoning>',   # Reasoning tags
             r'<tools>.*?</tools>',           # Tools tags
             r'```[\s\S]*?```',               # Code blocks (fenced)
             r'`[^`]+`',                      # Inline code

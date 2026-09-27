@@ -7,7 +7,7 @@ import string
 
 
 from plugins.discord.conversation.gif_service import strip_placeholder_gif_urls
-from plugins.discord.conversation.think_tags import strip_think_tags
+from core.think import strip as strip_think_tags      # the plugin's stripper, now core's (2.3.1)
 
 logger = logging.getLogger(__name__)
 

@@ -522,7 +522,8 @@ class OpenAIResponsesProvider(BaseProvider):
         # Prepend thinking as <think> tags to match streaming behavior
         if thinking_text:
             logger.info(f"[RESPONSES] Got reasoning summary ({len(thinking_text)} chars)")
-            final_content = f"<think>{thinking_text}</think>\n\n{content_text}"
+            from core import think as _think
+            final_content = _think.wrap(thinking_text, content_text)
         else:
             final_content = content_text
 

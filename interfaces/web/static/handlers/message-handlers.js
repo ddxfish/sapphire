@@ -3,6 +3,7 @@ import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
+import { stripThink } from '../shared/think.js';
 import {
     getIsProc,
     getTtsEnabled,
@@ -67,7 +68,6 @@ export async function handleRegen(idx) {
     if (len !== null) setHistLen(len);
 }
 
-const THINK_RE = /<(?:seed:)?think[^>]*>[\s\S]*?<\/(?:seed:think|seed:cot_budget_reflect|think)>/gi;
 const _msgEls = () => document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
 
 // Edit wave (2026-09-10): the editor shows the prose only (thinking stays on
@@ -89,7 +89,7 @@ export async function handleEdit(idx) {
         const last = msg.parts.filter(p => p.type === 'content').pop();
         text = last ? (last.text || '') : '';
     }
-    text = text.replace(THINK_RE, '').trim();
+    text = stripThink(text);
     if (!text) {
         ui.showToast('Nothing to edit here — that reply is thinking only', 'warning');
         return;

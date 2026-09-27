@@ -782,9 +782,8 @@ class LLMChat:
         # the content stream — which wraps thinking in <think> tags for UI
         # rendering; strip them so voice doesn't read reasoning aloud.
         text = "".join(fallback_parts)
-        if "<think" in text.lower():
-            text = re.sub(r"<think>.*?(?:</think>|$)", "", text,
-                          flags=re.DOTALL | re.IGNORECASE).strip()
+        from core import think
+        text = think.strip(text)
         return text
 
     def _select_provider(self):

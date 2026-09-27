@@ -1,8 +1,8 @@
 {
   "plugin": "discord",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "files": {
-    "CHANGELOG.md": "sha256:fb1f161a4284703151d53894e9d86b5a4627161902678f125b6d3099d3a0221c",
+    "CHANGELOG.md": "sha256:c7314d64f0fce4534e0921cddcee352e23482b8aacc32df8a886412dfe243e7f",
     "OPERATIONS.md": "sha256:bb84d0e6791bb118bc0522c1178915d25e889f3b88fe4a0bf6eeafb1611aef30",
     "README.md": "sha256:bad698b6862b4aacd4f4fa36b0e0b5e2b1741879e8c81af6d4da1aef0efe99f9",
     "__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -28,9 +28,8 @@
     "conversation/message_pipeline_service.py": "sha256:e40ea3ee9443306e8795d688ca435733ca4cc043ad12e161dea19625a6450f98",
     "conversation/name_match.py": "sha256:74dec039f513cc6b7f906ce293f9f5caf3f1723791a90b3d59712ecd09c8332c",
     "conversation/reactions.py": "sha256:e38042fb503f3daa3b06353b3905938eb0c82eaf69c84f6f2cce997c61534553",
-    "conversation/reply_style_service.py": "sha256:50935482408bba9bbba112303952ba338c5f4233b5e81d32dcce1e89146fe745",
+    "conversation/reply_style_service.py": "sha256:eab62c6e1288d29623325b37aefc85fa06bafab2af5b0fc4bebe88b84deb64c2",
     "conversation/sentiment.py": "sha256:8db06189f1535a331b41018c72fb020c7bb55102256db6e105d551bdf3b4e8f6",
-    "conversation/think_tags.py": "sha256:e415d2b51912a6b9e75e2ed868153046a6ab836fe9b3b69d13bef8dddc00f56b",
     "conversation/trigger_service.py": "sha256:00a9ef21bc6c684b2b1963f554488199d3084125dbddea871e9bf458152df7ca",
     "conversation/typing_indicator.py": "sha256:8e30d7076eab8e412a1278efc9c122673ff30fef24f9e8887add1a6321485d3f",
     "daemon.py": "sha256:fae4bb328eefe73c4bb7ce266054d2d60196b81cf6ffd99b6c0904172bf7c9cf",
@@ -45,7 +44,7 @@
     "models/settings.py": "sha256:402185c450751a029340841c4148e96721e68dd7ba0dc5f14063fff4062807b3",
     "models/voice.py": "sha256:5c5cdec4397a892bbc00bcce3950ee2149b25d2dd5fd8d6be8a7c5d06af3210b",
     "observability/decisions.py": "sha256:1828cae0ad44e783e890ec2287dac9620d143efccb04c7abaa63ae9528c5ecea",
-    "plugin.json": "sha256:0110b604dcac4cc5b2bfd20aec8bf8500e13e00825ff507ddefdb84fb0454413",
+    "plugin.json": "sha256:254bbe259a51f183d7f28df1c02acf17675ee0e3fc372802bd566e34a869d301",
     "presence.py": "sha256:5d8a67f70951a10d61bcf4637a97d3b48954a0875b63837f39cb8af460be8cd2",
     "reminders.py": "sha256:85951a6cc5400bba259148093d5f2f4acec63ec93690ddbd31ccf16bca873a22",
     "runtime/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -102,7 +101,7 @@
     "tests/test_patch_registry.py": "sha256:4c18a3c3275fcab13ae2a241faf9d50b3b748c01ae58084957374e137a6bbb56",
     "tests/test_presence.py": "sha256:abf9b38d517b8fbe49bf81fdd0cf14aa246b3baa9007eeabb19d35cd1276c0f8",
     "tests/test_pycord_patches.py": "sha256:c9c07504a682f060b2c5e79bc8b3f36202e83ff9258d430482e68b172304c169",
-    "tests/test_reactions.py": "sha256:dbe98792f87f120e29fce6ec3852d2e4ee2307538cc0ee83ccd75be95b64b733",
+    "tests/test_reactions.py": "sha256:b049a2dfea6c35a66bf84ea91c0c0f041abad5beb04cc4a4c59a8bb2e825ecd1",
     "tests/test_reminders.py": "sha256:2ee266e127399404ad3b27086843725848466c1b710f93a0fa23ff50bde022b1",
     "tests/test_reply_delivery.py": "sha256:7673a1e19c101631f45077bdfdaeef195fe06cf795394d827f0890f9be174ccb",
     "tests/test_reply_style_service.py": "sha256:c50d8ec04c5e15fb9fedf8f6e3bcf213fd1068879f47b21010c0ff080498fead",
@@ -110,7 +109,7 @@
     "tests/test_safety_gates.py": "sha256:53994d520720ef4ec63882273d680a55f1e4ccd6dffe519f75cf65f8392732a2",
     "tests/test_settings_model.py": "sha256:6277aded6686ee30af76270f3d44492563d98b5b4fe1b0e45f99d0aa46e9a84e",
     "tests/test_speech_bridge.py": "sha256:4ffc4601644e9a76ee0892b0b97df753bc49ba44afe038e9995aa7cb2feda9ae",
-    "tests/test_think_tags.py": "sha256:7ff858e07ae0a5bf59ba1fc7da39857e8ddad8fc3939a1adda26e60d62647e06",
+    "tests/test_think_tags.py": "sha256:9203403b9b7fd28addb91390859f394e29508bc1ffd967c4b0cce6896a8f5414",
     "tests/test_voice_addressing.py": "sha256:461a8320b4d7a08079db817ed4291c278a014960106f7158c1456a93f308f89b",
     "tests/test_voice_chat.py": "sha256:43e3676cb44f8dc2f2d68efff43aa9a4ca16c201d0b08d2255e1bee6407288d7",
     "tests/test_voice_deps.py": "sha256:49c2dc6f7635c2d369876b2c3c2fb8c9c2f8cd57e0415f7abde036c4ef3418f7",
@@ -153,5 +152,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "tCxXY5jgOOe4Tl7ZH79JiFXngyOm5afzrd7tvLjAOIjQuhy501mmCjBoNScSqJb31Ux1CJzbj/0nSxAOnVPwDQ=="
+  "signature": "19Ek1psogbE1eHrnTx/teewFoaJyH1D8H1G409/KNB/aFrZnHGimP8PjNi5i4H8pJE6OoiREF/SErl+faH8FDg=="
 }

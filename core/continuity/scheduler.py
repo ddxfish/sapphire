@@ -19,19 +19,6 @@ from core.fs_utils import replace_with_retry
 logger = logging.getLogger(__name__)
 
 
-def _strip_think_tags(text: str) -> str:
-    """Strip <think>...</think> blocks from LLM response, return clean content."""
-    if not text:
-        return text
-    # Greedy: first <think> to LAST </think> (handles GLM quirk: <think>A</think>B</think>C)
-    clean = re.sub(r'<(?:seed:)?think[^>]*>[\s\S]*</(?:seed:think|seed:cot_budget_reflect|think)>', '', text, flags=re.IGNORECASE)
-    # Orphan open tag + trailing content
-    clean = re.sub(r'<(?:seed:)?think[^>]*>.*$', '', clean, flags=re.DOTALL | re.IGNORECASE)
-    # Orphan close tag — no open tag, GLM sometimes omits it. Strip everything before last close tag.
-    clean = re.sub(r'^[\s\S]*</(?:seed:think|seed:cot_budget_reflect|think)>', '', clean, flags=re.IGNORECASE)
-    return clean.strip()
-
-
 # Lazy import croniter to avoid startup crash if not installed
 croniter = None
 
@@ -701,7 +688,8 @@ class ContinuityScheduler:
     def _make_response_callback(self, task_id: str):
         """Create a response callback — stores last_response before TTS blocks."""
         def callback(response: str):
-            clean = _strip_think_tags(response)
+            from core import think
+            clean = think.strip(response)
             with self._lock:
                 if task_id in self._tasks:
                     self._tasks[task_id]["last_response"] = clean or None

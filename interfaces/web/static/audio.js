@@ -2,6 +2,7 @@
 import * as ui from './ui.js';
 import * as api from './api.js';
 import { dispatch, on as busOn, Events } from './core/event-bus.js';
+import { stripThink } from './shared/think.js';
 
 let audioContext, mediaStream, sourceNode, processorNode;
 let audioChunks = [];
@@ -128,15 +129,8 @@ export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
     isStreaming = true;
     ttsCtrl = new AbortController();
 
-    // Remove think blocks (both formats + orphaned)
-    let clean = txt;
-    clean = clean.replace(/<(?:seed:)?think>.*?<\/(?:seed:think|seed:cot_budget_reflect|think)>\s*/gs, '');
-
-    const orphans = [...clean.matchAll(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g)];
-    if (orphans.length > 0) {
-        const last = orphans[orphans.length - 1];
-        clean = clean.substring(last.index + last[0].length);
-    }
+    // Thinking out (shared/think.js, the twin of core/think.py)
+    let clean = stripThink(txt);
 
     // Filter paragraphs
     const paras = clean.split(/\n\s*\n/).filter(p => {

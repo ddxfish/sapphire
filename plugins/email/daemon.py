@@ -334,11 +334,9 @@ def _reply_handler(task, event_data: dict, response_text: str):
         logger.warning("[EMAIL] Reply handler: no from_address in event data")
         return
 
-    # Strip think tags
-    clean = re.sub(r'<(?:seed:)?think[^>]*>[\s\S]*</(?:seed:think|seed:cot_budget_reflect|think)>', '', response_text, flags=re.IGNORECASE)
-    clean = re.sub(r'<(?:seed:)?think[^>]*>.*$', '', clean, flags=re.DOTALL | re.IGNORECASE)
-    clean = re.sub(r'^[\s\S]*</(?:seed:think|seed:cot_budget_reflect|think)>', '', clean, flags=re.IGNORECASE)
-    clean = clean.strip()
+    # Thinking out (core.think: the one reader of those tags)
+    from core import think
+    clean = think.strip(response_text)
     if not clean:
         logger.warning(
             f"[EMAIL] Empty reply after think-tag strip — raw response was "

@@ -299,7 +299,8 @@ def _create_llm_worker():
                 raw = ctx.run(self.mission)
             finally:
                 stream_brain.reset_override(_brain_token)
-            self.result = re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip() if raw else ''
+            from core import think
+            self.result = think.strip(raw) if raw else ''
             self.tool_log = ctx.tool_log
             # If the run degraded to a placeholder (tool loop exhausted, context
             # overflow, empty LLM), the executor populates degraded_reason. Carry

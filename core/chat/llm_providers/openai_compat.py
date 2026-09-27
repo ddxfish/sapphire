@@ -934,7 +934,8 @@ class OpenAICompatProvider(BaseProvider):
             logger.info(f"[REASONING] Non-stream response has reasoning_content ({len(reasoning)} chars)")
             content = message.content or ""
             if content:
-                message_content = f"<think>{reasoning}</think>\n\n{content}"
+                from core import think as _think
+                message_content = _think.wrap(reasoning, content)
             else:
                 # No visible content — use reasoning as the response
                 # (some providers put everything in reasoning_content)
