@@ -5,6 +5,7 @@ Uses system `ssh` via subprocess. Servers configured in Settings > Plugins > SSH
 Commands checked against a configurable blacklist before execution.
 """
 
+import os
 import subprocess
 import re
 import json
@@ -188,8 +189,55 @@ def _run_command(server_name, command, timeout=30):
     return _run_remote(server, command, timeout)
 
 
-def _run_remote(server, command, timeout):
-    """Run command on remote server via SSH."""
+def _login_dir():
+    """A private folder for one call's login material. Lives beside the
+    credentials (the home folder is rarely mounted noexec; /tmp can be)."""
+    import tempfile
+    from core.setup import CONFIG_DIR
+    base = Path(CONFIG_DIR) / 'run'
+    base.mkdir(parents=True, exist_ok=True)
+    if os.name != 'nt':
+        os.chmod(base, 0o700)
+    return Path(tempfile.mkdtemp(prefix='ssh-', dir=str(base)))
+
+
+def _private_file(folder, name, text, mode=0o600):
+    path = folder / name
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
+    return path
+
+
+def _login_args(auth, folder):
+    """(ssh options, env) for a login that needs material on disk.
+    auth: {'mode': 'key_paste' | 'password', 'secret': str}"""
+    secret = str(auth.get('secret') or '')
+    if auth.get('mode') == 'key_paste':
+        key = secret.replace('\r\n', '\n').strip() + '\n'     # ssh wants the last newline
+        path = _private_file(folder, 'key', key)
+        return ['-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-i', str(path)], None
+    # password: OpenSSH's own askpass hook (8.4+). ssh runs the helper and
+    # reads the password from its output. No sshpass, no second SSH library.
+    held = _private_file(folder, 'secret', secret)
+    if os.name == 'nt':
+        helper = _private_file(folder, 'askpass.cmd', '@type "%SAPPHIRE_SSH_SECRET%"\r\n', 0o700)
+    else:
+        helper = _private_file(folder, 'askpass.sh', '#!/bin/sh\ncat "$SAPPHIRE_SSH_SECRET"\n', 0o700)
+    env = dict(os.environ, SSH_ASKPASS=str(helper), SSH_ASKPASS_REQUIRE='force',
+               SAPPHIRE_SSH_SECRET=str(held))
+    return ['-o', 'BatchMode=no', '-o', 'PubkeyAuthentication=no',
+            '-o', 'PreferredAuthentications=password,keyboard-interactive',
+            '-o', 'NumberOfPasswordPrompts=1'], env
+
+
+def _run_remote(server, command, timeout, auth=None):
+    """Run command on remote server via SSH. The ONE ssh runner.
+
+    auth=None is the classic path: the server's key_path when it has one,
+    else whatever keys ssh already knows. auth={'mode', 'secret'} is a login
+    whose material lives in the secrets store (a pasted key, a password); it
+    sits in a private folder for the length of this one call."""
     host = server['host']
     user = server['user']
     port = str(server.get('port', 22))
@@ -199,24 +247,32 @@ def _run_remote(server, command, timeout):
         'ssh',
         '-o', 'StrictHostKeyChecking=accept-new',
         '-o', 'ConnectTimeout=5',
-        '-o', 'BatchMode=yes',
-        '-p', port,
     ]
-    if key_path:
-        expanded_key = str(Path(key_path).expanduser())
-        ssh_cmd.extend(['-i', expanded_key])
-    ssh_cmd.append(f'{user}@{host}')
-    ssh_cmd.append(command)
-
-    logger.info(f"SSH [{server['name']}] ({user}@{host}): {command[:100]}")
-
+    env, folder = None, None
     try:
+        if auth and auth.get('mode') in ('key_paste', 'password'):
+            folder = _login_dir()
+            opts, env = _login_args(auth, folder)
+            ssh_cmd.extend(opts)
+            ssh_cmd.extend(['-p', port])
+        else:
+            ssh_cmd.extend(['-o', 'BatchMode=yes', '-p', port])
+            if key_path:
+                expanded_key = str(Path(key_path).expanduser())
+                ssh_cmd.extend(['-i', expanded_key])
+        ssh_cmd.append(f'{user}@{host}')
+        ssh_cmd.append(command)
+
+        logger.info(f"SSH [{server['name']}] ({user}@{host}): {command[:100]}")
+
+        extra = {'env': env, 'stdin': subprocess.DEVNULL} if folder else {}
         result = subprocess.run(
             ssh_cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
             encoding='utf-8', errors='replace',
+            **extra,
         )
         return _format_output(server['name'], host, command, result)
 
@@ -226,8 +282,15 @@ def _run_remote(server, command, timeout):
     except FileNotFoundError:
         return "SSH client not found on system. Is OpenSSH installed?", False
     except Exception as e:
+        if folder:      # login material was in play: the error text stays out
+            logger.error(f"SSH error: {type(e).__name__}")
+            return f"SSH error: {type(e).__name__}", False
         logger.error(f"SSH error: {e}", exc_info=True)
         return f"SSH error: {e}", False
+    finally:
+        if folder:
+            import shutil
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def _format_output(name, host, command, result):

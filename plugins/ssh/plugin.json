@@ -1,13 +1,131 @@
 {
   "name": "ssh",
   "short_display_name": "SSH",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "SSH — remote command execution on configured servers",
   "author": "sapphire",
   "icon": "🖥️",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {
-    "tools": ["tools/ssh_tool.py"]
+    "tools": [
+      "tools/ssh_tool.py"
+    ],
+    "devices": [
+      {
+        "driver": "ssh",
+        "label": "SSH machine",
+        "icon": "🖥️",
+        "module": "device_driver.py",
+        "capabilities": [
+          "ssh"
+        ],
+        "config_schema": [
+          {
+            "key": "host",
+            "type": "string",
+            "label": "Host",
+            "placeholder": "192.168.0.10"
+          },
+          {
+            "key": "user",
+            "type": "string",
+            "label": "User"
+          },
+          {
+            "key": "port",
+            "type": "number",
+            "label": "Port",
+            "default": 22,
+            "min": 1,
+            "max": 65535
+          },
+          {
+            "key": "auth",
+            "type": "string",
+            "widget": "select",
+            "label": "Login",
+            "default": "auto",
+            "help": "Auto uses the keys already set up for the user Sapphire runs as.",
+            "options": [
+              {
+                "label": "Auto (keys already set up)",
+                "value": "auto"
+              },
+              {
+                "label": "Key file",
+                "value": "key_file"
+              },
+              {
+                "label": "Pasted key",
+                "value": "key_paste"
+              },
+              {
+                "label": "Password",
+                "value": "password"
+              }
+            ]
+          },
+          {
+            "key": "key_path",
+            "type": "string",
+            "label": "Key file",
+            "placeholder": "~/.ssh/id_ed25519",
+            "show_if": {
+              "auth": "key_file"
+            }
+          },
+          {
+            "key": "private_key",
+            "type": "string",
+            "widget": "textarea",
+            "secret": true,
+            "label": "Private key",
+            "rows": 5,
+            "help": "Stored scrambled. Never shown again.",
+            "show_if": {
+              "auth": "key_paste"
+            }
+          },
+          {
+            "key": "password",
+            "type": "string",
+            "widget": "password",
+            "secret": true,
+            "label": "Password",
+            "help": "Stored scrambled. Never shown again.",
+            "show_if": {
+              "auth": "password"
+            }
+          },
+          {
+            "key": "allow_all",
+            "type": "boolean",
+            "label": "Allow any command",
+            "default": false,
+            "help": "Off: Sapphire can run only the premade commands below. On: she can also run any command, checked against the SSH plugin's blacklist."
+          },
+          {
+            "key": "commands",
+            "widget": "rows",
+            "label": "Premade commands",
+            "help": "A name and the command it runs. Put {value} where her input goes, e.g. pactl set-sink-volume @DEFAULT_SINK@ {value}%",
+            "columns": [
+              {
+                "key": "name",
+                "label": "name",
+                "placeholder": "close_firefox"
+              },
+              {
+                "key": "command",
+                "label": "command",
+                "placeholder": "pkill firefox"
+              }
+            ],
+            "add_label": "+ Add Command"
+          }
+        ]
+      }
+    ]
   }
 }

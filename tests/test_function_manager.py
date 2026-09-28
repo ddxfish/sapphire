@@ -828,3 +828,64 @@ class TestPrivateUnflaggedToggle:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+# =============================================================================
+# with_success - a tool that runs another tool (device drivers)
+# =============================================================================
+
+class TestExecuteWithSuccess:
+    """execute_function(with_success=True) returns (result, success); the
+    default return shape is unchanged."""
+
+    def _mgr(self, executor, enabled=('test_func',)):
+        mgr = FunctionManager()
+        mgr._enabled_tools = [{'function': {'name': n}} for n in enabled]
+        mgr._mode_filters = {}
+        mgr._settings_gates = {}
+        mgr._hidden_tools = set()
+        mgr._story_engine = None
+        mgr._story_engine_enabled = False
+        mgr.execution_map = {'test_func': executor} if executor else {}
+        mgr._is_local_map = {'test_func': True}
+        mgr._function_module_map = {}
+        mgr.tool_history = []
+        mgr.tool_history_file = '/tmp/test.json'
+        return mgr
+
+    def _run(self, mgr, name='test_func', **kw):
+        with patch('core.chat.function_manager.config') as mock_cfg:
+            mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
+            return mgr.execute_function(name, {}, **kw)
+
+    def test_default_shape_unchanged(self):
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = self._mgr(MagicMock(return_value=("fine", True)))
+            assert self._run(mgr) == "fine"
+
+    def test_success_and_failure_are_reported(self):
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            ok = self._mgr(MagicMock(return_value=("fine", True)))
+            assert self._run(ok, with_success=True) == ("fine", True)
+            bad = self._mgr(MagicMock(return_value=("port not found", False)))
+            assert self._run(bad, with_success=True) == ("port not found", False)
+
+    def test_exception_is_a_failure(self):
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = self._mgr(MagicMock(side_effect=RuntimeError("boom")))
+            result, success = self._run(mgr, with_success=True)
+            assert success is False and "boom" in result
+
+    def test_refusals_are_failures(self):
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = self._mgr(MagicMock(return_value=("fine", True)))
+            result, success = self._run(mgr, name='other_func', with_success=True)
+            assert success is False and "not in the active toolset" in result
+            missing = self._mgr(None)
+            result, success = self._run(missing, with_success=True)
+            assert success is False and "no execution logic" in result
+
+    def test_allowed_tools_runs_a_tool_outside_the_toolset(self):
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = self._mgr(MagicMock(return_value=("played", True)), enabled=())
+            assert self._run(mgr, allowed_tools={'test_func'},
+                             with_success=True) == ("played", True)

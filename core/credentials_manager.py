@@ -596,6 +596,14 @@ class CredentialsManager:
                 "(salt file may be missing or rotated)"
             ) from e
 
+    def scramble(self, value: str) -> str:
+        """Public door to the machine-bound scramble (core/devices/secret_store)."""
+        return self._scramble(value)
+
+    def unscramble_strict(self, value: str) -> str:
+        """Public door to the strict decrypt - raises DecryptionError."""
+        return self._unscramble_strict(value)
+
     # =========================================================================
     # LLM API Keys
     # =========================================================================

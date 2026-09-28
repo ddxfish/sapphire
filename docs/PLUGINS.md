@@ -23,6 +23,7 @@ This documentation has been reorganized. See the **[Plugin Author Guide](plugin-
 | [Schedule](plugin-author/schedule.md) | Cron tasks — manifest fields, handler contract, examples |
 | [Widgets](plugin-author/widgets.md) | Dashboard panels — manifest, render contract, settings schema, sample plugin |
 | [Games](plugin-author/games.md) | Game Room games — engine contract, sealed seat, board modules, sessions-are-chats |
+| [Devices](plugin-author/devices.md) | Device drivers - teach Sapphire a machine or gadget: manifest declaration, the three driver functions, secrets, the tool door |
 | [Stories](plugin-author/stories.md) | Story packs — rooms, referee, dice, sealed blanks, identity modes, backdrops |
 | [Providers](plugin-author/providers.md) | Custom TTS, STT, Embedding, LLM backends — base classes, manifest, lifecycle |
 | [Settings](plugin-author/settings.md) | Manifest-declared settings, custom web UI, settings API, danger confirms |

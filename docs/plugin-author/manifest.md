@@ -52,6 +52,7 @@ The `capabilities` object declares what the plugin provides:
     "providers": { ... },
     "memory_layers": [ ... ],
     "games": [ ... ],
+    "devices": [ ... ],
     "prompts": { ... },
     "web": { ... },
     "daemon": { ... },
@@ -73,6 +74,7 @@ Each capability is documented in its own guide:
 - [Settings & Web UI](settings.md)
 - [Providers (TTS, STT, Embedding, LLM)](providers.md)
 - [Memory Layers](memory-layers.md) — register your own layer in the Mind Palace memory system
+- [Devices](devices.md) — register a device driver (`capabilities.devices`) with the Devices host
 - [Games](games.md) — register a playable game (`capabilities.games`) with the Game Room host. Story packs need no capability at all: ship a `stories/` dir ([Stories](stories.md))
 - [Prompt Packs](prompts.md) — ship monolith prompts and assembled-prompt pieces (mirror-only, user always wins collisions)
 - [Apps](APPS.md)
@@ -223,7 +225,7 @@ user/
 
 - Only `name` is required (unique; overrides folder name). Display title resolution: `short_display_name` → `display_name` → `short_name` → truncated first clause of `description` → `name`. Set `short_display_name` (2-4 words).
 - Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group — e.g. `"memory"`, which is also how other plugins find the loaded memory engine), `default_enabled`, `priority` (int — a non-int is coerced to 50 with a warning; lower fires first), `managed_hide`, `settingsUI` ("auto"|"plugin"|"core"|null), `min_core_version` (warn-only version skew check against the `VERSION` file; never blocks), `pip_dependencies` (pip specifiers or direct references; missing ones → Install button, conda/venv only, then auto-reload), `environment` ({python, pip, conda, channels} — dedicated conda env), `icon`/`emoji`, `url`, `author`, `version`.
-- `capabilities` keys: `hooks`, `voice_commands`, `tools`, `scopes`, `routes`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `prompts`, `web`, `daemon`, `services`, `app`, `themes`, `widgets`, `sidebar_accordion`, `cleanup_paths`. Each has its own guide page.
+- `capabilities` keys: `hooks`, `voice_commands`, `tools`, `scopes`, `routes`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `devices`, `prompts`, `web`, `daemon`, `services`, `app`, `themes`, `widgets`, `sidebar_accordion`, `cleanup_paths`. Each has its own guide page.
 - Scope entry: `{key (python identifier), label, endpoint, data_key?, value_field?, name_field?, label_template?, nav_target?, default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
 - `sidebar_accordion`: `{title?, icon?, content?, script?}` — files live in the plugin's `web/` dir, served at `/plugin-web/{name}/...`; script exports `init(contentEl, pluginName)`, called after the HTML fragment lands; chat surface only; renders only while the plugin is enabled.
 - `cleanup_paths`: relative to `user/`, namespace-restricted to `plugin_state/` (filename must start with the plugin name), `webui/plugins/`, or `plugins/{name}/`; anything else is REFUSED. Auto-cleanup already covers `plugin_state/{name}*`, `webui/plugins/{name}.json`, and the plugin dir.

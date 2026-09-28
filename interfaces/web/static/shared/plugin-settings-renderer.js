@@ -43,7 +43,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
     const rowHTML = field => {
         const val = values[field.key] ?? field.default ?? '';
         return `
-            <div class="setting-row" data-key="${escapeHtml(field.key)}">
+            <div class="setting-row" data-key="${escapeHtml(field.key)}"${showIfAttr(field)}>
                 <div class="setting-label">
                     <label>${escapeHtml(field.label)}</label>
                     ${field.help ? `<div class="setting-help">${escapeHtml(field.help)}</div>` : ''}
@@ -210,6 +210,26 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         wireListField(container, field);
     }
 
+    // Wire up rows fields (a list of objects)
+    for (const field of schema) {
+        if ((field.widget || inferWidget(field)) !== 'rows') continue;
+        wireRowsField(container, field);
+    }
+
+    // show_if: a row is visible only while its controlling field has the
+    // named value. Hidden rows stay in the DOM and still save.
+    if (schema.some(f => f.show_if)) {
+        const apply = () => container.querySelectorAll('[data-show-if]').forEach(row => {
+            let cond = {};
+            try { cond = JSON.parse(row.dataset.showIf); } catch { /* shown */ }
+            const ok = Object.entries(cond).every(([k, want]) => String(
+                getFieldValue(container, k, schema.find(f => f.key === k))) === String(want));
+            row.toggleAttribute('hidden', !ok);
+        });
+        container.addEventListener('change', apply);
+        apply();
+    }
+
     if (onChange) {
         container.addEventListener('change', e => {
             const key = e.target.closest('[data-key]')?.dataset.key;
@@ -272,12 +292,94 @@ function wireListField(container, field) {
     render();
 }
 
+function showIfAttr(field) {
+    if (!field.show_if || typeof field.show_if !== 'object') return '';
+    return ` data-show-if="${escapeHtml(JSON.stringify(field.show_if))}"`;
+}
+
+// rows: a list of objects, one text input per column, "+ Add" and a delete
+// per row. The value lives as JSON in a hidden input (the list widget's
+// pattern) so readSettingsForm/getFieldValue work unchanged.
+function rowsColumns(field) {
+    return (field.columns || []).map(c => typeof c === 'string'
+        ? { key: c, label: c } : { key: String(c.key || ''), label: c.label || c.key, placeholder: c.placeholder })
+        .filter(c => c.key);
+}
+
+function wireRowsField(container, field) {
+    const wrap = container.querySelector(`.ps-rows[data-rows-key="${CSS.escape(field.key)}"]`);
+    if (!wrap) return;
+    const hidden = wrap.querySelector(psSel(field.key));
+    const body = wrap.querySelector('.ps-rows-body');
+    const cols = rowsColumns(field);
+
+    const read = () => { try { const a = JSON.parse(hidden.value); return Array.isArray(a) ? a : []; } catch { return []; } };
+    const write = (items, redraw) => {
+        hidden.value = JSON.stringify(items);
+        if (redraw) render();
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const render = () => {
+        const items = read();
+        body.innerHTML = items.map((row, i) => `
+            <div class="ps-rows-row" data-row="${i}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+                ${cols.map((c, n) => `<input type="text" class="ps-rows-cell" data-col="${escapeHtml(c.key)}"
+                    value="${escapeHtml(String(row?.[c.key] ?? ''))}" placeholder="${escapeHtml(c.placeholder || c.label)}"
+                    style="flex:${n === 0 ? 1 : 2};min-width:0">`).join('')}
+                <a href="#" class="ps-rows-del" title="Remove" style="color:var(--text-muted);text-decoration:none">\u2715</a>
+            </div>`).join('') || '<div style="color:var(--text-muted);font-size:var(--font-sm,13px);margin-bottom:6px">None added</div>';
+    };
+
+    // Cell edits write through without a redraw, so typing keeps its focus.
+    // stopPropagation: the cell's own change event carries no data-key value.
+    body.addEventListener('input', e => {
+        const cell = e.target.closest('.ps-rows-cell');
+        if (!cell) return;
+        const items = read();
+        const i = Number(cell.closest('.ps-rows-row').dataset.row);
+        items[i] = { ...(items[i] || {}), [cell.dataset.col]: cell.value };
+        write(items, false);
+    });
+    body.addEventListener('change', e => { if (e.target.closest('.ps-rows-cell')) e.stopPropagation(); });
+    body.addEventListener('click', e => {
+        const del = e.target.closest('.ps-rows-del');
+        if (!del) return;
+        e.preventDefault();
+        const i = Number(del.closest('.ps-rows-row').dataset.row);
+        write(read().filter((_, n) => n !== i), true);
+    });
+    wrap.querySelector('.ps-rows-add')?.addEventListener('click', () => {
+        write([...read(), Object.fromEntries(cols.map(c => [c.key, '']))], true);
+        body.querySelector('.ps-rows-row:last-child .ps-rows-cell')?.focus();
+    });
+    render();
+}
+
 function renderWidget(field, value) {
     const id = `ps-${field.key}`;
     const widget = field.widget || inferWidget(field);
 
     switch (widget) {
+        case 'rows': {
+            const items = Array.isArray(value) ? value : [];
+            return `<div class="ps-rows" data-rows-key="${escapeHtml(field.key)}">
+                <input type="hidden" id="${id}" value="${escapeHtml(JSON.stringify(items))}">
+                <div class="ps-rows-body"></div>
+                <button type="button" class="btn-action ps-rows-add">${escapeHtml(field.add_label || '+ Add')}</button>
+            </div>`;
+        }
+
         case 'textarea':
+            // secret textarea (a pasted multi-line key): never echoed. Shows
+            // "Set" + clear, like the password widget, which cannot hold
+            // line breaks.
+            if (field.secret) {
+                const isSet = value && String(value).trim();
+                const mark = isSet
+                    ? '<small style="color:var(--success,#4caf50);margin-left:6px">\u2713 Set</small> <a href="#" class="ps-clear-key" data-field="' + id + '" style="font-size:var(--font-xs);margin-left:4px;color:var(--text-muted)">clear</a>'
+                    : '';
+                return `<textarea id="${id}" rows="${field.rows || 4}" placeholder="${isSet ? 'Set. Paste a new one to replace it.' : escapeHtml(field.placeholder || 'Paste here')}" style="width:100%;background:var(--bg-secondary,#1a1b2e);color:var(--text,#e1e1e6);border:1px solid var(--border,#333);border-radius:6px;padding:8px;font-family:monospace;font-size:var(--font-sm,13px);resize:vertical"></textarea>${mark}`;
+            }
             return `<textarea id="${id}" rows="${field.rows || 8}" placeholder="${escapeHtml(field.placeholder || '')}" style="width:100%;background:var(--bg-secondary,#1a1b2e);color:var(--text,#e1e1e6);border:1px solid var(--border,#333);border-radius:6px;padding:8px;font-family:monospace;font-size:var(--font-sm,13px);resize:vertical">${escapeHtml(String(value))}</textarea>`;
 
         case 'password': {
@@ -346,6 +448,7 @@ function inferWidget(field) {
     if (field.type === 'number') return 'number';
     if (field.type === 'textarea') return 'textarea';
     if (field.type === 'list') return 'list';
+    if (field.type === 'rows') return 'rows';
     // type:"password" without an explicit widget fell through to 'text' and
     // rendered the stored secret in a plaintext value="..." (live: the
     // ElevenLabs API key on screen — HDF scout, 2026-07-19).
@@ -370,7 +473,8 @@ export function readSettingsForm(container, schema) {
         // sentinel. Keyed off the RESOLVED widget, not just type — a
         // widget:"password" field with a non-password type would otherwise
         // wipe its stored secret on any unrelated save (scout, 2026-07-20).
-        if (field.type === 'password' || (field.widget || inferWidget(field)) === 'password') {
+        const w = field.widget || inferWidget(field);
+        if (field.type === 'password' || w === 'password' || (w === 'textarea' && field.secret)) {
             if (val === '__CLEAR__') { result[field.key] = ''; continue; }
             if (!val) continue;
         }
@@ -407,6 +511,12 @@ function coerce(value, field) {
     if (field.type === 'boolean') return Boolean(value);
     if (field.type === 'list') {
         try { const a = JSON.parse(value); return Array.isArray(a) ? a : []; } catch { return []; }
+    }
+    if (field.type === 'rows' || field.widget === 'rows') {
+        try {
+            const a = JSON.parse(value);
+            return Array.isArray(a) ? a.filter(r => r && typeof r === 'object') : [];
+        } catch { return []; }
     }
     return value;
 }

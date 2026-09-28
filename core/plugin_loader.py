@@ -886,6 +886,19 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: game registration failed: {e}")
 
+        # Register device drivers (declarations consumed by the device
+        # engine, core/devices/engine.py)
+        device_defs = capabilities.get("devices", [])
+        if device_defs:
+            try:
+                from core.devices.registry import register_driver
+                accepted = [dd.get("driver") for dd in device_defs
+                            if isinstance(dd, dict) and register_driver(dd.get("driver"), dd, name)]
+                if accepted:
+                    info["registered_device_drivers"] = accepted
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: device driver registration failed: {e}")
+
         # Register prompt pack (mirror-only — merged into the prompt system
         # at read time, never written to user/prompts; user wins collisions)
         prompts_decl = capabilities.get("prompts", {})
@@ -1233,6 +1246,15 @@ class PluginLoader:
                 _unreg_games(name)
             except Exception as e:
                 logger.warning(f"[PLUGINS] {name}: failed to unregister games: {e}")
+
+        # Unregister device drivers (their devices go dark in the engine; the
+        # device rows and secrets survive until re-enable)
+        if info.get("registered_device_drivers"):
+            try:
+                from core.devices.registry import unregister_plugin as _unreg_drivers
+                _unreg_drivers(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister device drivers: {e}")
 
         # Unregister prompt pack (pack prompts go dark; if one was the active
         # prompt and no user entry shadows it, the registry hands off to

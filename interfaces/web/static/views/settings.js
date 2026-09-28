@@ -21,6 +21,7 @@ import pluginsTab from './settings-tabs/plugins.js';
 import imagesTab from './settings-tabs/images.js';
 
 import backupTab from './settings-tabs/backup.js';
+import devicesTab from './settings-tabs/devices.js';
 import systemTab from './settings-tabs/system.js';
 import helpTab from './settings-tabs/help-tab.js';
 import videosTab from './settings-tabs/videos-tab.js';
@@ -30,7 +31,7 @@ import { getRegisteredTabs } from '../shared/plugin-registry.js';
 import { snapScroll } from '../shared/dom-guard.js';
 import { commitInto, mergeInto } from '../shared/settings-commit.js';
 
-const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
+const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, devicesTab, systemTab, helpTab, videosTab];
 
 let container = null;
 let activeTab = 'dashboard';
@@ -202,7 +203,7 @@ function syncDynamicTabs() {
     dynamicTabs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
-const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', 'embedding']);
+const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', 'embedding', 'devices']);
 
 function getAllTabs() {
     // Insert dynamic tabs between plugins and system
@@ -374,7 +375,8 @@ function updateSaveButtonForTab(tab) {
     // them and the button hides on your tab. See docs/PLUGINS.md.
     const saveBtn = container?.querySelector('#settings-save');
     if (!saveBtn) return;
-    const selfSaving = !!(tab.isPlugin && tab._reg && !tab._reg.getSettings);
+    // Core tabs that are CRUD pages say so with `selfSaving: true` (Devices).
+    const selfSaving = !!(tab.selfSaving || (tab.isPlugin && tab._reg && !tab._reg.getSettings));
     saveBtn.style.display = selfSaving ? 'none' : '';
     const resetBtn = container?.querySelector('#settings-plugin-reset');
     if (resetBtn) resetBtn.style.display = (tab.isPlugin && tab._reg?.reset) ? '' : 'none';

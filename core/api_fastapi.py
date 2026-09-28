@@ -986,6 +986,7 @@ from core.routes.backgrounds import router as backgrounds_router
 from core.routes.fonts import router as fonts_router
 from core.routes.conversation import router as conversation_router
 from core.routes.vault import router as vault_router
+from core.routes.devices import router as devices_router
 
 app.include_router(chat_router)
 app.include_router(tts_router)
@@ -1006,4 +1007,5 @@ app.include_router(backgrounds_router)
 app.include_router(fonts_router)
 app.include_router(conversation_router)
 app.include_router(vault_router)
+app.include_router(devices_router)
 

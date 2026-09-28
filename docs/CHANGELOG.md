@@ -1,3 +1,7 @@
+# 2.13.2 - Device Manager
+- Settings > Device Manager can add devices
+- Devices register capabilities
+- Added SSH, ESP32 gadget and FM-1 synth options
 # 2.13.1 - Discord Simplify
 - Removed Discord memory
 - Routed Discord through Daemons and Realtime

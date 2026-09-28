@@ -104,3 +104,13 @@ TROUBLESHOOTING:
 - Permission denied: verify key is in remote authorized_keys
 - Timeout: increase timeout param or check for hanging command
 - Blocked: check blacklist patterns in settings
+
+DEVICES (Settings > Devices):
+- This plugin also provides the "SSH machine" device type for Settings > Devices
+- A device has its own login (auto, key file, pasted key, password) and its own premade commands
+- Sapphire uses it with device_action(device, "ssh", command_name, value?)
+- Premade commands are the user's own words and skip the blacklist
+- Free-form "run" exists only while "Allow any command" is checked, and always passes the blacklist
+- Pasted keys and passwords are stored scrambled outside user/ and are never shown again
+- The servers list above and the ssh_* tools are unchanged and separate from devices
+- See docs/DEVICES.md

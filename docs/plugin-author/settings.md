@@ -26,10 +26,12 @@ Declare settings in `plugin.json` and they auto-render in Settings > Plugins:
 | `label` | yes | Display name |
 | `default` | yes | Default value |
 | `help` | no | Description text |
-| `widget` | no | Override: `"textarea"`, `"password"`, `"select"`, `"radio"`, `"button"` (action button) |
+| `widget` | no | Override: `"textarea"`, `"password"`, `"select"`, `"radio"`, `"button"` (action button), `"rows"` (a list of objects, needs `columns`) |
 | `options` | no | `[{label, value}]` for select/radio |
 | `placeholder` | no | Input hint text |
 | `confirm` | no | Danger confirm gate (see below) |
+| `show_if` | no | `{"other_key": "value"}` - the field shows only while that other field has that value. Hidden fields still save |
+| `columns` | rows only | Column keys, or `{key, label, placeholder}` objects. `add_label` names the add button |
 | `tab` | no | Tab name for grouping fields. Untagged fields land on a "General" tab (shown first); tagged tabs follow in first-seen schema order. The tab strip only renders when there are 2+ groups |
 
 Widget inference when omitted: `string` -> text, `string` + `options` -> select, `number` -> number spinner, `boolean` -> toggle, `textarea` type -> textarea, `list` -> chips with a "+ Add" row.

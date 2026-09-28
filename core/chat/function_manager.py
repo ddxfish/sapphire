@@ -1322,6 +1322,11 @@ class FunctionManager:
         # False, "endpoint", or anything else — network access, blocked
         return False, f"Tool '{function_name}' requires network access and is blocked in this private chat. Inform the user."
 
+    def tool_plugin(self, function_name: str):
+        """The plugin that owns a tool, or None (a core tool, or unknown)."""
+        info = self.function_modules.get(self._function_module_map.get(function_name) or '')
+        return (info or {}).get('_plugin') or None
+
     def _get_plugin_settings_for(self, function_name: str):
         """Get plugin settings for a function, or None if it's not a plugin tool."""
         module_name = self._function_module_map.get(function_name)
@@ -1336,7 +1341,8 @@ class FunctionManager:
         except Exception:
             return None
 
-    def execute_function(self, function_name, arguments, scopes=None, allowed_tools=None, executor_snapshot=None):
+    def execute_function(self, function_name, arguments, scopes=None, allowed_tools=None, executor_snapshot=None,
+                         with_success=False):
         """Execute a function using the mapped executor.
 
         scopes: optional dict to re-apply ContextVars before execution.
@@ -1347,7 +1353,13 @@ class FunctionManager:
                        current enabled_tools (prevents race conditions on plugin reload).
         executor_snapshot: optional dict of {name: executor} captured at stream start.
                            Prevents reload from yanking executor mid-chat.
+        with_success: when True, returns (result, success) instead of the bare
+                      result - for a tool that runs another tool and must not
+                      report a failure as a success (device drivers).
         """
+        def _ret(value, ok):
+            return (value, ok) if with_success else value
+
         if scopes:
             restore_scopes(scopes)
 
@@ -1373,14 +1385,14 @@ class FunctionManager:
                 f"Either call one of the available tools, or respond directly to the user without tools."
             )
             self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
-            return result
+            return _ret(result, False)
 
         # Privacy mode check
         allowed, error_msg = self._check_privacy_allowed(function_name)
         if not allowed:
             logger.info(f"Function '{function_name}' blocked by privacy mode: {error_msg}")
             self._log_tool_call(function_name, arguments, error_msg, time.time() - start_time, False)
-            return error_msg
+            return _ret(error_msg, False)
 
         logger.info(f"Executing function: {function_name}")
 
@@ -1393,7 +1405,7 @@ class FunctionManager:
             if type_err:
                 logger.warning(f"Arg type coercion failed for '{function_name}': {type_err}")
                 self._log_tool_call(function_name, arguments, type_err, time.time() - start_time, False)
-                return type_err
+                return _ret(type_err, False)
 
         # pre_execute hook — plugins can mutate arguments or skip execution
         from core.hooks import hook_runner, HookEvent
@@ -1408,7 +1420,7 @@ class FunctionManager:
             if exec_event.skip_llm:
                 result = exec_event.result or "Execution skipped by plugin."
                 self._log_tool_call(function_name, arguments, result, time.time() - start_time, True)
-                return result
+                return _ret(result, True)
 
         # Execute tool
         result = None
@@ -1419,7 +1431,7 @@ class FunctionManager:
             logger.error(f"No executor found for function '{function_name}'")
             result = f"The tool {function_name} is recognized but has no execution logic."
             self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
-            return result
+            return _ret(result, False)
 
         try:
             # For plugin tools, inject plugin settings (4th arg) + credentials (5th arg)
@@ -1467,7 +1479,7 @@ class FunctionManager:
                 result=result, config=config
             ))
 
-        return result
+        return _ret(result, success)
 
     def _load_tool_history(self):
         """Load tool history from disk. Disabled - legacy debug feature."""
