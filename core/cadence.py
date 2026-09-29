@@ -14,7 +14,8 @@ One organ, one ticker thread, per-chat records. Rules:
   - frames come from the perception inbox at fire time (latest wins) and
     reach the model for that turn only (`images_ephemeral`)
   - `speak`: 'browser' rides the VOICE_TURN_END payload (the room's tab
-    plays it), 'speakers' speaks the blob on the server after the turn
+    plays it), 'device:<id>' speaks it on that device (a satellite),
+    'speakers' speaks the blob on the server after the turn
 
 This is also the seat for heartbeats / Discord proactive / her pinging Krem
 later — nothing in here knows what a game is.
@@ -231,9 +232,11 @@ def armed():
 
 # ── the turn ────────────────────────────────────────────────────────────────
 
-def run_turn(chat, text, images=None, speak=None, source='cadence'):
+def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=None):
     """One unprompted turn on `chat` through THE engine, live to the wire.
-    Raises ChatBusy when the chat has a turn in flight. Returns her text."""
+    Raises ChatBusy when the chat has a turn in flight. Returns her text.
+    on_event(event) sees every event of THIS turn as it happens (the bus
+    cannot say whose turn a tool belongs to). Its faults are swallowed."""
     system = _system
     if system is None:
         raise RuntimeError('cadence organ not started')
@@ -258,6 +261,11 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
         for ev in stream.chat_stream(text, images=images or None):
             if not isinstance(ev, dict):
                 continue
+            if on_event is not None:
+                try:
+                    on_event(ev)
+                except Exception as e:
+                    logger.debug(f"[CADENCE] on_event hook failed: {e}")
             et = ev.get('type')
             if et == 'content':
                 parts.append(ev.get('text') or '')
@@ -321,6 +329,17 @@ def run_turn(chat, text, images=None, speak=None, source='cadence'):
             system.tts.speak(final, chat_settings=gate_settings)
         except Exception as e:
             logger.warning(f"[CADENCE] speakers lane failed: {e}")
+    elif isinstance(speak, str) and speak.startswith('device:') and final:
+        # the device lane: the reply is spoken on the satellite that heard
+        # the question. Same gate rule as above - THIS chat's settings.
+        try:
+            from core.devices import voice
+            gate_settings = sm.get_settings_for(chat) or {'private_chat': True}
+            said, ok = voice.say(speak[len('device:'):], final, chat_settings=gate_settings)
+            if not ok:
+                logger.warning(f"[CADENCE] device lane: {said}")
+        except Exception as e:
+            logger.warning(f"[CADENCE] device lane failed: {e}")
     return final
 
 

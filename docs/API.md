@@ -577,13 +577,22 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/avatar/check/{role}` | Check if avatar exists for role |
 | GET | `/api/avatar/{filename}` | Serve avatar file |
 
-### Body (Multi-Body Runtime)
+### Devices
+
+Login required, except the two doors a device opens with its own key.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/body/wake` | Trigger a wake event on a registered body |
-| GET | `/api/body/health` | Body runtime health/status |
-| GET | `/api/body/events` | SSE stream of body/avatar events |
+| GET | `/api/devices` | Every device with its status, and the device types |
+| POST | `/api/devices` | Add a device |
+| GET | `/api/devices/{id}` | One device: settings, status, what it can do |
+| PUT | `/api/devices/{id}` | Change a device. `locked` is a map `{capability: bool}` and changes only the capabilities it names |
+| GET | `/api/devices/found/{driver}` | What that driver can see right now, for a pick list: `{found: [{id, name, kind}]}`. `?device=<id>` lends a saved device's settings to the look |
+| DELETE | `/api/devices/{id}` | Remove a device and its stored secrets |
+| POST | `/api/devices/{id}/test` | Check the device now |
+| POST | `/api/devices/{id}/run` | Run one action. Answers `{text, ok, images?}` |
+| POST | `/api/devices/{id}/voice` | Device key. A satellite sends what it heard |
+| GET | `/api/devices/{id}/events` | Device key. SSE stream of what that satellite's light should show |
 
 ### Conversation Mode
 

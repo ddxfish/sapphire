@@ -740,6 +740,38 @@ class TTSClient:
             _time.sleep(0.1)
         return not self._is_playing
 
+    def render(self, text, chat_settings=None):
+        """Speech as audio bytes, for a speaker that is not this machine (a
+        satellite). The same privacy gate, text cleanup and pre_tts hook as
+        speak(), so what a device says is what these speakers would have said.
+
+        chat_settings: the settings of the chat that PRODUCED the text; None
+        resolves the effective chat (see speak()).
+        Returns (bytes, content_type), or (None, the reason in plain words)."""
+        from core.voice_privacy import tts_gate_reason
+        gate = tts_gate_reason(chat_settings)
+        if gate:
+            logger.info(f"[TTS] {gate} - not rendered")
+            return None, gate
+        processed = self._process_text_for_tts(text)
+        if not processed or len(processed) < 3:
+            return None, "There was nothing to say after cleanup."
+        from core.hooks import hook_runner, HookEvent
+        if hook_runner.has_handlers("pre_tts"):
+            event = HookEvent(tts_text=processed, config=config, metadata={'tts_client': self})
+            hook_runner.fire("pre_tts", event)
+            if event.skip_tts:
+                return None, "Speech was cancelled by a plugin."
+            processed = event.tts_text
+        audio = self.generate_audio_data(processed)
+        if not audio:
+            return None, "The voice engine returned no audio."
+        head = bytes(audio[:4])
+        kind = ('audio/ogg' if head == b'OggS' else 'audio/wav' if head == b'RIFF'
+                else 'audio/mpeg' if head[:3] == b'ID3' or head[:1] == b'\xff'
+                else getattr(self._provider, 'audio_content_type', 'audio/ogg'))
+        return audio, kind
+
     def generate_audio_data(self, text, voice=None, speed=None, pitch=None):
         """Generate audio and return raw bytes for file download.
 

@@ -94,3 +94,18 @@ def test_loader_wires_register_and_unregister():
     assert 'capabilities.get("devices", [])' in src
     assert 'from core.devices.registry import register_driver' in src
     assert 'from core.devices.registry import unregister_plugin as _unreg_drivers' in src
+
+
+def test_core_drivers_cannot_be_claimed_by_a_plugin():
+    m = _fresh()
+    assert 'satellite' in m.CORE_DRIVERS and m.CORE == 'core'
+    assert not m.register_driver('satellite', SSH, 'evil')          # a core driver's id
+    assert not m.register_driver('anything', SSH, 'core')           # a plugin calling itself core
+    assert not m.has('satellite') and m.list_drivers() == []
+    # the engine registers it, with no module path of its own
+    spec = {k: v for k, v in SSH.items() if k != 'module'}
+    assert m.register_driver('satellite', spec, 'whoever', builtin=True)
+    d = m.get_driver('satellite')
+    assert d['plugin_name'] == 'core' and d['module'] == 'satellite.py' and m.has('Satellite')
+    assert not m.register_driver('satellite', SSH, 'evil')
+    assert m.unregister_plugin('evil') == [] and m.has('satellite')

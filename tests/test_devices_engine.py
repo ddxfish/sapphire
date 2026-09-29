@@ -109,6 +109,7 @@ def host(tmp_path):
              patch.object(core, '_managed', lambda: False):
             sec.reload()
             importlib.reload(reg)
+            reg.CORE_DRIVERS = ()              # these tests run on the fake driver alone
             core._modules.clear()
             core._modules_gen = None
             core._status.clear()
@@ -253,7 +254,8 @@ def test_help_at_every_level(host):
     text, ok = core.run('desktop')
     assert ok and text == ('desktop - Krem\'s desktop - online\n'
                            '  shell  run commands  device_action("desktop","shell","close_firefox")\n'
-                           '  lamp   a light       device_action("desktop","lamp","set","red pulse 5s")')
+                           '  lamp   a light       device_action("desktop","lamp","set","red pulse 5s")\n'
+                           'Each line is one example. device_action("desktop","shell") lists all 3 actions of shell.')
     text, ok = core.run('desktop', 'shell')
     assert ok and text == ('desktop / shell\n'
                            '  close_firefox  pkill firefox  device_action("desktop","shell","close_firefox")\n'
@@ -268,6 +270,7 @@ def test_offline_is_said_before_she_wastes_a_call(host):
     assert ok and text == ('desktop - Krem\'s desktop - offline\n'
                            '  shell  run commands  device_action("desktop","shell","close_firefox")\n'
                            '  lamp   a light       device_action("desktop","lamp","set","red pulse 5s")\n'
+                           'Each line is one example. device_action("desktop","shell") lists all 2 actions of shell.\n'
                            'Offline: dead:22\n'
                            'Commands will fail until it is back.')
     text, ok = core.run('desktop', 'lamp')
@@ -319,6 +322,178 @@ def test_a_disabled_device_is_invisible_to_her(host):
     text, ok = core.run('fm1')
     assert not ok and text == "'fm1' is turned off in Settings > Devices."
     assert core.status_text('fm1') == (text, False)
+
+
+# --- what she may not use ----------------------------------------------------
+
+def test_a_locked_capability_is_hers_to_see_but_not_to_use(host):
+    """The user's own button still works. She is told why she cannot."""
+    with patch.object(core, 'LOCKABLE', ('power', 'lamp')):
+        _add()
+        assert core.locked(core.get('desktop')) == []
+        row, _ = core.update('desktop', locked=['lamp', 'shell', 'nonsense'])
+        assert row['locked'] == ['lamp']                      # shell has no such switch
+        assert core.public(row)['locked'] == ['lamp']
+        caps = {c['capability']: c for c in core.describe(row)}
+        assert (caps['lamp']['lockable'], caps['lamp']['locked']) == (True, True)
+        assert (caps['shell']['lockable'], caps['shell']['locked']) == (False, False)
+
+        host.seen.clear()
+        text, ok = core.run('desktop', 'lamp', 'set', 'red')
+        assert not ok and text == ("'lamp' on 'desktop' is locked: the user has not allowed you this. "
+                                   "They can change it in Settings > Devices.")
+        assert core.run('desktop', 'lamp')[1] is False        # asking for its actions is refused too
+        assert [s for s in host.seen if s[0] == 'run'] == []  # the driver never ran
+        listing = core.run('desktop')[0]
+        assert 'lamp   a light       locked: the user has not allowed you this.' in listing
+        assert 'device_action("desktop","lamp"' not in listing
+        assert 'lamp (locked)' in core.list_text()[0]
+
+        assert core.run('desktop', 'lamp', 'set', 'red', owner=True) == ('lamp.set(red)', True)
+        assert routes.run_action('desktop', {'capability': 'lamp', 'action': 'set', 'value': 'blue'}) == \
+            {'text': 'lamp.set(blue)', 'ok': True}
+        tools = _tools()
+        assert tools.execute('device_action', {'device': 'desktop', 'capability': 'lamp',
+                                               'action': 'set', 'value': 'red'}, None)[1] is False
+
+        core.update('desktop', label='changed')                # a change elsewhere keeps the lock
+        assert core.get('desktop')['locked'] == ['lamp']
+        core.update('desktop', locked=[])
+        assert core.run('desktop', 'lamp', 'set', 'red') == ('lamp.set(red)', True)
+
+
+def test_a_switch_the_page_did_not_show_is_never_touched(host):
+    """A device that is switched off shows no capability tabs, so its window
+    has no lock switches. Saving it used to send "nothing is locked" and
+    opened every lock, power included (quality check, 2026-09-28)."""
+    with patch.object(core, 'LOCKABLE', ('power', 'lamp', 'camera')):
+        _add()
+        core.update('desktop', locked=['lamp', 'camera'])
+        out = routes.update_device('desktop', {'enabled': False, 'locked': {}})
+        assert out['device']['capabilities'] == [] and out['device']['locked'] == ['camera', 'lamp']
+        out = routes.update_device('desktop', {'enabled': True, 'locked': {}})     # and on again
+        assert out['device']['locked'] == ['camera', 'lamp']
+        assert core.run('desktop', 'lamp', 'set', 'red')[1] is False
+
+        # a map changes only what it names
+        assert core.update('desktop', locked={'lamp': False})[0]['locked'] == ['camera']
+        assert core.update('desktop', locked={'power': True, 'shell': True, 'Camera': True})[0]['locked'] == \
+            ['camera', 'power']                                  # shell has no such switch
+        assert core.update('desktop', locked={})[0]['locked'] == ['camera', 'power']
+        # a device that never had the key starts from what its drivers ask for
+        host.store.d['devices']['desktop'].pop('locked')
+        assert core.update('desktop', locked={'lamp': True})[0]['locked'] == ['lamp']
+
+
+def test_the_page_sends_only_the_switches_it_showed():
+    """The other half of the same fix, in the page itself."""
+    page = (ROOT / 'interfaces/web/static/views/settings-tabs/devices.js').read_text(encoding='utf-8')
+    assert 'lockKey(c.capability) in form' in page and 'Object.fromEntries' in page
+    assert ".map(c => c.capability);" not in page                # the old list of "what is locked"
+
+
+def test_a_device_may_not_take_a_name_the_routes_use(host):
+    with pytest.raises(core.DeviceError, match='uses herself'):
+        core.add('found', 'x', 'fake', {'host': 'h'})
+    _add()
+    with pytest.raises(core.DeviceError, match='not a valid device name'):
+        core.update('desktop', new_id='found')
+    assert list(core.rows()) == ['desktop']
+
+
+def test_the_pick_list_asks_the_driver_what_is_here(host):
+    seen = []
+
+    def discover(config):
+        seen.append(config)
+        return [{'id': 'usb-2', 'name': 'Second board', 'kind': 'USB'},
+                {'id': 'usb-1', 'name': 'First board', 'kind': 'USB'}]
+    sys.modules[MOD].discover = discover
+    assert routes.found_things('fake') == {'found': [
+        {'id': 'usb-1', 'name': 'First board', 'kind': 'USB'},
+        {'id': 'usb-2', 'name': 'Second board', 'kind': 'USB'}]}
+    assert seen == [{}]                                          # the add form: no device yet
+    _add(port=2222)
+    routes.found_things('FAKE', 'desktop')
+    assert seen[-1]['port'] == 2222 and 'password' not in seen[-1]   # a saved device lends its settings
+    assert _status_of(routes.found_things, 'fake', 'nope')[0] == 404
+    assert _status_of(routes.found_things, 'ghost') == \
+        (400, "The 'ghost' driver is not loaded. Enable the ghost plugin in Settings > Plugins.")
+    with patch.object(core, '_plugin_info', lambda n: {'enabled': False, 'loaded': False}):
+        assert _status_of(routes.found_things, 'fake')[0] == 400     # a plugin that is off never looks
+    assert len(seen) == 2
+    paths = [r.path for r in routes.router.routes]
+    assert paths.index('/api/devices/found/{driver_id}') < paths.index('/api/devices/{device_id}')
+
+
+def test_a_driver_may_ask_for_a_capability_to_start_out_locked(host):
+    with patch.object(core, 'LOCKABLE', ('power', 'lamp')):
+        sys.modules['plugins.fakeplug.careful'] = sys.modules[MOD]
+        try:
+            assert host.reg.register_driver('careful', dict(DRIVER, module='careful.py',
+                                                            locked_by_default=['lamp', 'ghost']), 'fakeplug')
+            assert host.reg.get_driver('careful')['locked_by_default'] == ['lamp']
+            assert host.reg.get_driver('fake')['locked_by_default'] == []
+            row, _ = core.add('server', '', 'careful', {'host': 'tower'})
+            assert row['locked'] == ['lamp']
+            assert core.run('server', 'lamp', 'set', 'red')[1] is False
+            # a device saved before locks existed has no list of its own: the driver's wish holds
+            host.store.d['devices']['server'].pop('locked')
+            assert core.locked(core.get('server')) == ['lamp']
+            core.update('server', locked=[])                  # the user opened it: that holds
+            assert core.locked(core.get('server')) == []
+        finally:
+            sys.modules.pop('plugins.fakeplug.careful', None)
+
+
+def test_an_action_may_answer_with_pictures(host):
+    _add()
+    shot = {'data': 'QUJD', 'media_type': 'image/jpeg'}
+    sec = core._part_secrets('desktop', 'fake')
+    assert core._result({'text': 'A picture. hunter2-long', 'images': [shot]}, sec) == \
+        {'text': 'A picture. [secret]', 'images': [shot]}
+    out = core._result({'text': '', 'images': [shot, {'data': 'x', 'media_type': 'text/html'},
+                                                {'data': '', 'media_type': 'image/png'}, 'junk',
+                                                {'data': 'y' * (core.MAX_PICTURE + 1), 'media_type': 'image/png'},
+                                                {'data': 'QQ==', 'media_type': 'IMAGE/PNG', 'display_only': True}]}, sec)
+    assert out == {'text': 'A picture.', 'images': [shot, {'data': 'QQ==', 'media_type': 'image/png'}]}
+    assert len(core._result({'images': [shot] * 9}, sec)['images']) == core.MAX_PICTURES
+    assert core._result({'text': 'dark room', 'images': []}, sec) == 'dark room'
+    assert core._result({'images': ['junk']}, sec) == 'No picture came back.'
+    assert core._result(None, sec) == '(no output)'
+    assert core.text_of({'text': 'A picture.', 'images': [shot]}) == 'A picture.'
+    assert core.text_of('plain') == 'plain'
+
+
+def test_the_try_button_is_handed_the_pictures(host):
+    _add()
+    shot = {'data': 'QUJD', 'media_type': 'image/jpeg'}
+    with patch.object(core, 'run', return_value=({'text': 'A picture.', 'images': [shot]}, True)):
+        assert routes.run_action('desktop', {'capability': 'lamp', 'action': 'on'}) == \
+            {'text': 'A picture.', 'ok': True, 'images': [shot]}
+    with patch.object(core, 'run', return_value=('Lamp on.', True)):
+        assert routes.run_action('desktop', {'capability': 'lamp', 'action': 'on'}) == \
+            {'text': 'Lamp on.', 'ok': True}
+
+
+def test_location_is_part_of_what_she_reads(host):
+    _add()
+    _add('fm1', host='dead')
+    assert core.public(core.get('desktop'))['location'] == ''
+    row, _ = core.update('desktop', location='  the   Office  ' + 'x' * 100)
+    assert row['location'] == ('the Office ' + 'x' * 100)[:60]
+    core.update('desktop', location='Office')
+    assert core.public(core.get('desktop'))['location'] == 'Office'
+    assert core._brief(core.get('desktop'))['location'] == 'Office'
+    assert core.list_text()[0] == ('Devices (2):\n'
+                                   '  desktop  online   Office  shell, lamp\n'
+                                   '  fm1      offline  -       shell, lamp\n'
+                                   'Next: device_action("desktop")')
+    assert core.status_text('desktop')[0].startswith("desktop - Krem's desktop (Office) - online")
+    core.update('desktop', label='changed')                  # a change elsewhere keeps it
+    assert core.get('desktop')['location'] == 'Office'
+    row, _ = core.add('lamp', '', 'fake', {'host': 'tower'}, location='Hall')
+    assert row['location'] == 'Hall'
 
 
 def test_status_text(host):
@@ -501,13 +676,20 @@ def test_a_crash_is_a_500_without_its_detail(host):
 
 def test_the_routes_are_all_behind_login():
     """Every devices route must carry require_login. A route without it would
-    hand the device list, and the Try button, to anyone on the network."""
+    hand the device list, and the Try button, to anyone on the network.
+    The TWO exceptions are the doors a device opens with its own key: what it
+    heard, and what its light should show (tests/test_devices_voice.py proves
+    that lock on both)."""
     from core.auth import require_login
     found = [r for r in routes.router.routes if r.path.startswith('/api/devices')]
-    assert len(found) == 7
+    assert len(found) == 10
+    assert not [r.path for r in routes.router.routes if r.path.startswith('/api/body')]
+    open_doors = []
     for r in found:
         deps = [d.call for d in r.dependant.dependencies]
-        assert require_login in deps, (r.path, r.methods)
+        if require_login not in deps:
+            open_doors.append(r.path)
+    assert open_doors == ['/api/devices/{device_id}/voice', '/api/devices/{device_id}/events']
 
 
 # --- hosted Sapphire ---------------------------------------------------------

@@ -1276,6 +1276,8 @@ class VoiceChatSystem:
             # (KillMode=control-group) and the unit hangs in stop-sigterm.
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
             ("live turns", self._drain_live_turns),
+            # before the plugins go: their drivers let go of what they started
+            ("device presence", lambda: __import__('core.devices.presence', fromlist=['stop']).stop()),
             ("plugin services", _pl.stop_all_services),
             ("plugin daemons", _pl.stop_all_daemons),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
@@ -1392,6 +1394,14 @@ def run():
         # Scheduled backups (daily at 3am)
         from core.backup import backup_manager
         backup_manager.start_scheduler()
+
+        # Devices whose things come and go (a keyboard is plugged in): their
+        # drivers are kept told. A fault here must never stop the start.
+        try:
+            from core.devices import presence as _presence
+            _presence.start()
+        except Exception as e:
+            logger.error(f"Device presence did not start: {e}", exc_info=True)
 
         # Dev mode: auto-reload plugins on file changes
         import os

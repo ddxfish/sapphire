@@ -13,6 +13,7 @@ import { showToast } from '../../shared/toast.js';
 const API = '/api/devices';
 const ICON = String.fromCodePoint(0x1F39B, 0xFE0F);
 const POLL_MS = 10000;
+const LOCATION_HELP = 'The room or place it is in. Sapphire sees it, so she knows where a voice came from.';
 
 let page = null;        // the tab's container
 let drivers = [];
@@ -72,7 +73,7 @@ async function loadList() {
             <div class="setting-row" data-device="${esc(d.id)}" style="padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
                 <div class="setting-label">
                     <label style="cursor:pointer">${dot(d.enabled ? d.status?.online : null)}${esc(d.id)}</label>
-                    <div class="setting-help">${esc(d.label)} - ${esc(caps)}${missing}</div>
+                    <div class="setting-help">${esc(d.label)}${d.location ? ' - ' + esc(d.location) : ''} - ${esc(caps)}${missing}</div>
                 </div>
                 <div class="setting-input" style="text-align:right"><span class="text-muted">${stateWord(d)}</span></div>
             </div>`;
@@ -97,6 +98,9 @@ function drawAddForm() {
                     <div class="setting-input"><input type="text" id="dev-new-id" placeholder="desktop"></div></div>
                 <div class="setting-row"><div class="setting-label"><label>Display name</label></div>
                     <div class="setting-input"><input type="text" id="dev-new-label" placeholder="My desktop"></div></div>
+                <div class="setting-row"><div class="setting-label"><label>Location</label>
+                    <div class="setting-help">${LOCATION_HELP}</div></div>
+                    <div class="setting-input"><input type="text" id="dev-new-location" placeholder="Living Room" maxlength="60"></div></div>
                 <div class="setting-row"><div class="setting-label"><label>Type</label></div>
                     <div class="setting-input"><select id="dev-new-driver">
                         ${drivers.map(d => `<option value="${esc(d.driver)}" ${d.available ? '' : 'disabled'}>${
@@ -124,7 +128,7 @@ function drawAddForm() {
             fields.innerHTML = '<p class="text-muted" style="font-size:0.9em">Nothing else to set up for this type.</p>';
             return;
         }
-        renderSettingsForm(fields, d.config_schema.map(f => ({ ...f, tab: undefined })), {});
+        renderSettingsForm(fields, d.config_schema.map(f => ({ ...withLook(f, d.driver), tab: undefined })), {});
     };
     if (usable.length) pick.value = usable[0].driver;
     pick.addEventListener('change', drawFields);
@@ -140,6 +144,7 @@ function drawAddForm() {
         try {
             const res = await call('POST', '', {
                 id, label: box.querySelector('#dev-new-label').value.trim(),
+                location: box.querySelector('#dev-new-location').value.trim(),
                 driver: d.driver,
                 config: d.config_schema.length ? readSettingsForm(fields, d.config_schema) : {},
             });
@@ -158,22 +163,40 @@ function drawAddForm() {
 
 // Driver field keys are prefixed with the driver id so two parts never clash.
 const fieldKey = (driver, key) => `${driver}.${key}`;
+const lockKey = cap => `lock.${cap}`;
+
+// A pick list asks its driver what is here. A saved device lends its settings.
+const isFound = f => f.type === 'found' || f.widget === 'found';
+const withLook = (f, driver, device) => !isFound(f) ? f : { ...f,
+    found_url: `${API}/found/${encodeURIComponent(driver)}${device ? '?device=' + encodeURIComponent(device) : ''}` };
 
 function modalSchema(device) {
     const tabOf = Object.fromEntries((device.capabilities || []).map(c => [c.capability, c.label || c.capability]));
     const schema = [
         { key: 'device.label', type: 'string', label: 'Display name', tab: 'Status' },
+        { key: 'device.location', type: 'string', label: 'Location', tab: 'Status',
+          placeholder: 'Living Room', help: LOCATION_HELP },
         { key: 'device.enabled', type: 'boolean', label: 'Enabled', tab: 'Status',
           help: 'Off = Sapphire cannot see or use this device.' },
     ];
-    const values = { 'device.label': device.label, 'device.enabled': device.enabled };
+    const values = { 'device.label': device.label, 'device.location': device.location || '',
+                     'device.enabled': device.enabled };
+    for (const cap of device.capabilities || []) {
+        if (!cap.lockable) continue;
+        schema.push({ key: lockKey(cap.capability), type: 'boolean', label: 'Sapphire may use this',
+                      tab: cap.label || cap.capability,
+                      help: 'Off = only you can, with the buttons on this tab.' });
+        values[lockKey(cap.capability)] = !cap.locked;
+    }
     for (const part of device.parts) {
         for (const f of part.schema) {
             const cap = f.capability || part.capabilities[0];
             const show_if = f.show_if
                 ? Object.fromEntries(Object.entries(f.show_if).map(([k, v]) => [fieldKey(part.driver, k), v]))
                 : undefined;
-            schema.push({ ...f, key: fieldKey(part.driver, f.key), tab: tabOf[cap] || cap, show_if });
+            // a field may ask for the Status tab: how to reach a device belongs with its health
+            schema.push({ ...withLook(f, part.driver, device.id), key: fieldKey(part.driver, f.key),
+                          tab: f.tab || tabOf[cap] || cap, show_if });
             values[fieldKey(part.driver, f.key)] = part.values[f.key];
         }
     }
@@ -246,20 +269,33 @@ function mountActions(el, device, cap) {
                     <button type="button" class="btn-action dev-try">Try</button>
                 </div>`).join('')}
             <pre class="dev-try-out" hidden style="white-space:pre-wrap;max-height:220px;overflow:auto;background:var(--bg-secondary,#1a1b2e);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:8px;font-size:var(--font-sm,13px)"></pre>
+            <div class="dev-try-pics" style="margin-top:8px"></div>
         </div>`;
     const out = el.querySelector('.dev-try-out');
+    const pics = el.querySelector('.dev-try-pics');
+    const showPics = images => pics.replaceChildren(...(images || []).map(img => {
+        const pic = document.createElement('img');
+        pic.src = `data:${img.media_type};base64,${img.data}`;
+        pic.alt = 'What the device saw';
+        pic.style.cssText = 'max-width:100%;border-radius:6px;border:1px solid var(--border)';
+        return pic;
+    }));
     el.addEventListener('click', async e => {
         const btn = e.target.closest('.dev-try');
         if (!btn) return;
         const row = btn.closest('[data-action]');
+        if (cap.capability === 'power'
+            && !confirm(`${row.dataset.action} "${device.id}" now?`)) return;
         btn.disabled = true;
         out.hidden = false; out.textContent = 'Running...';
+        showPics([]);
         try {
             const res = await call('POST', `/${encodeURIComponent(device.id)}/run`, {
                 capability: cap.capability, action: row.dataset.action,
                 value: row.querySelector('.dev-try-value').value,
             });
             out.textContent = (res.ok ? '' : 'FAILED\n') + res.text;
+            showPics(res.images);
         } catch (err) { out.textContent = 'FAILED\n' + err.message; }
         btn.disabled = false;
     });
@@ -311,10 +347,15 @@ async function openDevice(id, tab) {
                 if (k in form) parts[part.driver][f.key] = form[k];
             }
         }
+        // only the switches this window showed: one it did not show is never touched
+        const locked = Object.fromEntries((device.capabilities || [])
+            .filter(c => c.lockable && lockKey(c.capability) in form)
+            .map(c => [c.capability, form[lockKey(c.capability)] === false]));
         save.disabled = true;
         try {
             const res = await call('PUT', `/${encodeURIComponent(device.id)}`, {
-                label: form['device.label'], enabled: form['device.enabled'], parts,
+                label: form['device.label'], location: form['device.location'] || '',
+                enabled: form['device.enabled'], parts, locked,
             });
             showToast(res.warning || 'Saved', res.warning ? 'warning' : 'success');
             const fresh = (await call('GET', `/${encodeURIComponent(device.id)}`)).device;

@@ -144,6 +144,27 @@ def test_a_slot_inside_quotes_is_refused():
 
 # --- describe ----------------------------------------------------------------
 
+def test_power_is_a_capability_of_its_own(ssh):
+    told = drv.describe(DEVICE, cfg())                      # saved before power existed
+    assert list(told) == ['ssh', 'power']
+    assert told['power']['actions'] == {
+        'restart': {'help': 'sudo -n shutdown -r +1', 'example': ''},
+        'shutdown': {'help': 'sudo -n shutdown -h +1', 'example': ''}}
+    assert 'restart' not in told['ssh']['actions']
+
+    drv.run(DEVICE, 'power', 'restart', 'ignored; rm -rf /', cfg(), Secrets(), None)
+    assert ssh.calls[-1].cmd[-1] == 'sudo -n shutdown -r +1'          # her value never reaches it
+    drv.run(DEVICE, 'power', 'shutdown', '', cfg(shutdown_command='systemctl poweroff'), Secrets(), None)
+    assert ssh.calls[-1].cmd[-1] == 'systemctl poweroff'              # the user's own words
+
+    mine = cfg(restart_command='', shutdown_command='  ')            # the user took both away
+    assert list(drv.describe(DEVICE, mine)) == ['ssh']
+    assert drv.run(DEVICE, 'power', 'restart', '', mine, Secrets(), None) == \
+        ('No restart command is set for this machine.', False)
+    assert drv.run(DEVICE, 'power', 'explode', '', cfg(), Secrets(), None)[1] is False
+    assert len(ssh.calls) == 2
+
+
 def test_describe_lists_premade_and_gates_run():
     d = drv.describe(DEVICE, cfg())['ssh']
     assert d['label'] == 'SSH' and list(d['actions']) == ['close_firefox', 'volume']
@@ -272,7 +293,8 @@ def test_manifest_declares_the_driver():
     decl = manifest['capabilities']['devices'][0]
     assert reg.register_driver(decl['driver'], decl, 'ssh')
     spec = reg.get_driver('ssh')
-    assert spec['module'] == 'device_driver.py' and spec['capabilities'] == ['ssh']
+    assert spec['module'] == 'device_driver.py' and spec['capabilities'] == ['ssh', 'power']
+    assert spec['locked_by_default'] == ['power']           # she may not restart a machine until the user says so
     secret = [f['key'] for f in spec['config_schema'] if f.get('secret')]
     assert secret == ['private_key', 'password']
     assert (Path(drv.__file__).parent / spec['module']).exists()

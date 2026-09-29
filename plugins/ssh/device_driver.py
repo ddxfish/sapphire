@@ -11,6 +11,10 @@
 #             own words skip the blacklist.
 #   run       any command. Exists only while "Allow any command" is checked,
 #             and always passes the blacklist.
+#
+# Power (restart, shutdown) is a capability of its own, so the user can lock
+# it for her on one machine and leave it open on another. Its two commands
+# are the USER's words, like a premade command. It starts out locked.
 import base64
 import re
 import shlex
@@ -116,6 +120,18 @@ def _reason(text):
     return (lines[-1] if lines else 'no answer')[:200]
 
 
+POWER = {'restart': ('restart_command', 'sudo -n shutdown -r +1'),
+         'shutdown': ('shutdown_command', 'sudo -n shutdown -h +1')}
+
+
+def _power_command(config, action):
+    """The user's command for this action. A device saved before power
+    existed has no such setting yet and gets the usual command. An empty
+    setting means the user took it away."""
+    key, usual = POWER[action]
+    return str(config[key] if key in config else usual).strip()
+
+
 def describe(device, config):
     actions = {}
     for c in config.get('commands', []):
@@ -123,7 +139,12 @@ def describe(device, config):
                               'example': '<value>' if SLOT in c['command'] else ''}
     if config.get('allow_all'):
         actions['run'] = {'help': 'any command, safety filter applies', 'example': 'uptime'}
-    return {'ssh': {'label': 'SSH', 'help': 'run commands on it', 'actions': actions}}
+    told = {'ssh': {'label': 'SSH', 'help': 'run commands on it', 'actions': actions}}
+    power = {name: {'help': _power_command(config, name)[:60], 'example': ''}
+             for name in POWER if _power_command(config, name)}
+    if power:
+        told['power'] = {'label': 'Power', 'help': 'restart it or shut it down', 'actions': power}
+    return told
 
 
 def status(device, config, secrets):
@@ -136,7 +157,11 @@ def status(device, config, secrets):
 
 
 def run(device, capability, action, value, config, secrets, call_tool):
-    if action == 'run':
+    if capability == 'power':
+        command = _power_command(config, action) if action in POWER else ''
+        if not command:
+            return f"No {action} command is set for this machine.", False
+    elif action == 'run':
         if not config.get('allow_all'):
             return "Free-form commands are off for this device. Use a premade command.", False
         command = value.strip()

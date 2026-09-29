@@ -5,14 +5,23 @@
 # are thin doors into it: the Test button and device_status are one function,
 # the Try button and device_action are one function.
 #
-# Core since 2026-09-27 (Krem's ruling: satellites make voice a device matter,
+# Core since 2026-09-27 (the ruling: satellites make voice a device matter,
 # and devices are never meant to be switched off). Drivers are NOT core: a
 # plugin that knows a transport declares one in its manifest
 # (capabilities.devices) and registry.py holds the list.
 #
 # A device row (user/plugin_state/devices.json, key "devices"):
-#   {"id", "label", "enabled", "created",
+#   {"id", "label", "location", "enabled", "created", "locked": [...],
 #    "parts": [{"driver", "plugin", "config": {...}}]}
+# "locked" names the capabilities SHE may not use on this device. The user's
+# own buttons on the Devices page always work. Only the capabilities in
+# LOCKABLE carry that switch. A row without the key uses its drivers' defaults.
+# "location" is the room or place, in the user's words. She reads it in
+# device_list and at the top of anything a device hears.
+# A part's config may hold one FILTER (a field of type "found"): which of the
+# things its driver can see count as this device. {"all": bool, "only":
+# [{"id", "name"}]}. The engine applies it (passing()). Things that come and
+# go are kept by presence.py.
 # The file kept its place when the engine moved into core, so no device list
 # ever had to be migrated. Secrets never sit in a row. They live in
 # secret_store.py under "<driver>.<field>".
@@ -34,6 +43,12 @@ STATUS_TTL = 30          # seconds a status answer stays fresh
 LIST_WAIT = 6            # seconds device_list waits for stale devices
 MAX_DEVICES = 64
 MAX_ROWS = 50            # items in one rows field
+MAX_PICTURES = 4         # pictures one action may answer with
+MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
+PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
+LOCKABLE = ('power', 'camera', 'screen', 'mic')    # these carry a "Sapphire may use this" switch
+MAX_FOUND = 64           # things one driver may report as found
+RESERVED = ('found',)    # names a device may not have: the routes use them
 CLEAR = '__CLEAR__'
 PAGE = 'Settings > Devices'
 
@@ -61,7 +76,17 @@ def _secrets():
 
 
 def _registry():
+    """The registry, with the drivers that ship inside core always present.
+    They are registered here, on first use, because nothing at boot may
+    import a driver."""
     from core.devices import registry
+    for name in registry.CORE_DRIVERS:
+        if not registry.has(name):
+            try:
+                mod = importlib.import_module(f"core.devices.drivers.{name}")
+                registry.register_driver(name, mod.SPEC, registry.CORE, builtin=True)
+            except Exception as e:
+                logger.error(f"[DEVICES] core driver '{name}' failed to load: {e}", exc_info=True)
     return registry
 
 
@@ -96,10 +121,24 @@ def _function_manager():
     return get_system().llm_chat.function_manager
 
 
+def _changed():
+    """A device was added, changed or removed: presence looks again."""
+    try:
+        from core.devices import presence
+        presence.poke()
+    except Exception as e:
+        logger.warning(f"[DEVICES] presence could not be told of a change: {e}")
+
+
 # --- rows --------------------------------------------------------------------
 
 def _slug(name):
     return str(name or '').strip().lower()
+
+
+def _place(text):
+    """A location as one short line."""
+    return ' '.join(str(text or '').split())[:60]
 
 
 def rows():
@@ -158,6 +197,12 @@ def _driver(driver_id, plugin_hint=''):
         who = plugin_hint or driver_id
         raise DeviceError(f"The '{driver_id}' driver is not loaded. Enable the "
                           f"{who} plugin in Settings > Plugins.")
+    if spec['plugin_name'] == _registry().CORE:       # ships inside core: always there
+        try:
+            return importlib.import_module(f"core.devices.drivers.{driver_id}"), spec
+        except Exception as e:
+            logger.error(f"[DEVICES] core driver '{driver_id}' failed to import: {e}", exc_info=True)
+            raise DeviceError(f"The '{driver_id}' driver failed to load: {e}")
     # The owning plugin must still be enabled and loaded - checked on every
     # call, not only at first import (game-room finding 4.14).
     info = _plugin_info(spec['plugin_name'])
@@ -186,12 +231,19 @@ def _driver(driver_id, plugin_hint=''):
     return mod, spec
 
 
-def _call_tool_for(plugin):
+def _call_tool_for(plugin, uses=()):
     """The tool door handed to a driver: it runs one of its OWN plugin's tools
-    through the function manager - same executor, same state, same gates."""
+    through the function manager - same executor, same state, same gates.
+    A driver that ships inside core owns no plugin. It may run the tools it
+    names in its SPEC (`uses_tools`), so core holds no second copy of what a
+    plugin already does."""
     def call_tool(name, args=None):
         fm = _function_manager()
-        if fm.tool_plugin(name) != plugin:
+        owner = fm.tool_plugin(name)
+        if plugin == _registry().CORE:
+            if name not in uses or not owner:
+                return f"'{name}' is not there to be used. Its plugin may be switched off.", False
+        elif owner != plugin:
             return f"The {plugin} driver may only run its own plugin's tools, not '{name}'.", False
         return fm.execute_function(name, dict(args or {}), allowed_tools={name}, with_success=True)
     return call_tool
@@ -221,8 +273,31 @@ def _columns(field):
             for c in (field.get('columns') or []) if c]
 
 
+def _is_found(field):
+    return field.get('widget') == 'found' or field.get('type') == 'found'
+
+
+def _picks(field, value):
+    """A filter as it is stored: {'all': bool, 'only': [{'id', 'name'}]}.
+    Never set = everything counts. "only" is kept while "all" is on, so the
+    user's ticks are still there when they switch back."""
+    value = value if isinstance(value, dict) else {}
+    only, seen = [], set()
+    for item in (value.get('only') if isinstance(value.get('only'), list) else []):
+        ident = str(item.get('id') or '').strip()[:200] if isinstance(item, dict) else ''
+        if ident and ident not in seen:
+            seen.add(ident)
+            only.append({'id': ident, 'name': ' '.join(str(item.get('name') or ident).split())[:80]})
+    every = value.get('all', True)
+    if isinstance(every, str):
+        every = every.strip().lower() in ('1', 'true', 'yes', 'on')
+    return {'all': bool(every), 'only': only[:MAX_FOUND if field.get('many', True) else 1]}
+
+
 def _coerce(field, value):
     default = field.get('default')
+    if _is_found(field):
+        return _picks(field, value)
     if _is_rows(field):
         cols = _columns(field)
         out = []
@@ -288,6 +363,75 @@ def _part(row, driver_id):
     return next((p for p in row.get('parts', []) if p.get('driver') == driver_id), None)
 
 
+# --- what is here right now ----------------------------------------------------
+
+def found(driver_id, config=None):
+    """What a driver can see right now: [{'id', 'name', 'kind'}], by name.
+    A driver without discover() sees nothing. Raises DeviceError."""
+    mod, _ = _driver(_slug(driver_id))
+    look = getattr(mod, 'discover', None)
+    if not callable(look):
+        return []
+    try:
+        told = look(dict(config or {})) or []
+    except Exception as e:
+        logger.error(f"[DEVICES] {driver_id}.discover failed: {e}", exc_info=True)
+        raise DeviceError(f"The '{driver_id}' driver could not look ({type(e).__name__}).")
+    out, seen = [], set()
+    for item in told if isinstance(told, (list, tuple)) else []:
+        ident = str(item.get('id') or '').strip()[:200] if isinstance(item, dict) else ''
+        if not ident or ident in seen:
+            continue
+        seen.add(ident)
+        out.append({'id': ident, 'name': ' '.join(str(item.get('name') or ident).split())[:80],
+                    'kind': ' '.join(str(item.get('kind') or '').split())[:24]})
+        if len(out) >= MAX_FOUND:
+            break
+    return sorted(out, key=lambda t: (t['name'].lower(), t['id']))
+
+
+def filter_field(spec):
+    """The field of a driver that holds its filter, or None."""
+    return next((f for f in (spec or {}).get('config_schema') or [] if _is_found(f)), None)
+
+
+def passing(spec, config, things):
+    """The found things that count as this device: its filter, applied. A
+    driver without a filter field takes everything."""
+    field = filter_field(spec)
+    if not field:
+        return list(things)
+    picks = _picks(field, (config or {}).get(field['key']))
+    if picks['all']:
+        kept = list(things)
+    else:
+        wanted = {p['id'] for p in picks['only']}
+        kept = [t for t in things if t['id'] in wanted]
+    return kept if field.get('many', True) else kept[:1]
+
+
+def here_now(row, part):
+    """The things that are here and count as this device. Raises DeviceError."""
+    _, spec = _driver(part['driver'], part.get('plugin', ''))
+    config = dict(part.get('config') or {})
+    return passing(spec, config, found(part['driver'], config))
+
+
+def _shut(row):
+    names = row.get('locked')
+    if not isinstance(names, list):              # never set: what its drivers ask for
+        names = []
+        for part in row.get('parts', []):
+            spec = _registry().get_driver(part.get('driver')) or {}
+            names += spec.get('locked_by_default') or []
+    return sorted({str(n) for n in names if n in LOCKABLE})
+
+
+def locked(row):
+    """The capabilities she may not use on this device."""
+    return _shut(row)
+
+
 def _build_part(device_id, driver_id, incoming, previous=None):
     mod, spec = _driver(driver_id)
     config, ops = _clean(spec['config_schema'], incoming, previous or {})
@@ -300,11 +444,13 @@ def _build_part(device_id, driver_id, incoming, previous=None):
 
 # --- add, change, remove (the Devices page only - never a tool) --------------
 
-def add(device_id, label, driver_id, config=None):
+def add(device_id, label, driver_id, config=None, location=''):
     device_id = _slug(device_id)
     if not ID_RE.fullmatch(device_id):
         raise DeviceError("A device name is lowercase letters, digits, dashes and "
                           "underscores, up to 33 characters, starting with a letter or digit.")
+    if device_id in RESERVED:
+        raise DeviceError(f"'{device_id}' is a name Sapphire uses herself. Pick another.")
     table = rows()
     if device_id in table:
         raise DeviceError(f"A device named '{device_id}' already exists.")
@@ -312,22 +458,40 @@ def add(device_id, label, driver_id, config=None):
         raise DeviceError(f"The limit is {MAX_DEVICES} devices.")
     part, ops, spec = _build_part(device_id, _slug(driver_id), config)
     row = {'id': device_id, 'label': str(label or '').strip()[:80] or device_id,
+           'location': _place(location),
            'enabled': True, 'created': int(time.time()), 'parts': [part]}
+    row['locked'] = locked(row)
     # A name that was used before must not inherit the old device's secrets.
     _secrets().delete(device_id)
     _write(lambda t: t.__setitem__(device_id, row))
     failed = _apply_secrets(device_id, part['driver'], ops)
     _forget_status(device_id)
+    _changed()
     return row, failed
 
 
-def update(device_id, label=None, enabled=None, parts=None, new_id=None):
-    """Change a device. parts: {driver: submitted config}. Returns (row, failed
-    secret fields)."""
+def update(device_id, label=None, enabled=None, parts=None, new_id=None, location=None,
+           locked=None):
+    """Change a device. parts: {driver: submitted config}. locked: what she
+    may not use. A map {capability: bool} changes only the capabilities it
+    names, so a switch the page did not show is never touched (a device that
+    was off showed none, and saving it opened every lock, 2026-09-28). A list
+    is the whole truth. Returns (row, failed secret fields)."""
     row = get(device_id)
     device_id = row['id']
+    if isinstance(locked, dict):
+        names = set(_shut(row))
+        for name, shut in locked.items():
+            if _slug(name) in LOCKABLE:
+                (names.add if shut else names.discard)(_slug(name))
+        row['locked'] = sorted(names)
+    elif locked is not None:
+        row['locked'] = sorted({_slug(n) for n in locked if _slug(n) in LOCKABLE}) \
+            if isinstance(locked, (list, tuple)) else []
     if label is not None:
         row['label'] = str(label).strip()[:80] or device_id
+    if location is not None:
+        row['location'] = _place(location)
     if enabled is not None:
         row['enabled'] = bool(enabled)
     pending = []
@@ -342,7 +506,7 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None):
     target = device_id
     if new_id is not None and _slug(new_id) != device_id:
         target = _slug(new_id)
-        if not ID_RE.fullmatch(target):
+        if not ID_RE.fullmatch(target) or target in RESERVED:
             raise DeviceError("That new name is not a valid device name.")
         if target in rows():
             raise DeviceError(f"A device named '{target}' already exists.")
@@ -364,6 +528,7 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None):
         failed += _apply_secrets(target, driver_id, ops)
     _forget_status(device_id)
     _forget_status(target)
+    _changed()
     return row, failed
 
 
@@ -372,6 +537,7 @@ def remove(device_id):
     _write(lambda t: t.pop(row['id'], None))
     _secrets().delete(row['id'])
     _forget_status(row['id'])
+    _changed()
     return row
 
 
@@ -397,6 +563,7 @@ def public(row):
                       'capabilities': spec['capabilities'] if spec else [],
                       'unreadable': unreadable})
     return {'id': row['id'], 'label': row.get('label', row['id']),
+            'location': _place(row.get('location')), 'locked': locked(row),
             'enabled': bool(row.get('enabled', True)), 'parts': parts}
 
 
@@ -404,20 +571,24 @@ def public(row):
 
 def describe(row):
     """What this device can do, in tab order:
-    [{'capability', 'label', 'help', 'driver', 'actions': {name: {'help', 'example'}}, 'error'}]"""
+    [{'capability', 'label', 'help', 'driver', 'actions': {name: {'help', 'example'}},
+      'error', 'lockable', 'locked'}]. locked = she may not use it."""
     out = []
+    shut = locked(row)
     for part in row.get('parts', []):
         try:
             mod, spec = _driver(part['driver'], part.get('plugin', ''))
             told = mod.describe(_brief(row), dict(part.get('config') or {})) or {}
         except DeviceError as e:
             out.append({'capability': part['driver'], 'label': part['driver'], 'help': '',
-                        'driver': part['driver'], 'actions': {}, 'error': str(e)})
+                        'driver': part['driver'], 'actions': {}, 'error': str(e),
+                        'lockable': False, 'locked': False})
             continue
         except Exception as e:
             logger.error(f"[DEVICES] {part['driver']}.describe failed: {e}", exc_info=True)
             out.append({'capability': part['driver'], 'label': part['driver'], 'help': '',
-                        'driver': part['driver'], 'actions': {}, 'error': f"driver error: {e}"})
+                        'driver': part['driver'], 'actions': {}, 'error': f"driver error: {e}",
+                        'lockable': False, 'locked': False})
             continue
         for cap in spec['capabilities']:
             if not isinstance(told.get(cap), dict):
@@ -430,12 +601,14 @@ def describe(row):
                                         'example': str(a.get('example') or '')[:200]}
             out.append({'capability': cap, 'label': str(info.get('label') or cap),
                         'help': str(info.get('help') or '')[:120],
-                        'driver': part['driver'], 'actions': actions, 'error': ''})
+                        'driver': part['driver'], 'actions': actions, 'error': '',
+                        'lockable': cap in LOCKABLE, 'locked': cap in shut})
     return out
 
 
 def _brief(row):
-    return {'id': row['id'], 'label': row.get('label', row['id'])}
+    return {'id': row['id'], 'label': row.get('label', row['id']),
+            'location': _place(row.get('location'))}
 
 
 # --- status ------------------------------------------------------------------
@@ -451,7 +624,7 @@ def _probe(row):
     for part in row.get('parts', []):
         entry = {'driver': part['driver'], 'online': False, 'detail': '', 'readings': {}}
         try:
-            mod, _ = _driver(part['driver'], part.get('plugin', ''))
+            mod, spec = _driver(part['driver'], part.get('plugin', ''))
             secrets = _part_secrets(row['id'], part['driver'])
             told = mod.status(_brief(row), dict(part.get('config') or {}), secrets) or {}
             entry['online'] = bool(told.get('online'))
@@ -460,6 +633,11 @@ def _probe(row):
             if isinstance(readings, dict):
                 entry['readings'] = {str(k)[:40]: secrets.scrub(str(v))[:80]
                                      for k, v in list(readings.items())[:20]}
+            if spec.get('presence'):             # said the same way for every driver
+                here = here_now(row, part)
+                entry['readings'] = dict({'connected': ', '.join(
+                    t['name'] + (f" ({t['kind']})" if t['kind'] else '') for t in here)[:80] or 'nothing'},
+                    **entry['readings'])
         except DeviceError as e:
             entry['detail'] = str(e)
         except Exception as e:
@@ -522,9 +700,14 @@ def _columns_text(lines):
                      for r in lines).rstrip()
 
 
+LOCKED_NOTE = f"the user has not allowed you this. They can change it in {PAGE}"
+
+
 def _caps(row):
-    """What this device can do, by name. A part whose driver is off is said so."""
-    return [c['capability'] + (' (driver off)' if c['error'] else '') for c in describe(row)]
+    """What this device can do, by name. A part whose driver is off is said
+    so, and so is a capability she may not use."""
+    return [c['capability'] + (' (driver off)' if c['error'] else ' (locked)' if c['locked'] else '')
+            for c in describe(row)]
 
 
 def list_text():
@@ -532,11 +715,13 @@ def list_text():
     if not table:
         return f"No devices yet. The user adds them in {PAGE}.", True
     found = statuses(wait_s=LIST_WAIT)
+    placed = any(_place(row.get('location')) for row in table.values())
     lines = []
     for device_id, row in table.items():
         st = found.get(device_id)
         state = 'checking' if st is None else ('online' if st['online'] else 'offline')
-        lines.append((device_id, state, ', '.join(_caps(row)) or '-'))
+        where = (_place(row.get('location')) or '-',) if placed else ()
+        lines.append((device_id, state) + where + (', '.join(_caps(row)) or '-',))
     first = next(iter(table))
     return f"Devices ({len(table)}):\n{_columns_text(lines)}\nNext: {_call(first)}", True
 
@@ -557,7 +742,8 @@ def _head(row, st):
     state = 'online' if st['online'] else 'offline'
     label = row.get('label') or row['id']
     name = row['id'] if label == row['id'] else f"{row['id']} - {label}"
-    return f"{name} - {state}"
+    where = _place(row.get('location'))
+    return name + (f" ({where})" if where else '') + f" - {state}"
 
 
 def status_text(device_id):
@@ -592,6 +778,9 @@ def _capability_list(row, caps):
         if c['error']:
             errors.append(f"  {c['capability']}: {c['error']}")
             continue
+        if c['locked']:
+            lines.append((c['capability'], c['help'] or '-', f"locked: {LOCKED_NOTE}"))
+            continue
         first = next(iter(c['actions'].items()), None)
         if first is None:
             lines.append((c['capability'], c['help'] or '-', '(no actions yet)'))
@@ -601,7 +790,13 @@ def _capability_list(row, caps):
         lines.append((c['capability'], c['help'] or '-', _call(*args)))
     body = '\n'.join(x for x in (_columns_text(lines), '\n'.join(errors)) if x)
     body = body or '  (nothing it can do yet)'
-    return '\n'.join(x for x in (_head(row, st), body, _down_note(st)) if x)
+    # one example per line reads as "that is all it can do" (Sapphire, 2026-09-28)
+    most = max((c for c in caps if not c['error'] and not c['locked']),
+               key=lambda c: len(c['actions']), default=None)
+    more = (f"Each line is one example. {_call(row['id'], most['capability'])} lists all "
+            f"{len(most['actions'])} actions of {most['capability']}."
+            if most and len(most['actions']) > 1 else '')
+    return '\n'.join(x for x in (_head(row, st), body, more, _down_note(st)) if x)
 
 
 def _action_list(row, cap):
@@ -615,10 +810,39 @@ def _action_list(row, cap):
                                   _down_note(st, cap['driver'])) if x)
 
 
-def run(device_id=None, capability=None, action=None, value=None):
+def _result(told, secrets):
+    """What an action answered: text, or {'text', 'images'} when it took
+    pictures. The text is scrubbed of secrets. Pictures are checked, never
+    trusted: a known type, a sane size, a few at most."""
+    if isinstance(told, dict) and isinstance(told.get('images'), list):
+        text = secrets.scrub(str(told.get('text') or '')).strip()
+        images = []
+        for img in told['images'][:MAX_PICTURES * 8]:
+            if len(images) >= MAX_PICTURES:
+                break
+            if not isinstance(img, dict):
+                continue
+            data, kind = img.get('data'), str(img.get('media_type') or '').lower()
+            if isinstance(data, str) and data and len(data) <= MAX_PICTURE and kind in PICTURE_TYPES:
+                images.append({'data': data, 'media_type': kind})
+        if images:
+            return {'text': text or 'A picture.', 'images': images}
+        return text or 'No picture came back.'
+    return secrets.scrub(str(told if told is not None else '(no output)'))
+
+
+def text_of(result):
+    """The words of what run() answered, for a caller that shows no pictures."""
+    return str(result.get('text') or '') if isinstance(result, dict) else str(result)
+
+
+def run(device_id=None, capability=None, action=None, value=None, owner=False):
     """device_action. Every level of missing or wrong argument answers with
     the list one level up, so a wrong guess costs one call, never a dead end.
-    Returns (text, ok)."""
+    Returns (result, ok). result is text, or {'text', 'images'} when the
+    action took pictures (the shape every picture-taking tool answers with).
+    owner=True is the user at the Devices page, or core itself: a capability
+    that is locked for her still runs."""
     if not _slug(device_id):
         return list_text()
     try:
@@ -635,6 +859,8 @@ def run(device_id=None, capability=None, action=None, value=None):
         return f"'{row['id']}' has no '{capability}'.\n{_capability_list(row, caps)}", False
     if cap['error']:
         return f"{row['id']} / {cap_name}: {cap['error']}", False
+    if cap['locked'] and not owner:
+        return f"'{cap_name}' on '{row['id']}' is locked: {LOCKED_NOTE}.", False
 
     act = _slug(action)
     if not act:
@@ -646,10 +872,10 @@ def run(device_id=None, capability=None, action=None, value=None):
     try:
         mod, spec = _driver(part['driver'], part.get('plugin', ''))
         secrets = _part_secrets(row['id'], part['driver'])
-        text, ok = mod.run(_brief(row), cap_name, act, '' if value is None else str(value),
+        told, ok = mod.run(_brief(row), cap_name, act, '' if value is None else str(value),
                            dict(part.get('config') or {}), secrets,
-                           _call_tool_for(spec['plugin_name']))
-        return secrets.scrub(str(text if text is not None else '(no output)')), bool(ok)
+                           _call_tool_for(spec['plugin_name'], spec.get('uses_tools') or ()))
+        return _result(told, secrets), bool(ok)
     except DeviceError as e:
         return str(e), False
     except Exception as e:

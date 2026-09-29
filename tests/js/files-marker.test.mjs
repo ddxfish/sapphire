@@ -1,7 +1,8 @@
 // Corpus for shared/files-marker.js — run under node by tests/test_files_marker_js.py.
 // A tiny fake DOM proves: marker parse + strip, several markers, plugin-route urls
 // only (nothing off-origin ever reaches an element), audio → a player that fetches
-// nothing until played, every file → a download button. 2026-09-26.
+// nothing until it is seen and then only the file's length, every file → a
+// download button. 2026-09-26.
 
 function mk(tag) {
     const el = { tagName: tag.toUpperCase(), children: [], dataset: {}, listeners: {},
@@ -75,7 +76,7 @@ const mark = (title, items) => '<!--FILES:' + JSON.stringify({ title, items }) +
     const [head, player, chips] = rows[0].children;
     ok(head.className === 'files-title' && head.textContent === 'Copper Light', 'title first');
     ok(player.tagName === 'AUDIO' && player.src === MP3 && player.controls === true, 'a player for the mp3');
-    ok(player.preload === 'none', 'nothing is fetched until play is pressed');
+    ok(player.preload === 'metadata', 'no way to tell what is on screen: the length is read at once');
     ok(chips.children.length === 2, 'a download button per file');
     ok(chips.children[0].tagName === 'A' && chips.children[0].href === MP3
        && chips.children[0].download === 'copper-light.mp3', 'mp3 button downloads under its name');
@@ -87,6 +88,38 @@ const mark = (title, items) => '<!--FILES:' + JSON.stringify({ title, items }) +
        'no title, no audio: just the button');
     ok(buildFilesRows([]).length === 0 && buildFilesRows(null).length === 0
        && buildFilesRows([{ title: 't', files: [] }]).length === 0, 'nothing to show = no row');
+}
+
+// ── a player reads its length when it is seen, not before ───────────────────────
+{
+    const watched = [], dropped = [];
+    let onSeen = null, made = 0;
+    globalThis.IntersectionObserver = class {
+        constructor(fn, opts) { onSeen = fn; made++; this.opts = opts; }
+        observe(el) { watched.push(el); }
+        unobserve(el) { dropped.push(el); }
+    };
+    const items = [{ url: MP3, name: 'a.mp3' }, { url: '/api/plugin/fm1/song/0000000000.mp3', name: 'b.mp3' }];
+    const rows = buildFilesRows(parseFilesMarker(mark('Two takes', items)).groups);
+    const players = rows[0].children.filter(c => c.tagName === 'AUDIO');
+    ok(players.length === 2 && watched.length === 2, 'both players are watched');
+    ok(players.every(p => p.preload === 'none'), 'off screen: nothing is fetched, not even the length');
+    let loads = 0;
+    players[0].readyState = 0;
+    players[0].load = () => { loads++; };
+    onSeen([{ isIntersecting: false, target: players[0] }]);
+    ok(players[0].preload === 'none' && loads === 0, 'still off screen: still nothing');
+    onSeen([{ isIntersecting: true, target: players[0] }]);
+    ok(players[0].preload === 'metadata' && loads === 1, 'on screen: the length is read');
+    ok(players[1].preload === 'none', 'the one that is not on screen is left alone');
+    ok(dropped.length === 1 && dropped[0] === players[0], 'a player that was seen is watched no longer');
+    players[1].readyState = 4;                       // already playing: never started over
+    players[1].load = () => { loads++; };
+    onSeen([{ isIntersecting: true, target: players[1] }]);
+    ok(players[1].preload === 'metadata' && loads === 1, 'a player that has its file is not started over');
+    buildFilesRows(parseFilesMarker(mark('More', items)).groups);
+    ok(made === 1, 'one watcher serves every player');
+    delete globalThis.IntersectionObserver;
 }
 
 console.log(`files-marker corpus: ${passed} checks passed`);

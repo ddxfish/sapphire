@@ -1,7 +1,9 @@
 // shared/files-marker.js — the ONE attachments renderer (2026-09-26). A tool, or a
 // plugin's own turn, hands the user files by appending ONE marker line:
 //   <!--FILES:{"title":"…","items":[{"url":"/api/plugin/<name>/…","name":"song.mp3"}]}-->
-// Audio items get a player; every item gets a download button. Built in Python by
+// Audio items get a player; every item gets a download button. A player reads
+// its file's length when it comes on screen, and the file when play is pressed.
+// Built in Python by
 // core/attachments.py. Sibling of shared/gallery-marker.js, and like it the marker
 // is UI-only: core strips it from every copy the model reads.
 // Urls are this app's own plugin routes and nothing else — a tool result can carry
@@ -46,6 +48,31 @@ export function parseFilesMarker(text) {
     return { groups, text: src.replace(FILES_RE_ALL, '').trimEnd() };
 }
 
+// A player fetches nothing until it is SEEN. Once it is on screen it fetches
+// the file's header and nothing more, so it can say how long the file is.
+// With preload 'none' alone every player read 0:00, also for a file with
+// minutes of music in it (2026-09-28). A chat with a hundred takes still
+// fetches only for the few that are on screen.
+let watcher = null;
+
+function readLength(player) {
+    player.preload = 'metadata';
+    // a player that has loaded nothing yet starts over with the new setting
+    if (player.readyState === 0 && typeof player.load === 'function') player.load();
+}
+
+function whenSeen(player) {
+    if (typeof IntersectionObserver !== 'function') return readLength(player);
+    watcher ||= new IntersectionObserver(entries => {
+        for (const e of entries) {
+            if (!e.isIntersecting) continue;
+            watcher.unobserve(e.target);
+            readLength(e.target);
+        }
+    }, { rootMargin: '300px' });
+    watcher.observe(player);
+}
+
 function chip(file) {
     const a = document.createElement('a');
     a.className = 'files-chip';
@@ -73,8 +100,9 @@ export function buildFilesRows(groups) {
             const player = document.createElement('audio');
             player.className = 'files-audio';
             player.controls = true;
-            player.preload = 'none';          // nothing is fetched until play is pressed
+            player.preload = 'none';          // nothing is fetched until it is seen
             player.src = f.url;
+            whenSeen(player);
             row.appendChild(player);
         });
         const chips = document.createElement('div');

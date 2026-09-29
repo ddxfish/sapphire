@@ -896,6 +896,8 @@ class PluginLoader:
                             if isinstance(dd, dict) and register_driver(dd.get("driver"), dd, name)]
                 if accepted:
                     info["registered_device_drivers"] = accepted
+                    from core.devices import presence as _presence
+                    _presence.poke()           # its devices may have things waiting
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: device driver registration failed: {e}")
 
@@ -1150,6 +1152,14 @@ class PluginLoader:
         # non-destructive). (wave-3 A1)
         self._load_errors[:] = [e for e in self._load_errors
                                 if e.get("plugin") != name]
+        # Device drivers let go FIRST, while the plugin is still whole: a
+        # driver that started something (a synth) ends it here.
+        if self._plugins.get(name, {}).get("registered_device_drivers"):
+            try:
+                from core.devices import presence as _presence
+                _presence.release(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: device presence release failed: {e}")
         quiet = [n for n, i in self._plugins.items() if i.get("loaded")
                  and name in ((i.get("manifest") or {}).get("requires_plugins") or [])]
         if quiet:

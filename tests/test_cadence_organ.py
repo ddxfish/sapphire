@@ -424,3 +424,54 @@ def test_refused_turn_is_never_her_answer():
     assert end['text'] == '' and end['speak'] is None
     sysobj.tts.speak.assert_not_called()
     llm.session_manager.remove_last_messages.assert_not_called()
+
+
+# ── the device lane (satellites, 2026-09-27) ────────────────────────────────
+
+def test_run_turn_device_lane_speaks_on_that_device():
+    sysobj, stream, llm = _system([{'type': 'final', 'text': 'It is noon.', 'cancelled': False}])
+    llm.session_manager.get_settings_for.return_value = {'private_chat': False, 'tts': 'x'}
+    cadence._system = sysobj
+    published = []
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))), \
+         patch('core.devices.voice.say', return_value=('Said there', True)) as say:
+        out = cadence.run_turn('kitchen-chat', 'what time is it', speak='device:kitchen', source='device:kitchen')
+    assert out == 'It is noon.'
+    say.assert_called_once_with('kitchen', 'It is noon.',
+                                chat_settings={'private_chat': False, 'tts': 'x'})
+    sysobj.tts.speak.assert_not_called()                 # never on this machine's speakers too
+    assert published[0][1]['source'] == 'device:kitchen'
+    assert published[-1][1]['speak'] == 'device:kitchen'
+
+
+def test_run_turn_shows_its_own_events_to_the_hook():
+    events = [{'type': 'tool_start', 'name': 'web_search'}, {'type': 'tool_end', 'name': 'web_search'},
+              {'type': 'final', 'text': 'Done.', 'cancelled': False}]
+    sysobj, stream, llm = _system(events)
+    cadence._system = sysobj
+    seen = []
+    with patch('core.cadence.publish'):
+        assert cadence.run_turn('c', 'cue', on_event=seen.append) == 'Done.'
+    assert [e['type'] for e in seen] == ['tool_start', 'tool_end', 'final']
+    sysobj2, _, _ = _system(events)
+    cadence._system = sysobj2
+
+    def broken(event):
+        raise RuntimeError('hook fell over')
+    with patch('core.cadence.publish'):
+        assert cadence.run_turn('c', 'cue', on_event=broken) == 'Done.'     # the turn still stands
+
+
+def test_device_lane_fails_closed_and_quietly():
+    sysobj, stream, llm = _system([{'type': 'final', 'text': 'Hi', 'cancelled': False}])
+    llm.session_manager.get_settings_for.return_value = None       # a sealed chat
+    cadence._system = sysobj
+    with patch('core.cadence.publish'), \
+         patch('core.devices.voice.say', side_effect=RuntimeError('satellite fell over')) as say:
+        assert cadence.run_turn('c', 'cue', speak='device:pi') == 'Hi'      # the turn still stands
+    assert say.call_args.kwargs['chat_settings'] == {'private_chat': True}
+    sysobj2, _, _ = _system([{'type': 'final', 'text': 'partial', 'cancelled': True}])
+    cadence._system = sysobj2
+    with patch('core.cadence.publish'), patch('core.devices.voice.say') as say2:
+        cadence.run_turn('c', 'cue', speak='device:pi')
+    say2.assert_not_called()                                           # cancelled = not spoken

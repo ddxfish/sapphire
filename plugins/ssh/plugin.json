@@ -1,10 +1,10 @@
 {
   "name": "ssh",
   "short_display_name": "SSH",
-  "version": "1.1.0",
-  "description": "SSH — remote command execution on configured servers",
+  "version": "1.2.0",
+  "description": "SSH \u2014 remote command execution on configured servers",
   "author": "sapphire",
-  "icon": "🖥️",
+  "icon": "\ud83d\udda5\ufe0f",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {
@@ -15,10 +15,11 @@
       {
         "driver": "ssh",
         "label": "SSH machine",
-        "icon": "🖥️",
+        "icon": "\ud83d\udda5\ufe0f",
         "module": "device_driver.py",
         "capabilities": [
-          "ssh"
+          "ssh",
+          "power"
         ],
         "config_schema": [
           {
@@ -123,7 +124,26 @@
               }
             ],
             "add_label": "+ Add Command"
+          },
+          {
+            "key": "restart_command",
+            "type": "string",
+            "label": "Restart command",
+            "capability": "power",
+            "default": "sudo -n shutdown -r +1",
+            "help": "What restarts this machine. The default waits one minute, so it can be cancelled with: sudo shutdown -c. Empty = no restart."
+          },
+          {
+            "key": "shutdown_command",
+            "type": "string",
+            "label": "Shutdown command",
+            "capability": "power",
+            "default": "sudo -n shutdown -h +1",
+            "help": "What shuts this machine down. Empty = no shutdown."
           }
+        ],
+        "locked_by_default": [
+          "power"
         ]
       }
     ]

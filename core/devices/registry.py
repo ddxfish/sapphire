@@ -15,6 +15,8 @@
 #   config_schema  list of field dicts (plugin-settings field shape). A field
 #                  with "secret": true is stored by secret_store.py, never
 #                  in the device row.
+#   presence       true = its things come and go, and the driver has tend()
+#                  (core/devices/presence.py keeps it told)
 
 import json
 import logging
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 MAX_FIELDS = 40
 MAX_CAPABILITIES = 16
+CORE = 'core'                     # the owner name of a driver that ships inside core
+CORE_DRIVERS = ('satellite', 'computer')     # their ids (core/devices/drivers/<id>.py): no plugin may claim one
 _ID_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,32}$')
 
 _lock = threading.Lock()
@@ -55,14 +59,23 @@ def _clean_schema(schema):
     return fields
 
 
-def register_driver(driver_id, spec, plugin_name):
+def register_driver(driver_id, spec, plugin_name, builtin=False):
     """Register one device driver. Returns True on accept. Never raises - a
-    bad declaration must not break plugin load."""
+    bad declaration must not break plugin load.
+
+    builtin=True is the engine registering a driver that ships inside core.
+    A plugin can neither call itself 'core' nor take a core driver's id."""
     global _generation
     try:
         driver_id = str(driver_id or '').strip().lower()
         if not _ID_RE.fullmatch(driver_id):
             logger.warning(f"[DEVICES] '{plugin_name}': driver id '{driver_id}' invalid - skipped")
+            return False
+        if builtin:
+            plugin_name = CORE
+            spec = dict(spec, module=driver_id + '.py')
+        elif plugin_name == CORE or driver_id in CORE_DRIVERS:
+            logger.warning(f"[DEVICES] '{plugin_name}': driver id '{driver_id}' belongs to core - refused")
             return False
         module = _clean_module(spec.get('module'))
         if not module:
@@ -79,6 +92,9 @@ def register_driver(driver_id, spec, plugin_name):
             logger.warning(f"[DEVICES] '{plugin_name}': driver '{driver_id}' has an invalid "
                            f"config_schema - skipped")
             return False
+        locked = spec.get('locked_by_default') or []
+        locked = [c for c in caps if c in {str(x).strip().lower() for x in locked}] \
+            if isinstance(locked, (list, tuple)) else []
         with _lock:
             owner = _drivers.get(driver_id, {}).get('plugin_name')
             if owner and owner != plugin_name:
@@ -92,6 +108,11 @@ def register_driver(driver_id, spec, plugin_name):
                 'module': module,
                 'capabilities': caps,
                 'config_schema': schema,
+                'locked_by_default': locked,
+                'presence': spec.get('presence') is True,
+                # tools of OTHER plugins this driver may run. Core's own
+                # drivers only: a plugin's driver runs its own tools.
+                'uses_tools': [str(t) for t in (spec.get('uses_tools') or [])][:8] if builtin else [],
                 'plugin_name': plugin_name,
             }
             _generation += 1
@@ -123,6 +144,11 @@ def list_drivers():
         drivers = [json.loads(json.dumps(v)) for v in _drivers.values()]
     drivers.sort(key=lambda d: (d.get('label', ''), d.get('driver', '')))
     return drivers
+
+
+def has(driver_id):
+    with _lock:
+        return str(driver_id or '').strip().lower() in _drivers
 
 
 def get_driver(driver_id):

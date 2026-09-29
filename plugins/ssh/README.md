@@ -114,3 +114,13 @@ DEVICES (Settings > Devices):
 - Pasted keys and passwords are stored scrambled outside user/ and are never shown again
 - The servers list above and the ssh_* tools are unchanged and separate from devices
 - See docs/DEVICES.md
+
+## Power
+
+An SSH device has a Power tab with a **Restart command** and a **Shutdown
+command**. The usual ones are `sudo -n shutdown -r +1` and
+`sudo -n shutdown -h +1`. Change them for another system, or clear one to
+take that action away. They are your words, so they skip the blacklist.
+
+Sapphire may not use power on an SSH device until you turn on **Sapphire may
+use this** on that tab. Your own buttons there always work.

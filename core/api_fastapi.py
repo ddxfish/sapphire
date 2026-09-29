@@ -980,7 +980,6 @@ from core.routes.agents import router as agents_router
 from core.routes.docs import router as docs_router
 from core.routes.store import router as store_router
 from core.routes.dashboard import router as dashboard_router
-from core.routes.body import router as body_router
 from core.routes.videos import router as videos_router
 from core.routes.backgrounds import router as backgrounds_router
 from core.routes.fonts import router as fonts_router
@@ -1001,7 +1000,6 @@ app.include_router(agents_router)
 app.include_router(docs_router)
 app.include_router(store_router)
 app.include_router(dashboard_router)
-app.include_router(body_router)
 app.include_router(videos_router)
 app.include_router(backgrounds_router)
 app.include_router(fonts_router)

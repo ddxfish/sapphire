@@ -23,6 +23,8 @@ const psSel = key => '#' + CSS.escape('ps-' + key);
  * Render a settings form from a manifest schema array.
  * @param {HTMLElement} container - Where to render
  * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?, tab?}]
+ *   type "found": a live pick list. found_url answers {found: [{id, name, kind}]},
+ *   the value is {all, only: [{id, name}]}. many:false makes it "pick one".
  * @param {Object} values - Current setting values (merged with defaults by backend)
  * @param {Object} [opts] - {onChange: (key, value) => void, managed, slots}
  *   slots: [{tab, mount(el)}] — caller-rendered widget sections (dynamic
@@ -216,6 +218,12 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         wireRowsField(container, field);
     }
 
+    // Wire up found fields (a live pick list)
+    for (const field of schema) {
+        if ((field.widget || inferWidget(field)) !== 'found') continue;
+        wireFoundField(container, field);
+    }
+
     // show_if: a row is visible only while its controlling field has the
     // named value. Hidden rows stay in the DOM and still save.
     if (schema.some(f => f.show_if)) {
@@ -355,6 +363,104 @@ function wireRowsField(container, field) {
     render();
 }
 
+// found: a pick list of what is here right now (a keyboard, a board). The
+// value lives as JSON in a hidden input, like rows. "all" counts everything
+// that is found. The ticks are kept while "all" is on, so they are still
+// there when the user switches back.
+export function foundPicks(value) {
+    let v = value;
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
+    const only = Array.isArray(v?.only)
+        ? v.only.filter(p => p && p.id).map(p => ({ id: String(p.id), name: String(p.name || p.id) }))
+        : [];
+    return { all: v?.all !== false, only };
+}
+
+// What is here, then what was picked and is away.
+export function foundRows(picks, found) {
+    const here = (found || []).filter(t => t && t.id)
+        .map(t => ({ id: String(t.id), name: String(t.name || t.id), kind: String(t.kind || '') }));
+    const away = picks.only.filter(p => !here.some(t => t.id === p.id)).map(p => ({ ...p, kind: '', away: true }));
+    return [...here, ...away];
+}
+
+export function foundHTML(field, picks, found, problem = '') {
+    const name = `ps-${field.key}-mode`;
+    const every = field.all_label || 'Everything that is found';
+    const rows = foundRows(picks, found);
+    const note = t => t.away ? 'not here now' : t.kind;
+    const looking = found === null;
+    const again = `<button type="button" class="btn-action ps-found-look" style="margin-top:6px">Look again</button>`;
+    const trouble = problem
+        ? `<div style="color:var(--error,#e53935);font-size:var(--font-sm,13px)">${escapeHtml(problem)}</div>` : '';
+    if (field.many === false) {
+        const chosen = picks.all ? '' : (picks.only[0]?.id || '');
+        return `<select class="ps-found-one">
+                <option value="">${escapeHtml(field.all_label || 'Whichever is found')}</option>
+                ${rows.map(t => `<option value="${escapeHtml(t.id)}" ${t.id === chosen ? 'selected' : ''}>${
+                    escapeHtml(t.name)}${note(t) ? ` (${escapeHtml(note(t))})` : ''}</option>`).join('')}
+            </select> ${again}${trouble}`;
+    }
+    const ticked = t => picks.all ? !t.away : picks.only.some(p => p.id === t.id);
+    const list = looking ? '<span style="color:var(--text-muted)">Looking...</span>'
+        : rows.map(t => `<label style="display:block;margin:2px 0">
+                <input type="checkbox" class="ps-found-tick" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}"
+                    ${ticked(t) ? 'checked' : ''} ${picks.all ? 'disabled' : ''}>
+                ${escapeHtml(t.name)} <span style="color:var(--text-muted);font-size:var(--font-sm,13px)">${escapeHtml(note(t))}</span>
+            </label>`).join('') || '<span style="color:var(--text-muted)">Nothing is here right now.</span>';
+    return `<label style="display:block"><input type="radio" name="${escapeHtml(name)}" value="all" ${picks.all ? 'checked' : ''}> ${escapeHtml(every)}</label>
+            <label style="display:block"><input type="radio" name="${escapeHtml(name)}" value="only" ${picks.all ? '' : 'checked'}> ${escapeHtml(field.only_label || 'Only these')}</label>
+            <div class="ps-found-list" style="margin:6px 0 0 22px">${list}</div>${again}${trouble}`;
+}
+
+function wireFoundField(container, field) {
+    const wrap = container.querySelector(`.ps-found[data-found-key="${CSS.escape(field.key)}"]`);
+    if (!wrap) return;
+    const hidden = wrap.querySelector(psSel(field.key));
+    const body = wrap.querySelector('.ps-found-body');
+    let found = null, problem = '';           // null = still looking
+
+    const read = () => foundPicks(hidden.value);
+    const draw = () => { body.innerHTML = foundHTML(field, read(), found, problem); };
+    const write = picks => {
+        hidden.value = JSON.stringify(picks);
+        draw();
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const look = async () => {
+        found = null; problem = '';
+        draw();
+        try {
+            if (field.found_url) {
+                const res = await fetch(field.found_url);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `The look failed (${res.status}).`);
+                found = Array.isArray(data.found) ? data.found : [];
+            } else found = [];
+        } catch (e) { found = []; problem = String(e.message || e); }
+        draw();
+    };
+    // The inner inputs carry no value of their own: the hidden input speaks.
+    body.addEventListener('change', e => {
+        e.stopPropagation();
+        const picks = read();
+        if (e.target.matches('.ps-found-one')) {
+            const row = foundRows(picks, found).find(t => t.id === e.target.value);
+            return write(row ? { all: false, only: [{ id: row.id, name: row.name }] }
+                             : { all: true, only: picks.only });
+        }
+        if (e.target.matches('input[type="radio"]')) return write({ ...picks, all: e.target.value === 'all' });
+        if (e.target.matches('.ps-found-tick')) {
+            const { id, name } = e.target.dataset;
+            const only = picks.only.filter(p => p.id !== id);
+            if (e.target.checked) only.push({ id, name });
+            write({ all: false, only });
+        }
+    });
+    body.addEventListener('click', e => { if (e.target.closest('.ps-found-look')) look(); });
+    look();
+}
+
 function renderWidget(field, value) {
     const id = `ps-${field.key}`;
     const widget = field.widget || inferWidget(field);
@@ -435,6 +541,12 @@ function renderWidget(field, value) {
             </div>`;
         }
 
+        case 'found':
+            return `<div class="ps-found" data-found-key="${escapeHtml(field.key)}">
+                <input type="hidden" id="${id}" value="${escapeHtml(JSON.stringify(foundPicks(value)))}">
+                <div class="ps-found-body"></div>
+            </div>`;
+
         case 'button':
             return `<button type="button" id="${id}" class="btn-action" data-action-url="${escapeHtml(field.action || '')}" data-status-url="${escapeHtml(field.status || '')}">${escapeHtml(field.button_label || field.label || 'Action')}</button>`;
 
@@ -449,6 +561,7 @@ function inferWidget(field) {
     if (field.type === 'textarea') return 'textarea';
     if (field.type === 'list') return 'list';
     if (field.type === 'rows') return 'rows';
+    if (field.type === 'found') return 'found';
     // type:"password" without an explicit widget fell through to 'text' and
     // rendered the stored secret in a plaintext value="..." (live: the
     // ElevenLabs API key on screen — HDF scout, 2026-07-19).
@@ -512,6 +625,7 @@ function coerce(value, field) {
     if (field.type === 'list') {
         try { const a = JSON.parse(value); return Array.isArray(a) ? a : []; } catch { return []; }
     }
+    if (field.type === 'found' || field.widget === 'found') return foundPicks(value);
     if (field.type === 'rows' || field.widget === 'rows') {
         try {
             const a = JSON.parse(value);
