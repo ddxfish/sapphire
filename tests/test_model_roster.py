@@ -84,7 +84,10 @@ def test_current_flagships_are_offered():
     opts = _core_options()
     assert 'claude-opus-5' in opts['claude'] and 'claude-fable-5-1' in opts['claude']
     assert 'claude-opus-5-5' in opts['claude']
+    assert 'claude-sonnet-5-5' in opts['claude']          # shipped 2026-09-28: adaptive, not always-on
     assert 'claude-haiku-4-5' in opts['claude']
+    from core.chat.llm_providers.claude import thinking_family
+    assert thinking_family('claude-sonnet-5-5') == 'adaptive'
     assert 'gpt-6-astra' in opts['openai'] and 'gpt-5.6-terra' in opts['openai']
     assert 'gemini-3.8-flash' in opts['gemini']
 

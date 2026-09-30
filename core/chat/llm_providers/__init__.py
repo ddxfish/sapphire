@@ -77,16 +77,18 @@ class ProviderRegistry(_BaseRegistry):
                 'required_fields': ['api_key', 'model'],
                 'optional_fields': ['timeout'],
                 # Dropdown = current lineup + still-served legacy (vendor pages
-                # verified 2026-09-20; Opus 5.5 added launch day 2026-09-23).
+                # verified 2026-09-30: Sonnet 5.5 shipped 2026-09-28, Opus 5
+                # and Sonnet 5 moved to legacy; no Haiku past 4.5).
                 # A saved id that isn't listed renders as
                 # "Other (custom)" and keeps working — dropping a row never
                 # breaks an install.
                 'model_options': {
                     'claude-fable-5-1': 'Fable 5.1',
                     'claude-opus-5-5': 'Opus 5.5',
-                    'claude-opus-5': 'Opus 5',
-                    'claude-sonnet-5': 'Sonnet 5',
+                    'claude-sonnet-5-5': 'Sonnet 5.5',
                     'claude-haiku-4-5': 'Haiku 4.5',
+                    'claude-opus-5': 'Opus 5 (legacy)',
+                    'claude-sonnet-5': 'Sonnet 5 (legacy)',
                     'claude-fable-5': 'Fable 5 (legacy)',
                     'claude-opus-4-8': 'Opus 4.8 (legacy)',
                     'claude-sonnet-4-6': 'Sonnet 4.6 (legacy)',
