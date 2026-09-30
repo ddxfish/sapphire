@@ -181,6 +181,49 @@ Fields land on the tab of the driver's first capability. Add `"capability": "sou
 
 `describe` may return fewer capabilities than the manifest lists. A gadget that reports only a light gets only a Light tab.
 
+### A device that says what it has
+
+One driver often serves boards that differ: one has a light, the next has none.
+Ask the device, and pass its answer on in `status()`:
+
+```python
+def status(device, config, secrets):
+    info = ask_the_board(config)             # {"has": ["light", "button"], ...}
+    return {"online": True, "detail": info["name"], "has": info["has"]}
+```
+
+Core keeps the list with the device. From then on the device shows only those
+capabilities, to her and on the page, also while it is offline. A settings
+field with `"capability": "light"` is hidden on a device without a light, and
+its value is kept.
+
+| `has` | Result |
+|---|---|
+| Not answered, ever | The device has everything `describe` returns |
+| `["light"]` | Only `light` |
+| `[]` | Nothing |
+| A name that is not in your manifest | Left out, and logged once |
+
+Do not cache the list yourself. `describe` is given no secrets and must not
+call the device.
+
+### Settings that live on the device
+
+Some settings belong on the hardware: the looks of a ring, the hours it is
+lit. Give your driver `apply(device, config, secrets)` and core calls it
+after every save. Hand the settings over there:
+
+```python
+def apply(device, config, secrets):
+    r = requests.put(config["url"] + "/led/looks", json={...}, headers=auth(secrets), timeout=6)
+    if r.status_code >= 400:
+        raise DeviceError("the board did not take the looks: " + r.text[:100])
+```
+
+The save holds either way. What you raise is shown beside "Saved": *Saved, but
+the device did not take its settings (satellite: ...)*. A device that is
+turned off is not told. Keep `apply` short; it runs while the user waits.
+
 ## Rules
 
 - **Do not reimplement your plugin.** If a tool of yours already does the work, run it with `call_tool`. It goes through the function manager, so it uses the same state, settings, and privacy gates as the tool itself.
@@ -283,6 +326,17 @@ audio, kind = voice.render(text)        # (bytes, "audio/ogg") or (None, reason)
 `render` applies the privacy gate for the chat that produced the text. When it
 returns `None`, return the reason as your result and send nothing.
 
+A small board plays one format. Let it state that format, and have core
+convert:
+
+```python
+plays = {"type": "audio/wav", "rate": 16000, "channels": 1}     # as the board stated it
+audio, kind = voice.fit(audio, kind, plays)     # (bytes, "audio/wav") or (None, reason)
+```
+
+`audio/wav` is always 16 bit PCM. It is the only type today. `rate` is 8000 to
+48000, `channels` is 1 or 2.
+
 **A microphone.** Declare a capability named `mic`, and these config fields:
 
 | Field | Purpose |
@@ -295,8 +349,13 @@ The device then posts what it heard:
 ```
 POST /api/devices/<device name>/voice
 Authorization: Bearer <voice_key>
-multipart field "audio": the recording
+Content-Type: audio/wav
+
+<the recording>
 ```
+
+A form with the file field `audio` works too. The full contract of a satellite
+board is in [Satellite Protocol](../SATELLITE-PROTOCOL.md).
 
 Core transcribes it and answers at once with `{ok, heard, accepted, chat}`.
 `accepted: true` means a turn has started. Its answer comes later, through
@@ -503,13 +562,16 @@ These work in any plugin's settings schema.
 ## Reference for AI
 
 - Manifest: `capabilities.devices: [{driver, label?, icon?, module, capabilities[], config_schema[]?, locked_by_default[]?, presence?}]`. Registered by the loader into `core/devices/registry.py`; unregistered on unload. Bad declarations are skipped with a log line, never a failed load.
-- Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example}}}}`, `status(device, config, secrets) -> {online, detail, readings?}`, `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`.
+- Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example}}}}`, `status(device, config, secrets) -> {online, detail, readings?, has?}`, optional `apply(device, config, secrets)` (after a save; raise `DeviceError` to be heard), `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`.
 - Engine: `core/devices/engine.py`, loaded on first use. Tools: `functions/devices.py`. Rows in `user/plugin_state/devices.json` under key `devices`: `{id, label, location, enabled, created, locked: [capability], parts: [{driver, plugin, config}]}`. `locked` = what she may not use; only capabilities in `engine.LOCKABLE` can be locked; `engine.run(..., owner=True)` is the user's own button and passes the lock. Secrets in `core/devices/secret_store.py` under `<driver>.<field>`.
 - The engine re-checks that the owning plugin is enabled and loaded on every call and drops cached driver modules when the registry generation changes.
 - Hosted (managed) installs: the tools refuse, the routes answer 404, the tab is hidden.
 - `call_tool` refuses tools owned by another plugin. It calls `execute_function(name, args, allowed_tools={name}, with_success=True)`.
 - Voice: `core/devices/voice.py` (`hear`, `say`, `cue`, `render`, `transcribe`, `key_ok`, `origin_line`). `hear` answers once the words are known and runs the turn on its own thread. Reply lane: `cadence.run_turn(chat, text, speak='device:<id>', on_event=...)`. Doors: `POST /api/devices/{id}/voice` and `GET /api/devices/{id}/events`, device key, each 30 a minute per caller address, counted before the key is checked.
 - Core drivers: `registry.CORE_DRIVERS`, registered by the engine on first use with `builtin=True`.
+- Self-report: `status()` may answer `has: [capability]`. `engine._learn` keeps it on the row as `parts[].has` (written only on a change, names outside the manifest dropped with one warning). `engine.capabilities(part, spec)` is the manifest list held to it; `describe`, `public`, `run` and `voice._voice_part` all use it. `public` hides schema fields whose `capability` the device lacks. No key = never said = everything.
+- Sound format: `voice.fit(audio, kind, plays)` and `voice.wanted(plays)`. numpy and soundfile only. Going down in rate it low-pass filters first.
+- After a save: `engine.tell(row)` calls each part's `apply` and returns problems in words; the routes put them in the save's `warning`. `voice.clock()` = `{now, tz}` (POSIX zone from `/etc/localtime`'s footer) rides on the events stream's `connected` line.
 - Routes (session auth, `core/routes/devices.py`): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`. Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
 - Presence: `core/devices/presence.py`, started after the plugin scan (`sapphire.py`), stopped before plugin services. Manifest `"presence": true` plus optional module functions `discover(config) -> [{id, name, kind}]`, `watch(changed, stopped)`, `tend(device, config, secrets, present, leaving)`. `tend` is level triggered: called on a poke (watcher, device saved, plugin loaded), on the 15 s heartbeat, and once with `leaving=True, present=[]` when the device is disabled or removed, the plugin unloads (`presence.release(plugin)`, called by the loader before it unregisters the drivers) or the app stops. One keeper thread, one watcher thread per driver with an enabled device, tends on a pool of 4, never two at once for one device. Pokes are gathered for 0.3 s.
 - Filter: a `config_schema` field of `"type": "found"` (one per driver). Stored in the part's config as `{all: bool, only: [{id, name}]}`. `engine.found(driver, config)` cleans what `discover` returns (64 at most). `engine.passing(spec, config, things)` applies the filter. `"many": false` keeps one.

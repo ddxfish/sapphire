@@ -65,8 +65,10 @@ def pi():
             return Reply(content=b'RIFFfake-wav')
         return Reply(REAL.get((method, path.split('?')[0]), {"ok": True}))
 
+    sat._about.clear()
     with patch.object(sat.net, 'request', fake):
         yield calls
+    sat._about.clear()
 
 
 run = lambda cap, action, value='', cfg=CFG, key=KEY: sat.run(DEV, cap, action, value, cfg, key, None)
@@ -120,8 +122,8 @@ def test_say_renders_her_voice_and_sends_it(pi):
     with patch.object(voice, 'render', return_value=(b'OggS-audio', 'audio/ogg')) as render:
         assert run('speaker', 'say', ' Dinner is ready ') == ('Said there: "Dinner is ready"', True)
     render.assert_called_once_with('Dinner is ready')
-    call = pi[0]
-    assert (call.method, call.path) == ('POST', '/audio/speak')
+    assert [(c.method, c.path) for c in pi] == [('GET', '/health'), ('POST', '/audio/speak')]
+    call = pi[1]
     assert call.kw['files'] == {'audio': ('speech.ogg', b'OggS-audio', 'audio/ogg')}
     assert call.kw['timeout'] == sat.SPEAK_WAIT
 
@@ -315,3 +317,146 @@ def test_a_satellite_too_old_for_power():
     with patch.object(sat.net, 'request', lambda m, u, **kw: Reply({"detail": "Not Found"}, status=404)):
         assert run('power', 'restart') == ("This satellite's program is too old to restart or shut down. "
                                            "Update it.", False)
+
+
+# --- a board that says what it is -------------------------------------------------
+
+BOARD = {"ok": True, "name": "den", "board": "waveshare-s3-audio", "firmware": "0.1.0",
+         "has": ["speaker", "mic", "wake"], "uptime_s": 61, "volume": 85,
+         "plays": {"type": "audio/wav", "rate": 16000, "channels": 1},
+         "wakeword": {"enabled": True, "running": True, "model": "hey_sapphire"},
+         "link": {"connected": True}}
+
+
+@pytest.fixture
+def board(pi):
+    with patch.dict(REAL, {('GET', '/health'): BOARD}):
+        yield pi
+
+
+def test_a_board_says_what_it_has_and_the_engine_is_told(board):
+    st = sat.status(DEV, CFG, KEY)
+    assert st['has'] == ['speaker', 'mic', 'wake']
+    assert st['detail'] == 'den at 192.168.0.221:8090'
+    assert st['readings'] == {'program': 'waveshare-s3-audio 0.1.0', 'volume': '85%', 'running for': '1m 1s',
+                              'wake word': 'listening for hey_sapphire', 'link to Sapphire': 'connected'}
+
+
+def test_volume_read_set_and_step(board):
+    with patch.dict(REAL, {('GET', '/volume'): {"volume": 60}, ('POST', '/volume'): {"volume": 70}}):
+        assert run('speaker', 'volume') == ('Volume is 60%.', True)
+        assert run('speaker', 'volume', '80') == ('Volume is now 70%.', True)      # what the board says it is
+        assert board[-1].path == '/volume?level=80'
+        assert run('speaker', 'volume', 'up') == ('Volume is now 70%.', True)
+        assert board[-1].path == '/volume?level=70'                               # 60 + 10
+        assert run('speaker', 'volume', 'DOWN')[1] and board[-1].path == '/volume?level=50'
+        assert run('speaker', 'volume', '250')[1] and board[-1].path == '/volume?level=100'
+        text, ok = run('speaker', 'volume', 'loud')
+    assert not ok and text.startswith('volume: a number from 0 to 100')
+
+
+def test_an_early_pi_has_no_volume_door(pi):
+    def old(method, url, **kw):
+        return Reply({"detail": "Not Found"}, status=404)
+    with patch.object(sat.net, 'request', old):
+        assert run('speaker', 'volume', '80') == ("This satellite's program has no volume control.", False)
+
+
+def test_an_early_pi_says_nothing_and_nothing_is_passed_on(pi):
+    assert 'has' not in sat.status(DEV, CFG, KEY)
+
+
+def test_a_board_gets_her_voice_in_the_format_it_stated(board):
+    with patch.object(voice, 'render', return_value=(b'OggS-audio', 'audio/ogg')), \
+         patch.object(voice, 'fit', return_value=(b'RIFF-fitted', 'audio/wav')) as fit:
+        assert run('speaker', 'say', 'Dinner is ready') == ('Said there: "Dinner is ready"', True)
+    fit.assert_called_once_with(b'OggS-audio', 'audio/ogg', BOARD['plays'])
+    call = board[-1]
+    assert (call.method, call.path) == ('POST', '/audio/speak')
+    assert call.kw['data'] == b'RIFF-fitted' and 'files' not in call.kw        # the sound itself, no form
+    assert call.kw['headers'] == {'Content-Type': 'audio/wav', 'Authorization': 'Bearer body-key-abcdefgh'}
+
+
+def test_a_format_that_cannot_be_made_is_said_and_nothing_is_sent(board):
+    odd = dict(BOARD, plays={"type": "audio/opus", "rate": 16000})
+    with patch.dict(REAL, {('GET', '/health'): odd}), \
+         patch.object(voice, 'render', return_value=(b'OggS-audio', 'audio/ogg')):
+        text, ok = run('speaker', 'say', 'Dinner is ready')
+    assert not ok and text == 'Nothing was said: This device stated a sound format I cannot make.'
+    assert [c.path for c in board] == ['/health']
+
+
+def test_it_is_asked_what_it_plays_once_a_minute_not_at_every_sentence(board):
+    with patch.object(voice, 'render', return_value=(b'RIFF', 'audio/wav')), \
+         patch.object(voice, 'fit', return_value=(b'RIFF', 'audio/wav')):
+        for _ in range(3):
+            run('speaker', 'say', 'Dinner is ready')
+        assert [c.path for c in board].count('/health') == 1
+        with patch.object(sat.time, 'monotonic', return_value=sat.time.monotonic() + sat.ABOUT_FRESH + 1):
+            run('speaker', 'say', 'Dinner is ready')
+    assert [c.path for c in board].count('/health') == 2
+
+
+def test_a_look_at_its_health_is_always_fresh_and_a_silent_board_is_forgotten(board):
+    sat.status(DEV, CFG, KEY)
+    sat.status(DEV, CFG, KEY)
+    assert [c.path for c in board] == ['/health', '/health']
+    assert DEV['id'] in sat._about
+
+    def dead(method, url, **kw):
+        raise requests.exceptions.ConnectionError('gone')
+    with patch.object(sat.net, 'request', dead):
+        assert sat.status(DEV, CFG, KEY)['online'] is False
+        assert DEV['id'] not in sat._about
+        with patch.object(voice, 'render', return_value=(b'RIFF', 'audio/wav')):
+            text, ok = run('speaker', 'say', 'Dinner is ready')
+    assert not ok and text.startswith('Could not reach')
+
+
+def test_the_camera_switch_belongs_to_the_camera():
+    field = next(f for f in sat.SPEC['config_schema'] if f['key'] == 'camera')
+    assert field['capability'] == 'camera' and field['tab'] == 'Status'
+
+
+# --- the looks and the hours ---------------------------------------------------------
+
+LOOKS = {'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1', 'look_listening': 'yellow spin',
+         'look_thinking': 'rainbow spin', 'look_speaking': 'green spin', 'look_nolink': 'red pulse'}
+
+
+def test_the_looks_are_checked_at_save():
+    good = dict(CFG, **LOOKS, lights_from='07:00', lights_until='23:00')
+    assert sat.validate(dict(good))[1] == ''
+    assert 'Listening' in sat.validate(dict(good, look_listening='yellow spin fast wobble'))[1]
+    assert 'has no time' in sat.validate(dict(good, look_thinking='rainbow spin 5s'))[1]
+    assert 'clock times' in sat.validate(dict(good, lights_from='7pm'))[1]
+    assert sat.validate(dict(good, lights_from='', lights_until=''))[1] == ''
+
+
+def test_a_save_hands_the_looks_and_hours_to_the_board(board):
+    with patch.dict(REAL, {('PUT', '/led/looks'): {"ok": True}}):
+        sat.apply(DEV, dict(CFG, **LOOKS, lights_from='07:00', lights_until='23:00'), KEY)
+    call = board[-1]
+    assert (call.method, call.path) == ('PUT', '/led/looks')
+    assert call.kw['json'] == {
+        'resting': {'color': 'sapphire', 'animation': 'heartbeat', 'bpm': 33, 'ceiling': 0.1},
+        'listening': {'color': 'yellow', 'animation': 'spin'},
+        'thinking': {'color': 'rainbow', 'animation': 'spin'},
+        'speaking': {'color': 'green', 'animation': 'spin'},
+        'nolink': {'color': 'red', 'animation': 'pulse'},
+        'from': '07:00', 'until': '23:00'}
+
+
+def test_an_early_pi_keeps_its_own_looks_and_that_is_no_fault(pi):
+    def old(method, url, **kw):
+        return Reply({"detail": "Not Found"}, status=404)
+    with patch.object(sat.net, 'request', old):
+        assert sat.apply(DEV, dict(CFG, **LOOKS), KEY) is None
+
+
+def test_a_board_that_refuses_a_look_is_heard_at_save(board):
+    from core.devices.engine import DeviceError
+    def refuse(method, url, **kw):
+        return Reply({"detail": "the thinking look names a color this ring does not know"}, status=400)
+    with patch.object(sat.net, 'request', refuse), pytest.raises(DeviceError, match='thinking look'):
+        sat.apply(DEV, dict(CFG, **LOOKS), KEY)

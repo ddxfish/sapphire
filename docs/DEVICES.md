@@ -6,7 +6,7 @@ Sapphire itself.
 | Type | Comes with | What it is |
 |---|---|---|
 | This computer | Sapphire | The machine she runs on: volume, outputs, screen, power |
-| Satellite | Sapphire | A room box with mic, speaker, light and camera |
+| Satellite | Sapphire | A room box with mic, speaker, light and camera: a Raspberry Pi, an ESP32 board |
 | SSH machine | the SSH plugin | Any machine you can log in to |
 | WiFi gadget | the gadget plugin | A small board with a light, a screen, a button |
 | FM-1 synth, MIDI keyboard | the FM-1 plugin | Instruments she plays and hears |
@@ -25,7 +25,7 @@ Any plugin can bring more types. A type appears when its plugin is enabled.
 ## The device window
 
 - **Status** shows online or offline, the reason when it is offline, and any readings. **Test now** checks it fresh.
-- One tab per thing the device can do. Each lists its actions with a **Try** button.
+- One tab per thing the device can do. Each lists its actions with a **Try** button. The box beside it sends what you type; the grey text in it is only an example. Empty is allowed: an action that reads something, like `volume`, answers with it.
 - **Save** keeps the window open. Try runs the saved version.
 
 ## What Sapphire can and cannot do
@@ -187,6 +187,12 @@ A satellite is a small box in another room with a microphone, a speaker and a
 light. Say its wake word, ask your question, and Sapphire answers from that
 same box. The Raspberry Pi bodies are satellites. This type is built in.
 
+**A satellite says what it has.** A board with no light shows no Light tab, and
+Sapphire is not offered one. Press **Test now** after you change what is on a
+board. Any board that speaks the [Satellite Protocol](SATELLITE-PROTOCOL.md)
+can be added here. Sapphire ships a program for the Waveshare ESP32-S3 audio
+board: see `firmware/satellite-esp32/README.md`.
+
 Add one with **+ Add Device**, type **Satellite**:
 
 | Field | What to enter |
@@ -201,6 +207,7 @@ What Sapphire can do with it:
 
 ```
 device_action("kitchen","speaker","say","Dinner is ready")
+device_action("kitchen","speaker","volume","80")
 device_action("kitchen","speaker","sound","ping")
 device_action("kitchen","mic","listen","10")
 device_action("kitchen","light","set","cyan blink 5s")
@@ -218,6 +225,21 @@ unaware. The **Try** button on the Camera tab shows you the same picture.
 give none. `clear` ends it early. `rest` sets the resting light the ring
 returns to, and it is kept after a restart. Fine settings are written
 `name=value`: `bpm=40 speed=fast floor=0.05 ceiling=0.4`.
+
+**Its looks** are settings on the Light tab, in the same words, one for each
+state: Resting, Listening, Thinking, Speaking, No link to Sapphire. `rainbow`
+is a color too, and `rainbow` is an animation.
+
+```
+Thinking   rainbow spin
+Speaking   green spin bpm=90 ceiling=0.6
+```
+
+**Lights on from / until** are clock times. Outside them the ring rests dark.
+A state still shows while she is answering, and what she `set`s shows too, so
+"a white light for the night" works at 2 am. Both empty = always on. The
+board keeps the time from Sapphire, no internet clock. (A Pi body keeps its
+own looks and night light; these settings are for boards that take them.)
 
 **She knows where a voice came from.** Every question a satellite hears
 arrives with one line above it, and you see that line in the chat too:

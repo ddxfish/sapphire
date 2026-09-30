@@ -589,9 +589,9 @@ Login required, except the two doors a device opens with its own key.
 | PUT | `/api/devices/{id}` | Change a device. `locked` is a map `{capability: bool}` and changes only the capabilities it names |
 | GET | `/api/devices/found/{driver}` | What that driver can see right now, for a pick list: `{found: [{id, name, kind}]}`. `?device=<id>` lends a saved device's settings to the look |
 | DELETE | `/api/devices/{id}` | Remove a device and its stored secrets |
-| POST | `/api/devices/{id}/test` | Check the device now |
+| POST | `/api/devices/{id}/test` | Check the device now. Answers `{status, device}`: a device may have just said what it has |
 | POST | `/api/devices/{id}/run` | Run one action. Answers `{text, ok, images?}` |
-| POST | `/api/devices/{id}/voice` | Device key. A satellite sends what it heard |
+| POST | `/api/devices/{id}/voice` | Device key. A satellite sends what it heard, as the body with an `audio/*` Content-Type or as the form file `audio`. See [Satellite Protocol](SATELLITE-PROTOCOL.md) |
 | GET | `/api/devices/{id}/events` | Device key. SSE stream of what that satellite's light should show |
 
 ### Conversation Mode

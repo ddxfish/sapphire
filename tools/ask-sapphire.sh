@@ -118,15 +118,18 @@ print(tid.get('id', '') if isinstance(tid, dict) else tid)
 ")
 
 if [ -z "$TASK_ID" ]; then
-    echo "Failed to create task"
+    echo "ERROR: the task could not be created. Sapphire said: ${TASK_RESULT:0:300}" >&2
     exit 1
 fi
 
 # Run — blocks until Sapphire responds
 RAW=$(curl -sk -b "$COOKIE_JAR" -H "X-CSRF-Token: $CSRF" \
-    -X POST "$BASE/api/continuity/tasks/$TASK_ID/run" --max-time 180)
+    -X POST "$BASE/api/continuity/tasks/$TASK_ID/run" --max-time 180 || true)
 
-# Extract and display her response
+# Extract and display her response. No answer is never silent: the reason goes
+# to stderr and the exit code is 5. A chat whose model had been retired
+# answered 404, and this printed nothing and exited 0 (2026-09-29).
+STATUS=0
 python3 -c "
 import sys, json, re
 
@@ -134,10 +137,14 @@ raw = sys.stdin.read()
 try:
     d = json.loads(raw)
 except json.JSONDecodeError:
-    print('(could not parse response)')
-    sys.exit(0)
+    d = None
+if not isinstance(d, dict):
+    print('ERROR: no readable answer: ' + (raw.strip()[:300] or 'nothing came back in 180s'),
+          file=sys.stderr)
+    sys.exit(5)
 
-for r in d.get('responses', []):
+said = False
+for r in d.get('responses') or []:
     text = r.get('output', r.get('response', ''))
     if text:
         text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
@@ -145,9 +152,20 @@ for r in d.get('responses', []):
         cleaned = text.strip()
         if cleaned:
             print(cleaned)
-" <<< "$RAW"
+            said = True
+
+problems = [str(e) for e in (d.get('errors') or [])]
+problems += [str(d[k]) for k in ('error', 'detail') if d.get(k)]
+for p in problems:
+    print('ERROR: ' + p, file=sys.stderr)
+if not said:
+    if not problems:
+        print('ERROR: the turn ran, and the answer was empty.', file=sys.stderr)
+    sys.exit(5)
+" <<< "$RAW" || STATUS=$?
 
 # Cleanup task (conversation persists in the chat)
 curl -sk -b "$COOKIE_JAR" -H "X-CSRF-Token: $CSRF" \
-    -X DELETE "$BASE/api/continuity/tasks/$TASK_ID" -o /dev/null
+    -X DELETE "$BASE/api/continuity/tasks/$TASK_ID" -o /dev/null || true
 rm -f "$COOKIE_JAR"
+exit $STATUS

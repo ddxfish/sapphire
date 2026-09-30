@@ -735,3 +735,158 @@ def test_the_doors_import_the_engine_lazily():
         assert not any('core.devices' in ln for ln in top), (rel, top)
     init = (ROOT / 'core' / 'devices' / '__init__.py').read_text(encoding='utf-8')
     assert 'import' not in [ln.split()[0] for ln in init.splitlines() if ln and not ln.startswith((' ', '"', '#'))]
+
+
+# --- a device says what it has ---------------------------------------------------
+
+def _says(has):
+    """The fake device now says this about itself whenever it is asked how it is."""
+    def status(device, config, secrets):
+        out = {'online': True, 'detail': 'here'}
+        if has is not None:
+            out['has'] = has
+        return out
+    sys.modules[MOD].status = status
+
+
+def _tabs(device_id='desktop'):
+    return [c['capability'] for c in core.describe(core.get(device_id))]
+
+
+def test_a_device_that_never_said_has_all_its_driver_can_do(host):
+    _add()
+    _says(None)
+    core.status('desktop')
+    assert _tabs() == ['shell', 'lamp']
+    assert 'has' not in host.store.d['devices']['desktop']['parts'][0]
+
+
+def test_a_device_shows_only_what_it_said_it_has(host):
+    _add()
+    _says(['lamp'])
+    core.status('desktop')
+    assert _tabs() == ['lamp']
+    assert host.store.d['devices']['desktop']['parts'][0]['has'] == ['lamp']      # kept, so it holds offline
+    assert core.public(core.get('desktop'))['parts'][0]['capabilities'] == ['lamp']
+    text, ok = core.run('desktop', 'shell', 'close_firefox')
+    assert not ok and "has no 'shell'" in text and ('run', 'desktop', 'shell', 'close_firefox', '') not in host.seen
+    assert 'lamp' in core.list_text()[0] and 'shell' not in core.list_text()[0]
+
+
+def test_what_it_said_holds_while_it_is_away_and_follows_when_it_says_otherwise(host):
+    _add()
+    _says(['lamp'])
+    core.status('desktop')
+
+    def away(device, config, secrets):
+        return {'online': False, 'detail': 'no answer'}
+    sys.modules[MOD].status = away
+    assert core.status('desktop')['online'] is False
+    assert _tabs() == ['lamp']
+    _says(['Shell', 'lamp'])                     # it came back with new firmware
+    core.status('desktop')
+    assert _tabs() == ['shell', 'lamp']
+    _says([])
+    core.status('desktop')
+    assert _tabs() == []
+
+
+def test_a_name_the_driver_does_not_know_is_left_out_and_said_in_the_log(host, caplog):
+    _add()
+    _says(['lamp', 'buzzer', 7, ''])
+    with caplog.at_level('WARNING'):
+        core.status('desktop')
+        core.status('desktop')
+    assert _tabs() == ['lamp']
+    said = [r.message for r in caplog.records if 'does not know' in r.message]
+    assert len(said) == 1 and 'buzzer' in said[0]            # once, not at every look
+
+
+def test_the_list_is_written_only_when_it_changed(host):
+    _add()
+    _says(['lamp'])
+    writes = []
+    real = host.store.update_with_lock
+    host.store.update_with_lock = lambda *a, **k: writes.append(a[0]) or real(*a, **k)
+    for _ in range(3):
+        core.status('desktop')
+    assert writes == ['devices']
+    _says('lamp')                                 # not a list: nothing is learned
+    core.status('desktop')
+    assert writes == ['devices'] and _tabs() == ['lamp']
+
+
+def test_saving_the_device_keeps_what_it_said(host):
+    _add()
+    _says(['lamp'])
+    core.status('desktop')
+    core.update('desktop', label='Tower', parts={'fake': {'port': 2200}})
+    assert _tabs() == ['lamp']
+    assert core.get('desktop')['parts'][0]['config']['port'] == 2200
+
+
+def test_a_field_of_something_the_device_lacks_is_not_shown_and_keeps_its_value(host):
+    spec = dict(DRIVER, config_schema=SCHEMA + [
+        {'key': 'glow', 'type': 'string', 'label': 'Glow', 'capability': 'lamp', 'default': 'warm'},
+        {'key': 'note', 'type': 'string', 'label': 'Note', 'capability': 'elsewhere'}])
+    assert host.reg.register_driver('fake', spec, 'fakeplug')
+    _add(glow='cold')
+    keys = lambda: [f['key'] for f in core.public(core.get('desktop'))['parts'][0]['schema']]
+    assert 'glow' in keys() and 'note' in keys()
+    _says(['shell'])
+    core.status('desktop')
+    assert 'glow' not in keys()
+    assert 'note' in keys()                      # names no capability of this driver: always shown
+    core.update('desktop', parts={'fake': {'port': 2200}})
+    assert core.get('desktop')['parts'][0]['config']['glow'] == 'cold'
+
+
+def test_the_window_shows_what_the_device_just_said(host):
+    _add()
+    _says(['lamp'])
+    seen = routes.get_device('desktop')['device']
+    assert [c['capability'] for c in seen['capabilities']] == ['lamp']       # first look already
+    _says(['shell'])
+    out = routes.test_device('desktop')
+    assert out['status']['online'] is True
+    assert [c['capability'] for c in out['device']['capabilities']] == ['shell']
+
+
+# --- after a save, the driver may hand the settings to the hardware -------------------
+
+def test_a_driver_with_apply_is_told_after_a_save(host):
+    told = []
+    sys.modules[MOD].apply = lambda device, config, secrets: told.append((device['id'], config['host'], secrets.get('password')))
+    row, _ = _add()
+    assert core.tell(row) == []
+    assert told == [('desktop', 'tower', 'hunter2-long')]
+    out = routes.update_device('desktop', {'parts': {'fake': {'host': 'rack'}}})
+    assert 'warning' not in out and told[-1] == ('desktop', 'rack', 'hunter2-long')
+    del sys.modules[MOD].apply
+
+
+def test_a_driver_without_apply_is_left_alone(host):
+    row, _ = _add()
+    assert core.tell(row) == []
+
+
+def test_what_the_hardware_refused_is_said_at_save_and_the_save_still_holds(host):
+    def apply(device, config, secrets):
+        raise core.DeviceError('the ring does not know teal')
+    sys.modules[MOD].apply = apply
+    out = routes.add_device({'id': 'lamp', 'label': 'Lamp', 'driver': 'fake', 'config': {'host': 'tower'}})
+    assert out['warning'] == 'Saved, but the device did not take its settings (fake: the ring does not know teal).'
+    assert core.get('lamp')['parts'][0]['config']['host'] == 'tower'
+    sys.modules[MOD].apply = lambda device, config, secrets: 1 / 0
+    out = routes.update_device('lamp', {'label': 'Desk lamp'})
+    assert 'division' in out['warning'] and 'hunter2' not in out['warning']
+    del sys.modules[MOD].apply
+
+
+def test_a_device_turned_off_is_not_told(host):
+    told = []
+    sys.modules[MOD].apply = lambda device, config, secrets: told.append(1)
+    _add()
+    routes.update_device('desktop', {'enabled': False})
+    assert told == [] and core.get('desktop')['enabled'] is False
+    del sys.modules[MOD].apply

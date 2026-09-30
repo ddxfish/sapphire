@@ -22,6 +22,10 @@
 # things its driver can see count as this device. {"all": bool, "only":
 # [{"id", "name"}]}. The engine applies it (passing()). Things that come and
 # go are kept by presence.py.
+# A part may hold "has": the capabilities the DEVICE ITSELF said it has (its
+# driver's status() answered 'has'). From then on the device shows only
+# those, also while it is offline. A part without the key has everything its
+# driver can do: a device that never said.
 # The file kept its place when the engine moved into core, so no device list
 # ever had to be migrated. Secrets never sit in a row. They live in
 # secret_store.py under "<driver>.<field>".
@@ -417,6 +421,37 @@ def here_now(row, part):
     return passing(spec, config, found(part['driver'], config))
 
 
+def capabilities(part, spec):
+    """What this part can do: what its driver can do, held to what the device
+    itself said it has. A device that never said has all of it."""
+    said = part.get('has')
+    every = list((spec or {}).get('capabilities') or [])
+    return [c for c in every if c in said] if isinstance(said, list) else every
+
+
+def _learn(row, part, spec, said):
+    """Keep what the device said it has. A name its driver does not know is
+    dropped and logged. Written only when the list changed."""
+    if not isinstance(said, (list, tuple)):
+        return
+    names = {_slug(n) for n in said}
+    kept = [c for c in spec['capabilities'] if c in names]
+    if kept == part.get('has'):
+        return
+    odd = sorted(n for n in names - set(kept) if n)
+    if odd:
+        logger.warning(f"[DEVICES] {row['id']}: it says it has {', '.join(odd)[:200]}, which the "
+                       f"{part['driver']} driver does not know. Left out.")
+    part['has'] = kept
+
+    def step(table):
+        mine = _part(table.get(row['id']) or {}, part['driver'])
+        if mine is not None:
+            mine['has'] = kept
+    _write(step)
+    logger.info(f"[DEVICES] {row['id']}: it says it has {', '.join(kept) or 'nothing'}")
+
+
 def _shut(row):
     names = row.get('locked')
     if not isinstance(names, list):              # never set: what its drivers ask for
@@ -440,6 +475,28 @@ def _build_part(device_id, driver_id, incoming, previous=None):
         if error:
             raise DeviceError(error)
     return {'driver': driver_id, 'plugin': spec['plugin_name'], 'config': config}, ops, spec
+
+
+def tell(row):
+    """After a save: each part's driver may have apply(device, config,
+    secrets), which hands the settings to the hardware. Returns what went
+    wrong, in words, one line per part. Never raises."""
+    problems = []
+    for part in row.get('parts', []):
+        secrets = None
+        try:
+            mod, _ = _driver(part['driver'], part.get('plugin', ''))
+            apply = getattr(mod, 'apply', None)
+            if not callable(apply):
+                continue
+            secrets = _part_secrets(row['id'], part['driver'])
+            apply(_brief(row), dict(part.get('config') or {}), secrets)
+        except DeviceError as e:
+            problems.append(f"{part['driver']}: {e}")
+        except Exception as e:
+            logger.error(f"[DEVICES] {part['driver']}.apply failed: {e}", exc_info=True)
+            problems.append(f"{part['driver']}: {secrets.scrub(str(e)) if secrets else e}")
+    return problems
 
 
 # --- add, change, remove (the Devices page only - never a tool) --------------
@@ -548,7 +605,10 @@ def public(row):
     parts = []
     for part in row.get('parts', []):
         spec = _registry().get_driver(part['driver'])
-        schema = spec['config_schema'] if spec else []
+        has = capabilities(part, spec)
+        # a field that belongs to something this device does not have is not shown
+        schema = [f for f in (spec['config_schema'] if spec else [])
+                  if f.get('capability') in has or f.get('capability') not in spec['capabilities']]
         values = dict(part.get('config') or {})
         unreadable = []
         for field in schema:
@@ -560,7 +620,7 @@ def public(row):
         parts.append({'driver': part['driver'], 'plugin': part.get('plugin', ''),
                       'label': spec['label'] if spec else part['driver'],
                       'available': bool(spec), 'schema': schema, 'values': values,
-                      'capabilities': spec['capabilities'] if spec else [],
+                      'capabilities': has,
                       'unreadable': unreadable})
     return {'id': row['id'], 'label': row.get('label', row['id']),
             'location': _place(row.get('location')), 'locked': locked(row),
@@ -590,7 +650,7 @@ def describe(row):
                         'driver': part['driver'], 'actions': {}, 'error': f"driver error: {e}",
                         'lockable': False, 'locked': False})
             continue
-        for cap in spec['capabilities']:
+        for cap in capabilities(part, spec):
             if not isinstance(told.get(cap), dict):
                 continue            # this device does not have it (self-describing drivers)
             info = told[cap]
@@ -628,6 +688,7 @@ def _probe(row):
             secrets = _part_secrets(row['id'], part['driver'])
             told = mod.status(_brief(row), dict(part.get('config') or {}), secrets) or {}
             entry['online'] = bool(told.get('online'))
+            _learn(row, part, spec, told.get('has'))
             entry['detail'] = secrets.scrub(str(told.get('detail') or ''))[:300]
             readings = told.get('readings')
             if isinstance(readings, dict):

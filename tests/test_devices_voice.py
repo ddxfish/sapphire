@@ -5,8 +5,9 @@
 import asyncio
 import importlib
 import json
+import time
 from types import SimpleNamespace
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, DEFAULT, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -39,8 +40,14 @@ def home(tmp_path):
     sm.get_active_chat_name.return_value = 'open-chat'
     sm.get_settings_for.side_effect = lambda chat: None if chat == 'ghost' else {'chat': chat}
     sm.get_chat_settings.return_value = {'chat': 'open-chat'}
-    stt = MagicMock()
+    stt, heard = MagicMock(), []
     stt.transcribe_file.return_value = ' what time is it '
+
+    def keep(path):                              # what the speech engine was handed
+        with open(path, 'rb') as f:
+            heard.append(f.read())
+        return DEFAULT
+    stt.transcribe_file.side_effect = keep
     system = SimpleNamespace(llm_chat=SimpleNamespace(session_manager=sm), whisper_client=stt,
                              tts=MagicMock())
     with patch('core.credentials_manager.CREDENTIALS_FILE', tmp_path / 'credentials.json'), \
@@ -59,14 +66,14 @@ def home(tmp_path):
             sec.reload()
             importlib.reload(reg)
             engine._status.clear()
-            for held in (voice._waiting, voice._showing, voice._listeners):
+            for held in (voice._waiting, voice._showing, voice._listeners, sat._about):
                 held.clear()
             engine.add('pi2', 'Kitchen', 'satellite',
                        {'url': 'http://192.168.0.221:8090', 'token': 'body-key-abcdefgh',
                         'voice_key': 'voice-key-12345678'})
-            yield SimpleNamespace(system=system, sm=sm, stt=stt, store=store)
+            yield SimpleNamespace(system=system, sm=sm, stt=stt, store=store, heard=heard)
             engine._status.clear()
-            for held in (voice._waiting, voice._showing, voice._listeners):
+            for held in (voice._waiting, voice._showing, voice._listeners, sat._about):
                 held.clear()
             importlib.reload(reg)
             sec.reload()
@@ -97,8 +104,11 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
     assert [d['driver'] for d in engine.drivers()] == ['satellite', 'computer']      # both ship inside core
     row = engine.get('pi2')
     assert row['parts'][0] == {'driver': 'satellite', 'plugin': 'core',
-                               'config': {'url': 'http://192.168.0.221:8090',
-                                          'camera': True, 'chat': ''}}
+                               'config': {'url': 'http://192.168.0.221:8090', 'camera': True, 'chat': '',
+                                          'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
+                                          'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
+                                          'look_speaking': 'green spin', 'look_nolink': 'red pulse',
+                                          'lights_from': '', 'lights_until': ''}}
     assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power']
     view = engine.public(row)
     assert view['parts'][0]['values']['token'] == 'set' and view['parts'][0]['values']['voice_key'] == 'set'
@@ -312,7 +322,9 @@ def test_the_light_stream(home):
         voice.cue('pi2', 'thinking')
         stream = routes.light_stream('pi2', 'voice-key-12345678', gone)
         first = await stream.__anext__()
-        assert json.loads(first[6:]) == {'state': 'connected', 'src': 'device'}
+        hello = json.loads(first[6:])
+        assert (hello['state'], hello['src']) == ('connected', 'device')
+        assert abs(hello['now'] - time.time()) < 5 and hello['tz'] == voice.local_tz()   # the clock rides along
         assert json.loads((await stream.__anext__())[6:])['state'] == 'thinking'   # caught up
         voice.cue('pi2', 'idle')
         line = await stream.__anext__()
@@ -348,7 +360,8 @@ def test_say_carries_the_chat_settings_to_the_voice_engine(home):
         out = voice.say('pi2', 'It is noon.', chat_settings={'private_chat': True})
     assert out == ('Said there: "It is noon."', True)
     home.system.tts.render.assert_called_once_with('It is noon.', chat_settings={'private_chat': True})
-    assert sent[0][1] == 'http://192.168.0.221:8090/audio/speak'
+    assert [url for _, url, _ in sent] == ['http://192.168.0.221:8090/health',
+                                           'http://192.168.0.221:8090/audio/speak']
     assert voice._speaking_for.get() is None                  # never leaks into the next call
 
 
@@ -382,13 +395,28 @@ class _Audio:
         return self._data
 
 
-def _request(key=None, addr='192.168.0.221'):
+def _request(key=None, addr='192.168.0.221', audio=None, body=None, kind=''):
+    """What a device sent: the form file `audio`, or with `kind` the sound
+    itself as the body, arriving in small pieces."""
     headers = {'authorization': f'Bearer {key}'} if key else {}
-    return SimpleNamespace(headers=headers, client=SimpleNamespace(host=addr), session={})
+    if kind:
+        headers['content-type'] = kind
+
+    async def form():
+        return {'audio': audio} if audio is not None else {}
+
+    async def stream():
+        for i in range(0, len(body or b''), 5):
+            yield body[i:i + 5]
+
+    return SimpleNamespace(headers=headers, client=SimpleNamespace(host=addr), session={},
+                           form=form, stream=stream)
 
 
-def _door(device_id, request, audio=None):
-    return asyncio.run(routes.devices_voice(device_id, request, audio or _Audio()))
+def _door(device_id, request):
+    if 'content-type' not in request.headers and asyncio.run(request.form()) == {}:
+        request.form = _request(audio=_Audio()).form          # the usual case: a form with a wav
+    return asyncio.run(routes.devices_voice(device_id, request))
 
 
 def test_the_door_opens_for_the_right_key_only(home):
@@ -462,3 +490,148 @@ def test_render_names_what_it_made():
         assert _tts(b'????', 'audio/flac').render('hello there')[1] == 'audio/flac'
         assert _tts(None).render('hello there') == (None, 'The voice engine returned no audio.')
         assert _tts().render('...')[0] is None
+
+
+# --- a small board sends the sound itself ----------------------------------------
+
+def test_the_door_takes_the_sound_itself(home):
+    with _turn():
+        out = _door('pi2', _request('voice-key-12345678', addr='10.1.0.1', kind='audio/wav; rate=16000',
+                                    body=b'RIFFsixteen-bytes'))
+    assert out == ACCEPTED
+    assert home.heard == [b'RIFFsixteen-bytes']
+
+
+def test_a_form_still_works_for_the_pi(home):
+    with _turn():
+        out = _door('pi2', _request('voice-key-12345678', addr='10.1.0.2',
+                                    audio=_Audio(b'OggSfrom-a-pi', 'wake.ogg')))
+    assert out == ACCEPTED and home.heard == [b'OggSfrom-a-pi']
+    assert home.stt.transcribe_file.call_args[0][0].endswith('.ogg')
+
+
+def test_a_sound_that_is_too_large_is_refused_before_it_is_held(home):
+    with patch.object(voice, 'MAX_AUDIO', 12), pytest.raises(HTTPException) as err:
+        _door('pi2', _request('voice-key-12345678', addr='10.1.0.3', kind='audio/wav', body=b'x' * 40))
+    assert err.value.status_code == 413 and home.heard == []
+
+
+def test_a_body_that_is_no_sound_is_refused(home):
+    async def broken():
+        raise ValueError('not a form')
+    for request in (_request('voice-key-12345678', addr='10.1.0.4', kind='application/json', body=b'{}'),
+                    _request('voice-key-12345678', addr='10.1.0.5', kind='text/plain', body=b'hello')):
+        request.form = broken
+        with pytest.raises(HTTPException) as err:
+            asyncio.run(routes.devices_voice('pi2', request))
+        assert err.value.status_code == 422
+    assert home.heard == []
+
+
+def test_a_board_that_says_it_has_no_mic_cannot_use_the_door(home):
+    assert voice.key_ok('pi2', 'voice-key-12345678') is True
+    with patch.object(sat, 'status', lambda d, c, s: {'online': True, 'has': ['speaker', 'light']}):
+        engine.status('pi2')
+    assert voice.key_ok('pi2', 'voice-key-12345678') is False
+    assert voice.hear('pi2', b'RIFFaudio')['error'] == "'pi2' has no microphone."
+
+
+# --- her voice, in the format a device plays -------------------------------------
+
+def _tone(hz, rate, seconds=0.5, level=0.5, channels=1):
+    import numpy as np
+    wave = level * np.sin(2 * np.pi * hz * np.arange(int(rate * seconds)) / rate)
+    return np.column_stack([wave] * channels)
+
+
+def _file(sound, rate, kind='WAV', subtype=None):
+    import io
+    import soundfile as sf
+    out = io.BytesIO()
+    sf.write(out, sound, rate, format=kind, subtype=subtype)
+    return out.getvalue()
+
+
+def _read(audio):
+    import io
+    import soundfile as sf
+    with sf.SoundFile(io.BytesIO(audio)) as f:
+        return f.read(dtype='float32', always_2d=True), f.samplerate, f.format, f.subtype
+
+
+def _level(sound, rate, hz):
+    """How strong one frequency is in a sound, 1.0 = a full scale tone."""
+    import numpy as np
+    wave = sound[:, 0]
+    t = np.arange(len(wave)) / rate
+    return 2 * abs(np.mean(wave * np.exp(-2j * np.pi * hz * t)))
+
+
+PLAYS = {'type': 'audio/wav', 'rate': 16000, 'channels': 1}
+
+
+@pytest.mark.parametrize('kind, subtype, content_type', [
+    ('WAV', 'FLOAT', 'audio/wav'), ('OGG', 'VORBIS', 'audio/ogg'), ('MP3', None, 'audio/mpeg')])
+def test_fit_makes_the_format_the_device_stated(kind, subtype, content_type):
+    audio, said = voice.fit(_file(_tone(1000, 24000, channels=2), 24000, kind, subtype), content_type, PLAYS)
+    assert said == 'audio/wav'
+    sound, rate, fmt, sub = _read(audio)
+    assert (rate, fmt, sub, sound.shape[1]) == (16000, 'WAV', 'PCM_16', 1)
+    assert abs(len(sound) - 8000) <= 1200                     # half a second, give or take a codec's padding
+    assert 0.4 < _level(sound, rate, 1000) < 0.6              # the tone is still there, as loud as it was
+
+
+def test_fit_takes_out_what_the_lower_rate_cannot_carry():
+    """A 10 kHz tone cannot live at 16 kHz. Unfiltered it comes back as a 6 kHz tone."""
+    audio, _ = voice.fit(_file(_tone(10000, 24000), 24000, 'WAV', 'PCM_16'), 'audio/wav', PLAYS)
+    sound, rate, _, _ = _read(audio)
+    assert _level(sound, rate, 6000) < 0.01
+
+
+def test_fit_goes_up_and_to_two_channels_too():
+    audio, _ = voice.fit(_file(_tone(1000, 16000), 16000, 'WAV', 'PCM_16'), 'audio/wav',
+                         {'type': 'audio/wav', 'rate': 24000, 'channels': 2})
+    sound, rate, _, _ = _read(audio)
+    assert rate == 24000 and sound.shape == (12000, 2)
+    assert 0.4 < _level(sound, rate, 1000) < 0.6
+
+
+def test_fit_hands_on_untouched_what_already_fits():
+    ready = _file(_tone(1000, 16000), 16000, 'WAV', 'PCM_16')
+    assert voice.fit(ready, 'audio/wav', PLAYS) == (ready, 'audio/wav')
+
+
+def test_fit_never_clips_a_loud_voice():
+    import numpy as np
+    audio, _ = voice.fit(_file(_tone(1000, 24000, level=1.0), 24000, 'WAV', 'FLOAT'), 'audio/wav', PLAYS)
+    sound, _, _, _ = _read(audio)
+    assert np.abs(sound).max() <= 1.0 and _level(sound, 16000, 1000) > 0.9
+
+
+def test_fit_says_why_when_it_cannot():
+    assert voice.fit(b'not a sound at all', 'audio/ogg', PLAYS)[0] is None
+    assert 'could not be converted' in voice.fit(b'not a sound at all', 'audio/ogg', PLAYS)[1]
+    assert voice.fit(b'RIFF', 'audio/wav', {'type': 'audio/opus'}) == \
+        (None, 'This device stated a sound format I cannot make.')
+
+
+@pytest.mark.parametrize('plays', [
+    None, 'audio/wav', {}, {'type': 'audio/wav'}, {'type': 'audio/wav', 'rate': 'fast'},
+    {'type': 'audio/wav', 'rate': 4000}, {'type': 'audio/wav', 'rate': 96000},
+    {'type': 'audio/wav', 'rate': 16000, 'channels': 6}, {'type': 'audio/ogg', 'rate': 16000}])
+def test_a_format_that_cannot_be_made_is_no_format(plays):
+    assert voice.wanted(plays) is None
+
+
+def test_a_stated_format_is_read_with_care():
+    assert voice.wanted({'type': 'Audio/WAV', 'rate': '16000', 'junk': 1}) == PLAYS
+    assert voice.wanted({'type': 'audio/wav', 'rate': 22050, 'channels': 2}) == \
+        {'type': 'audio/wav', 'rate': 22050, 'channels': 2}
+
+
+def test_the_zone_is_posix_for_a_small_board():
+    tz = voice.local_tz()
+    assert tz and ' ' not in tz and len(tz) < 64
+    with patch('builtins.open', side_effect=OSError):                  # no zone file: the plain offset
+        plain = voice.local_tz()
+    assert plain[:1].isalpha() and plain[-1].isdigit()

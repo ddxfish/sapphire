@@ -234,7 +234,11 @@ function mountStatus(el, device, redraw) {
         const btn = ev.currentTarget;
         btn.disabled = true; btn.textContent = 'Testing...';
         try {
-            device.status = (await call('POST', `/${encodeURIComponent(device.id)}/test`)).status;
+            const res = await call('POST', `/${encodeURIComponent(device.id)}/test`);
+            device.status = res.status;
+            // asked how it is, a device may say it has more or less than this window shows
+            const tabs = d => (d.capabilities || []).map(c => c.capability).join();
+            if (res.device && tabs(res.device) !== tabs(device)) return redraw(res.device);
             el.querySelector('#dev-status').innerHTML = statusHTML(device);
             loadList();
         } catch (e) { showToast(e.message, 'error'); }
@@ -259,13 +263,14 @@ function mountActions(el, device, cap) {
     el.innerHTML = `
         <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:12px">
             <div class="setting-help" style="margin-bottom:8px">${names.length
-                ? 'What Sapphire can do here. Try runs the saved version, so save first.'
+                ? 'What Sapphire can do here. Try sends what you type; the grey text is only an example. Try runs the saved version, so save first.'
                 : 'Nothing to run yet.'}</div>
             ${names.map(n => `
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px" data-action="${esc(n)}">
                     <code style="min-width:120px">${esc(n)}</code>
-                    <input type="text" class="dev-try-value" value="${esc(cap.actions[n].example || '')}"
-                        placeholder="value (optional)" style="flex:1;min-width:0">
+                    <input type="text" class="dev-try-value"
+                        placeholder="${esc(cap.actions[n].example ? 'for example ' + cap.actions[n].example : 'value (optional)')}"
+                        style="flex:1;min-width:0">
                     <button type="button" class="btn-action dev-try">Try</button>
                 </div>`).join('')}
             <pre class="dev-try-out" hidden style="white-space:pre-wrap;max-height:220px;overflow:auto;background:var(--bg-secondary,#1a1b2e);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:8px;font-size:var(--font-sm,13px)"></pre>
@@ -326,9 +331,10 @@ async function openDevice(id, tab) {
         renderSettingsForm(root, schema, built.values, { slots });
         if (want) [...root.querySelectorAll('.ps-tab')].find(b => b.dataset.psTab === want)?.click();
     };
-    const after = dev => {            // null = the device is gone
+    const after = dev => {            // null = the device is gone, a device = draw it again
         loadList();
         if (!dev) modal.close();
+        else draw(dev, activeTab());
     };
     draw(device, tab);
 

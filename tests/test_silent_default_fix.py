@@ -77,6 +77,43 @@ def test_ask_sapphire_rejects_empty_settings_response():
     assert "no 'settings' key" in script
 
 
+def _answer_reader():
+    """The Python that reads her answer, cut out of the script as it is."""
+    script = (Path(__file__).parent.parent / 'tools/ask-sapphire.sh').read_text()
+    start = script.index('STATUS=0\npython3 -c "\n') + len('STATUS=0\npython3 -c "\n')
+    return script[start:script.index('\n" <<< "$RAW"', start)]
+
+
+@pytest.mark.parametrize('answer, code, said, problem', [
+    ('{"success": false, "responses": [], "errors": ["Task failed: Model not found."]}',
+     5, '', 'Model not found'),
+    ('{"success": false, "error": "Task not found"}', 5, '', 'Task not found'),
+    ('{"success": true, "responses": [{"output": ""}]}', 5, '', 'empty'),
+    ('', 5, '', 'nothing came back'),
+    ('<html>502</html>', 5, '', '502'),
+    ('{"success": true, "responses": [{"output": "<think>hm</think>Hello"}], "errors": []}',
+     0, 'Hello', ''),
+])
+def test_ask_sapphire_is_never_silent_without_an_answer(answer, code, said, problem):
+    """[REGRESSION_GUARD] A chat whose model had been retired answered 404.
+    The script printed nothing and exited 0, so a dead chat looked like a
+    quiet one (2026-09-29). No answer = the reason on stderr and exit 5."""
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, '-c', _answer_reader()], input=answer,
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == code
+    assert r.stdout.strip() == said
+    assert problem in r.stderr
+    assert bool(r.stderr.strip()) == bool(problem)
+
+
+def test_ask_sapphire_hands_on_the_readers_exit_code():
+    script = (Path(__file__).parent.parent / 'tools/ask-sapphire.sh').read_text()
+    assert '|| STATUS=$?' in script
+    assert script.rstrip().endswith('exit $STATUS')
+
+
 # ─── executor: warn-not-silent on missing scope keys ─────────────────────
 
 def test_executor_omits_missing_scope_keys_and_warns(caplog):

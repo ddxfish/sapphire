@@ -11,9 +11,15 @@
 #
 # Both privacy gates apply: a private chat never sends audio to a cloud
 # speech engine, and never sends its reply to a cloud voice engine.
+#
+# A device may state the ONE format it plays: {"type": "audio/wav", "rate":
+# 16000, "channels": 1}. wav is always 16 bit PCM. fit() is the only place
+# her voice is converted. A device that states nothing gets the audio as the
+# voice engine made it.
 import asyncio
 import contextvars
 import hmac
+import io
 import logging
 import os
 import tempfile
@@ -26,6 +32,7 @@ MAX_AUDIO = 20 * 1024 * 1024
 MAX_WAITING = 3            # questions one device may have waiting or running
 BUSY_WAIT = 20             # seconds a question waits for a chat that is mid-turn
 MAX_LISTENERS = 4          # light streams one device may hold open
+RATES = (8000, 48000)      # the sample rates a device may ask for, lowest and highest
 CUE_FRESH = 300            # seconds a cue is still worth showing to a late stream
 CUES = ('thinking', 'tool', 'idle', 'error')
 
@@ -47,15 +54,98 @@ def _engine():
     return engine
 
 
+# --- the clock -------------------------------------------------------------------
+
+def local_tz():
+    """This machine's time zone as the POSIX string a small board's C library
+    takes, like EST5EDT,M3.2.0,M11.1.0: the footer of the system zone file.
+    Without one, the plain offset, which knows no summer time."""
+    try:
+        with open('/etc/localtime', 'rb') as f:
+            data = f.read()
+        if data[:4] == b'TZif' and data[4:5] >= b'2':
+            foot = data.rstrip(b'\n').rsplit(b'\n', 1)[-1]
+            if 0 < len(foot) < 64 and b'\x00' not in foot:
+                return foot.decode('ascii', 'replace')
+    except (OSError, ValueError):
+        pass
+    name = ''.join(c for c in (time.tzname[0] or 'UTC') if c.isalpha())[:5] or 'UTC'
+    hours = time.timezone / 3600                      # POSIX counts west as positive
+    return f"{name}{int(hours) if hours == int(hours) else hours:g}"
+
+
+def clock():
+    """{'now': seconds since 1970, 'tz': POSIX zone}, for a device that keeps time."""
+    return {'now': int(time.time()), 'tz': local_tz()}
+
+
 # --- used by drivers -----------------------------------------------------------
 
 def render(text):
     """Her voice as (bytes, content_type), or (None, the reason). Gated by the
-    chat that produced the text when say() set one, else the effective chat."""
+    chat that produced the text when say() set one, else the effective chat.
+    fit() makes it the format a device plays."""
     tts = getattr(_system(), 'tts', None)
     if tts is None or not hasattr(tts, 'render'):
         return None, "Speech is not available right now."
     return tts.render(text, chat_settings=_speaking_for.get())
+
+
+def wanted(plays):
+    """The format a device stated, checked: {'type', 'rate', 'channels'}, or
+    None when it stated none that can be made."""
+    if not isinstance(plays, dict) or str(plays.get('type') or '').lower() != 'audio/wav':
+        return None
+    try:
+        rate, channels = int(plays.get('rate') or 0), int(plays.get('channels') or 1)
+    except (TypeError, ValueError):
+        return None
+    if not RATES[0] <= rate <= RATES[1] or channels not in (1, 2):
+        return None
+    return {'type': 'audio/wav', 'rate': rate, 'channels': channels}
+
+
+def _resample(sound, was, to):
+    """One channel at another sample rate. Going down, what the new rate
+    cannot carry is filtered out first, or it would come back as noise."""
+    import numpy as np
+    if was == to or not len(sound):
+        return sound
+    if to < was:
+        edge = 0.46 * to / was                   # a little under half the new rate
+        reach = 16 * int(np.ceil(was / to))
+        n = np.arange(-reach, reach + 1)
+        taps = 2 * edge * np.sinc(2 * edge * n) * np.hamming(len(n))
+        sound = np.convolve(sound, taps / taps.sum(), mode='same')
+    count = max(1, int(round(len(sound) * to / was)))
+    return np.interp(np.arange(count) * (was / to), np.arange(len(sound)), sound)
+
+
+def fit(audio, kind, plays):
+    """Audio in the format a device plays: (bytes, content_type), or (None,
+    the reason). Audio that already fits is handed on untouched."""
+    import numpy as np
+    import soundfile as sf
+    want = wanted(plays)
+    if want is None:
+        return None, "This device stated a sound format I cannot make."
+    try:
+        with sf.SoundFile(io.BytesIO(audio)) as f:
+            fits = (f.format == 'WAV' and f.subtype == 'PCM_16'
+                    and f.samplerate == want['rate'] and f.channels == want['channels'])
+            if fits:
+                return audio, want['type']
+            rate = f.samplerate
+            sound = f.read(dtype='float32', always_2d=True)
+        one = sound.mean(axis=1)
+        one = np.clip(_resample(one, rate, want['rate']), -1.0, 1.0)
+        out = io.BytesIO()
+        sf.write(out, np.column_stack([one] * want['channels']), want['rate'],
+                 format='WAV', subtype='PCM_16')
+        return out.getvalue(), want['type']
+    except Exception as e:
+        logger.error(f"[DEVICES] could not convert {kind} speech: {e}", exc_info=True)
+        return None, f"Her voice could not be converted for this device ({type(e).__name__})."
 
 
 def stt_refusal(chat_settings=None):
@@ -91,10 +181,9 @@ def transcribe(audio, suffix='.wav'):
 
 def _voice_part(row):
     """The part of this device that has a microphone, or None."""
-    reg = _engine()._registry()
+    e = _engine()
     for part in row.get('parts', []):
-        spec = reg.get_driver(part.get('driver'))
-        if spec and 'mic' in spec['capabilities']:
+        if 'mic' in e.capabilities(part, e._registry().get_driver(part.get('driver'))):
             return part
     return None
 

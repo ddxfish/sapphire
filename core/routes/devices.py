@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from core.auth import require_login, check_endpoint_rate, get_client_ip
@@ -40,11 +40,14 @@ def _view(row, status=None):
     return out
 
 
-def _saved(row, failed):
+def _saved(row, failed, problems=()):
     out = {"device": _view(row)}
+    notes = []
     if failed:
-        out["warning"] = ("Saved, but these could not be stored: " + ", ".join(failed)
-                          + ". Enter them again.")
+        notes.append("these could not be stored: " + ", ".join(failed) + ". Enter them again")
+    notes += [f"the device did not take its settings ({p})" for p in problems]
+    if notes:
+        out["warning"] = "Saved, but " + "; ".join(notes) + "."
     return out
 
 
@@ -65,20 +68,24 @@ def list_devices():
 def get_device(device_id):
     e = _engine()
     row = e.get(device_id)
-    return {"device": _view(row, e.status(row["id"], fresh=False) if row.get("enabled", True) else None)}
+    status = e.status(row["id"], fresh=False) if row.get("enabled", True) else None
+    # read again: asked how it is, the device may have just said what it has
+    return {"device": _view(e.get(row["id"]), status)}
 
 
 def add_device(body):
-    row, failed = _engine().add(body.get("id"), body.get("label"), body.get("driver"), body.get("config"),
-                                location=body.get("location") or '')
-    return _saved(row, failed)
+    e = _engine()
+    row, failed = e.add(body.get("id"), body.get("label"), body.get("driver"), body.get("config"),
+                        location=body.get("location") or '')
+    return _saved(row, failed, e.tell(row))
 
 
 def update_device(device_id, body):
-    row, failed = _engine().update(device_id, label=body.get("label"), enabled=body.get("enabled"),
-                                   parts=body.get("parts"), new_id=body.get("new_id"),
-                                   location=body.get("location"), locked=body.get("locked"))
-    return _saved(row, failed)
+    e = _engine()
+    row, failed = e.update(device_id, label=body.get("label"), enabled=body.get("enabled"),
+                           parts=body.get("parts"), new_id=body.get("new_id"),
+                           location=body.get("location"), locked=body.get("locked"))
+    return _saved(row, failed, e.tell(row) if row.get("enabled", True) else [])
 
 
 def remove_device(device_id):
@@ -87,7 +94,9 @@ def remove_device(device_id):
 
 
 def test_device(device_id):
-    return {"status": _engine().status(device_id, fresh=True)}
+    e = _engine()
+    status = e.status(device_id, fresh=True)
+    return {"status": status, "device": _view(e.get(device_id), status)}
 
 
 def found_things(driver_id, device_id=''):
@@ -216,16 +225,42 @@ async def _device_key(device_id, request, door):
     return key
 
 
+AUDIO_BODIES = {'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/ogg': '.ogg',
+                'audio/mpeg': '.mp3', 'audio/flac': '.flac'}
+
+
+async def _heard(request, limit):
+    """(audio, suffix) a device sent: the request body itself when its
+    Content-Type is a sound (a small board), else the form file `audio`.
+    Read in pieces, so one that is too large is refused before it is held."""
+    kind = request.headers.get('content-type', '').split(';')[0].strip().lower()
+    if kind in AUDIO_BODIES:
+        data = bytearray()
+        async for piece in request.stream():
+            data += piece
+            if len(data) > limit:
+                raise HTTPException(status_code=413, detail="The audio is too large.")
+        return bytes(data), AUDIO_BODIES[kind]
+    try:
+        audio = (await request.form()).get('audio')
+    except Exception:
+        audio = None
+    if audio is None or not hasattr(audio, 'read'):
+        raise HTTPException(status_code=422, detail="Send the audio as the body with its "
+                            "Content-Type, or as the form file 'audio'.")
+    name = (audio.filename or '').lower()
+    suffix = '.' + name.rsplit('.', 1)[1] if '.' in name and len(name.rsplit('.', 1)[1]) <= 4 else '.wav'
+    return await audio.read(), suffix
+
+
 @router.post("/api/devices/{device_id}/voice")
-async def devices_voice(device_id: str, request: Request, audio: UploadFile = File(...)):
+async def devices_voice(device_id: str, request: Request):
     """A satellite heard its wake word and sends what was said. The answer
     comes back as soon as the words are known. Her reply is spoken on the
     same device later, when she has one."""
     await _device_key(device_id, request, 'voice')
     from core.devices import voice
-    data = await audio.read()
-    name = (audio.filename or '').lower()
-    suffix = '.' + name.rsplit('.', 1)[1] if '.' in name and len(name.rsplit('.', 1)[1]) <= 4 else '.wav'
+    data, suffix = await _heard(request, voice.MAX_AUDIO)
     return await asyncio.to_thread(voice.hear, device_id, data, suffix)
 
 
@@ -238,7 +273,8 @@ async def light_stream(device_id, key, gone):
     queue = asyncio.Queue(maxsize=32)
     now = voice.listen(device_id, loop, queue)
     try:
-        yield f"data: {json.dumps({'state': 'connected', 'src': 'device'})}\n\n"
+        # the clock rides along: a board keeps local time from it, no internet clock needed
+        yield f"data: {json.dumps(dict(voice.clock(), state='connected', src='device'))}\n\n"
         if now:
             yield f"data: {json.dumps(now)}\n\n"
         while True:
