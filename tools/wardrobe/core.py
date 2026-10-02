@@ -176,7 +176,7 @@ def skin_ref(lab, aA):
     return np.median(lab[strip], axis=0) if strip.sum() >= 50 else None
 
 
-def cut(base, gen, thresh=24, min_blob=400, inside=True, feather=2, pieces=1, head=False, skin_guard=True, trim=0.0, reach=0, hair=False):
+def cut(base, gen, thresh=24, min_blob=400, inside=True, feather=2, pieces=1, head=False, skin_guard=True, trim=0.0, reach=0, hair=False, key=None, key_tol=35):
     """base, gen: RGBA PIL, same size. Returns (layer RGBA PIL, alpha ndarray).
     head=True (the face slot): no diff at all — the layer is the whole head down to the neck, feathered there,
     so an expression's subtle shading comes through faithfully. The head doesn't move, so a patch is exact.
@@ -185,6 +185,9 @@ def cut(base, gen, thresh=24, min_blob=400, inside=True, feather=2, pieces=1, he
     skin_guard: drop changed pixels that are skin-like (her own skin colour) before AND after — the model
     re-lighting her. Turn it off for a garment that is itself skin-coloured (beige pants, a tan top).
     hair: the hair slot — hair drawn over hair is a change, so the same-hue test for re-shaded worn garments is off.
+    key: an RGB colour — a CHROMA KEY instead of the diff: the layer is every pixel within key_tol degrees of that
+    hue (and chromatic enough), nothing else. Generate the garment in a colour she can't be (blue hair), cut by
+    key, recolour the layer on the Tools tab. Threshold and the skin guard don't apply.
     trim: erode the garment's FREE edges by this many px (fractions allowed) — the last sliver of skin where
     the garment ends. Trim and feather never touch the edge that runs along HER outline (see below).
     reach: the garment hugs her outline — garment within this many px of her edge extends to it, the added
@@ -204,8 +207,13 @@ def cut(base, gen, thresh=24, min_blob=400, inside=True, feather=2, pieces=1, he
         out = np.dstack([np.clip(B[..., :3], 0, 255).astype(np.uint8), a]); out[a == 0, :3] = 0
         return Image.fromarray(out), a
     rgb = np.abs(A[..., :3] - B[..., :3]).max(axis=2)
-    m = (rgb > thresh) & (sil > 0)
-    if skin_guard:
+    keyed = None
+    if key is not None:
+        # additive: only key-coloured pixels that were NOT key-coloured in what the model saw — a worn blue layer
+        # it repainted stays out of the new one (a different key per layer is the surer way)
+        keyed = key_mask(np.clip(B[..., :3], 0, 255).astype(np.uint8), key, key_tol) & ~key_mask(np.clip(A[..., :3], 0, 255).astype(np.uint8), key, key_tol)
+    m = (keyed if keyed is not None else (rgb > thresh)) & (sil > 0)
+    if skin_guard and keyed is None:
         # Re-lit skin is skin in BOTH images. Her own skin colour is the median of a strip down the middle of her
         # face (nose to chin). Skin-like = skin's chroma at any brightness (her jaw in the hair's shadow) or near
         # skin's brightness with the chroma drifted (the model re-tinting her legs beside the leggings). A changed
@@ -226,7 +234,7 @@ def cut(base, gen, thresh=24, min_blob=400, inside=True, feather=2, pieces=1, he
             same_hue = (np.hypot(L1[..., 1] - L2[..., 1], L1[..., 2] - L2[..., 2]) < 12) & (np.abs(L1[..., 0] - L2[..., 0]) < 60)
             m &= ~same_hue
     if not inside:
-        m |= (aB > 8) & (sil == 0)
+        m |= ((aB > 8) if keyed is None else (keyed & (aB > 8))) & (sil == 0)      # keyed: outside her must be the key colour too
     m = m.astype(np.uint8)
     # Edge ribbons — the model's re-rendering of her outline, a thin changed strip just INSIDE her — die in the
     # open. Outside her it only chewed up wisps of hair, so there the mask stays as the result drew it.
@@ -316,6 +324,38 @@ def alpha_heat(img):
     out[(a > 0) & (a <= 25)] = (230, 40, 40); out[(a >= 230) & (a < 255)] = (40, 210, 230); out[a == 255] = (190, 190, 190)
     mid = (a > 25) & (a < 230); t = (a[mid] - 25) / 205.0; out[mid] = np.stack([np.full_like(t, 240), 120 + 120 * t, np.zeros_like(t)], axis=1).astype(np.uint8)
     return Image.fromarray(np.dstack([out, np.full(a.shape, 255, np.uint8)]))
+
+
+def _hue_chroma(rgb_u8):
+    lab = cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2LAB).astype(np.float32); a, b = lab[..., 1] - 128, lab[..., 2] - 128
+    return np.degrees(np.arctan2(b, a)), np.hypot(a, b), lab
+
+
+def key_mask(rgb_u8, colour, tol=35, min_chroma=18):
+    """Pixels within ±tol degrees of `colour`'s hue (Lab) that are chromatic enough to have a hue at all."""
+    hue, chroma, _ = _hue_chroma(rgb_u8); ref_h, ref_c, _ = _hue_chroma(np.uint8([[colour]]))
+    d = (hue - ref_h[0, 0] + 180) % 360 - 180
+    return (np.abs(d) <= tol) & (chroma >= min_chroma)
+
+
+def recolour(img, hue=0.0, sat=1.0, light=0.0):
+    """Every pixel's colour shifted in Lab — hue rotated by `hue` degrees, chroma scaled by `sat`, L moved by
+    `light` (0..255 units) — alpha and texture untouched. Blue hair becomes brown hair, strand for strand."""
+    A = np.asarray(img.convert("RGBA")).copy(); _, _, lab = _hue_chroma(A[..., :3])
+    a, b = lab[..., 1] - 128, lab[..., 2] - 128; t = np.radians(hue); c, s = np.cos(t), np.sin(t)
+    lab[..., 1] = (a * c - b * s) * sat + 128; lab[..., 2] = (a * s + b * c) * sat + 128; lab[..., 0] += light
+    rgb = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+    on = A[..., 3] > 0; A[on, :3] = rgb[on]; return Image.fromarray(A)
+
+
+def colour_shift(img, target, min_chroma=18):
+    """The (hue, sat, light) that takes the image's dominant colour — the median of its chromatic opaque pixels —
+    to `target` RGB. None when nothing in it has a hue."""
+    A = np.asarray(img.convert("RGBA")); hue, chroma, lab = _hue_chroma(A[..., :3]); on = (A[..., 3] > 0) & (chroma >= min_chroma)
+    if on.sum() < 50: return None
+    th, tc, tlab = _hue_chroma(np.uint8([[target]])); mh = np.degrees(np.arctan2(np.median(np.sin(np.radians(hue[on]))), np.median(np.cos(np.radians(hue[on])))))
+    mc, ml = np.median(chroma[on]), np.median(lab[on, 0])
+    return (float((th[0, 0] - mh + 180) % 360 - 180), float(tc[0, 0] / max(mc, 1)), float(tlab[0, 0, 0] - ml))
 
 
 def fix_alpha(img, lo=25, hi=230, trim_px=0, defringe_px=0, min_px=0, grow_px=0):

@@ -521,7 +521,7 @@ class ExecutionContext:
         # message content can't free schema bytes; the user has to either
         # reduce the toolset or raise context_limit. Surfacing both numbers
         # in the error message tells them which lever to pull.
-        from core.chat.history import count_tokens
+        from core.chat.history import count_tokens, count_message_tokens
         tool_schema_tokens = 0
         if self.tools:
             try:
@@ -555,12 +555,27 @@ class ExecutionContext:
             # orphaned tool-result heads, retry under 80% of limit, and only
             # give up with a specific reason if trim can't help.
             if context_limit > 0:
-                msg_tokens = sum(count_tokens(str(m.get("content", ""))) for m in messages)
+                # count_message_tokens, not count_tokens(str(content)): a vision
+                # turn's content is a list carrying base64 image blocks, and the
+                # text tokenizer chews base64 at ~1.4 chars/token — one 374KB PNG
+                # off Discord was charged 356k "tokens" (the model bills ~1.4k for
+                # its pixels), tripped overflow on a 198k history, and she never
+                # replied. Images are a flat per-block estimate here. 2026-10-02.
+                def _budget(ms):
+                    return sum(count_message_tokens(m.get("content", ""), include_images=True) for m in ms)
+                msg_tokens = _budget(messages)
                 total_tokens = msg_tokens + tool_schema_tokens
                 if total_tokens > context_limit * 0.9:
                     sys_idx = 1 if messages and messages[0].get("role") == "system" else 0
-                    non_system = len(messages) - sys_idx
-                    if non_system > 4:
+                    before, dropped, passes = total_tokens, 0, 0
+                    # Keep biting until under 80% (the headroom this block always
+                    # promised) or nothing droppable is left. Before 2026-10-02 it
+                    # was ONE 25% bite, so any turn more than 25% over bailed as
+                    # overflow with history still on the table.
+                    while total_tokens > context_limit * 0.8:
+                        non_system = len(messages) - sys_idx
+                        if non_system <= 4:
+                            break
                         drop = max(1, non_system // 4)
                         # Trim is for OLD history ONLY — never delete the current
                         # turn's user message or anything after it. On a short/empty
@@ -571,24 +586,26 @@ class ExecutionContext:
                         # Clamp so the delete never reaches user_msg. 2026-06-13.
                         protect_idx = next((i for i, m in enumerate(messages) if m is user_msg), len(messages))
                         drop = min(drop, max(0, protect_idx - sys_idx))
-                        if drop > 0:
-                            del messages[sys_idx:sys_idx + drop]
-                            # Strip any orphaned tool-result messages now at the front
-                            while len(messages) > sys_idx and messages[sys_idx].get("role") == "tool":
-                                messages.pop(sys_idx)
-                            # Also strip an assistant that had tool_calls whose results
-                            # just got dropped (would become orphan at LLM call time)
-                            if len(messages) > sys_idx and messages[sys_idx].get("role") == "assistant" and messages[sys_idx].get("tool_calls"):
-                                messages.pop(sys_idx)
-                            new_msg_tokens = sum(count_tokens(str(m.get("content", ""))) for m in messages)
-                            new_total = new_msg_tokens + tool_schema_tokens
-                            logger.warning(
-                                f"[ExecCtx] Context trim: dropped ~{drop} oldest msgs "
-                                f"({total_tokens} → {new_total} tokens, "
-                                f"limit {context_limit}; tool schemas {tool_schema_tokens})"
-                            )
-                            total_tokens = new_total
-                            msg_tokens = new_msg_tokens
+                        if drop <= 0:
+                            break
+                        del messages[sys_idx:sys_idx + drop]
+                        # Strip any orphaned tool-result messages now at the front
+                        while len(messages) > sys_idx and messages[sys_idx].get("role") == "tool":
+                            messages.pop(sys_idx)
+                        # Also strip an assistant that had tool_calls whose results
+                        # just got dropped (would become orphan at LLM call time)
+                        if len(messages) > sys_idx and messages[sys_idx].get("role") == "assistant" and messages[sys_idx].get("tool_calls"):
+                            messages.pop(sys_idx)
+                        dropped += drop
+                        passes += 1
+                        msg_tokens = _budget(messages)
+                        total_tokens = msg_tokens + tool_schema_tokens
+                    if dropped:
+                        logger.warning(
+                            f"[ExecCtx] Context trim: dropped ~{dropped} oldest msgs in {passes} pass(es) "
+                            f"({before} → {total_tokens} tokens, "
+                            f"limit {context_limit}; tool schemas {tool_schema_tokens})"
+                        )
                     if total_tokens > context_limit * 0.9:
                         # Trim couldn't rescue this turn — give a specific reason
                         # that points at the actual lever to pull. With heavy

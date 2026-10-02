@@ -39,7 +39,7 @@ _MAX_EVENT_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB decoded, per image
 _VALID_IMAGE_MEDIA = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"}
 
 
-def _extract_event_images(obj) -> list:
+def _extract_event_images(obj, notes: list = None) -> list:
     """Pull validated images from an event payload dict.
 
     Returns a list of {"data": <base64 str>, "media_type": <str>} that passed
@@ -47,6 +47,15 @@ def _extract_event_images(obj) -> list:
     plugin-supplied binary data: a signed plugin can still be buggy, so we
     decode-test every entry and cap count + size before anything reaches the
     LLM context or the chat DB. 2026-06-13.
+
+    Every survivor is normalized through core.images.for_chat (≤1536px long
+    edge, RGB JPEG — the one resize). What a vision model bills is pixels,
+    ~w*h/750, so this bounds an event image at ~3k tokens and roughly a fifth
+    of the bytes on the wire and in the DB. A plugin hands us whatever the
+    user posted (Discord: up to 10MB raw); before 2026-10-02 it went through
+    untouched. Anything that can't be decoded is dropped — the API would have
+    400'd the whole turn on it — and `notes`, when given, collects one human
+    line per removed image so the model is told instead of left guessing.
     """
     import base64
     if not isinstance(obj, dict):
@@ -54,30 +63,44 @@ def _extract_event_images(obj) -> list:
     raw = obj.get("images")
     if not isinstance(raw, list) or not raw:
         return []
+
+    def _drop(reason):
+        logger.warning(f"[EVENT-IMG] Dropped image — {reason}")
+        if notes is not None:
+            notes.append(reason)
+
     out = []
     for entry in raw[:_MAX_EVENT_IMAGES]:
         if not isinstance(entry, dict):
-            logger.warning("[EVENT-IMG] Dropped non-dict image entry")
+            _drop("entry is not an image record")
             continue
         data = entry.get("data")
         media_type = (entry.get("media_type") or "image/jpeg").lower()
         if not isinstance(data, str) or not data:
-            logger.warning("[EVENT-IMG] Dropped image entry with no base64 'data' string")
+            _drop("no image data")
             continue
         if media_type not in _VALID_IMAGE_MEDIA:
-            logger.warning(f"[EVENT-IMG] Dropped image with unsupported media_type {media_type!r}")
+            _drop(f"unsupported type {media_type}")
             continue
         try:
             decoded = base64.b64decode(data, validate=True)
         except Exception:
-            logger.warning("[EVENT-IMG] Dropped image entry — 'data' is not valid base64")
+            _drop("image data is not valid base64")
             continue
         if len(decoded) > _MAX_EVENT_IMAGE_BYTES:
-            logger.warning(f"[EVENT-IMG] Dropped image — {len(decoded)} bytes exceeds cap")
+            _drop(f"{len(decoded) // (1024 * 1024)}MB is over the {_MAX_EVENT_IMAGE_BYTES // (1024 * 1024)}MB cap")
             continue
-        out.append({"data": data, "media_type": media_type})
+        try:
+            from core import images as _ci
+            fitted = _ci.for_chat(decoded)
+        except Exception as e:
+            _drop(f"could not be processed ({e})")
+            continue
+        out.append({"data": base64.b64encode(fitted).decode("ascii"), "media_type": "image/jpeg"})
     if len(raw) > _MAX_EVENT_IMAGES:
         logger.warning(f"[EVENT-IMG] Payload had {len(raw)} images; capped to {_MAX_EVENT_IMAGES}")
+        if notes is not None:
+            notes.append(f"{len(raw) - _MAX_EVENT_IMAGES} more image(s) over the {_MAX_EVENT_IMAGES}-per-message cap")
     return out
 
 
@@ -257,10 +280,16 @@ class ContinuityExecutor:
             # run site. Absent/invalid → [] → behavior identical to text-only. 2026-06-13.
             try:
                 _img_obj = json.loads(event_data) if isinstance(event_data, str) else event_data
-                event_images = _extract_event_images(_img_obj)
+                _img_notes = []
+                event_images = _extract_event_images(_img_obj, _img_notes)
                 if event_images:
                     task["_event_images"] = event_images
                     logger.info(f"[EVENT-IMG] {len(event_images)} image(s) attached from event payload")
+                if _img_notes:
+                    # The model is told what it didn't get, in the user turn, so
+                    # "what's in the picture?" gets an honest answer. 2026-10-02.
+                    task["initial_message"] += "".join(
+                        f"\n(An attached image was removed before it reached you: {n})" for n in _img_notes)
             except (json.JSONDecodeError, TypeError):
                 pass
 

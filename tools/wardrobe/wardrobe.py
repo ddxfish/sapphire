@@ -21,10 +21,10 @@ from PySide6.QtGui import QImage, QPixmap, QIcon, QPalette, QColor, QShortcut, Q
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel, QPushButton, QToolButton, QLineEdit, QSpinBox,
                                QSlider, QCheckBox, QRadioButton, QComboBox, QPlainTextEdit, QScrollArea, QTabWidget, QSplitter,
                                QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QFileDialog, QMessageBox, QSizePolicy,
-                               QButtonGroup, QDialog, QTextBrowser, QGraphicsView, QGraphicsScene, QDoubleSpinBox)
+                               QButtonGroup, QDialog, QTextBrowser, QGraphicsView, QGraphicsScene, QDoubleSpinBox, QColorDialog)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from core import (Comfy, build_graph, cut, checker, stack, preview_sheet, make_icon, FRAME, LAYER_ORDER, SLOTS, PAIRED, STICKS_OUT, HAIR, UNDER,
+from core import (Comfy, build_graph, cut, checker, stack, preview_sheet, make_icon, recolour, colour_shift, FRAME, LAYER_ORDER, SLOTS, PAIRED, STICKS_OUT, HAIR, UNDER,
                   GARMENT_TPL, SLOT_TPL, GARMENT_HINT, BASE_PROMPT, REF_PROMPT, EDIT_HINT, REGION_HINT, REGION_ADD_HINT, REGION_BLANK_HINT, crop_up, paste_down, blank_hole, paste_hole, slot_for, clean_alpha, alpha_is_soft, alpha_hist, alpha_heat, diff_view, onion, fix_alpha, on_bg, change_map, over_dim, FLAT_BGS)
 
 NONE = "(none)"
@@ -157,7 +157,6 @@ class Strip(QScrollArea):
             k = e["kind"] if isinstance(e, dict) else ""; worn = ", ".join(e.get("ctx", ())) if isinstance(e, dict) else ""
             b.setToolTip({"saved": "the layer on disk, worn — what the card shows now. Nothing to save here.",
                           "blank": "nothing saved for this item yet.",
-                          "raw": "the raw result the saved layer was cut from: the sliders re-cut THIS, Save overwrites the layer.",
                           "new": "a fresh result: the sliders cut it, Save writes it."}.get(k, "") + (f"\nmade over: {worn}" if worn else ""))
             b.clicked.connect(lambda _=False, i=i: self.on_click(i)); self.group.addButton(b); self.lay.addWidget(b)
 
@@ -526,10 +525,18 @@ class App(QMainWindow):
         tab = QWidget(); self.tabs.addTab(tab, "Wardrobe"); v = QVBoxLayout(tab)
         left = QWidget(); lv = QVBoxLayout(left)
         lv.addWidget(hint("LEFT: exactly what the model sees — the base plus whatever you check under 'wear while generating'. "
-                          "RIGHT: the picked result in the chosen cut view; 'over base' is the plain base + this item. "
+                          "RIGHT: the picked result in the chosen cut view; 'over base' is the plain base + this item, 'worn' adds what it was made over. "
                           "Wheel = zoom, drag = pan, double-click = fit; both panes move together."))
-        pair = QHBoxLayout(); lv.addLayout(pair, 1)
-        self.lpreview = Preview(); self.rpreview = Preview(); pair.addWidget(self.lpreview, 1); pair.addWidget(self.rpreview, 1); self.lpreview.link(self.rpreview)
+        pair = QHBoxLayout(); lv.addLayout(pair, 1); lc, rc = QVBoxLayout(), QVBoxLayout(); pair.addLayout(lc, 1); pair.addLayout(rc, 1)
+        self.lpreview = Preview(); self.rpreview = Preview(); lc.addWidget(self.lpreview, 1); rc.addWidget(self.rpreview, 1); self.lpreview.link(self.rpreview)
+        # how to look at the picked result: a row UNDER the right pane, like the Base tab's candidate views
+        self.view = QButtonGroup(self); vr = QHBoxLayout(); vr.setSpacing(6)
+        for i, (t, tt) in enumerate((("result", "what the model made"), ("layer", "the cut-out alone, on a checker"),
+                                     ("on dark", "the cut-out alone on a flat dark background — re-drawn skin that rode into the layer shows here"),
+                                     ("over base", "the plain base + this item only: anything of the worn layers that rode into this one shows here"),
+                                     ("worn", "her wearing what this result was made over, plus this item — as the card will show it"))):
+            rb = tip(QRadioButton(t), tt); rb.setChecked(i == 4); self.view.addButton(rb, i); vr.addWidget(rb)
+        vr.addStretch(1); rc.addLayout(vr); self.view.buttonClicked.connect(lambda *_: self.show_cut())
         self.wstrip = Strip(self.select); lv.addWidget(self.wstrip)
 
         right, r = self.panel(); v.addWidget(self.split(left, right), 1)
@@ -584,12 +591,15 @@ class App(QMainWindow):
                                                               "Hair over hair passes. Turn OFF for a garment that is itself skin-coloured (beige pants, a tan top).")
         self.skin.setChecked(True); self.skin.toggled.connect(lambda *_: self.schedule_cut())
         cl.addWidget(row(QLabel("pieces"), self.pieces, self.outside, self.skin, 1))
-        self.view = QButtonGroup(self); vr = QHBoxLayout()
-        for i, (t, tt) in enumerate((("result", "what the model made"), ("layer", "the cut-out alone, on a checker"),
-                                     ("on dark", "the cut-out alone on a flat dark background — re-drawn skin that rode into the layer shows here"),
-                                     ("over base", "the plain base + this item, as the card shows it"))):
-            rb = tip(QRadioButton(t), tt); rb.setChecked(i == 3); self.view.addButton(rb, i); vr.addWidget(rb)
-        vr.addStretch(1); cl.addLayout(vr); self.view.buttonClicked.connect(lambda *_: self.show_cut())
+        self.keyon = tip(QCheckBox("key colour"), "CHROMA KEY instead of the diff: the layer is every pixel of this hue that wasn't already that hue in what "
+                                                  "the model saw. Generate the garment in a colour she can't be ('bright blue hair'), cut by key, then turn it "
+                                                  "brown on the Tools tab (recolour → to colour…). Making a second layer over a worn keyed one? Give it a "
+                                                  "different key (green over blue). Threshold and the skin guard don't apply.")
+        self.keyon.toggled.connect(lambda *_: self.schedule_cut()); self.key = (40, 80, 255)
+        self.keybtn = tip(QPushButton(""), "the key colour — click to pick"); self.keybtn.setFixedWidth(44); self.keybtn.clicked.connect(self.pick_key); self.show_key()
+        self.keytol = tip(QSpinBox(), "how far a hue may stray from the key, in degrees"); self.keytol.setRange(5, 90); self.keytol.setValue(35)
+        self.keytol.valueChanged.connect(lambda *_: self.schedule_cut())
+        cl.addWidget(row(self.keyon, self.keybtn, QLabel("± °"), self.keytol, 1))
         self.save_btn = big("Save layer", "#36c", self.save_layer); self.save_btn.setEnabled(False)
         self.del_btn = tip(QPushButton("Delete"), "Remove this item's files from --out: the layer, icon, preview, raw result and recipe. Asks first.")
         self.del_btn.setStyleSheet("background:#733; color:white; padding:8px"); self.del_btn.clicked.connect(self.delete_item); self.del_btn.setEnabled(False)
@@ -708,6 +718,12 @@ class App(QMainWindow):
         self.t_lo = self.tslider(gl, "empty below", 0, 128, 25, "alpha at or below this → 0. Kills the low-opacity junk (squares) that isn't her.")
         self.t_hi = self.tslider(gl, "solid above", 128, 255, 230, "alpha at or above this → 255. Makes a slightly see-through body solid.")
         self.t_min = self.tslider(gl, "drop islands px", 0, 3000, 0, "floating alpha blobs smaller than this many px are removed")
+        g = QGroupBox("recolour — hue, strength and lightness of every pixel; alpha untouched"); gl = QVBoxLayout(g); gl.setSpacing(4); r.addWidget(g)
+        self.t_hue = self.tslider(gl, "hue °", -180, 180, 0, "rotate every colour's hue — blue hair to brown is about +120")
+        self.t_sat = self.tslider(gl, "colour %", 0, 300, 100, "scale how colourful it is — 0 = grey, 100 = as is")
+        self.t_light = self.tslider(gl, "lightness", -100, 100, 0, "darker or lighter, same shading")
+        tcol = tip(QPushButton("to colour…"), "pick the colour the garment should be: sets the three sliders so its dominant colour lands there")
+        tcol.clicked.connect(self.tools_to_colour); gl.addWidget(row(tcol, 1))
         g = QGroupBox("trim edges"); gl = QVBoxLayout(g); gl.setSpacing(4); r.addWidget(g)
         self.t_trim = self.tslider(gl, "trim outline px", 0, 12, 0, "erode the outline inward by this many px — eats a white border baked into an edge, shrinks a garment that overshoots")
         self.t_grow = self.tslider(gl, "grow outline px", 0, 12, 0, "dilate the outline outward by this many px, grown pixels take the nearest colour — a garment that stops a hair short of her edge")
@@ -732,6 +748,25 @@ class App(QMainWindow):
     def tools_settings(self):
         return dict(lo=self.t_lo.value(), hi=max(self.t_hi.value(), self.t_lo.value() + 1), trim_px=self.t_trim.value(), defringe_px=self.t_fringe.value(),
                     min_px=self.t_min.value(), grow_px=self.t_grow.value())
+
+    def tools_colour(self):
+        return dict(hue=float(self.t_hue.value()), sat=self.t_sat.value() / 100, light=float(self.t_light.value()))
+
+    def tools_to_colour(self):
+        src, _, _ = self.tools_input()
+        if src is None: return
+        c = QColorDialog.getColor(QColor(110, 70, 40), self, "the colour it should be")
+        if not c.isValid(): return
+        sh = colour_shift(src, (c.red(), c.green(), c.blue()))
+        if sh is None: return self.say("nothing in it has a hue to shift")
+        for w, v in ((self.t_hue, sh[0]), (self.t_sat, sh[1] * 100), (self.t_light, sh[2])): w.setValue(int(round(v)))
+
+    def pick_key(self):
+        c = QColorDialog.getColor(QColor(*self.key), self, "key colour")
+        if c.isValid(): self.key = (c.red(), c.green(), c.blue()); self.show_key(); self.schedule_cut()
+
+    def show_key(self):
+        self.keybtn.setStyleSheet("background: rgb(%d, %d, %d); border: 1px solid #888" % self.key)
 
     def tools_list(self):
         """Fill the item box from the layers on disk, filtered by the slot box. 'source image' = the Base tab's source."""
@@ -782,7 +817,9 @@ class App(QMainWindow):
         if src is None:
             for pv in self.tviews: pv.clear_image(); self.tools_result = None
             self.thist.setText("no source — Load source… on the Base tab" if kind == "source" else "no layer — pick a slot and an item (saved layers in --out)"); return
-        st = self.tools_settings(); self.tools_result = fix_alpha(src, **st); bg = FLAT_BGS[self.tbg.currentText()]
+        st = self.tools_settings(); col = self.tools_colour()
+        if col != dict(hue=0.0, sat=1.0, light=0.0): src = recolour(src, **col)                    # colour first: the defringe reads colours
+        self.tools_result = fix_alpha(src, **st); bg = FLAT_BGS[self.tbg.currentText()]
         if kind == "layer" and self.base is not None:
             caps = ("LAYER alone · on flat colour (added skin shows here)", "AFTER · over DIMMED base (gaps and overshoot at her edge)", "CHANGE MAP · red → empty, cyan → solid, yellow recoloured", "AFTER · over base")
             imgs = (on_bg(src, bg), over_dim(self.base, self.tools_result), change_map(src, self.tools_result, bg), Image.alpha_composite(self.base, self.tools_result))
@@ -798,12 +835,14 @@ class App(QMainWindow):
 
     def tools_store(self, k):
         if self.tools_result is None: return
-        _, _, b2 = self.tslots[k]; self.tslots[k] = (self.tools_result, self.tools_settings(), b2); b2.setEnabled(True); self.say(f"slot {k} stored")
+        _, _, b2 = self.tslots[k]; self.tslots[k] = (self.tools_result, dict(self.tools_settings(), **self.tools_colour()), b2); b2.setEnabled(True); self.say(f"slot {k} stored")
 
     def tools_recall(self, k):
         img, st, _ = self.tslots[k]
         if st is None: return
         for w, key in ((self.t_lo, "lo"), (self.t_hi, "hi"), (self.t_trim, "trim_px"), (self.t_grow, "grow_px"), (self.t_fringe, "defringe_px"), (self.t_min, "min_px")): w.setValue(st[key])
+        for w, key, f in ((self.t_hue, "hue", 1), (self.t_sat, "sat", 100), (self.t_light, "light", 1)):
+            if key in st: w.setValue(int(round(st[key] * f)))
         self.tools_refresh(); self.say(f"slot {k} recalled")
 
     def tools_apply(self):
@@ -906,7 +945,7 @@ class App(QMainWindow):
         if it and self.prompt.toPlainText().strip() in (GARMENT_HINT, self._auto_prompt): self.auto_prompt(it)
         self.del_btn.setEnabled(bool(it and self.item_files(it)))
         if it and not self.recipe(it):                            # a NEW item starts from the defaults — settings never leak from the last item
-            self.thresh.setValue(24); self.blob.setValue(400); self.skin.setChecked(True); self.trim.setValue(0); self.reach.setValue(2)
+            self.thresh.setValue(24); self.blob.setValue(400); self.skin.setChecked(True); self.trim.setValue(0); self.reach.setValue(2); self.keyon.setChecked(False)
         self.build_strip()
 
     def auto_prompt(self, it):
@@ -924,9 +963,8 @@ class App(QMainWindow):
 
     def build_strip(self, pick=0):
         """The strip belongs to the picked item: first what it IS now — its saved layer worn ('saved'), or 'blank'
-        when nothing is saved — then its saved raw result ('seed N', re-cuttable with the sliders), then whatever
-        was generated for it this session. Picking an item also brings its recipe back (slot, sliders, worn
-        layers). Results never leak between items (2026-10-02)."""
+        when nothing is saved — then whatever was generated for it this session. Picking an item also brings its
+        recipe back (slot, sliders, worn layers). Results never leak between items (2026-10-02)."""
         it = self.cur_item(); self._gb = None; self.show_base(); self.cut_cache = None
         if not self.base: self.results = []; self.sel = None; self.wstrip.set([], None); return
         files = self.layer_files(); rec = self.recipe(it) if it else {}
@@ -936,6 +974,8 @@ class App(QMainWindow):
                 if key in rec: w.setValue(rec[key])
             if "may_stick_out" in rec: self.outside.setChecked(rec["may_stick_out"])
             self.skin.setChecked(rec.get("skin_guard", True)); self.trim.setValue(float(rec.get("trim", 0))); self.reach.setValue(int(rec.get("reach", 2)))
+            self.keyon.setChecked(bool(rec.get("key"))); self.keytol.setValue(int(rec.get("key_tol", 35)))
+            if rec.get("key"): self.key = tuple(rec["key"]); self.show_key()
             for k, b in self.wear_boxes.items(): b.setChecked(k in (rec.get("worn_context") or []))
             self._gb = None; self.show_base()
         ctx = tuple(rec.get("worn_context") or [])
@@ -943,8 +983,6 @@ class App(QMainWindow):
             layer = pil_open(files[it]); self.results = [("saved", stack(self.ctx_image(ctx), [(it, layer)], {it: self.slot.currentText()}), dict(kind="saved", layer=layer, ctx=ctx))]
         else:
             self.results = [("blank", self.gen_base(), dict(kind="blank", ctx=()))]
-        g = os.path.join(self.side_dir(), f"{it}.gen.png") if it else None
-        if g and os.path.exists(g): self.results.append((f"raw {rec.get('seed', 0)}", pil_open(g), dict(kind="raw", seed=rec.get("seed", 0), ctx=ctx)))
         self.results += self.gens.get(it, [])
         if self._fresh and self.gens.get(it): self._fresh = False; pick = len(self.results) - 1      # a batch that landed while you were away shows itself once
         self.select(min(pick, len(self.results) - 1))
@@ -1011,11 +1049,12 @@ class App(QMainWindow):
         if self.sel is not None: self.cut_timer.start()
 
     def do_cut(self):
-        if self.sel is None or self.results[self.sel][2]["kind"] not in ("raw", "new"): return
+        if self.sel is None or self.results[self.sel][2]["kind"] != "new": return
         _, gen, e = self.results[self.sel]; seed = e["seed"]
         layer, alpha = cut(self.ctx_image(e["ctx"]), gen, self.thresh.value(), self.blob.value(), not self.outside.isChecked(),
                            pieces=self.pieces.value(), head=(self.slot.currentText() == "face"), skin_guard=self.skin.isChecked(), trim=self.trim.value(),
-                           reach=self.reach.value(), hair=(self.slot.currentText() in HAIR))
+                           reach=self.reach.value(), hair=(self.slot.currentText() in HAIR),
+                           key=(self.key if self.keyon.isChecked() else None), key_tol=self.keytol.value())
         self.cut_cache = (seed, gen, layer, alpha); self.save_btn.setEnabled(True); self.show_cut()
 
     def show_cut(self):
@@ -1024,8 +1063,8 @@ class App(QMainWindow):
         if v == 0: img = gen if gen is not None else self.results[self.sel][1]      # 'saved' has no raw result: show it worn
         elif v == 1: img = layer
         elif v == 2: img = on_bg(layer, FLAT_BGS["dark"])
-        else:                                                   # base + THIS item only — the worn context stays on the left
-            img = stack(self.base, [("it", layer)], {"it": self.slot.currentText()})
+        elif v == 3: img = stack(self.base, [("it", layer)], {"it": self.slot.currentText()})             # the plain base + this item only
+        else: img = stack(self.ctx_image(self.results[self.sel][2]["ctx"]), [("it", layer)], {"it": self.slot.currentText()})   # as the card will show it
         self.rpreview.set_image(img)
         px = int((alpha > 0).sum()); seed = seed if gen is not None else "saved layer"
         if gen is None: return self.say(f"{seed}: {px:,} px on disk — the sliders re-cut a result, not this; pick 'seed …' beside it to re-cut")
@@ -1051,11 +1090,12 @@ class App(QMainWindow):
         self.item_slot[item] = slot
         json.dump({"item": item, "slot": slot, "seed": seed, "steps": self.steps.value(), "cfg": self.cfg.value(), "prompt": self.prompt.toPlainText().strip(),
                    "skin_guard": self.skin.isChecked(), "trim": self.trim.value(), "reach": self.reach.value(),
+                   "key": (list(self.key) if self.keyon.isChecked() else None), "key_tol": self.keytol.value(),
                    "negative": self.neg.text().strip(), "reference": self.ref_name, "scope": ("whole", "region", "replace")[self.wscope.checkedId()],
                    "threshold": self.thresh.value(), "min_blob": self.blob.value(), "pieces": self.pieces.value(), "may_stick_out": self.outside.isChecked(),
                    "worn_context": list(self.results[self.sel][2]["ctx"]), "base": os.path.basename(self.base_path or "")},
                   open(os.path.join(self.side_dir(), f"{item}.json"), "w"), indent=1)
-        self.gens[item] = [e for e in self.gens.get(item, []) if e[2].get("seed") != seed]      # it is the 'saved' + 'raw' entries now
+        self.gens[item] = [e for e in self.gens.get(item, []) if e[2].get("seed") != seed]      # it is the 'saved' entry now
         self.say(f"saved → {out}"); self._gb = None; self.refresh_context(); self.del_btn.setEnabled(True); self.build_strip(0)
         self.save_btn.setText(f"Saved ✓  layer-{item}.png"); QTimer.singleShot(4000, lambda: self.save_btn.setText("Save layer"))
 

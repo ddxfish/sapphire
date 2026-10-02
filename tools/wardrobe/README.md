@@ -42,13 +42,13 @@ tab the bar between the panes and the right column drags — give the column roo
 Name the item (free text, underscores: `black_leggings`, `face_smile`, `hair_front_long`, `hair_back_long` — a
 slot prefix picks the slot), pick the **slot**, Go ×N (~12s each), click one, **Save layer** → `<out>/layer-<item>.png`,
 a browsable `<out>/preview/<item>.png` (layer alone | over base) and the recipe + raw result in
-`<out>/wardrobe/`. **(none)** at the top of the item list is just for looking: her with the worn layers, nothing
+`<out>/wardrobe/` (provenance only; the app never reads the raw result back). **(none)** at the top of the item list is just for looking: her with the worn layers, nothing
 to generate or save.
 
 The strip belongs to the picked item. First is what it **is now** — `saved`, its layer on disk worn as the card
-wears it, or `blank` when nothing is saved yet — then `raw N`, the raw result that layer was cut from (the sliders
-re-cut *that*; Save overwrites the layer), then whatever you generate this session (`seed N`). Click between
-`saved` and a result to compare old and new; hover a thumbnail for what it is. Picking an item brings its recipe
+wears it, or `blank` when nothing is saved yet — then whatever you generate this session (`seed N`). Click between
+`saved` and a result to compare old and new; hover a thumbnail for what it is. The sliders cut a generated result;
+`saved` is fixed — to change a saved item, generate again (or fix it on the Tools tab). Picking an item brings its recipe
 back (slot, sliders, worn layers); a Go replaces the item's generations, Refine adds to them; results never leak
 between items, and a batch that lands while you're on another item waits under its own.
 
@@ -69,6 +69,13 @@ outer, hair_front, hat, in_hand (+ pack, holster on the side). The slot sets the
 
 **Wear while generating**: check saved layers to stack under this generation (wear the top while making
 the blazer). The new layer still holds only the new garment.
+
+**key colour** (Cut box): a chroma key instead of the diff — the layer is every pixel of that hue that wasn't
+already that hue in what the model saw, and nothing else. Layers are additive: a worn keyed layer the model
+repaints stays out of the new one, but where it repaints it a little differently a sliver gets through — making
+a second hair layer over a worn one, give it a different key (green front over blue back). For hair, which re-lights her whole face so the diff can't separate it: prompt **bright blue hair**, cut by
+key (blue, ±35°), save, then on the Tools tab **recolour → to colour…** and pick the brown. Every strand keeps its
+own lightness; only the hue and strength move. Threshold and the skin guard don't apply to a keyed cut.
 
 **Refine picked**: the model reads the *picked result* instead of the base, and the prompt is the fix — "remove
 the stray strand on the right", "make the left shoe match the right". With **zoomed region** only the LEFT
@@ -94,6 +101,9 @@ after over her. **trim opacity** snaps alpha and drops islands; **trim edges** e
 the nearest colour) or defringes the outline. **store A/B/C** remembers an after-image + settings. **◀ Apply**
 rewrites the layer on disk (the original kept once in `wardrobe/<item>.layer.bak.png`) or makes the after-image
 the Base tab's source.
+
+**recolour**: hue °, colour % and lightness of every pixel, alpha and texture untouched — **to colour…** picks the
+colour the garment should be and sets the three. Blue hair → brown hair, strand for strand.
 
 **eraser**: brush on, then on the top-left pane — LEFT erases, RIGHT restores, MIDDLE drags, wheel zooms;
 hard edge, size in image pixels, the red ring is the brush. Ctrl+Z undoes a stroke, **clear** forgets them all.
