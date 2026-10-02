@@ -1759,7 +1759,8 @@ def full_state(system, session=None):
         # {item: icon url} for everything in hand or on a body — pins,
         # popover rows and Carrying chips all draw from this one map.
         "icons": {n: u for n in _shown for u in [_icon_url(n)] if u},
-        # {item: layer url} — worn ones paint over the portrait in slot order.
+        # {item: layer url} — worn ones paint over the portrait in slot order;
+        # the hair_back slot paints UNDER it (2026-10-02, two hair slots).
         "layers": {n: u for n in _shown for u in [_layer_url(n)] if u},
         "solved": state["solved"],
         "found": state["found"],

@@ -928,13 +928,19 @@ function sceneCard(title, desc, actions) {
 // in the 720x1200 standard frame — hat at the head, shoes at the feet.
 // Unknown slots stack down the left. Percent-of-image, so any portrait
 // at that aspect lines up.
-const SLOT_PINS = { hat: ['r', 9], outer: ['r', 25], jacket: ['r', 25], body: ['r', 25],
+const SLOT_PINS = { hat: ['r', 9], face: ['l', 9], hair_front: ['l', 17], hair_back: ['l', 24], outer: ['r', 25], jacket: ['r', 25], body: ['r', 25],
     shirt: ['r', 37], bra: ['l', 31], pants: ['r', 58], underwear: ['l', 53],
     shoes: ['r', 93], socks: ['l', 87], in_hand: ['l', 46], pack: ['l', 40], holster: ['l', 61] };
 
 // Wardrobe layers (2026-08-26): worn items with a cut-out paint over the
 // portrait, bottom to top in this slot order (unknown slots go on top).
-const LAYER_ORDER = ['underwear', 'bra', 'socks', 'pants', 'shirt', 'shoes', 'body', 'jacket', 'outer', 'hat', 'in_hand'];
+// face (2026-10-01) = an expression patch, first so everything sits over it;
+// hair_front sits over every garment and under the hat; hair_back (2026-10-02)
+// is drawn UNDER the portrait — behind her, so her body and every garment
+// cover it. Two slots, two generations: the wardrobe tool no longer splits
+// one hair layer by her silhouette.
+const LAYER_ORDER = ['face', 'underwear', 'bra', 'socks', 'pants', 'shirt', 'shoes', 'body', 'jacket', 'outer', 'hair_front', 'hat', 'in_hand'];
+const UNDER_PORTRAIT = ['hair_back'];
 
 function personCard(cid, c, a) {
     const esc = host.esc;
@@ -947,8 +953,14 @@ function personCard(cid, c, a) {
     const slots = c.slots || [];
     const icons = (a && a.icons) || {};
     const layerUrls = (a && a.layers) || {};
+    // Behind-her slots (hair_back) go UNDER the portrait: an absolutely
+    // positioned img emitted before it, so her body and garments cover them.
+    const backs = Object.entries(wearing)
+        .filter(([sl, it]) => it && layerUrls[it] && UNDER_PORTRAIT.includes(sl))
+        .map(([, it]) => `<img src="${esc(layerUrls[it])}" alt="" style="position:absolute;left:0;top:0;height:100%;width:100%;pointer-events:none">`)
+        .join('');
     const layers = Object.entries(wearing)
-        .filter(([, it]) => it && layerUrls[it])
+        .filter(([sl, it]) => it && layerUrls[it] && !UNDER_PORTRAIT.includes(sl))
         .sort((x, y) => { const o = sl => { const i = LAYER_ORDER.indexOf(sl); return i < 0 ? 99 : i; }; return o(x[0]) - o(y[0]); })
         .map(([, it]) => `<img src="${esc(layerUrls[it])}" alt="" style="position:absolute;left:0;top:0;height:100%;width:100%;pointer-events:none">`)
         .join('');
@@ -998,7 +1010,7 @@ function personCard(cid, c, a) {
     wrap.innerHTML = `
         <div class="st-card" style="width:min(920px,94vw);max-width:min(920px,94vw);${c.image ? 'height:min(86vh,840px,calc(94vw * 0.9));' : 'max-height:86vh;'}position:relative;display:flex;gap:14px;padding:14px;overflow:hidden;text-align:left">
             <button type="button" data-close title="Close" style="position:absolute;top:8px;right:12px;background:none;border:none;color:inherit;font-size:1.15em;cursor:pointer;opacity:.65;z-index:2">✕</button>
-            ${c.image ? `<div style="flex:0 0 auto;height:100%;position:relative"><img src="${esc(c.image)}" alt="" style="height:100%;display:block">${layers}${pins}</div>` : ''}
+            ${c.image ? `<div style="flex:0 0 auto;height:100%;position:relative">${backs}<img src="${esc(c.image)}" alt="" style="height:100%;display:block;position:relative">${layers}${pins}</div>` : ''}
             <div style="flex:1;min-width:0;overflow-y:auto;align-self:stretch">
                 <div class="st-card-title" style="margin-bottom:0;font-size:1.45em">${titleFace}${esc(pretty(c.name || cid))}</div>
                 <div class="st-card-note" style="text-align:left;margin:0 0 8px">${c.controlled_by === 'player' ? 'your character' : 'played by the storyteller'}</div>

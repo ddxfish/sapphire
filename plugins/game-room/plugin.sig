@@ -7,14 +7,14 @@
     "app/prompt-preview.js": "sha256:e9152e125a03e8e3bbfecb558d76a0707f6fb3f6da4127c27bdee35d04193f69",
     "app/room-host.js": "sha256:706ebc26688a40df31dec7e1ec3805c236b454b159a425d85b4c22b80ecfa70b",
     "app/settings-modal.js": "sha256:ed4707051fc8dd807478447a0b47951b31e59cbc09df8b9377b2753c2078dd98",
-    "app/story-room.js": "sha256:3f5adad1fe9ccc6233cfeae7e9a07a9eba7743c129f3e51e381db5bb158985f8",
+    "app/story-room.js": "sha256:f12953a7b1c32b8ea3fbdd4ac8cfba3474deaada4f6813205982534b60d83709",
     "gameroom_core.py": "sha256:e1361ebf49b36506e07b9eb3fc8b85715e7f929fc109734c5a0a22c578c12f05",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
     "gameroom_story/render.py": "sha256:a8a141142561dde035d3d219fa302def007dc04bb999c29dbdaf3ee3bf752388",
     "gameroom_story/rooms.py": "sha256:ed4ffcdc459f031e8c9b4231d0329487b8e885ef887cd617c25a950c3bb3ea72",
-    "gameroom_story/session.py": "sha256:f69e4e1b2b83e7bd7c99d4686744c6a90babba23146d87c5cbb93a29d96e418c",
+    "gameroom_story/session.py": "sha256:c7606793326ec80cfb84e6f19305ee8dbbd6706c960155927e4d020582fc9ab7",
     "gameroom_story/state.py": "sha256:fa947a8bdefbc928fe5860e7d9010079a0b73db4e529c94cbd70b3b0e025191b",
     "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/costume.py": "sha256:abc31221475d359e83b61ddcea05a00532731bd01d5f7211ce8214567598ce19",
@@ -63,5 +63,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "wWWWXybNl34T2tw6hw8v6qaPTj4ZQ+J9syYhsPlx5W6NOC334drbLqVGQTx4AwsHMduVcgwKUzsSy3g1l6N/DA=="
+  "signature": "HkhmPquW1LRbBTX+6W0nWWAfNI/nYNu2hvAxsULPXGczE27ZcT2x2xGEMvaKG82Gy7ylPICX2P3P8fY9hSfgAA=="
 }
