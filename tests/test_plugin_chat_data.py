@@ -323,3 +323,39 @@ class TestLoaderVeneer:
         ldr = PluginLoader()
         a = ldr.get_chat_state("some-plugin")
         assert a is ldr.get_chat_state("some-plugin")
+
+
+class TestPurge:
+    """The purge lever (2026-10-02): every row a plugin holds, across chats,
+    in one call — sealed chats skipped and counted, other plugins untouched."""
+
+    def test_purge_drops_plugin_rows_everywhere(self, sm, monkeypatch, tmp_path):
+        _open(monkeypatch)
+        sm.create_chat("other")
+        sm.plugin_data_put(PLUGIN, "pub", "story:objects:x", {"a": 1})
+        sm.plugin_data_append(PLUGIN, "other", "story:journal:x", {"e": 1})
+        sm.plugin_data_put("someone-else", "pub", "k", {"keep": True})
+        r = sm.plugin_data_purge(PLUGIN)
+        assert r == {"deleted": 2, "skipped_sealed": 0}
+        assert sm.plugin_data_get(PLUGIN, "pub", "story:objects:x") is None
+        assert sm.plugin_data_read_all(PLUGIN, "other", "story:journal:x") == []
+        assert sm.plugin_data_get("someone-else", "pub", "k") == {"keep": True}
+        # orphan rows (owner chat gone) go too
+        rawx(tmp_path, "INSERT INTO plugin_chat_data (plugin, chat_name, key, seq, value, updated_at) "
+                       "VALUES (?, 'ghost', 'k', 0, '{}', 'now')", (PLUGIN,))
+        assert sm.plugin_data_purge(PLUGIN)["deleted"] == 1
+
+    def test_purge_skips_sealed_chats(self, sm, monkeypatch):
+        _open(monkeypatch)
+        sm.create_chat("other")
+        sm.plugin_data_put(PLUGIN, "pub", "story:active", {"story": "a"})
+        sm.plugin_data_put(PLUGIN, "other", "story:active", {"story": "b"})
+        assert sm.vault_chat("pub")[0]
+        _key_off(monkeypatch)
+        _seal(monkeypatch, True)
+        r = sm.plugin_data_purge(PLUGIN)
+        assert r == {"deleted": 1, "skipped_sealed": 1}
+        _open(monkeypatch)
+        assert sm.plugin_data_get(PLUGIN, "pub", "story:active") == {"story": "a"}  # survived, sealed
+        assert sm.plugin_data_get(PLUGIN, "other", "story:active") is None
+        assert sm.plugin_data_purge(PLUGIN) == {"deleted": 1, "skipped_sealed": 0}  # unlocked: reached

@@ -357,6 +357,11 @@ function _renderRow(p, locked) {
             `<button class="pm-kebab-item pm-kebab-reload" data-plugin="${_esc(p.name)}">Reload</button>`
         );
     }
+    // Any band: system plugins (game-room) hold user data too. Purge =
+    // state file + chat rows gone, plugin stays installed and configured.
+    kebabItems.push(
+        `<button class="pm-kebab-item pm-kebab-danger plugin-purge-btn" data-plugin="${_esc(p.name)}">Purge data</button>`
+    );
     if (isUser) {
         kebabItems.push(
             `<button class="pm-kebab-item pm-kebab-danger plugin-uninstall-btn" data-plugin="${_esc(p.name)}">Uninstall</button>`
@@ -1021,6 +1026,38 @@ export default {
                 ui.showToast(`Uninstall failed: ${err.message}`, 'error', 5000);
                 btn.disabled = false;
                 btn.textContent = 'Uninstall';
+            }
+        });
+
+        // ── Purge data (delegated) ──
+        el.addEventListener('click', async e => {
+            const btn = e.target.closest('.plugin-purge-btn');
+            if (!btn) return;
+            const name = btn.dataset.plugin;
+            const ctx = el._pluginCtx;
+            const plugin = ctx.pluginList?.find(p => p.name === name);
+            const confirmed = await showDangerConfirm({
+                title: `Purge data: ${plugin?.title || name}`,
+                warnings: [
+                    'Everything this plugin stored about you is deleted — its state file and its rows in every chat',
+                    'The plugin stays installed and configured',
+                    'Rows in sealed (locked-vault) chats are skipped — unlock and purge again to reach them',
+                    'This cannot be undone',
+                ],
+                buttonLabel: 'Purge',
+            });
+            if (!confirmed) return;
+            btn.disabled = true;
+            btn.textContent = 'Purging...';
+            try {
+                const r = await pluginsAPI.purgePluginData(name);
+                const skipped = r.skipped_sealed ? ` · ${r.skipped_sealed} sealed chat(s) skipped` : '';
+                ui.showToast(`Purged ${plugin?.title || name}: ${r.rows} row(s), ${r.files} file(s)${skipped}`, 'success', 5000);
+            } catch (err) {
+                ui.showToast(`Purge failed: ${err.message}`, 'error', 5000);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Purge data';
             }
         });
 

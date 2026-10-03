@@ -122,6 +122,21 @@ const pluginsAPI = {
   },
 
   /**
+   * Purge a plugin's user data (state file + chat rows); plugin stays installed.
+   */
+  async purgePluginData(name) {
+    const res = await fetch(`/api/plugins/${name}/purge`, {
+      method: 'POST',
+      headers: csrfHeaders(),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Purge failed: ${res.status}`);
+    }
+    return res.json();
+  },
+
+  /**
    * Swap a plugin back to the version retained by its last update.
    */
   async revertPlugin(name) {

@@ -3021,6 +3021,30 @@ class ChatSessionManager:
                     (plugin, chat_name, key))
             conn.commit()
 
+    def plugin_data_purge(self, plugin: str) -> dict:
+        """Drop EVERY row this plugin holds, across chats — the "purge
+        plugin data" lever (uninstall, or the card's Purge button; 2026-10-02:
+        deleting user/plugin_state/<name>.json by hand never reached these
+        rows). Hidden (sealed) chats are skipped and counted, never deleted
+        blind — unlock and purge again. Orphan rows (owner chat gone) go
+        too. Returns {'deleted': n, 'skipped_sealed': m}."""
+        with self._lock, self._get_connection() as conn:
+            chats = [r[0] for r in conn.execute(
+                "SELECT DISTINCT chat_name FROM plugin_chat_data WHERE plugin = ?",
+                (plugin,)).fetchall()]
+            sealed = [c for c in chats if self._vault_hidden(c)]
+            deleted = 0
+            for c in chats:
+                if c in sealed:
+                    continue
+                deleted += conn.execute(
+                    "DELETE FROM plugin_chat_data WHERE plugin = ? AND chat_name = ?",
+                    (plugin, c)).rowcount
+            conn.commit()
+        logger.info(f"[PLUGINS] purged {plugin} chat data: {deleted} row(s), "
+                    f"{len(sealed)} sealed chat(s) skipped")
+        return {"deleted": deleted, "skipped_sealed": len(sealed)}
+
     def plugin_data_get_all_chats(self, plugin: str, key: str) -> dict:
         """{chat_name: decoded seq=0 value} for every chat holding `key` —
         HIDDEN CHATS OMITTED, same inheritance rule as list_chat_files.

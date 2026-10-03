@@ -26,6 +26,9 @@ class FakeStore:
     def save(self, k, v):
         self.d[k] = v
 
+    def delete(self, k):
+        self.d.pop(k, None)
+
 
 @pytest.fixture
 def story(monkeypatch):
@@ -46,6 +49,14 @@ def _fresh(story):
     state = st.initial_state()
     state["room"] = story["meta"]["start"]
     return state
+
+
+def _name_canvas(cfg_store, chat, name="t", slug="mad-manse"):
+    """Default is read-only (2026-10-02): route-level canvas edits need a
+    living scenario tag — tag the chat's canvas with a stored scenario."""
+    key = f"storyscenarios:{slug}"
+    cfg_store.save(key, {**(cfg_store.get(key) or {}), name: {}})
+    st.save_user_layer(slug, chat, {**st.get_user_layer(slug, chat), "scenario": name})
 
 
 # ── flag_gte condition ───────────────────────────────────────────────────────
@@ -527,9 +538,8 @@ def test_apply_scenario_env_is_pure_swap(story, cfg_store):
     session.upsert_user_object(CHAT, "mad-manse", 1, "extra", {"desc": "x"})
     assert st.get_user_layer("mad-manse", CHAT)["scenario"] == "bbq"  # survives edits
     session._apply_scenario_env(CHAT, "mad-manse", story, "")
-    layer = st.get_user_layer("mad-manse", CHAT)
-    assert not layer.get("objects") and not layer.get("rooms")   # reset
-    assert layer.get("scenario") == ""
+    # Default holds no data (2026-10-02): blank = NO canvas row at all
+    assert st.get_user_layer("mad-manse", CHAT) == {}
 
 
 # ── Scenarios (unified: slots + environment, Krem 2026-08-20) ───────────────
@@ -595,6 +605,7 @@ def test_prestart_environment_edits(story, cfg_store, monkeypatch):
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
     chat = "manse-prestart-chat"
+    _name_canvas(cfg_store, chat)
     r = story_routes.set_object(body={"session": chat, "slug": "mad-manse",
                                       "room_id": 1, "name": "welcome_mat",
                                       "spec": {"desc": "a mat"}})
@@ -621,6 +632,7 @@ def test_route_shadow_tombstone_restore(story, cfg_store, monkeypatch):
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
     chat = "manse-shadow-chat"
+    _name_canvas(cfg_store, chat)
     r = story_routes.set_object(body={"session": chat, "slug": "mad-manse",
                                       "room_id": 1, "name": "chest",
                                       "spec": {"desc": "shadowed"}})
@@ -641,6 +653,7 @@ def test_exit_routes_shadow_add_delete(story, cfg_store, monkeypatch):
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
     chat = "manse-exit-chat"
+    _name_canvas(cfg_store, chat)
     base = {"session": chat, "slug": "mad-manse", "room_id": 1}
     # shipped destination (1→2) = shadow path, diff-only
     r = story_routes.set_exit(body={**base, "to": 2, "label": "the red door",
@@ -680,6 +693,7 @@ def test_object_route_replace_flag(story, cfg_store, monkeypatch):
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
     chat = "manse-obj-replace-chat"
+    _name_canvas(cfg_store, chat)
     base = {"session": chat, "slug": "mad-manse", "room_id": 1}
     # replace flag on a shipped name stamps the wholesale marker
     r = story_routes.set_object(body={**base, "name": "chest", "replace": True,
@@ -707,6 +721,7 @@ def test_exit_routes_mechanics_shadow(story, cfg_store, monkeypatch):
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
     chat = "manse-exit-mech-chat"
+    _name_canvas(cfg_store, chat)
     base = {"session": chat, "slug": "mad-manse", "room_id": 1}
     r = story_routes.set_exit(body={**base, "to": 2, "label": "the parlor",
                                     "edit_mechanics": True,
@@ -772,6 +787,7 @@ def test_user_room_routes_and_guards(story, cfg_store, monkeypatch):
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
     chat = "manse-room-route-chat"
+    _name_canvas(cfg_store, chat)
     base = {"session": chat, "slug": "mad-manse"}
     r = story_routes.create_room(body={**base, "title": "Widow's Walk"})
     assert r["success"] and r["id"] >= 100, r
@@ -952,6 +968,7 @@ def test_backdrop_override_merge_and_route(story, cfg_store, tmp_path, monkeypat
     Image.new("RGB", (64, 48), (10, 120, 90)).save(buf, "PNG")
     name, _ = art.ingest(buf.getvalue())
     chat = "manse-backdrop-chat"
+    _name_canvas(cfg_store, chat)
     base = {"session": chat, "slug": "mad-manse", "room_id": 1}
     r = story_routes.set_backdrop(body={**base, "name": "nope.webp"})
     assert not r["success"]                               # unknown refused
@@ -1035,7 +1052,7 @@ def test_mid_run_scenario_swap_applies_slots(story, cfg_store, monkeypatch):
     assert r["success"], r
     entry = st.get_active_entry(CHAT)
     assert entry["slots"]["relationship"] != "wife"
-    assert st.get_user_layer("mad-manse", CHAT).get("scenario") == ""
+    assert not st.get_user_layer("mad-manse", CHAT).get("scenario")
     st.clear_active(CHAT)
 
 
@@ -1093,3 +1110,166 @@ def test_cap_scenario_slots_scales_with_rows(story, monkeypatch):
     assert len(capped["scenario"]) == 8000    # textarea slots: real prose
     assert len(capped["name"]) == 1200        # one-liners keep the tight cap
     assert "blank" not in capped
+
+
+# ── Default holds no data (Krem's ruling 2026-10-02) ────────────────────────
+# "— the default story —" is the shipped pack and nothing else: canvas edits
+# need a living scenario tag, deleting a scenario drops every canvas wearing
+# it, and ▶ Start / story_end / editor-open sweep orphans (dead or empty tag).
+
+def test_default_canvas_is_read_only(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-readonly-chat"
+    base = {"session": chat, "slug": "mad-manse", "room_id": 1}
+    refusals = [
+        story_routes.set_object(body={**base, "name": "mat", "spec": {"desc": "x"}}),
+        story_routes.delete_object(body={**base, "name": "chest"}),
+        story_routes.set_item(body={**base, "name": "coin", "spec": {"desc": "x"}}),
+        story_routes.set_room_text(body={**base, "template": "Hall."}),
+        story_routes.set_exit(body={**base, "to": 2, "label": "door"}),
+        story_routes.create_room(body={**base, "title": "Attic"}),
+        story_routes.set_backdrop(body={**base, "name": ""}),
+        story_routes.set_room_enter(body={**base, "on_enter": None}),
+    ]
+    for r in refusals:
+        assert not r["success"] and r.get("needs_scenario"), r
+    assert st.get_user_layer("mad-manse", chat) == {}        # nothing landed
+    # A dead tag (scenario deleted / plugin_state wiped) is read-only too
+    st.save_user_layer("mad-manse", chat, {"scenario": "ghost"})
+    r = story_routes.set_object(body={**base, "name": "mat", "spec": {"desc": "x"}})
+    assert r.get("needs_scenario")
+    # Named = editable; the AI's own lane never needs a tag
+    _name_canvas(cfg_store, chat)
+    r = story_routes.set_object(body={**base, "name": "mat", "spec": {"desc": "x"}})
+    assert r["success"], r
+    assert session.upsert_user_object("manse-ai-chat", "mad-manse", 1, "surprise",
+                                      {"desc": "hers"}, author="ai")[1]
+
+
+def test_scenario_delete_cascades_to_canvases(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    cfg_store.save("storyscenarios:mad-manse", {
+        "bbq": {"slots": {}, "objects": {"1": {"grill": {"desc": "hot"}}},
+                "rooms": {}, "items": {"tongs": {"desc": "steel"}}},
+        "keep": {"slots": {}, "objects": {}, "rooms": {}}})
+    for c in ("manse-casc-a", "manse-casc-b"):
+        session._apply_scenario_env(c, "mad-manse", story, "bbq")
+    session._apply_scenario_env("manse-casc-c", "mad-manse", story, "keep")
+    assert st.get_user_layer("mad-manse", "manse-casc-a")["items"]["tongs"]["desc"] == "steel"
+    r = story_routes.set_scenario("mad-manse", body={"name": "bbq", "delete": True})
+    assert r["success"] and r["reset_chats"] == 2, r
+    assert st.get_user_layer("mad-manse", "manse-casc-a") == {}
+    assert st.get_user_layer("mad-manse", "manse-casc-b") == {}
+    assert st.get_user_layer("mad-manse", "manse-casc-c")["scenario"] == "keep"
+    assert "bbq" not in cfg_store.d["storyscenarios:mad-manse"]
+
+
+def test_items_ride_scenarios(story, cfg_store, monkeypatch):
+    # The kit was the one bucket a swap spared (2026-08-22) — it hid inside
+    # "default". Now it snapshots with 💾 and swaps with the dropdown.
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-items-scn-chat"
+    _name_canvas(cfg_store, chat, "kit")
+    session.upsert_user_item(chat, "mad-manse", "coin", {"desc": "gold"})
+    session.upsert_user_item(chat, "mad-manse", "hers", {"desc": "x"}, author="ai")
+    r = story_routes.set_scenario("mad-manse", body={"name": "kit", "session": chat,
+                                                      "slug": "mad-manse"})
+    assert r["success"], r
+    saved = cfg_store.d["storyscenarios:mad-manse"]["kit"]
+    assert "coin" in saved["items"] and "hers" not in saved["items"]
+    session._apply_scenario_env(chat, "mad-manse", story, "")
+    assert st.get_user_layer("mad-manse", chat) == {}
+    session._apply_scenario_env(chat, "mad-manse", story, "kit")
+    assert st.get_user_layer("mad-manse", chat)["items"]["coin"]["desc"] == "gold"
+
+
+def test_orphan_canvas_swept_at_start_end_and_open(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-orphan-chat"
+    # Legacy / wiped-store shape: content with a dead tag, no run in flight
+    st.save_user_layer("mad-manse", chat,
+                       {"objects": {"1": {"old": {"desc": "x"}}}, "scenario": "gone"})
+    assert session.sweep_orphan_canvas("mad-manse", chat, "test")
+    assert st.get_user_layer("mad-manse", chat) == {}
+    # Editor open sweeps too (what Krem saw: deleted the store, canvas stayed)
+    st.save_user_layer("mad-manse", chat, {"objects": {"1": {"old": {"desc": "x"}}}})
+    world = story_routes.get_objects(query={"session": chat, "slug": "mad-manse"})
+    assert world["active"] and "old" not in (world["objects"].get("1") or {})
+    assert st.get_user_layer("mad-manse", chat) == {}
+    # Mid-run of THIS story the canvas is the world — never swept
+    st.save_user_layer("mad-manse", chat, {"objects": {"1": {"hers": {"desc": "x",
+                                                                        "_author": "ai"}}}})
+    st.set_active(chat, "mad-manse", None)
+    assert not session.sweep_orphan_canvas("mad-manse", chat, "test")
+    assert st.get_user_layer("mad-manse", chat)["objects"]["1"]["hers"]
+    st.clear_active(chat)
+    # A living tag is never an orphan
+    _name_canvas(cfg_store, chat, "live")
+    assert not session.sweep_orphan_canvas("mad-manse", chat, "test")
+    assert st.get_user_layer("mad-manse", chat)["scenario"] == "live"
+
+
+def test_legacy_keys_never_resurrect_a_tag(story, cfg_store):
+    # Orphan hunt 2026-10-02 #1: pre-migration the legacy keys ARE the
+    # scenarios; once storyscenarios exists they are dead data — and the
+    # migration's persist drops them so nothing hides in plugin_state.
+    from routes import story_routes
+    cfg_store.save("storypresets:mad-manse", {"old": {"slots": {"a": "b"}}})
+    cfg_store.save("storyobjsets:mad-manse", {"old": {"objects": {}}, "set2": {"objects": {}}})
+    assert session.scenario_exists("mad-manse", "old")
+    scen = story_routes._scenarios(cfg_store, "mad-manse", persist=True)
+    assert set(scen) == {"old", "set2"}
+    assert "storypresets:mad-manse" not in cfg_store.d
+    assert "storyobjsets:mad-manse" not in cfg_store.d
+    cfg_store.save("storyscenarios:mad-manse", {"set2": {}})     # 'old' deleted
+    assert not session.scenario_exists("mad-manse", "old")
+    assert session.scenario_exists("mad-manse", "set2")
+
+
+def test_cascade_spares_a_chat_that_swapped_away(story, cfg_store, monkeypatch):
+    # #8: the cascade re-checks the tag under the lock — drop_user_layer
+    # with if_tag never kills a canvas that now wears another name.
+    st.save_user_layer("mad-manse", "manse-swap-chat",
+                       {"objects": {}, "rooms": {}, "items": {}, "scenario": "other"})
+    assert not st.drop_user_layer("mad-manse", "manse-swap-chat", if_tag="gone")
+    assert st.get_user_layer("mad-manse", "manse-swap-chat")["scenario"] == "other"
+    assert st.drop_user_layer("mad-manse", "manse-swap-chat", if_tag="other")
+    assert st.get_user_layer("mad-manse", "manse-swap-chat") == {}
+
+
+def test_private_chat_refusal_carries_flag(story, cfg_store, monkeypatch):
+    # #12: a private chat can't name a scenario (unencrypted store), so the
+    # refusal says so and the client skips the namer.
+    import types
+    from routes import story_routes
+    sm = types.SimpleNamespace(get_settings_for=lambda c: {"private_chat": c == "manse-priv"})
+    monkeypatch.setattr(story_routes, "_system", lambda: types.SimpleNamespace(
+        llm_chat=types.SimpleNamespace(session_manager=sm)))
+    base = {"slug": "mad-manse", "room_id": 1, "name": "mat", "spec": {"desc": "x"}}
+    r = story_routes.set_object(body={**base, "session": "manse-priv"})
+    assert r.get("needs_scenario") and r.get("private")
+    r = story_routes.set_object(body={**base, "session": "manse-pub"})
+    assert r.get("needs_scenario") and not r.get("private")
+
+
+def test_upload_art_gated_like_a_canvas_write(story, cfg_store, monkeypatch):
+    # The store keeps pixels: an upload needs a named canvas too (2026-10-02).
+    import asyncio
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+
+    class Req:
+        headers = {"content-length": "10"}
+        def __init__(self, form): self._f = form
+        async def form(self): return self._f
+
+    blank = {"session": "manse-art-chat", "slug": "mad-manse", "file": None}
+    r = asyncio.run(story_routes.upload_art(request=Req(blank)))
+    assert r.get("needs_scenario"), r
+    _name_canvas(cfg_store, "manse-art-chat")
+    r = asyncio.run(story_routes.upload_art(request=Req(blank)))
+    assert not r.get("needs_scenario") and r["detail"] == "Empty upload."   # past the gate

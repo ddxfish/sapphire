@@ -35,6 +35,50 @@ async function api(path, method, body) {
     return data;
 }
 
+// The default story is read-only (Krem 2026-10-02): canvas writes need a
+// named scenario. The server answers `needs_scenario`; this pops the
+// scenario bar's namer, and once a name is saved the write goes again.
+// Every Rooms/Characters write lane calls through here, not api().
+let _ensureScenario = null;   // bound by wireScenarioBar while a modal is open
+let _afterEnsured = null;     // snapshot the just-named scenario once the write lands
+let _canvasCtx = null;        // {session, slug} of the open modal — uploads carry it
+async function envApi(path, method, body) {
+    const r = await api(path, method, body);
+    if (!(r && r.needs_scenario)) return r;
+    if (r.private) {
+        // The scenario store is unencrypted — a private chat can't name one.
+        ui.showToast('Private chat: pick a saved scenario to edit it here, or release the chat first', 'error', 4500);
+        return r;
+    }
+    if (_ensureScenario && await _ensureScenario(true)) {
+        const r2 = await api(path, method, body);
+        if (r2 && r2.success && _afterEnsured) await _afterEnsured();
+        return r2;
+    }
+    return r;
+}
+// Throw on a refused write so the caller's catch toasts it (restore lanes).
+const must = (r) => { if (r && r.success === false) throw new Error(r.detail || 'refused'); return r; };
+
+// Flush pending room text under the read-only default: name the scenario
+// first (or let the user discard), post, and — only when the name was
+// claimed right here — snapshot it. false = the user backed out.
+async function flushNamed(envTab, scnState) {
+    if (!envTab?.flush) return true;
+    let claimed = false;
+    if (envTab.dirty?.() && scnState && !scnState.named()) {
+        if (!(await scnState.ensure())) {
+            if (!confirm('Discard your room text edits?')) return false;
+            envTab.discard();
+            return true;
+        }
+        claimed = true;
+    }
+    await envTab.flush();                       // throws on refusal
+    if (claimed) await scnState.resnapshot();
+    return true;
+}
+
 function esc(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -286,28 +330,105 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
         updateDot();
         ui.showToast(name ? `'${name}' loaded` : 'Back to the default story', 'success', 2000);
     };
+    // ensure(): the read-only default (Krem 2026-10-02). A canvas write
+    // with no scenario picked opens the namer and waits — true once a name
+    // is saved (the write retries), false on ✕. envApi() calls this.
+    let ensureResolve = null, ensurePromise = null;
+    const settle = (ok) => {
+        if (ensureResolve) { const r = ensureResolve; ensureResolve = null; ensurePromise = null; r(ok); }
+    };
+    state.named = () => !!sel.value;
+    const namer = bar.querySelector('.grs-preset-namer');
+    const adopt = (name, vals) => {          // the dropdown learns a saved name
+        if (![...sel.options].some(o => o.value === name)) {
+            const opt = document.createElement('option');
+            opt.value = opt.textContent = name;
+            sel.appendChild(opt);
+        }
+        setup.scenarios = setup.scenarios || {};
+        setup.scenarios[name] = { slots: vals };
+        sel.value = name;
+        last = name;
+    };
+    // ensure(refused): true once a scenario is named. Blank → the namer
+    // opens and the caller waits (one shared promise for every waiter).
+    // `refused` = the server just bounced a write while a name IS picked:
+    // that tag is dead (deleted elsewhere) — drop it and re-name.
+    state.ensure = (refused = false) => {
+        if (!document.body.contains(bar)) return Promise.resolve(false);
+        if (sel.value && !refused) return Promise.resolve(true);
+        if (ensurePromise) return ensurePromise;
+        ensurePromise = new Promise((resolve) => {
+            ensureResolve = resolve;
+            let prefill = '';
+            if (sel.value) {
+                prefill = sel.value;
+                delete (setup.scenarios || {})[prefill];
+                [...sel.options].find(o => o.value === prefill)?.remove();
+                sel.value = ''; last = '';
+                ui.showToast(`Scenario '${prefill}' no longer exists — name this one to keep editing`, 'error', 4000);
+            } else {
+                ui.showToast('The default story is read-only — name your scenario to edit it', 'info', 3500);
+            }
+            if (namer.style.display === 'none') {
+                bar.querySelector('.grs-scn-save').onclick();
+                if (prefill) bar.querySelector('.grs-preset-name').value = prefill;
+            }
+        });
+        return ensurePromise;
+    };
+    _ensureScenario = state.ensure;
+    _canvasCtx = { session: opts.session, slug };
+    const postScenario = async (name) => {
+        const vals = {};
+        for (const s of slotList) vals[s.key] = readField(overlay, s.key) ?? '';
+        const r = await api(`story/${encodeURIComponent(slug)}/scenarios`, 'POST',
+                            { name, slots: vals, session: opts.session, slug });
+        return [r, vals];
+    };
+    // Snapshot the picked scenario from the live canvas (after an ensured
+    // write landed) — the name the user just typed should hold the edit.
+    state.resnapshot = async () => {
+        if (!sel.value) return;
+        const [r, vals] = await postScenario(sel.value);
+        if (!r.success) return;
+        setup.scenarios[sel.value] = { slots: vals };
+        if (opts.envRepaint) await opts.envRepaint();
+        if (opts.onSaved) opts.onSaved();
+        updateDot();
+    };
+    _afterEnsured = state.resnapshot;
     wireNamer(bar, bar.querySelector('.grs-scn-save'), () => sel.value, async (name) => {
         try {
-            if (opts.envFlush) await opts.envFlush();   // snapshot includes pendings
-            const vals = {};
-            for (const s of slotList) vals[s.key] = readField(overlay, s.key) ?? '';
-            const r = await api(`story/${encodeURIComponent(slug)}/scenarios`, 'POST',
-                                { name, slots: vals, session: opts.session, slug });
-            if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return false; }
-            if (![...sel.options].some(o => o.value === name)) {
-                const opt = document.createElement('option');
-                opt.value = opt.textContent = name;
-                sel.appendChild(opt);
+            const viaEnsure = !!ensureResolve;
+            // From the default: claim the name FIRST so later writes (the
+            // flush below, or the write that opened the namer) are allowed.
+            if (!sel.value) {
+                if ((setup.scenarios || {})[name]
+                    && !confirm(`'${name}' already exists — overwrite it with this chat's canvas? (Pick it in the dropdown to edit it instead.)`)) {
+                    return false;
+                }
+                const [r0, vals0] = await postScenario(name);
+                if (!r0.success) { ui.showToast(r0.detail || 'refused', 'error'); return false; }
+                adopt(name, vals0);
+                if (viaEnsure) {
+                    // The waiting write lands next and re-snapshots itself.
+                    ui.showToast(`Scenario '${name}' named`, 'success', 1500);
+                    settle(true);
+                    return;
+                }
             }
-            setup.scenarios = setup.scenarios || {};
-            setup.scenarios[name] = { slots: vals };
-            sel.value = name;
-            last = name;   // saved = the canvas IS this scenario now
+            if (opts.envFlush) await opts.envFlush();   // snapshot includes pendings
+            const [r, vals] = await postScenario(name);
+            if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return false; }
+            adopt(name, vals);
+            if (opts.envRepaint) await opts.envRepaint();   // the pane shows what landed
             if (opts.onSaved) opts.onSaved();
             updateDot();
             ui.showToast(`Scenario '${name}' saved`, 'success', 2000);
+            settle(true);
         } catch (e) { ui.showToast(e.message, 'error'); return false; }
-    });
+    }, () => settle(false));
     armDelete(bar.querySelector('.grs-scn-del'), '\u{1F5D1}\u{FE0E} Delete',
         () => {
             if (!sel.value) { ui.showToast('Pick a scenario to delete first', 'error', 2000); return false; }
@@ -322,8 +443,16 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
                 delete (setup.scenarios || {})[name];
                 [...sel.options].find(o => o.value === name)?.remove();
                 sel.value = '';
-                last = '';   // the canvas keeps its content — only the save died
-                ui.showToast(`Scenario '${name}' deleted`, 'success', 2000);
+                last = '';
+                // One delete = gone (2026-10-02): the server dropped every
+                // canvas wearing this name, this chat's included — repaint
+                // the world. Slot fields stay (a running cast keeps its
+                // names); the ● dot says they're unsaved now.
+                if (opts.onSwap) await opts.onSwap();
+                updateDot();
+                const n = r.reset_chats || 0;
+                ui.showToast(`Scenario '${name}' deleted` + (n > 1 ? ` — reset in ${n} chats` : ''),
+                             'success', 2500);
             } catch (e) { ui.showToast(e.message, 'error'); }
         });
     return state;
@@ -332,7 +461,7 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
 // The namer span (shared by preset + object-set rows): 💾 swaps in an
 // inline name input prefilled from the dropdown; ✓/Enter commits via
 // onSave(name) — return false to keep it open (refusal); ✕ cancels.
-function wireNamer(row, saveBtn, getPrefill, onSave) {
+function wireNamer(row, saveBtn, getPrefill, onSave, onCancel) {
     const namer = row.querySelector('.grs-preset-namer');
     const nameIn = row.querySelector('.grs-preset-name');
     saveBtn.onclick = () => {
@@ -340,7 +469,10 @@ function wireNamer(row, saveBtn, getPrefill, onSave) {
         namer.style.display = '';
         nameIn.focus();
     };
-    row.querySelector('.grs-preset-no').onclick = () => { namer.style.display = 'none'; };
+    row.querySelector('.grs-preset-no').onclick = () => {
+        namer.style.display = 'none';
+        if (onCancel) onCancel();
+    };
     const commit = async () => {
         const name = nameIn.value.trim();
         if (!name) return;
@@ -754,10 +886,13 @@ function charactersPanels(slug, session, objData) {
     const panels = [];
     if (objData) panels.push(itemsPanel(slug, session, objData));
     if (session) panels.push(piecesPanel(slug, session));
-    return {
+    const out = {
         html: panels.map(p => p.html).join(''),
         wire: (root) => { for (const p of panels) p.wire(root); },
+        refresh: async () => { for (const p of panels) if (p.refresh) await p.refresh(); },
     };
+    for (const p of panels) p.onChange = () => out.onChange && out.onChange();
+    return out;
 }
 
 // Merge shared content into a tab list — appends to an existing tab of
@@ -781,6 +916,7 @@ const mergeTab = (tabs, title, html) => {
 function worldSections(slug, session, objData) {
     const chars = charactersPanels(slug, session, objData);
     const envTab = objData ? objectsTab(slug, session, objData) : null;
+    chars.onChange = () => envTab?.repaint?.();   // items ride the canvas fingerprint/dot
     return {
         envTab,
         splice: (tabs) => {
@@ -792,8 +928,9 @@ function worldSections(slug, session, objData) {
         // these into its opts alongside surface-specific ones.
         scnOpts: {
             envFlush: () => envTab?.flush?.(),
+            envRepaint: async () => { await envTab?.repaint?.(); await chars.refresh(); },
             envDiverged: () => !!(envTab && envTab.diverged()),
-            onSwap: () => envTab?.swapped?.(),
+            onSwap: async () => { await envTab?.swapped?.(); await chars.refresh(); },
             onSaved: () => envTab?.markClean?.(),
         },
         bindBar: (scnState) => {
@@ -840,7 +977,7 @@ function itemsPanel(slug, session, initialData) {
         form.querySelector('.grs-item-act-add').onclick = () =>
             addCard(null).querySelector('.grs-act-verb').focus();
 
-        const refresh = async () => {
+        const refresh = async (fromWorld = false) => {
             try {
                 const d = await api(`story/objects?session=${encodeURIComponent(session)}&slug=${encodeURIComponent(slug)}`);
                 if (d.active !== false) {
@@ -849,6 +986,7 @@ function itemsPanel(slug, session, initialData) {
                 }
             } catch { /* keep last state */ }
             paint();
+            if (!fromWorld && panel.onChange) panel.onChange();   // env tab repaints its dot
         };
         const closeForm = () => {
             form.style.display = 'none';
@@ -917,8 +1055,8 @@ function itemsPanel(slug, session, initialData) {
         resetBtn.onclick = async () => {
             if (!editing) return;
             try {
-                await api('story/items/delete', 'POST',
-                          { session, slug, name: editing, restore: true });
+                must(await envApi('story/items/delete', 'POST',
+                          { session, slug, name: editing, restore: true }));
                 closeForm();
                 await refresh();
             } catch (e) { ui.showToast(e.message, 'error'); }
@@ -932,8 +1070,8 @@ function itemsPanel(slug, session, initialData) {
             const restoreAndClose = async () => {
                 try {
                     if (ovNow)
-                        await api('story/items/delete', 'POST',
-                                  { session, slug, name, restore: true });
+                        must(await envApi('story/items/delete', 'POST',
+                                  { session, slug, name, restore: true }));
                     closeForm();
                     await refresh();
                 } catch (e) { ui.showToast(e.message, 'error'); }
@@ -964,7 +1102,7 @@ function itemsPanel(slug, session, initialData) {
                 body = { session, slug, name, spec: compileObj(name, d, null) };
             }
             try {
-                const res = await api('story/items', 'POST', body);
+                const res = await envApi('story/items', 'POST', body);
                 if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
                 closeForm();
                 ui.showToast(`'${name}' is in the kit`, 'success', 2000);
@@ -1015,7 +1153,7 @@ function itemsPanel(slug, session, initialData) {
             list.querySelectorAll('.grs-item-del').forEach(b => b.onclick = async (e) => {
                 e.stopPropagation();
                 try {
-                    const res = await api('story/items/delete', 'POST',
+                    const res = await envApi('story/items/delete', 'POST',
                                           { session, slug, name: b.dataset.name });
                     if (res.detail) ui.showToast(res.detail, res.success ? 'success' : 'error', 2000);
                     await refresh();
@@ -1024,15 +1162,17 @@ function itemsPanel(slug, session, initialData) {
             list.querySelectorAll('.grs-item-restore').forEach(b => b.onclick = async (e) => {
                 e.stopPropagation();
                 try {
-                    await api('story/items/delete', 'POST',
-                              { session, slug, name: b.dataset.name, restore: true });
+                    must(await envApi('story/items/delete', 'POST',
+                              { session, slug, name: b.dataset.name, restore: true }));
                     await refresh();
                 } catch (e2) { ui.showToast(e2.message, 'error'); }
             });
         };
         paint();
+        panel.refresh = () => refresh(true);   // a scenario swap/delete repaints the kit too
     };
-    return { html, wire };
+    const panel = { html, wire };
+    return panel;
 }
 
 export async function openStorySettings(slug, opts = {}) {
@@ -1115,11 +1255,20 @@ export async function openStorySettings(slug, opts = {}) {
         setup ? scenarioBarHtml(Object.keys(setup.scenarios || {})) : '',
         { guard: () => {
             // closing COMMITS: in-flight autosave fires now, pending room
-            // text flushes (fire-and-forget) — nothing here is discardable.
+            // text flushes — nothing here is discardable.
             if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; saveAll(); }
-            if (envTab?.flush) envTab.flush();
+            const subDirty = () => !modal.dirty() || confirm('Discard your unsaved changes?');
+            if (envTab?.dirty?.()) {
+                // The overlay must outlive the server's answer: on the
+                // read-only default the flush needs a name (or a discard)
+                // first, so close asynchronously once the text has landed.
+                flushNamed(envTab, scnState)
+                    .then((go) => { if (go && subDirty()) modal.close(); })
+                    .catch(e => ui.showToast('Room text not saved: ' + e.message, 'error'));
+                return false;
+            }
             // what's left dirty is a sub-form (typed, unplaced object/exit)
-            return !modal.dirty() || confirm('Discard your unsaved changes?');
+            return subDirty();
         } });
     const { overlay, close } = modal;
     const scnState = setup
@@ -1301,9 +1450,9 @@ export async function openStorySetup(slug, setup, session) {
         overlay.querySelector('.grs-cancel').onclick = modal.tryClose;
         overlay.querySelector('.grs-start').onclick = async () => {
             // Scenario swaps already applied on pick — Start just flushes
-            // pending room edits on top.
+            // pending room edits on top (named first, or discarded).
             try {
-                if (envTab?.flush) await envTab.flush();
+                if (!(await flushNamed(envTab, scnState))) return;
             } catch (e) {
                 ui.showToast('Environment failed to save: ' + e.message, 'error');
                 return;
@@ -1848,8 +1997,13 @@ function locksWidget(form, opts) {
             const f = fileIn.files && fileIn.files[0];
             fileIn.value = '';
             if (!f) return;
+            // Name first: the store keeps pixels, and the server gates
+            // uploads like any canvas write (read-only default, 2026-10-02).
+            if (_ensureScenario && !(await _ensureScenario())) return;
             const fd = new FormData();
             fd.append('file', f);
+            fd.append('session', _canvasCtx?.session || '');
+            fd.append('slug', _canvasCtx?.slug || '');
             try {
                 const up = await fetch('/api/plugin/game-room/story/art',
                                        { method: 'POST', body: fd });
@@ -2226,14 +2380,27 @@ function objectsTab(slug, session, data) {
         };
 
         tab.flush = async () => {
-            for (const rid of Object.keys(pending)) {
-                await api('story/room-text', 'POST',
-                          { session, slug, room_id: Number(rid),
-                            template: pending[rid].template,
-                            player_desc: pending[rid].player_desc });
-            }
+            // Snapshot-and-clear first (a namer save mid-flush calls flush
+            // again — it must find nothing). A refused room restores every
+            // unposted pending and THROWS, so ▶ Start/close abort with a
+            // toast instead of carrying on over lost text (2026-10-02).
+            const take = { ...pending };
             Object.keys(pending).forEach(k => delete pending[k]);
+            const rids = Object.keys(take);
+            for (let i = 0; i < rids.length; i++) {
+                const rid = rids[i];
+                const r = await envApi('story/room-text', 'POST',
+                          { session, slug, room_id: Number(rid),
+                            template: take[rid].template,
+                            player_desc: take[rid].player_desc });
+                if (!r || !r.success) {
+                    for (const k of rids.slice(i)) pending[k] = take[k];
+                    throw new Error(r?.detail || 'room text refused');
+                }
+            }
         };
+        tab.discard = () => { Object.keys(pending).forEach(k => delete pending[k]); };
+        tab.repaint = () => refresh();
         tab.dirty = () => !!Object.keys(pending).length;
         tab.hasContent = () =>
             Object.values(world.objects || {}).some(o => Object.keys(o || {}).length)
@@ -2247,6 +2414,7 @@ function objectsTab(slug, session, data) {
         // Before any stamp the baseline is unknown — protect if content.
         const canvasFp = () => JSON.stringify([
             world.objects || {},
+            world.user_items || {},          // the kit rides scenarios too (2026-10-02)
             (world.rooms || []).map(r => [r.template || '', r.player_desc || '',
                                           r.backdrop_override || '',
                                           r.add_exits || [], r.exit_shadows || {}]),
@@ -2314,7 +2482,7 @@ function objectsTab(slug, session, data) {
             else if (!fx) body = shipped ? { _clear: true } : null;        // nothing = strip / reset
             else body = fx;
             try {
-                const res = await api('story/room-enter', 'POST',
+                const res = await envApi('story/room-enter', 'POST',
                                       { session, slug, room_id: r.id, on_enter: body });
                 if (!res.success) { ui.showToast(res.detail || 'save failed', 'error'); return; }
                 r.on_enter = body;
@@ -2326,7 +2494,7 @@ function objectsTab(slug, session, data) {
             const r = curRoom();
             if (!r) return;
             try {
-                const res = await api('story/room-enter', 'POST',
+                const res = await envApi('story/room-enter', 'POST',
                                       { session, slug, room_id: r.id, on_enter: null });
                 if (!res.success) { ui.showToast(res.detail || 'reset failed', 'error'); return; }
                 r.on_enter = null;
@@ -2426,7 +2594,7 @@ function objectsTab(slug, session, data) {
             });
             list.querySelectorAll('.grs-obj-del').forEach(b => b.onclick = async () => {
                 try {
-                    const res = await api('story/objects/delete', 'POST',
+                    const res = await envApi('story/objects/delete', 'POST',
                               { session, slug, room_id: r.id, name: b.dataset.name });
                     if (res.detail) ui.showToast(res.detail, res.success ? 'success' : 'error', 2000);
                     await refresh();
@@ -2434,8 +2602,8 @@ function objectsTab(slug, session, data) {
             });
             list.querySelectorAll('.grs-obj-restore').forEach(b => b.onclick = async () => {
                 try {
-                    await api('story/objects/delete', 'POST',
-                              { session, slug, room_id: r.id, name: b.dataset.name, restore: true });
+                    must(await envApi('story/objects/delete', 'POST',
+                              { session, slug, room_id: r.id, name: b.dataset.name, restore: true }));
                     await refresh();
                 } catch (e) { ui.showToast(e.message, 'error'); }
             });
@@ -2484,7 +2652,7 @@ function objectsTab(slug, session, data) {
             });
             badges.querySelectorAll('.grs-exit-x:not(.grs-exit-restore)').forEach(b => b.onclick = async () => {
                 try {
-                    const res = await api('story/exits/delete', 'POST',
+                    const res = await envApi('story/exits/delete', 'POST',
                         { session, slug, room_id: r.id, to: Number(b.dataset.to) });
                     if (res.detail) ui.showToast(res.detail, res.success ? 'success' : 'error', 2000);
                     await refresh();
@@ -2492,8 +2660,8 @@ function objectsTab(slug, session, data) {
             });
             badges.querySelectorAll('.grs-exit-restore').forEach(b => b.onclick = async () => {
                 try {
-                    await api('story/exits/delete', 'POST',
-                        { session, slug, room_id: r.id, to: Number(b.dataset.to), restore: true });
+                    must(await envApi('story/exits/delete', 'POST',
+                        { session, slug, room_id: r.id, to: Number(b.dataset.to), restore: true }));
                     await refresh();
                 } catch (e2) { ui.showToast(e2.message, 'error'); }
             });
@@ -2726,8 +2894,8 @@ function objectsTab(slug, session, data) {
             const r = curRoom();
             if (exEditing == null) return;
             try {
-                await api('story/exits/delete', 'POST',
-                          { session, slug, room_id: r.id, to: exEditing, restore: true });
+                must(await envApi('story/exits/delete', 'POST',
+                          { session, slug, room_id: r.id, to: exEditing, restore: true }));
                 closeExit();
                 await refresh();
             } catch (e) { ui.showToast(e.message, 'error'); }
@@ -2760,7 +2928,7 @@ function objectsTab(slug, session, data) {
                 if (se) body.edit_mechanics = true;
             }
             try {
-                const res = await api('story/exits', 'POST', body);
+                const res = await envApi('story/exits', 'POST', body);
                 if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
                 // One-shot return door (F4): mirrored once at creation,
                 // skipped if the far side already leads back. Never linked
@@ -2770,7 +2938,7 @@ function objectsTab(slug, session, data) {
                     const destHas = dest && [...(dest.shipped_exits || []), ...(dest.add_exits || [])]
                         .some(e => e.to === r.id);
                     if (!destHas)
-                        await api('story/exits', 'POST',
+                        await envApi('story/exits', 'POST',
                                   { session, slug, room_id: to, to: r.id, label: r.title || '' });
                 }
                 closeExit();
@@ -2926,8 +3094,8 @@ function objectsTab(slug, session, data) {
             const r = curRoom();
             if (!editing || !r) return;
             try {
-                await api('story/objects/delete', 'POST',
-                          { session, slug, room_id: r.id, name: editing, restore: true });
+                must(await envApi('story/objects/delete', 'POST',
+                          { session, slug, room_id: r.id, name: editing, restore: true }));
                 closeAdd();
                 await refresh();
             } catch (e) { ui.showToast(e.message, 'error'); }
@@ -2942,8 +3110,8 @@ function objectsTab(slug, session, data) {
             const restoreAndClose = async () => {
                 try {
                     if (ovNow)
-                        await api('story/objects/delete', 'POST',
-                                  { session, slug, room_id: r.id, name, restore: true });
+                        must(await envApi('story/objects/delete', 'POST',
+                                  { session, slug, room_id: r.id, name, restore: true }));
                     closeAdd();
                     await refresh();
                 } catch (e) { ui.showToast(e.message, 'error'); }
@@ -2980,7 +3148,7 @@ function objectsTab(slug, session, data) {
                          spec: compileObj(name, d, null) };
             }
             try {
-                const res = await api('story/objects', 'POST', body);
+                const res = await envApi('story/objects', 'POST', body);
                 if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
                 closeAdd();
                 ui.showToast(`'${name}' ${so ? 'saved' : 'placed'}`, 'success', 2000);
@@ -2995,9 +3163,9 @@ function objectsTab(slug, session, data) {
         const setBackdrop = async (name) => {
             const r = curRoom();
             try {
-                const res = await api('story/backdrop', 'POST',
+                const res = await envApi('story/backdrop', 'POST',
                                       { session, slug, room_id: r.id, name });
-                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
+                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); paintRoom(); return; }
                 await refresh();
             } catch (e) { ui.showToast(e.message, 'error'); }
         };
@@ -3008,8 +3176,13 @@ function objectsTab(slug, session, data) {
             const f = bdFile.files && bdFile.files[0];
             bdFile.value = '';
             if (!f) return;
+            // Name first: the store keeps pixels, so don't ingest for a
+            // write that the read-only default is about to refuse.
+            if (_ensureScenario && !(await _ensureScenario())) return;
             const fd = new FormData();
             fd.append('file', f);
+            fd.append('session', session);   // the server gates uploads like any canvas write
+            fd.append('slug', slug);
             try {
                 const up = await fetch('/api/plugin/game-room/story/art',
                                        { method: 'POST', body: fd });
@@ -3027,7 +3200,7 @@ function objectsTab(slug, session, data) {
             roomSel.value = roomSel.dataset.prev || '';   // cancel-safe
             if (!title || !title.trim()) { paintRoom(); return; }
             try {
-                const res = await api('story/rooms', 'POST',
+                const res = await envApi('story/rooms', 'POST',
                                       { session, slug, title: title.trim() });
                 if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); paintRoom(); return; }
                 await refresh();
@@ -3041,7 +3214,7 @@ function objectsTab(slug, session, data) {
             if (!r || !r.user_room) return;
             if (!confirm(`Remove '${r.title}'? Its doors and objects go with it.`)) return;
             try {
-                const res = await api('story/rooms/delete', 'POST',
+                const res = await envApi('story/rooms/delete', 'POST',
                                       { session, slug, room_id: r.id });
                 ui.showToast(res.detail || (res.success ? 'Removed' : 'refused'),
                              res.success ? 'success' : 'error', 2500);

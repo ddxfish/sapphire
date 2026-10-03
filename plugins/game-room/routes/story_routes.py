@@ -9,6 +9,7 @@
 # effective chat, which is the old behavior minus the global-active bug.
 
 import logging
+import threading
 import sys
 from pathlib import Path
 
@@ -29,6 +30,16 @@ logger = logging.getLogger(__name__)
 def _system():
     from core.api_fastapi import get_system
     return get_system()
+
+
+def _has_system():
+    try:
+        return _system() is not None
+    except Exception:
+        return False
+
+
+_scn_lock = threading.Lock()   # serializes the scenario store's read-modify-write
 
 
 def _sess_arg(body=None, query=None):
@@ -305,6 +316,14 @@ def _scenarios(store, slug, persist=False):
             ent['rooms'] = o.get('rooms') or {}
     if persist:
         store.save(key, cur)
+        # The old keys are dead data from here on — and dead data is
+        # hidden data (orphan hunt 2026-10-02, #1): drop them.
+        for k in (f'storypresets:{slug}', f'storyobjsets:{slug}'):
+            try:
+                if store.get(k) is not None:
+                    store.delete(k)
+            except Exception as e:
+                logger.warning(f"[STORY] legacy key {k} not dropped: {e}")
     return cur
 
 
@@ -337,6 +356,41 @@ def _active_ctx(query=None, body=None):
                         'detail': 'No story is active in this session.'}
 
 
+def _chat_private(chat):
+    """True / False, or None when it can't be read (callers fail CLOSED —
+    silent-default class rule). Hermetic tests have no system: None."""
+    try:
+        sm = _system().llm_chat.session_manager
+    except Exception:
+        return None
+    try:
+        s = sm.get_settings_for(chat)
+        return bool(isinstance(s, dict) and s.get('private_chat'))
+    except Exception:
+        return None
+
+
+def _edit_ctx(body=None, query=None):
+    """_active_ctx for the canvas WRITE lanes — plus the read-only default
+    (Krem 2026-10-02): edits need a living scenario tag; "— the default
+    story —" can hold no data. `needs_scenario` tells the client to pop
+    the namer and retry; `private` says the namer can't help (the store
+    is unencrypted, so a private chat can only edit a LOADED scenario)."""
+    chat, slug, err = _active_ctx(query=query, body=body)
+    if err:
+        return chat, slug, err
+    if not _session().canvas_named(slug, chat):
+        out = {'success': False, 'needs_scenario': True,
+               'detail': 'The default story is read-only — name a scenario to edit it.'}
+        private = _chat_private(chat)
+        if private or (private is None and _has_system()):   # unknown = closed
+            out['private'] = True
+            out['detail'] = ('This chat is private and the default story is read-only — '
+                             'pick a saved scenario to edit it here.')
+        return None, None, out
+    return chat, slug, None
+
+
 def get_objects(query=None, **_):
     """The Objects editor's world view: every room with shipped + override
     text, and the playthrough's placed objects."""
@@ -344,6 +398,10 @@ def get_objects(query=None, **_):
     chat, slug, err = _active_ctx(query=query)
     if err:
         return err
+    # Opening the editor on an orphan canvas (tag dead or empty, no run
+    # in flight) drops it — the default story shows as shipped, not as
+    # whatever a deleted scenario left behind (2026-10-02).
+    _session().sweep_orphan_canvas(slug, chat, "editor open")
     shipped = rooms.load_story(slug)
     layer = st.get_user_layer(slug, chat)
     room_rows = []
@@ -497,6 +555,13 @@ async def upload_art(request=None, **_):
             return {"success": False, "detail":
                     f"Image too large ({art.MAX_UPLOAD // (1024 * 1024)}MB cap)."}
         form = await request.form()
+        # Read-only default (2026-10-02): the store keeps pixels, so the
+        # upload itself needs a named canvas — same gate as the backdrop
+        # write it precedes (the client checks first; this is the backstop).
+        chat, slug, err = _edit_ctx(body={'session': str(form.get('session') or ''),
+                                          'slug': str(form.get('slug') or '')})
+        if err:
+            return err
         f = form.get("file")
         data = await f.read(art.MAX_UPLOAD + 1) if f is not None else b""
     except Exception as e:
@@ -541,7 +606,7 @@ def create_room(body=None, **_):
     """New playthrough room (W2) — a user-layer room definition; every
     editor lane (text/backdrop/objects/exits) then works on it as-is."""
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     msg, ok, rid = _session().create_user_room(chat, slug, body.get('title'))
@@ -551,7 +616,7 @@ def create_room(body=None, **_):
 def delete_room(body=None, **_):
     """Remove a playthrough-created room (never shipped ones)."""
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -568,7 +633,7 @@ def set_backdrop(body=None, **_):
     to shipped. UNGATED like objects/exits — deliberate user content."""
     from gameroom_story import art, rooms
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -598,7 +663,7 @@ def set_object(body=None, **_):
     same law as sealed blanks: on her side it's simply the world."""
     from gameroom_story import rooms
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -637,7 +702,7 @@ def delete_object(body=None, **_):
     instead: tombstone lifted / shadow edits reset, back to the pack."""
     from gameroom_story import rooms
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -664,7 +729,7 @@ def set_item(body=None, **_):
     Same NEVER-through-the-AI law as objects; membership is derived at
     load, so it's in her inventory next turn."""
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     name = str(body.get('name') or '').strip()
@@ -687,7 +752,7 @@ def delete_item(body=None, **_):
     """Delete a user starting item — or tombstone a SHIPPED one
     (restorable); `restore: true` lifts the tombstone / resets shadows."""
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     name = str(body.get('name') or '').strip()
@@ -711,7 +776,7 @@ def set_room_enter(body=None, **_):
     {effects}|{_clear:true}|null}. Playthrough layer, wholesale."""
     from gameroom_story import rooms
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -729,7 +794,7 @@ def set_room_text(body=None, **_):
     rule)."""
     from gameroom_story import rooms
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -829,7 +894,7 @@ def set_exit(body=None, **_):
     import json
     from gameroom_story import rooms, state as st
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -897,7 +962,7 @@ def delete_exit(body=None, **_):
     plain removal."""
     from gameroom_story import rooms
     body = body or {}
-    chat, slug, err = _active_ctx(body=body)
+    chat, slug, err = _edit_ctx(body=body)
     if err:
         return err
     try:
@@ -959,11 +1024,27 @@ def set_scenario(slug, body=None, **_):
     sess = _session()
     store = sess._store()
     key = f'storyscenarios:{slug}'
-    cur = dict(_scenarios(store, slug, persist=True))
     if body.get('delete'):
-        cur.pop(name, None)
-        store.save(key, cur)
-        return {'success': True, 'scenarios': sorted(cur)}
+        # Store read→pop→save under the lock (a save racing a delete used
+        # to resurrect the scenario after its canvases were dropped).
+        with _scn_lock:
+            cur = dict(_scenarios(store, slug, persist=True))
+            cur.pop(name, None)
+            store.save(key, cur)
+        # One delete = gone (Krem 2026-10-02): every visible canvas wearing
+        # this tag drops with it — journals/transcripts stay (the chat's
+        # history is the user's to delete). A sealed chat's copy is out of
+        # reach here; its dead tag gets swept at its next start/open/end.
+        # if_tag: a chat that swapped away meanwhile keeps its new copy.
+        reset = 0
+        for c, layer in st.all_user_layers(slug).items():
+            if layer.get('scenario') == name:
+                try:
+                    reset += bool(st.drop_user_layer(slug, c, if_tag=name))
+                except Exception as e:
+                    logger.warning(f"[STORY] scenario '{name}' delete: canvas on "
+                                   f"'{c}' not dropped: {e}")
+        return {'success': True, 'scenarios': sorted(cur), 'reset_chats': reset}
     chat, active_slug, err = _active_ctx(body=body)
     if err:
         return err
@@ -972,48 +1053,45 @@ def set_scenario(slug, body=None, **_):
                 'detail': f"This session is playing '{active_slug}', not '{slug}'."}
     # Privacy gate (plan care point): the plugin store is NOT encrypted — a
     # private playthrough's authored world must not leak into it. Fails
-    # CLOSED on a settings-read error (silent-default class rule).
-    sm = None
-    try:
-        sm = _system().llm_chat.session_manager
-    except Exception:
-        sm = None                      # hermetic tests: no system, no chat privacy
-    if sm is not None:
-        try:
-            s = sm.get_settings_for(chat)
-            if isinstance(s, dict) and s.get('private_chat'):
-                return {'success': False, 'detail':
-                        'This playthrough is private — scenarios save to '
-                        'unencrypted storage. Release the chat first if you '
-                        'really want this scenario shared.'}
-        except Exception:
-            return {'success': False,
-                    'detail': 'Could not verify chat privacy — refusing to save.'}
+    # CLOSED on a settings-read error (silent-default class rule); hermetic
+    # tests have no system at all and pass.
+    private = _chat_private(chat)
+    if private is None and _has_system():
+        return {'success': False,
+                'detail': 'Could not verify chat privacy — refusing to save.'}
+    if private:
+        return {'success': False, 'detail':
+                'This playthrough is private — scenarios save to '
+                'unencrypted storage. Release the chat first if you '
+                'really want this scenario shared.'}
+    cur = dict(_scenarios(store, slug, persist=True))
     if name not in cur and len(cur) >= _PRESET_CAP:
         return {'success': False, 'detail': f'Scenario cap reached ({_PRESET_CAP}).'}
     slots = body.get('slots') if isinstance(body.get('slots'), dict) else {}
     slots = _cap_scenario_slots(slug, slots)
     # layer_lock across the read→save (2026-08-21 hunt, race R1 family):
     # the scenario-tag stamp is a whole-blob rewrite of the layer it read.
-    with st.layer_lock:
+    def _players(objs):
+        return {n: s for n, s in (objs or {}).items()
+                if isinstance(s, dict) and s.get('_author') != 'ai'}
+
+    with st.layer_lock, _scn_lock:
         layer = st.get_user_layer(slug, chat)
         objects = {}
         for rid, objs in (layer.get('objects') or {}).items():
-            if not isinstance(objs, dict):
-                continue
-            keep = {n: s for n, s in objs.items()
-                    if isinstance(s, dict) and s.get('_author') != 'ai'}
-            if keep:
-                objects[rid] = keep
+            if isinstance(objs, dict) and _players(objs):
+                objects[rid] = _players(objs)
+        cur = dict(_scenarios(store, slug, persist=True))   # fresh under the lock
         cur[name] = {'slots': slots, 'objects': objects,
                      'rooms': layer.get('rooms') or {},
+                     # Start items ride the scenario too (2026-10-02)
+                     'items': _players(layer.get('items')),
                      # AI tools fence rides the scenario like slots do —
                      # read server-side from the running entry (2026-08-24)
                      'fence': (st.get_active_entry(chat) or {}).get('fence') or []}
         store.save(key, cur)
         # The canvas IS this scenario now — remember it (gear reopens on it).
-        # Spread-forward: only the tag changes here; every other bucket
-        # (items included) rides untouched.
+        # Only the tag changes here; every bucket rides untouched.
         st.save_user_layer(slug, chat, {**layer, 'scenario': name})
     return {'success': True, 'scenarios': sorted(cur)}
 

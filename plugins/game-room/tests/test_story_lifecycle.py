@@ -211,3 +211,28 @@ def test_reassert_heals_missing_surface(system, engine, monkeypatch):
     monkeypatch.setattr(sess, "_activate_prompt_for", lambda *a, **k: None)
     assert sess.refresh_prompt(system, session="story-chat")
     assert sm.settings["story-chat"]["surface"] == "game"
+
+
+def test_start_and_end_sweep_orphan_canvas(system, engine, monkeypatch):
+    """Default holds no data (Krem 2026-10-02): an untagged canvas dies at
+    ▶ Start (the default story starts pristine) and again at story_end
+    (the AI's run-time placements go with the run); a canvas wearing a
+    LIVING scenario tag survives both."""
+    monkeypatch.setattr(sess, "_room_return_prompt", lambda: "")
+    monkeypatch.setattr(sess, "scenario_exists", lambda slug, name: name == "live")
+    st.save_user_layer("goblin-den", "story-chat",
+                       {"objects": {"1": {"stale": {"desc": "x"}}}, "scenario": "gone"})
+    msg, ok = sess.start(system, "goblin-den", session="story-chat")
+    assert ok, msg
+    assert st.get_user_layer("goblin-den", "story-chat") == {}
+    # her mid-run placement lives on the untagged canvas until the end
+    sess.upsert_user_object("story-chat", "goblin-den", 1, "hers", {"desc": "x"}, author="ai")
+    assert st.get_user_layer("goblin-den", "story-chat")["objects"]["1"]["hers"]
+    sess.end(system, session="story-chat")
+    assert st.get_user_layer("goblin-den", "story-chat") == {}
+    # a named scenario's copy rides through start AND end
+    st.save_user_layer("goblin-den", "story-chat",
+                       {"objects": {"1": {"mine": {"desc": "x"}}}, "scenario": "live"})
+    sess.start(system, "goblin-den", session="story-chat")
+    sess.end(system, session="story-chat")
+    assert st.get_user_layer("goblin-den", "story-chat")["scenario"] == "live"

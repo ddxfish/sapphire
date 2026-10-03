@@ -154,6 +154,33 @@ def save_user_layer(story, chat, data):
     _cs().put(chat, _okey(story), data)
 
 
+def drop_user_layer(story, chat, if_tag=None):
+    """Canvas → shipped-only: the row goes, not just its buckets (Krem
+    2026-10-02: the default story holds NO data). No-op when absent.
+    if_tag: drop only while the row still wears that scenario tag (the
+    delete cascade re-checks under the lock — a chat that swapped away
+    between the sweep's read and its drop keeps its new copy)."""
+    with layer_lock:
+        row = _cs().get(chat, _okey(story))
+        if row is None:
+            return False
+        if if_tag is not None and (row.get("scenario") if isinstance(row, dict) else None) != if_tag:
+            return False
+        _cs().delete(chat, _okey(story))
+        return True
+
+
+def all_user_layers(story):
+    """{chat: layer} across every VISIBLE chat holding this story's canvas
+    (hidden chats structurally absent — core's filter)."""
+    try:
+        return {c: v for c, v in _cs().get_all_chats(_okey(story)).items()
+                if isinstance(v, dict)}
+    except Exception as e:
+        logger.warning(f"[STORY] canvas sweep read failed for '{story}': {e}")
+        return {}
+
+
 # ── Journal ──────────────────────────────────────────────────────────────────
 
 def _stamp_anchor(chat, event):

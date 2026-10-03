@@ -1467,6 +1467,58 @@ class PluginLoader:
                         if name in self._plugins:
                             self._plugins[name]["loaded"] = False
 
+    def purge_plugin_data(self, name: str) -> dict:
+        """Delete everything a plugin stores ABOUT THE USER, leaving the
+        plugin itself installed and configured: user/plugin_state/<name>.json,
+        its `{name}-*` / `{name}_*` siblings, and every plugin_chat_data row
+        it holds (sealed chats skipped, counted). The lever behind the card's
+        "Purge data" and the uninstall path (2026-10-02: deleting the state
+        file by hand never reached the chat rows). Returns counts."""
+        out = {"rows": 0, "skipped_sealed": 0, "files": 0}
+        try:
+            from core.api_fastapi import get_system
+            sm = get_system().llm_chat.session_manager
+            r = sm.plugin_data_purge(name)
+            out["rows"], out["skipped_sealed"] = r["deleted"], r["skipped_sealed"]
+        except Exception as e:
+            logger.warning(f"[PLUGINS] purge {name}: chat rows not reached: {e}")
+        # A LIVE plugin holds the loader's PluginState singleton with the
+        # whole file in memory — unlinking the file alone would let its next
+        # save() rewrite everything back (the hand-delete trap). Empty the
+        # instance first; it stays the shared singleton, now blank.
+        with self._plugin_state_cache_lock:
+            inst = self._plugin_state_cache.get(name)
+        if inst is not None:
+            try:
+                inst.clear()
+            except Exception as e:
+                logger.warning(f"[PLUGINS] purge {name}: live state not cleared: {e}")
+        state_file = PLUGIN_STATE_DIR / f"{name}.json"
+        if state_file.exists():
+            state_file.unlink(missing_ok=True)
+            out["files"] += 1
+        # Sweep sibling files/dirs in plugin_state whose name starts with
+        # the plugin name (+ '-' or '_' separator). Catches conventions
+        # like `{name}-logs/`, `{name}_sessions/`, `{name}-sessions.json`.
+        # Without this, e.g. uninstalling telegram leaves
+        # `telegram_sessions/` with live credentials on disk (H5).
+        try:
+            for prefix in (f"{name}-", f"{name}_"):
+                for extra in PLUGIN_STATE_DIR.glob(f"{prefix}*"):
+                    try:
+                        if extra.is_dir():
+                            _rmtree_robust(extra)
+                        else:
+                            extra.unlink()
+                        out["files"] += 1
+                        logger.info(f"[PLUGINS] purge: removed sibling {extra.name}")
+                    except Exception as e:
+                        logger.warning(f"[PLUGINS] Could not remove {extra}: {e}")
+        except Exception as e:
+            logger.warning(f"[PLUGINS] purge sibling sweep failed: {e}")
+        logger.info(f"[PLUGINS] purged data for {name}: {out}")
+        return out
+
     def uninstall_plugin(self, name: str):
         """Fully remove a user plugin — unload, delete files, settings, and state."""
         info = self._plugins.get(name)
@@ -1512,28 +1564,9 @@ class PluginLoader:
         settings_file = PROJECT_ROOT / "user" / "webui" / "plugins" / f"{name}.json"
         settings_file.unlink(missing_ok=True)
 
-        # Delete state
-        state_file = PLUGIN_STATE_DIR / f"{name}.json"
-        state_file.unlink(missing_ok=True)
-
-        # Sweep sibling files/dirs in plugin_state whose name starts with
-        # the plugin name (+ '-' or '_' separator). Catches conventions
-        # like `{name}-logs/`, `{name}_sessions/`, `{name}-sessions.json`.
-        # Without this, e.g. uninstalling telegram leaves
-        # `telegram_sessions/` with live credentials on disk (H5).
-        try:
-            for prefix in (f"{name}-", f"{name}_"):
-                for extra in PLUGIN_STATE_DIR.glob(f"{prefix}*"):
-                    try:
-                        if extra.is_dir():
-                            _rmtree_robust(extra)
-                        else:
-                            extra.unlink()
-                        logger.info(f"[PLUGINS] Uninstall: removed sibling {extra.name}")
-                    except Exception as e:
-                        logger.warning(f"[PLUGINS] Could not remove {extra}: {e}")
-        except Exception as e:
-            logger.warning(f"[PLUGINS] Uninstall sibling sweep failed: {e}")
+        # Delete state — the file, its siblings, AND the plugin's chat rows
+        # (the purge lever; uninstall is its first caller).
+        self.purge_plugin_data(name)
 
         # Manifest-declared extra cleanup paths — for plugins whose state
         # files/dirs DON'T follow the `{name}-*` convention (e.g. Google

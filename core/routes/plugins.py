@@ -1370,6 +1370,22 @@ def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/plugins/{plugin_name}/purge")
+def purge_plugin_data_endpoint(plugin_name: str, _=Depends(require_login)):
+    """Delete everything a plugin stores about the user — plugin_state file
+    + siblings + its plugin_chat_data rows — leaving it installed and
+    configured. Any band: system plugins (game-room) hold user data too.
+    Sealed chats' rows are skipped and counted (unlock, purge again)."""
+    from core.plugin_loader import plugin_loader
+    if not plugin_loader.get_plugin_info(plugin_name):
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    try:
+        return {"status": "ok", "plugin": plugin_name,
+                **plugin_loader.purge_plugin_data(plugin_name)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/plugins/{plugin_name}/revert")
 def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
     """Swap a plugin back to the version retained by its last update.

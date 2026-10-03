@@ -3,8 +3,8 @@
 # A story pack is a folder: story.json (slug, title, premise, start) +
 # rooms/{id}-{slug}.json, one file per room — the file IS the room.
 # Scanned roots: the plugin's own stories/, user/story_presets/, and any
-# other plugin's stories/ dir (expansions). Generated rooms live with the
-# PLAYTHROUGH (user/story_saves/{slug}/rooms/), never the canonical pack.
+# other plugin's stories/ dir (expansions). Playthrough-created rooms live
+# on the chat row (session._merge_user_layer), never the canonical pack.
 import hashlib
 import json
 import logging
@@ -236,19 +236,11 @@ def load_story(slug, raw=False):
     return {"meta": meta, "rooms": rooms, "path": str(path)}
 
 
-def load_generated_rooms(slug, chat):
-    """Playthrough-generated rooms for one save (may be empty)."""
-    out = {}
-    # save_dir(), not a hand-built path: this used the RAW slug while
-    # journal_path sanitized it, so the two disagreed for any slug with a
-    # space or dot in it (Tier 5, F1).
-    gen_dir = save_dir(slug, chat) / "rooms"
-    if gen_dir.is_dir():
-        for f in gen_dir.iterdir():
-            room = _load_room_file(f)
-            if room:
-                out[room["id"]] = room
-    return out
+# load_generated_rooms() is GONE (orphan hunt 2026-10-02): it read legacy
+# user/story_saves/<slug>/<chat>/rooms/*.json on every load — files nothing
+# has written since v1.3, keyed by chat NAME, so a new chat reusing an old
+# name inherited a stranger's rooms. Playthrough rooms live on the chat row
+# (user layer, W2). save_dir() below stays only as the legacy-dir mapping.
 
 
 def _load_room_file(f):

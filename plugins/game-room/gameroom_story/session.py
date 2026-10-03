@@ -525,7 +525,6 @@ def load_active(chat):
     except Exception as e:
         logger.warning(f"[STORY] active story '{entry.get('story')}' failed to load: {e}")
         return None, None
-    story["rooms"].update(rooms.load_generated_rooms(entry["story"], chat))
     # Starting items (Krem 2026-08-22): a story-level object pool — things
     # the player begins with, living in NO room. Shipped in story.json
     # ("start_items"), user-authored in the layer's "items" bucket (same
@@ -896,46 +895,91 @@ def start(system, slug, character=None, mode=None, local=None, session=None,
                       slots=slots)
 
 
+# ── Default holds no data (Krem's ruling 2026-10-02) ────────────────────────
+# "— the default story —" is the shipped pack and nothing else. A canvas
+# (story:objects:<slug> row) exists only as the working copy of a NAMED
+# scenario: player edits need a living tag (routes refuse, the client pops
+# the namer), ▶ Start / story_end / the editor's open sweep any canvas whose
+# tag is empty or names a scenario that no longer exists, and deleting a
+# scenario drops every visible canvas wearing it. One delete = gone.
+# The AI's own placements (story_place, _author 'ai') are that run's
+# surprises — they may sit on an untagged canvas mid-run and die with it.
+
+def scenario_exists(slug, name):
+    """Named scenario in the store? Before the unified key exists, the
+    legacy preset/objset keys ARE the scenarios (the lazy migration folds
+    them in on the first write lane); once it exists they are dead data
+    and never resurrect a tag (orphan hunt 2026-10-02, #1)."""
+    if not name:
+        return False
+    store = _store()
+    cur = store.get(f"storyscenarios:{slug}")
+    if cur is not None:
+        return isinstance(cur, dict) and name in cur
+    return any(name in (store.get(f"{k}:{slug}") or {})
+               for k in ("storypresets", "storyobjsets"))
+
+
+def canvas_named(slug, chat):
+    """The canvas's scenario tag, or '' when untagged / dead-tagged."""
+    tag = str((st.get_user_layer(slug, chat) or {}).get("scenario") or "")
+    return tag if scenario_exists(slug, tag) else ""
+
+
+def sweep_orphan_canvas(slug, chat, reason):
+    """Drop a canvas with no living scenario behind it. Never mid-run of
+    this story (the AI's placements are the world until story_end).
+    Returns True when a row was dropped."""
+    if (st.get_active_entry(chat) or {}).get("story") == slug:
+        return False
+    layer = st.get_user_layer(slug, chat)
+    if not layer or canvas_named(slug, chat):
+        return False
+    try:
+        st.drop_user_layer(slug, chat)
+    except Exception as e:
+        logger.warning(f"[STORY] orphan canvas drop failed ({reason}): {e}")
+        return False
+    logger.info(f"[STORY] orphan canvas for '{slug}' dropped at {reason} "
+                f"(tag {layer.get('scenario')!r})")
+    return True
+
+
 def _apply_scenario_env(chat, slug, story, name):
     """PURE SWAP (Krem's ruling 2026-08-20): the playthrough's environment
     BECOMES the named scenario — canvas = snapshot, VERBATIM. Empty name =
-    reset to the shipped-only house. No implicit zork-line stamp anymore
-    (clown_key finding, same day): under swap the scenario IS the house
-    from turn 0 — what you saw when you saved is what you get when you
-    load. At-open materialization is the author's explicit choice via a
-    Visible-when condition on the object."""
+    the shipped-only house, i.e. NO canvas row at all (2026-10-02). No
+    implicit zork-line stamp (clown_key finding): under swap the scenario
+    IS the house from turn 0 — what you saw when you saved is what you get
+    when you load. At-open materialization is the author's explicit choice
+    via a Visible-when condition on the object."""
     if not name:
-        with st.layer_lock:
-            # Spread-forward (2026-08-22): scenario swap owns the ENV buckets
-            # only — other layer buckets (start items = the player's kit)
-            # ride through untouched.
-            layer = st.get_user_layer(slug, chat)
-            st.save_user_layer(slug, chat, {**layer, "objects": {}, "rooms": {},
-                                            "scenario": ""})
+        st.drop_user_layer(slug, chat)
         return
     sets = _store().get(f"storyscenarios:{slug}") or {}
     data = sets.get(name)
     if not isinstance(data, dict):
         raise KeyError(name)
+
+    def _specs(objs):
+        cur = {}
+        for oname, spec in (objs or {}).items():
+            if isinstance(spec, dict):
+                cur[oname] = {"_author": "player", **spec}
+        return cur
+
     objects = {}
     for rid, objs in (data.get("objects") or {}).items():
-        if not isinstance(objs, dict):
-            continue
-        cur = {}
-        for oname, spec in objs.items():
-            if not isinstance(spec, dict):
-                continue
-            spec = dict(spec)
-            spec.setdefault("_author", "player")
-            cur[oname] = spec
-        if cur:
-            objects[str(rid)] = cur
+        if isinstance(objs, dict) and _specs(objs):
+            objects[str(rid)] = _specs(objs)
     rooms_ov = {str(rid): txt for rid, txt in (data.get("rooms") or {}).items()
                 if isinstance(txt, dict)}
+    # Start items ride the scenario too (2026-10-02) — the kit was the one
+    # bucket a swap used to spare, which left it hiding inside "default".
     with st.layer_lock:
-        layer = st.get_user_layer(slug, chat)
-        st.save_user_layer(slug, chat, {**layer, "objects": objects,
-                                        "rooms": rooms_ov, "scenario": name})
+        st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
+                                        "items": _specs(data.get("items")),
+                                        "scenario": name})
 
 
 def _start(system, slug, character, mode, local, session, slots=None):
@@ -995,7 +1039,10 @@ def _start(system, slug, character, mode, local, session, slots=None):
                     f"persists rendered prompts in plaintext. Pick a "
                     f"non-vault prompt, or use 'story' identity mode."), False
 
-    # Fresh playthrough = fresh journal; the old one archives beside it
+    # Fresh playthrough = fresh journal; the old one archives beside it.
+    # A canvas with no living scenario behind it goes first — the default
+    # story starts pristine, always (2026-10-02).
+    sweep_orphan_canvas(slug, chat, "start")
     st.new_run(slug, chat)
 
     st.set_active(chat, slug, prev_prompt)
@@ -1368,6 +1415,9 @@ def _end(system, session):
         # cockpit stays, but the story no longer owns the chat's surface
         _stamp_settings(system, chat, {"surface": "chat"}, runtime_toolset=False)
     st.clear_active(chat)
+    # The run's untagged canvas (AI placements on the default story) dies
+    # with the run; a named scenario's copy stays for the gear to reopen on.
+    sweep_orphan_canvas(entry["story"], chat, "story_end")
     # v1.3: the journal lives on this chat's rows now — kept until the chat
     # itself is deleted, sealed if the chat is.
     return (f"Story closed. Journal kept with this chat — "
@@ -1799,7 +1849,6 @@ def last_played(system, session=None):
     slug = best[0]
     try:
         story = rooms.load_story(slug)
-        story["rooms"].update(rooms.load_generated_rooms(slug, chat))
         state = st.replay(slug, chat)
         room = story["rooms"].get(state["room"])
         return {
