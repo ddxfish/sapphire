@@ -8,17 +8,24 @@ Reference drivers: **`plugins/ssh`** (stored logins, user-written commands), the
 
 ## What Sapphire sees
 
-Three tools. Their schemas never change as devices come and go.
+Three tools. Their descriptions carry the fleet: every device's name, place,
+online or offline, and what it can do, so she usually starts at
+`device_action(device)` without a list call. With ten devices or fewer the
+device argument is an enum of their names.
 
 ```
 device_list()                                   every device, online or offline, what it can do
-device_status("desktop")                        one device, checked right now
-device_action("desktop")                        its capabilities, one example each
-device_action("desktop","ssh")                  that capability's actions, one example each
+device_status("desktop")                        one device, asked right now
+device_action("desktop")                        how it is, EVERY action with the value it takes, one example call
+device_action("desktop","ssh")                  the same, one capability
 device_action("desktop","ssh","volume","40")    runs one
 ```
 
-A wrong guess answers with the list one level up. Core writes all of this help from what your driver's `describe()` returns, so every device reads the same to her.
+So an action is two calls: `device_action(device)`, then the run. A wrong
+guess answers with the screen one level up. Core writes all of this help from
+what your driver's `describe()` returns, so every device reads the same to her.
+One screen is kept under about a thousand tokens: a capability with many
+actions is cut to its first eight and says how to see the rest.
 
 Sapphire cannot add, change, or remove a device. Only the Devices page can.
 
@@ -254,6 +261,7 @@ def test_dim():
 Two tests are worth having in every driver:
 
 - **Every example in your help really runs.** Loop over `describe()` and run each action with its own `example`. Sapphire copies those examples.
+- **Say what the value is.** An action may carry `values`, a short grammar of its value: `<color> [pulse|blink] [5s]`. Angle brackets for what is needed, square for what may be left out, `|` for a choice. It sits beside the action's name on her screen, so she does not have to guess, or call again to find out. Put what the words mean in `help`. A long menu (every color, 128 instruments) stays an action of its own, one call away.
 - **What is missing is said plainly.** An unplugged device must answer with a sentence, never a stack trace.
 
 ## Names that mean the same everywhere
@@ -562,7 +570,7 @@ These work in any plugin's settings schema.
 ## Reference for AI
 
 - Manifest: `capabilities.devices: [{driver, label?, icon?, module, capabilities[], config_schema[]?, locked_by_default[]?, presence?}]`. Registered by the loader into `core/devices/registry.py`; unregistered on unload. Bad declarations are skipped with a log line, never a failed load.
-- Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example}}}}`, `status(device, config, secrets) -> {online, detail, readings?, has?}`, optional `apply(device, config, secrets)` (after a save; raise `DeviceError` to be heard), `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`.
+- Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example, values?}}}}`, `status(device, config, secrets) -> {online, detail, readings?, has?}`, optional `apply(device, config, secrets)` (after a save; raise `DeviceError` to be heard), `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`.
 - Engine: `core/devices/engine.py`, loaded on first use. Tools: `functions/devices.py`. Rows in `user/plugin_state/devices.json` under key `devices`: `{id, label, location, enabled, created, locked: [capability], parts: [{driver, plugin, config}]}`. `locked` = what she may not use; only capabilities in `engine.LOCKABLE` can be locked; `engine.run(..., owner=True)` is the user's own button and passes the lock. Secrets in `core/devices/secret_store.py` under `<driver>.<field>`.
 - The engine re-checks that the owning plugin is enabled and loaded on every call and drops cached driver modules when the registry generation changes.
 - Hosted (managed) installs: the tools refuse, the routes answer 404, the tab is hidden.

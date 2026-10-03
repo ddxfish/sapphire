@@ -362,7 +362,7 @@ def _power(action):
 def describe(device, config):
     told = {'sound': {'label': 'Sound', 'help': 'the volume of everything it plays, and its outputs',
                       'actions': {
-        'set': {'help': 'volume, 0 to 100', 'example': '40'},
+        'set': {'help': 'the volume', 'example': '40', 'values': '<0-100>'},
         'read': {'help': 'the volume now', 'example': ''},
         'up': {'help': 'a step louder', 'example': ''},
         'down': {'help': 'a step quieter', 'example': ''},
@@ -371,8 +371,8 @@ def describe(device, config):
     }}}
     if not _windows():
         told['sound']['actions']['outputs'] = {'help': 'where sound can come out', 'example': ''}
-        told['sound']['actions']['use'] = {'help': "switch to an output, by its number or name",
-                                           'example': '1'}
+        told['sound']['actions']['use'] = {'help': "switch to an output. 'outputs' numbers them",
+                                           'example': '1', 'values': '<number | name>'}
     if _can_see():
         told['screen'] = {'label': 'Screen', 'help': 'see what is on its screen', 'actions': {
             'look': {'help': 'take one picture of the whole screen and see it', 'example': ''},

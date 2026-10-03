@@ -32,9 +32,13 @@ class Engine:
         self.hold = threading.Event()
         self.hold.set()
         self._pool = ThreadPoolExecutor(max_workers=4)
+        self.retold = 0
 
     def refusal(self):
         return ''
+
+    def retell(self):
+        self.retold += 1
 
     def rows(self):
         return {k: dict(v) for k, v in self.table.items()}
@@ -75,6 +79,7 @@ def test_the_keeper_asks_every_enabled_device_and_keeps_asking(rig):
     n = len(rig.asked)
     assert until(lambda: len(rig.asked) >= n + 2)       # the clock came round again
     assert health.view('pi')['online'] is True
+    assert rig.retold == 2                              # two devices went online: told twice, no more
 
 
 def test_a_device_that_is_down_is_asked_less_often(rig):

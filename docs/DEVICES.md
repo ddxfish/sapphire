@@ -39,6 +39,12 @@ default.
 
 She has three tools: `device_list`, `device_status`, `device_action`. She can use a device. She cannot add, change, or remove one, and she never sees a stored password or key.
 
+The tools' own descriptions name your devices, where they are, whether they
+are online, and what each can do, so she rarely needs `device_list`.
+`device_action("pi2")` answers with how the device is and everything it can
+do, with the value each action takes; the run is her second call. One screen
+stays under about a thousand tokens.
+
 Turn a device off on its Status tab and she cannot see or use it.
 
 ## Power: restart, shut down, sleep

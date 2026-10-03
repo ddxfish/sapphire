@@ -1,11 +1,19 @@
 # functions/devices.py - the three device tools (tmp/device-manager-plan.md)
 """
-Thin doors into core/devices/engine.py. The schemas never change as devices
-come and go: a device is a string.
+Thin doors into core/devices/engine.py.
+
+The descriptions carry the fleet (get_tools): each device's name, where it
+is, whether it is online, and what it can do; with ten devices or fewer the
+device argument is an enum of their names. The engine asks for a rebuild
+(engine.retell) when a device is added, changed or removed, when a driver
+registers, and when one goes online or offline. So she can go from a wish to
+device_action(device) in one call, and that answer holds everything she
+needs for the second: status, every action, the value each takes.
 
 She cannot add, change, or remove a device or a premade command. Only the
 Settings > Devices page can.
 """
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,11 +54,9 @@ TOOLS = [
         "function": {
             "name": "device_action",
             "description": (
-                "Use a device. It works like a command with built-in help. "
-                "device_action(device) lists what it can do. "
-                "device_action(device, capability) lists the actions, one example each. "
-                "device_action(device, capability, action, value) runs one. "
-                "value is optional; the help shows its format."),
+                "Use a device. device_action(device) shows how it is and everything it can do, "
+                "with the value each action takes. "
+                "device_action(device, capability, action, value) runs one. value is optional."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -64,6 +70,48 @@ TOOLS = [
         }
     },
 ]
+
+
+FLEET_MAX = 10          # devices named in the description before "and N more"
+
+
+def _fleet_line(fleet):
+    """One device per clause: name, place, online or offline, what it can do."""
+    said = []
+    for d in fleet[:FLEET_MAX]:
+        where = f" ({d['location']})" if d['location'] else ''
+        caps = ', '.join(d['caps']) or 'nothing yet'
+        said.append(f"{d['id']}{where} {'online' if d['online'] else 'offline'}: {caps}")
+    more = f" · and {len(fleet) - FLEET_MAX} more: device_list" if len(fleet) > FLEET_MAX else ''
+    return ' · '.join(said) + more
+
+
+def get_tools():
+    """The schemas, with the fleet in them. Falls back to the plain TOOLS on
+    an install without devices, or before the engine can answer."""
+    tools = json.loads(json.dumps(TOOLS))
+    try:
+        from core.devices import engine
+        if engine.refusal():
+            return tools
+        fleet = engine.fleet()
+    except Exception as e:
+        logger.warning(f"[DEVICES] tool descriptions built without the fleet: {e}")
+        return tools
+    by_name = {t['function']['name']: t['function'] for t in tools}
+    if fleet:
+        by_name['device_action']['description'] += " Devices now: " + _fleet_line(fleet) + "."
+    else:
+        by_name['device_action']['description'] += " No devices yet: the user adds them in Settings > Devices."
+    names = [d['id'] for d in fleet]
+    for tool in ('device_status', 'device_action'):
+        device = by_name[tool]['parameters']['properties']['device']
+        if 0 < len(names) <= engine.FLEET_ENUM:
+            device['enum'] = names
+            device['description'] = 'Which device'
+        else:
+            device['description'] = 'Device name' + (f", one of: {', '.join(names[:FLEET_MAX])}, ..." if names else '')
+    return tools
 
 
 def execute(function_name, arguments, config):

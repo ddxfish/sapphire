@@ -136,9 +136,11 @@ def describe(device, config):
     actions = {}
     for c in config.get('commands', []):
         actions[c['name']] = {'help': c['command'][:60],
-                              'example': '<value>' if SLOT in c['command'] else ''}
+                              'example': '<value>' if SLOT in c['command'] else '',
+                              'values': '<value>' if SLOT in c['command'] else ''}
     if config.get('allow_all'):
-        actions['run'] = {'help': 'any command, safety filter applies', 'example': 'uptime'}
+        actions['run'] = {'help': 'any command, safety filter applies', 'example': 'uptime',
+                          'values': '<command>'}
     told = {'ssh': {'label': 'SSH', 'help': 'run commands on it', 'actions': actions}}
     power = {name: {'help': _power_command(config, name)[:60], 'example': ''}
              for name in POWER if _power_command(config, name)}

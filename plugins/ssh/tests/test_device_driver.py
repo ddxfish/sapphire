@@ -168,8 +168,8 @@ def test_power_is_a_capability_of_its_own(ssh):
 def test_describe_lists_premade_and_gates_run():
     d = drv.describe(DEVICE, cfg())['ssh']
     assert d['label'] == 'SSH' and list(d['actions']) == ['close_firefox', 'volume']
-    assert d['actions']['close_firefox'] == {'help': 'pkill firefox', 'example': ''}
-    assert d['actions']['volume']['example'] == '<value>'
+    assert d['actions']['close_firefox'] == {'help': 'pkill firefox', 'example': '', 'values': ''}
+    assert d['actions']['volume']['example'] == d['actions']['volume']['values'] == '<value>'
     assert list(drv.describe(DEVICE, cfg(allow_all=True))['ssh']['actions'])[-1] == 'run'
 
 

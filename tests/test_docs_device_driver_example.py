@@ -114,7 +114,8 @@ def test_the_guides_driver_works_through_the_real_engine(lamp):
         ("dim takes a number from 0 to 100, not 'bright'.", False)
 
     listing, ok = engine.run('desk')
-    assert ok and 'light  switch and dim it  device_action("desk","light","on")' in listing
+    assert ok and 'light - switch and dim it\n  on   switch it on\n  off  switch it off\n' in listing
+    assert 'Run one: device_action("desk","light","dim","40")' in listing
     st = engine.status('desk')
     assert st['online'] is True and st['parts'][0]['readings'] == {'brightness': '40%'}
 

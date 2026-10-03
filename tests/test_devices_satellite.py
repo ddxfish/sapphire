@@ -29,8 +29,9 @@ REAL = {
                          "brain_events": {"connected": True}},
     ('GET', '/sounds'): {"sounds": [{"name": "ping", "ext": ".wav", "bytes": 70604}], "count": 1},
     ('GET', '/wakeword'): {"running": True, "enabled": True, "model": "hey_sapphire", "threshold": 0.5},
-    ('GET', '/led/spec'): {"colors": ["cyan", "sapphire", "off"], "color_aliases": ["red", "blue"],
-                           "animations": {"solid": "no motion", "blink": "on and off"},
+    ('GET', '/led/spec'): {"colors": ["cyan", "sapphire", "soft_blue", "off"], "color_aliases": ["red", "blue"],
+                           "animations": {"solid": "no motion", "blink": "on and off", "heartbeat": "ba-bump",
+                                          "breathe": "rise and fall"},
                            "baseline_now": {"color": [90, 140, 220], "animation": "heartbeat", "bpm": 33},
                            "is_night": True},
     ('POST', '/led'): {"state": "custom", "animation": "blink"},
@@ -66,9 +67,11 @@ def pi():
         return Reply(REAL.get((method, path.split('?')[0]), {"ok": True}))
 
     sat._about.clear()
+    sat._palettes.clear()
     with patch.object(sat.net, 'request', fake):
         yield calls
     sat._about.clear()
+    sat._palettes.clear()
 
 
 run = lambda cap, action, value='', cfg=CFG, key=KEY: sat.run(DEV, cap, action, value, cfg, key, None)
@@ -177,8 +180,40 @@ def test_light_words():
     assert p('2m #ff8800 pulse') == {'r': 255, 'g': 136, 'b': 0, 'animation': 'pulse', 'duration_s': 120.0}
     assert p('#f80') == {'r': 255, 'g': 136, 'b': 0}
     assert p('') == {}
+    assert p('soft blue breathe 10s') == {'color': 'soft_blue', 'animation': 'breathe', 'duration_s': 10.0}
     with pytest.raises(sat.Problem, match="did not understand 'fast'"):
-        p('cyan blink fast')
+        p('soft blue blink fast')
+    with pytest.raises(sat.Problem, match="did not understand 'fast'"):
+        p('#f80 blink fast')
+
+
+def test_light_words_against_the_devices_own_palette():
+    """With the palette, every word is checked and the wrong one is named with
+    the choices (Sapphire burned seven calls on 'soft blue breathe', 2026-10-03)."""
+    pal = {'colors': ['cyan', 'soft_blue', 'red'], 'animations': ['solid', 'blink', 'breathe']}
+    p = lambda v: sat.parse_light(v, pal)
+    assert p('soft blue breathe 10s') == {'color': 'soft_blue', 'animation': 'breathe', 'duration_s': 10.0}
+    assert p('breathe soft blue') == {'color': 'soft_blue', 'animation': 'breathe'}      # any order
+    assert p('soft blue') == {'color': 'soft_blue'}
+    assert p('#f80 blink') == {'r': 255, 'g': 136, 'b': 0, 'animation': 'blink'}
+    with pytest.raises(sat.Problem, match="did not understand 'soft blue breath'. Colors: cyan, soft_blue, red, "
+                                          "or #hex like #ff8800. Animations: solid, blink, breathe."):
+        p('soft blue breath')
+    with pytest.raises(sat.Problem, match="did not understand 'teal'"):
+        p('teal blink')
+    with pytest.raises(sat.Problem, match="One animation at a time, not blink and breathe"):
+        p('red blink breathe')
+    with pytest.raises(sat.Problem, match="the color is already given as hex"):
+        p('#f80 red blink')
+
+
+def test_the_palette_is_asked_once_an_hour(pi):
+    assert run('light', 'set', 'soft blue breathe 10s')[1]
+    assert run('light', 'set', 'cyan blink 5s')[1]
+    assert [c.path for c in pi] == ['/led/spec', '/led', '/led']
+    assert pi[1].kw['json'] == {'color': 'soft_blue', 'animation': 'breathe', 'duration_s': 10.0}
+    told, ok = run('light', 'set', 'soft blue breath')
+    assert not ok and told.startswith("I did not understand 'soft blue breath'. Colors: cyan, sapphire, soft_blue")
 
 
 def test_light_fine_settings():
@@ -195,7 +230,7 @@ def test_light_fine_settings():
 def test_light_with_no_time_holds_five_minutes(pi):
     """A ring set with no time would stay forever. It is given five minutes."""
     assert run('light', 'set', 'red') == ('Ring: red, blink, 300s.', True)
-    assert pi[0].kw['json'] == {'color': 'red', 'animation': 'solid', 'duration_s': 300.0}
+    assert pi[-1].kw['json'] == {'color': 'red', 'animation': 'solid', 'duration_s': 300.0}
 
 
 def test_resting_light(pi):
@@ -206,14 +241,15 @@ def test_resting_light(pi):
     text, ok = run('light', 'rest', '#ff8c00 bpm=40')
     assert ok and text == ('Resting light is now: #ff8c00 heartbeat bpm=40 floor=0.05 ceiling=0.17. '
                            'Kept after a restart.')
-    assert (pi[1].method, pi[1].path) == ('PUT', '/led/baseline')
-    assert pi[1].kw['json'] == {'r': 255, 'g': 140, 'b': 0, 'bpm': 40}       # only what she named
+    put = [c for c in pi if c.method == 'PUT']
+    assert [(c.method, c.path) for c in pi] == [('GET', '/led/baseline'), ('GET', '/led/spec'), ('PUT', '/led/baseline')]
+    assert put[0].kw['json'] == {'r': 255, 'g': 140, 'b': 0, 'bpm': 40}      # only what she named
     for wrong in ('cyan 5m', 'cyan speed=fast'):
         text, ok = run('light', 'rest', wrong)
         assert not ok and text.startswith('A resting light has no time and no speed.')
-    assert len(pi) == 2
+    assert len(pi) == 3
     assert run('light', 'clear') == ('Back to its resting light.', True)
-    assert pi[2].kw['json'] == {'state': 'idle'}
+    assert pi[-1].kw['json'] == {'state': 'idle'}
 
 
 # --- camera --------------------------------------------------------------------
@@ -237,19 +273,22 @@ def test_a_satellite_without_a_camera(pi):
 
 def test_light_set_off_options(pi):
     assert run('light', 'set', 'cyan blink 5s') == ('Ring: cyan, blink, 5s.', True)
-    assert pi[0].kw['json'] == {'color': 'cyan', 'animation': 'blink', 'duration_s': 5.0}
+    assert [c.path for c in pi] == ['/led/spec', '/led']              # its palette first, once
+    assert pi[1].kw['json'] == {'color': 'cyan', 'animation': 'blink', 'duration_s': 5.0}
     assert run('light', 'off') == ('Ring dark.', True)
-    assert pi[1].kw['json'] == {'state': 'off'}
+    assert pi[2].kw['json'] == {'state': 'off'}
     text, ok = run('light', 'options')
     assert ok and text == (
-        'Colors: cyan, sapphire, off, red, blue. Any hex color works too, like #ff8800.\n'
+        'Colors: cyan, sapphire, soft_blue, off, red, blue. Any hex color works too, like #ff8800.\n'
         'Animations:\n'
         '  solid: no motion\n'
         '  blink: on and off\n'
+        '  heartbeat: ba-bump\n'
+        '  breathe: rise and fall\n'
         'Fine settings, written name=value: bpm=10 to 120, speed=slow, normal or fast, '
         'floor and ceiling=0 to 1 (lowest and highest brightness).\n'
         'Its resting light is: #5a8cdc heartbeat bpm=33. It is night there, so the night light shows.')
-    assert 'Example: cyan blink 5s' in run('light', 'set', '')[0] and len(pi) == 3
+    assert 'Example: cyan blink 5s' in run('light', 'set', '')[0] and len(pi) == 4
 
 
 # --- wake ----------------------------------------------------------------------

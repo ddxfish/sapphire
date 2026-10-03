@@ -896,8 +896,9 @@ class PluginLoader:
                             if isinstance(dd, dict) and register_driver(dd.get("driver"), dd, name)]
                 if accepted:
                     info["registered_device_drivers"] = accepted
-                    from core.devices import presence as _presence
+                    from core.devices import presence as _presence, engine as _dev_engine
                     _presence.poke()           # its devices may have things waiting
+                    _dev_engine.retell()       # the device tools' descriptions name what its devices can do
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: device driver registration failed: {e}")
 

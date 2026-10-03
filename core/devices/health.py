@@ -115,6 +115,7 @@ def told(device_id, result):
         out = _view_locked(b)
     if flipped:
         logger.info(f"[DEVICES] {device_id}: {'online' if out['online'] else 'offline'}")
+        _engine().retell()                   # the tool descriptions say who is online
     return out
 
 
@@ -146,6 +147,7 @@ def seen(device_id):
         if not was:
             logger.info(f"[DEVICES] {device_id}: online (it checked in)")
             _wake.set()
+            _engine().retell()
     except Exception as e:
         logger.warning(f"[DEVICES] health: seen({device_id}) failed: {e}")
 

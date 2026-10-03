@@ -7,6 +7,7 @@ import asyncio
 import importlib
 import importlib.util
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -258,17 +259,50 @@ def test_list_text_format(host):
 def test_help_at_every_level(host):
     _add(allow_all=True)
     core.status('desktop')                 # the keeper's first look
-    text, ok = core.run('desktop')
-    assert ok and text == ('desktop - Krem\'s desktop - online\n'
-                           '  shell  run commands  device_action("desktop","shell","close_firefox")\n'
-                           '  lamp   a light       device_action("desktop","lamp","set","red pulse 5s")\n'
-                           'Each line is one example. device_action("desktop","shell") lists all 3 actions of shell.')
-    text, ok = core.run('desktop', 'shell')
-    assert ok and text == ('desktop / shell\n'
-                           '  close_firefox  pkill firefox  device_action("desktop","shell","close_firefox")\n'
-                           '  play_beep      beep -f 800    device_action("desktop","shell","play_beep")\n'
-                           '  run            any command    device_action("desktop","shell","run","uptime")')
+    with patch.object(core, '_age', lambda ts: 'just now'):
+        text, ok = core.run('desktop')
+        # one screen: how it is, everything it can do with the value each takes, one example call
+        assert ok and text == ('desktop - Krem\'s desktop - online, checked just now\n'
+                               '  temp 41C\n'
+                               'shell - run commands\n'
+                               '  close_firefox  pkill firefox\n'
+                               '  play_beep      beep -f 800\n'
+                               '  run            any command\n'
+                               'lamp - a light\n'
+                               '  set  color\n'
+                               'Run one: device_action("desktop","shell","run","uptime")')
+        text, ok = core.run('desktop', 'lamp')         # one capability: the same, that block alone
+        assert ok and text == ('desktop - Krem\'s desktop - online, checked just now\n'
+                               '  temp 41C\n'
+                               'lamp - a light\n'
+                               '  set  color\n'
+                               'Run one: device_action("desktop","lamp","set","red pulse 5s")')
     assert not any(s[0] == 'run' for s in host.seen)
+    assert ('status', 'desktop') in host.seen and host.seen.count(('status', 'desktop')) == 1   # help never probes
+
+
+def test_the_value_each_action_takes_is_on_its_line(host):
+    _add()
+    sys.modules[MOD].describe = lambda device, config: {
+        'lamp': {'label': 'Lamp', 'help': 'a light', 'actions': {
+            'set': {'help': 'a color, then how it moves', 'example': 'red pulse 5s',
+                    'values': '<color> [pulse|blink] [5s]'},
+            'off': {'help': 'dark', 'example': ''}}}}
+    text = core.run('desktop')[0]
+    assert re.search(r'\n  set <color> \[pulse\|blink\] \[5s\]  a color, then how it moves\n  off +dark\n', text)
+    assert 'Run one: device_action("desktop","lamp","set","red pulse 5s")' in text
+
+
+def test_a_long_capability_is_cut_and_says_how_to_see_the_rest(host):
+    many = [{'name': f'cmd_{i:02d}', 'command': 'x' * 50} for i in range(40)]
+    _add(commands=many)
+    assert 'cmd_39' in core.run('desktop')[0]          # fits the budget: nothing is cut
+    with patch.object(core, 'SCREEN', 800):
+        text = core.run('desktop')[0]
+        assert len(text) <= 800
+        assert '  ... 32 more: device_action("desktop","shell")' in text and 'cmd_07' in text and 'cmd_08' not in text
+        full = core.run('desktop', 'shell')[0]         # asked for that capability: all of it, as promised
+        assert 'cmd_39' in full and '... ' not in full
 
 
 def test_offline_is_said_before_she_wastes_a_call(host):
@@ -276,12 +310,10 @@ def test_offline_is_said_before_she_wastes_a_call(host):
     assert core.run('desktop')[0].endswith('Offline: not heard from yet\nCommands will fail until it is back.')
     core.status('desktop')                 # the keeper's first look
     text, ok = core.run('desktop')
-    assert ok and text == ('desktop - Krem\'s desktop - offline\n'
-                           '  shell  run commands  device_action("desktop","shell","close_firefox")\n'
-                           '  lamp   a light       device_action("desktop","lamp","set","red pulse 5s")\n'
-                           'Each line is one example. device_action("desktop","shell") lists all 2 actions of shell.\n'
-                           'Offline: dead:22\n'
-                           'Commands will fail until it is back.')
+    assert ok and text.startswith("desktop - Krem's desktop - offline, checked ")
+    assert text.endswith('Run one: device_action("desktop","lamp","set","red pulse 5s")\n'
+                         'Offline: dead:22\n'
+                         'Commands will fail until it is back.')
     text, ok = core.run('desktop', 'lamp')
     assert ok and text.endswith('Offline: dead:22\nCommands will fail until it is back.')
     assert 'Offline' not in core.run('desktop', 'lamp', 'set', 'red')[0]   # a run is the driver's words
@@ -354,7 +386,7 @@ def test_a_locked_capability_is_hers_to_see_but_not_to_use(host):
         assert core.run('desktop', 'lamp')[1] is False        # asking for its actions is refused too
         assert [s for s in host.seen if s[0] == 'run'] == []  # the driver never ran
         listing = core.run('desktop')[0]
-        assert 'lamp   a light       locked: the user has not allowed you this.' in listing
+        assert 'lamp (locked) - the user has not allowed you this.' in listing
         assert 'device_action("desktop","lamp"' not in listing
         assert 'lamp (locked)' in core.list_text()[0]
 
@@ -674,6 +706,45 @@ def test_tools_are_thin_doors(host):
     names = [t['function']['name'] for t in tools.TOOLS]
     assert names == tools.AVAILABLE_FUNCTIONS == ['device_list', 'device_status', 'device_action']
     assert all(t['is_local'] is True for t in tools.TOOLS)
+
+
+def test_the_tool_descriptions_carry_the_fleet(host):
+    tools = _tools()
+    plain = {t['function']['name']: t['function'] for t in tools.get_tools()}
+    assert plain['device_action']['description'].endswith('No devices yet: the user adds them in Settings > Devices.')
+    assert 'enum' not in plain['device_action']['parameters']['properties']['device']
+    _add()
+    _add('fm1', host='dead')
+    core.update('desktop', location='Office')
+    core.status('desktop'), core.status('fm1')
+    built = {t['function']['name']: t['function'] for t in tools.get_tools()}
+    d = built['device_action']
+    assert d['description'].endswith(' Devices now: desktop (Office) online: shell, lamp · fm1 offline: shell, lamp.')
+    assert d['parameters']['properties']['device']['enum'] == ['desktop', 'fm1']
+    assert built['device_status']['parameters']['properties']['device']['enum'] == ['desktop', 'fm1']
+    assert 'Devices now' not in tools.TOOLS[2]['function']['description']    # the static schema is untouched
+    for i in range(9):
+        _add(f'box{i}')
+    many = {t['function']['name']: t['function'] for t in tools.get_tools()}['device_action']
+    assert 'enum' not in many['parameters']['properties']['device']          # eleven: names in words
+    assert many['description'].endswith(' · and 1 more: device_list.')
+    assert many['parameters']['properties']['device']['description'].startswith('Device name, one of: box0, ')
+
+
+def test_a_change_asks_for_the_descriptions_again(host):
+    asked = []
+    with patch.object(core, '_function_manager',
+                      lambda: types.SimpleNamespace(refresh_core_tool_descriptions=lambda: asked.append(1))):
+        _add()
+        assert asked == [1]
+        core.update('desktop', label='x')
+        core.remove('desktop')
+        assert asked == [1, 1, 1]
+        _add()
+        core.status('desktop')                                               # offline -> online: a flip
+        assert asked == [1, 1, 1, 1, 1]
+        core.status('desktop')                                               # still online: nothing to say
+        assert asked == [1, 1, 1, 1, 1]
 
 
 def test_no_tool_can_change_a_device(host):

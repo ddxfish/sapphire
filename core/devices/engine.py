@@ -53,6 +53,10 @@ MAX_FOUND = 64           # things one driver may report as found
 RESERVED = ('found',)    # names a device may not have: the routes use them
 CLEAR = '__CLEAR__'
 PAGE = 'Settings > Devices'
+SCREEN = 4000            # characters of one help screen, about 1k tokens
+MOST = 8                 # actions a capability shows when the screen is over that
+READINGS = 4             # readings on the head of a help screen
+FLEET_ENUM = 10          # devices or fewer: the tool schema lists their names
 
 _lock = threading.RLock()
 _modules = {}            # driver id -> loaded driver module
@@ -128,12 +132,24 @@ def _function_manager():
 
 
 def _changed():
-    """A device was added, changed or removed: presence looks again."""
+    """A device was added, changed or removed: presence looks again, and the
+    tool descriptions are rebuilt (they carry the fleet)."""
     try:
         from core.devices import presence
         presence.poke()
     except Exception as e:
         logger.warning(f"[DEVICES] presence could not be told of a change: {e}")
+    retell()
+
+
+def retell():
+    """The device tools' descriptions name the devices, what each can do,
+    and whether it is online (functions/devices.py get_tools). Rebuild them.
+    Never raises: before the system is up there is nothing to rebuild."""
+    try:
+        _function_manager().refresh_core_tool_descriptions()
+    except Exception as e:
+        logger.debug(f"[DEVICES] tool descriptions not rebuilt: {e}")
 
 
 # --- rows --------------------------------------------------------------------
@@ -662,8 +678,9 @@ def describe(row):
             actions = {}
             for name, a in (info.get('actions') or {}).items():
                 a = a if isinstance(a, dict) else {}
-                actions[_slug(name)] = {'help': str(a.get('help') or '')[:120],
-                                        'example': str(a.get('example') or '')[:200]}
+                actions[_slug(name)] = {'help': str(a.get('help') or '')[:160],
+                                        'example': str(a.get('example') or '')[:200],
+                                        'values': str(a.get('values') or '')[:80]}
             out.append({'capability': cap, 'label': str(info.get('label') or cap),
                         'help': str(info.get('help') or '')[:120],
                         'driver': part['driver'], 'actions': actions, 'error': '',
@@ -756,6 +773,15 @@ def _caps(row):
             for c in describe(row)]
 
 
+def fleet():
+    """[{'id', 'location', 'online', 'caps'}] for every enabled device: what the
+    tool descriptions say, so she can act without a list call."""
+    found = statuses()
+    return [{'id': k, 'location': _place(row.get('location')), 'online': found[k]['online'],
+             'caps': _caps(row)}
+            for k, row in rows().items() if row.get('enabled', True)]
+
+
 def list_text():
     table = {k: v for k, v in rows().items() if v.get('enabled', True)}
     if not table:
@@ -820,43 +846,47 @@ def _down_note(st, driver=None):
     return f"Offline: {why}\nCommands will fail until it is back."
 
 
-def _capability_list(row, caps):
-    st = _health().view(row['id'])
-    lines, errors = [], []
-    for c in caps:
-        if c['error']:
-            errors.append(f"  {c['capability']}: {c['error']}")
-            continue
-        if c['locked']:
-            lines.append((c['capability'], c['help'] or '-', f"locked: {LOCKED_NOTE}"))
-            continue
-        first = next(iter(c['actions'].items()), None)
-        if first is None:
-            lines.append((c['capability'], c['help'] or '-', '(no actions yet)'))
-            continue
-        name, a = first
-        args = [row['id'], c['capability'], name] + ([a['example']] if a['example'] else [])
-        lines.append((c['capability'], c['help'] or '-', _call(*args)))
-    body = '\n'.join(x for x in (_columns_text(lines), '\n'.join(errors)) if x)
-    body = body or '  (nothing it can do yet)'
-    # one example per line reads as "that is all it can do" (Sapphire, 2026-09-28)
-    most = max((c for c in caps if not c['error'] and not c['locked']),
-               key=lambda c: len(c['actions']), default=None)
-    more = (f"Each line is one example. {_call(row['id'], most['capability'])} lists all "
-            f"{len(most['actions'])} actions of {most['capability']}."
-            if most and len(most['actions']) > 1 else '')
-    return '\n'.join(x for x in (_head(row, st), body, more, _down_note(st)) if x)
-
-
-def _action_list(row, cap):
-    lines = []
-    for name, a in cap['actions'].items():
-        args = [row['id'], cap['capability'], name] + ([a['example']] if a['example'] else [])
-        lines.append((name, a['help'] or '-', _call(*args)))
+def _block(row, c, limit):
+    """One capability: its actions, each with the value it takes and what it does."""
+    if c['error']:
+        return f"{c['capability']} - {c['error']}"
+    if c['locked']:
+        return f"{c['capability']} (locked) - {LOCKED_NOTE}"
+    title = c['capability'] + (f" - {c['help']}" if c['help'] else '')
+    items = list(c['actions'].items())
+    lines = [(f"{name} {a['values']}".strip(), a['help'] or '-') for name, a in items[:limit]]
     body = _columns_text(lines) or f"  (no actions yet - the user adds them in {PAGE})"
+    more = f"  ... {len(items) - limit} more: {_call(row['id'], c['capability'])}" if len(items) > limit else ''
+    return '\n'.join(x for x in (title, body, more) if x)
+
+
+def _screen(row, caps, only=None):
+    """What she reads for device_action(device) and device_action(device,
+    capability): how the device is (believed, never asked), then everything it
+    can do with the value each action takes, then ONE example call. Kept
+    under SCREEN characters: a long capability is cut to its first MOST
+    actions and says how to see the rest."""
     st = _health().view(row['id'])
-    return '\n'.join(x for x in (f"{row['id']} / {cap['capability']}", body,
-                                  _down_note(st, cap['driver'])) if x)
+    shown = [only] if only else caps
+    head = f"{_head(row, st)}, " + (f"checked {_age(st['ts'])}" if st['ts'] else 'not checked yet')
+    readings = [f"{k} {v}" for p in st['parts'] for k, v in p['readings'].items()][:READINGS]
+    usable = [c for c in shown if not c['error'] and not c['locked'] and c['actions']]
+    pick = next(((c, n, a) for c in usable for n, a in c['actions'].items() if a['example']), None) \
+        or next(((c, n, a) for c in usable for n, a in c['actions'].items()), None)
+    if pick:
+        c, n, a = pick
+        foot = 'Run one: ' + _call(*([row['id'], c['capability'], n] + ([a['example']] if a['example'] else [])))
+    else:
+        foot = f'Run one: device_action("{row["id"]}", capability, action, value)'
+    down = _down_note(st, only['driver'] if only else None)
+
+    def build(limit):
+        parts = [head, '  ' + ' · '.join(readings) if readings else '']
+        parts += [_block(row, c, limit) for c in shown] or ['  (nothing it can do yet)']
+        return '\n'.join(x for x in parts + [foot, down] if x)
+    text = build(MAX_ROWS + 1)
+    # asked for one capability, she gets all of it (MAX_ROWS bounds it): that is what "N more" promised
+    return text if only or len(text) <= SCREEN else build(MOST)
 
 
 def _result(told, secrets):
@@ -902,10 +932,10 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
 
     cap_name = _slug(capability)
     if not cap_name:
-        return _capability_list(row, caps), True
+        return _screen(row, caps), True
     cap = next((c for c in caps if c['capability'] == cap_name), None)
     if not cap:
-        return f"'{row['id']}' has no '{capability}'.\n{_capability_list(row, caps)}", False
+        return f"'{row['id']}' has no '{capability}'.\n{_screen(row, caps)}", False
     if cap['error']:
         return f"{row['id']} / {cap_name}: {cap['error']}", False
     if cap['locked'] and not owner:
@@ -913,9 +943,9 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
 
     act = _slug(action)
     if not act:
-        return _action_list(row, cap), True
+        return _screen(row, caps, only=cap), True
     if act not in cap['actions']:
-        return f"'{cap_name}' has no action '{action}'.\n{_action_list(row, cap)}", False
+        return f"'{cap_name}' has no action '{action}'.\n{_screen(row, caps, only=cap)}", False
 
     part = _part(row, cap['driver'])
     try:

@@ -1407,6 +1407,8 @@ def run():
         try:
             from core.devices import health as _health
             _health.start()
+            from core.devices import engine as _dev_engine
+            _dev_engine.retell()          # the device tools' descriptions name the fleet
         except Exception as e:
             logger.error(f"Device health did not start: {e}", exc_info=True)
 

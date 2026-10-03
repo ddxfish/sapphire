@@ -80,6 +80,8 @@ _UNIT = {'s': 1, 'm': 60, 'h': 3600}
 
 _lock = threading.Lock()
 _about = {}                   # device id -> (when, what its /health said)
+_palettes = {}                # device id -> (when, its colors and animations, from /led/spec)
+SPEC_FRESH = 3600             # seconds a device's palette is kept: it changes with its firmware, not its mood
 
 
 class Problem(Exception):
@@ -206,9 +208,31 @@ def _knob(name, text):
     return max(0.0, min(1.0, n))                  # floor and ceiling: brightness, 0 to 1
 
 
-def parse_light(value):
+def _palette(device, config, secrets):
+    """The device's own colors and animations (its /led/spec), kept an hour.
+    {} when it cannot be asked: parse_light then falls back to word order."""
+    with _lock:
+        when, said = _palettes.get(device['id'], (0, None))
+    if said is not None and time.monotonic() - when < SPEC_FRESH:
+        return said
+    try:
+        s = _json(_call('GET', '/led/spec', config, secrets))
+    except Problem:
+        return {}
+    anims = s.get('animations')
+    said = {'colors': [str(c).lower() for c in list(s.get('colors') or []) + list(s.get('color_aliases') or [])],
+            'animations': [str(a).lower() for a in (anims if isinstance(anims, (dict, list)) else [])]}
+    with _lock:
+        _palettes[device['id']] = (time.monotonic(), said)
+    return said
+
+
+def parse_light(value, palette=None):
     """'cyan blink 5s' -> {'color': 'cyan', 'animation': 'blink', 'duration_s': 5.0}
-    The first plain word is the color, the second the animation. Fine
+    Plain words are the color, then the animation. A color may be two words:
+    soft blue is the device's soft_blue (Sapphire wrote it that way, 2026-10-03,
+    and the old parser blamed the animation). With the device's own palette
+    every word is checked, and a wrong one is named with the choices. Fine
     settings are written name=value: bpm=40 speed=fast floor=0.05 ceiling=0.4"""
     body, words = {}, []
     for tok in str(value or '').split():
@@ -225,15 +249,34 @@ def parse_light(value):
             body['r'], body['g'], body['b'] = (int(h[i:i + 2], 16) for i in (0, 2, 4))
         else:
             words.append(low)
-    if len(words) > 2:
-        raise Problem(f"I did not understand '{' '.join(words[2:])}'. Example: cyan blink 5s")
     have_color = 'r' in body
-    if words and not have_color:
-        body['color'] = words.pop(0)
-    if words:
-        body['animation'] = words.pop(0)
-    if words:
-        raise Problem(f"I did not understand '{' '.join(words)}'. Example: cyan blink 5s")
+    colors = list((palette or {}).get('colors') or [])
+    anims = list((palette or {}).get('animations') or [])
+    if anims:                                   # the device says what an animation is
+        picked = [w for w in words if w in anims]
+        rest = [w for w in words if w not in anims]
+        menu = (f"Colors: {', '.join(colors)}, or #hex like #ff8800. " if colors else '') \
+            + f"Animations: {', '.join(anims)}."
+        if len(picked) > 1:
+            raise Problem(f"One animation at a time, not {' and '.join(picked)}.")
+        if rest and have_color:
+            raise Problem(f"I did not understand '{' '.join(rest)}': the color is already given as hex. {menu}")
+        if rest and colors and '_'.join(rest) not in colors:
+            raise Problem(f"I did not understand '{' '.join(rest)}'. {menu}")
+        if rest:
+            body['color'] = '_'.join(rest)
+        if picked:
+            body['animation'] = picked[0]
+        return body
+    if len(words) > 3 or (have_color and len(words) > 1):   # no palette: by word order
+        raise Problem(f"I did not understand '{' '.join(words[1 if have_color else 3:])}'. Example: cyan blink 5s")
+    if have_color:
+        if words:
+            body['animation'] = words[0]
+    elif len(words) == 1:
+        body['color'] = words[0]
+    elif words:
+        body['color'], body['animation'] = '_'.join(words[:-1]), words[-1]
     return body
 
 
@@ -274,20 +317,27 @@ def _whole(value, default, lo, hi, what):
 def describe(device, config):
     told = {
         'speaker': {'label': 'Speaker', 'help': 'speak in that room', 'actions': {
-            'say': {'help': 'say it out loud there', 'example': 'Dinner is ready'},
-            'sound': {'help': 'play a stored sound, no value lists them', 'example': ''},
-            'volume': {'help': '0 to 100, or up, down. No value reads it', 'example': '80'},
+            'say': {'help': 'say it out loud there, in your voice', 'example': 'Dinner is ready',
+                    'values': '<text>'},
+            'sound': {'help': 'play a stored sound. No value lists them', 'example': '',
+                      'values': '[name]'},
+            'volume': {'help': 'set it, or step it. No value reads it', 'example': '80',
+                       'values': '[0-100 | up | down]'},
         }},
         'mic': {'label': 'Mic', 'help': 'hear that room', 'actions': {
-            'listen': {'help': 'longest wait in seconds, ends when they stop', 'example': '10'},
+            'listen': {'help': 'longest wait in seconds, ends when they stop talking', 'example': '10',
+                       'values': '[seconds]'},
         }},
         'light': {'label': 'Light', 'help': 'the light ring', 'actions': {
-            'set': {'help': 'color, animation, time', 'example': 'cyan blink 5s'},
+            'set': {'help': 'color: a name (red, cyan, sapphire, amber, white...) or #hex. animation: solid, '
+                            'blink, breathe, heartbeat, rotate, wave, spin, rain... No time = 5 minutes',
+                    'example': 'cyan blink 5s',
+                    'values': '<color> [animation] [5s|2m] [bpm= speed= floor= ceiling=]'},
             'clear': {'help': 'back to its resting light', 'example': ''},
             'off': {'help': 'ring dark', 'example': ''},
             'rest': {'help': 'its resting light, kept after a restart. No value reads it',
-                     'example': 'sapphire heartbeat bpm=33'},
-            'options': {'help': 'its colors and animations', 'example': ''},
+                     'example': 'sapphire heartbeat bpm=33', 'values': '[color animation bpm= floor= ceiling=]'},
+            'options': {'help': "this device's full list of colors and animations", 'example': ''},
         }},
         'wake': {'label': 'Wake word', 'help': 'listening for its wake word', 'actions': {
             'read': {'help': 'is it listening', 'example': ''},
@@ -431,7 +481,7 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 _call('POST', '/led', config, secrets, json={'state': 'idle'})
                 return 'Back to its resting light.', True
             if action == 'rest':
-                body = parse_light(value)
+                body = parse_light(value, _palette(device, config, secrets) if str(value or '').strip() else None)
                 if not body:
                     now = _json(_call('GET', '/led/baseline', config, secrets)).get('baseline') or {}
                     return (f"Its resting light is: {_ring_words(now)}. Nothing was changed. "
@@ -458,7 +508,7 @@ def run(device, capability, action, value, config, secrets, call_tool):
                     lines.append(f"Its resting light is: {_ring_words(s['baseline_now'])}.{hours}")
                 return '\n'.join(lines), True
             if action == 'set':
-                body = parse_light(value)
+                body = parse_light(value, _palette(device, config, secrets) if str(value or '').strip() else None)
                 if not body:
                     return ("set: a color, then an animation, then a time like 5s or 2m. "
                             "With no time it holds for 5 minutes. 'options' lists the colors and "
