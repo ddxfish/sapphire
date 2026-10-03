@@ -272,6 +272,10 @@ class StreamingChat:
             # no double-speak. Must gate HERE, not via tts_stopped: the
             # generator resets tts_stopped just below.
             disabled=bool(getattr(self, "suppress_tts", False)),
+            # A device's turn (cadence.run_turn stream_speech): the pump runs
+            # whatever the streaming switch says, gated by THAT chat's settings.
+            force=bool(getattr(self, "tts_force", False)),
+            chat_settings=getattr(self, "tts_chat_settings", None),
         )
         self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 

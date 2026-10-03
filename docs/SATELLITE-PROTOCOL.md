@@ -54,7 +54,7 @@ A board answers only the addresses of what it has.
 
 | Has | Request | What it does |
 |---|---|---|
-| `speaker` | `POST /audio/speak` | Plays the sound. Answers when it has finished playing, within 150 s |
+| `speaker` | `POST /audio/speak` | Plays the sound. Answers when it has taken the sound, within 150 s - a board that plays as it goes may still be sounding its last second: `{"ok": true}`, or `{"ok": true, "stopped": true}` when the board's own button cut it short |
 | `speaker` | `GET /sounds` | Its stored sounds: `{"sounds": [{"name": "ping"}]}` |
 | `speaker` | `POST /audio/effect?name=ping` | Plays one stored sound |
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
@@ -63,7 +63,7 @@ A board answers only the addresses of what it has.
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
 | `light` | `GET /led/spec` | Its colors and animations |
 | `light` | `GET` and `PUT /led/baseline` | Its resting light, kept after a restart |
-| `light` | `PUT /led/looks` | After a save in Settings > Devices: `{"resting", "listening", "thinking", "speaking", "nolink", "night"}`, each a look, plus `"from"` and `"until"` clock times. A look that is not sent is kept. A board without the door answers 404 and keeps its own |
+| `light` | `PUT /led/looks` | After a save in Settings > Devices: `{"resting", "listening", "thinking", "tool", "speaking", "nolink", "night"}`, each a look, plus `"from"` and `"until"` clock times. A look that is not sent is kept. A board without the door answers 404 and keeps its own |
 | `wake` | `GET /wakeword` | `{"enabled", "running", "model"}` |
 | `wake` | `POST /wakeword?enabled=true` | Listen for the wake word, or stop |
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
@@ -72,6 +72,25 @@ A board answers only the addresses of what it has.
 **`/audio/speak`** carries the sound as the request body, with its
 `Content-Type`, when the board stated `plays`. The board can play it while it
 arrives.
+
+**Her reply comes one sentence at a time.** While she is still writing, each
+finished sentence is rendered, trimmed to a breath of silence at each end
+(a sentence rendered alone carries ~0.3 s before and ~0.4 s after; joined,
+that was a hole at every joint) and sent as its own `/audio/speak`, in
+order, the next one only after the board has answered the last. The first
+sound arrives a second or two after her first sentence, not after her whole
+reply.
+A board keeps its speaker open across the sentences of one reply (the Pi
+body feeds them into one `aplay`; opening a Bluetooth speaker costs half a
+second, which was a hole between every two sentences) and answers each
+`/audio/speak` once the sound is taken, so the next sentence is already
+there before the last has finished. Between two sentences the turn is still
+hers: when the sound has ended the board goes back to the brain's last cue
+from the events stream (thinking, tool) and only to idle when that stream
+says so. A `stopped` answer ends the rest of that reply; nothing more is
+sent for it, and the board refuses what was already on its way. A board
+whose driver cannot take sound this way hears the reply whole, at the end,
+as before.
 
 **A refusal** is any status from 400 up with `{"detail": "the reason"}`. The
 reason is shown as it is. 401 or 403 means the key was wrong.
@@ -83,7 +102,8 @@ the resting look, and outside them the `night` look, where the color `off` is
 dark. A state always shows, through a blackout and at any hour, so the ring
 says when she is listening. The hours are by the board's own local time; the
 same `from` and `until` means always on. Built in, before any save: dark from
-00:00 to 08:00. The Pi body (0.7.0) and the ESP32 firmware keep this order.
+00:00 to 08:00, tool purple, speaking cyan. The Pi body (0.7.2) and the ESP32
+firmware keep this order, and both state `plays`.
 
 ## What the board sends to Sapphire
 

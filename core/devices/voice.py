@@ -4,7 +4,12 @@
 #   hear()  a device heard its wake word and sends what was said. hear()
 #           answers as soon as the words are known. The turn runs on its own
 #           thread, and the answer is spoken on the SAME device.
-#   say()   speak on a device. The reply lane of cadence.run_turn uses it.
+#   say()   speak on a device, whole: her `say` action, and the reply lane
+#           of cadence.run_turn when a reply could not be spoken as it was
+#           made.
+#   Speech  her reply spoken on a device sentence by sentence, as the turn
+#           makes it: the device hears the first sentence while she is still
+#           writing the third. The turn feeds it, a worker plays in order.
 #   cue()   what a device's light should show: thinking, tool, idle, error.
 #           Only the device whose turn it is gets them. A device holds one
 #           stream open to receive them (GET /api/devices/{id}/events).
@@ -17,11 +22,13 @@
 # her voice is converted. A device that states nothing gets the audio as the
 # voice engine made it.
 import asyncio
+import base64
 import contextvars
 import hmac
 import io
 import logging
 import os
+import queue
 import tempfile
 import threading
 import time
@@ -33,8 +40,11 @@ MAX_WAITING = 3            # questions one device may have waiting or running
 BUSY_WAIT = 20             # seconds a question waits for a chat that is mid-turn
 MAX_LISTENERS = 4          # light streams one device may hold open
 RATES = (8000, 48000)      # the sample rates a device may ask for, lowest and highest
+QUIET = 0.01               # below this a sample is silence, for the trim
+HEAD, TAIL = 0.08, 0.20    # seconds of silence left before and after her words
 CUE_FRESH = 300            # seconds a cue is still worth showing to a late stream
 CUES = ('thinking', 'tool', 'idle', 'error')
+SPEECH_WAIT = 600          # seconds a turn waits for the last sentence to finish playing
 
 _speaking_for = contextvars.ContextVar('device_voice_chat_settings', default=None)
 _lock = threading.Lock()
@@ -121,9 +131,24 @@ def _resample(sound, was, to):
     return np.interp(np.arange(count) * (was / to), np.arange(len(sound)), sound)
 
 
+def _trim(sound, rate):
+    """Her words with a breath of silence each side, no more. A sentence
+    rendered on its own comes with ~0.3 s of silence before and ~0.4 s after
+    (Kokoro, measured 2026-10-03); joined one after another on a device that
+    was a hole at every sentence, twice what a whole reply has between them."""
+    import numpy as np
+    loud = np.flatnonzero(np.abs(sound).max(axis=1) > QUIET)
+    if not len(loud):
+        return sound
+    start = max(0, int(loud[0]) - int(HEAD * rate))
+    end = min(len(sound), int(loud[-1]) + 1 + int(TAIL * rate))
+    return sound[start:end]
+
+
 def fit(audio, kind, plays):
     """Audio in the format a device plays: (bytes, content_type), or (None,
-    the reason). Audio that already fits is handed on untouched."""
+    the reason), with the silence at its ends trimmed to a breath. Audio that
+    already fits is handed on untouched."""
     import numpy as np
     import soundfile as sf
     want = wanted(plays)
@@ -136,7 +161,7 @@ def fit(audio, kind, plays):
             if fits:
                 return audio, want['type']
             rate = f.samplerate
-            sound = f.read(dtype='float32', always_2d=True)
+            sound = _trim(f.read(dtype='float32', always_2d=True), rate)
         one = sound.mean(axis=1)
         one = np.clip(_resample(one, rate, want['rate']), -1.0, 1.0)
         out = io.BytesIO()
@@ -259,13 +284,94 @@ def unlisten(device_id, loop, queue):
             _listeners.pop(device_id, None)
 
 
-def _follow(device_id, event):
-    """The light follows the tools of this device's own turn."""
+def _follow(device_id, event, speech=None):
+    """The light follows the tools of this device's own turn, and each
+    sentence of her voice goes to the device as it is made."""
     kind = event.get('type')
     if kind == 'tool_start':
         cue(device_id, 'tool', tool_name=str(event.get('name') or '')[:60])
     elif kind == 'tool_end':
         cue(device_id, 'thinking')
+    elif kind == 'tts_chunk' and speech is not None:
+        speech.feed(event)
+
+
+# --- her voice, as it is made ----------------------------------------------------
+
+class Speech:
+    """Her reply spoken on one device sentence by sentence. The turn's TTS
+    pump renders each sentence and feed() takes it; one worker plays them in
+    order, each play returning when the device has finished it, so a
+    sentence that is ready early waits its turn. feed() never blocks the
+    turn. wait() at the end does, until the last sentence has played.
+    The device's own stop (the Pi's button) ends the rest of the reply."""
+
+    def __init__(self, device_id):
+        self.device_id = device_id
+        self.door = _engine().speaker(device_id)     # None: this device cannot take sound as it is made
+        self.queue = queue.Queue()
+        self.spoken = 0                              # sentences the device has played
+        self.stopped = False                         # the device stopped it, or a play failed
+        self.problem = None
+        self._thread = None
+
+    @property
+    def ready(self):
+        return self.door is not None
+
+    def feed(self, event):
+        if not self.ready or self.stopped:
+            return
+        try:
+            audio = base64.b64decode(event.get('audio_b64') or '')
+        except (TypeError, ValueError):
+            return
+        if not audio:
+            return
+        self.queue.put((audio, str(event.get('content_type') or 'audio/ogg')))
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._play_all, daemon=True,
+                                            name=f'device-speech-{self.device_id}')
+            self._thread.start()
+
+    def finish(self):
+        """No more sentences are coming."""
+        self.queue.put(None)
+
+    def wait(self, timeout=SPEECH_WAIT):
+        """Until the device has played everything it was given. True when it did."""
+        if self._thread is None:
+            return True
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            logger.warning(f"[DEVICES] {self.device_id}: still speaking after {timeout}s, not waited for")
+            return False
+        return True
+
+    def _play_all(self):
+        mod, device, config, secrets = self.door
+        while True:
+            item = self.queue.get()
+            if item is None:
+                return
+            if self.stopped:
+                continue                             # drain what is left, play nothing
+            audio, kind = item
+            t0 = time.monotonic()
+            try:
+                said = mod.play(audio, kind, device, config, secrets)
+            except Exception as e:
+                self.problem, self.stopped = str(e), True
+                logger.warning(f"[DEVICES] {self.device_id}: a sentence could not be played: {e}")
+                continue
+            self.spoken += 1
+            took = time.monotonic() - t0
+            sound = said.get('seconds') if isinstance(said, dict) else None
+            logger.info(f"[DEVICES] {self.device_id}: sentence {self.spoken}"
+                        + (f", {sound}s of sound" if sound is not None else '') + f", taken in {took:.2f}s")
+            if isinstance(said, dict) and said.get('stopped'):
+                self.stopped = True
+                logger.info(f"[DEVICES] {self.device_id}: stopped at the device after {self.spoken} sentence(s)")
 
 
 # --- the halves ----------------------------------------------------------------
@@ -315,8 +421,11 @@ def _free_slot(device_id):
 
 def _turn(row, chat, heard):
     """One question from start to finish, on its own thread. Never raises.
-    The light ends on idle, or on error when the person got no answer."""
-    device_id, failed = row['id'], False
+    Her reply is spoken on the device as it is made (Speech); a device whose
+    driver cannot take sound that way hears it whole at the end, through
+    the reply lane. The light ends on idle, or on error when the person got
+    no answer."""
+    device_id, failed, speech = row['id'], False, None
     lane = f"device:{device_id}"
     try:
         from core import cadence
@@ -325,10 +434,12 @@ def _turn(row, chat, heard):
         text = f"{origin_line(row)}\n{heard}"
         give_up = time.monotonic() + BUSY_WAIT
         _spoke.ok = None
+        speech = Speech(device_id)
         while True:
             try:
                 reply = cadence.run_turn(chat, text, speak=lane, source=lane,
-                                         on_event=lambda ev: _follow(device_id, ev))
+                                         on_event=lambda ev: _follow(device_id, ev, speech),
+                                         stream_speech=speech.ready)
                 break
             except ChatBusy:
                 if time.monotonic() >= give_up:
@@ -337,14 +448,22 @@ def _turn(row, chat, heard):
                     failed = True
                     return
                 time.sleep(1)
-        if reply and _spoke.ok is False:
+        speech.finish()
+        speech.wait()
+        if reply and (_spoke.ok is False or (speech.problem and not speech.spoken)):
             failed = True                # she answered, and the device could not say it
         logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}', {len(reply or '')} chars"
+                    + (f', {speech.spoken} sentence(s) as made' if speech.spoken else '')
+                    + (', stopped at the device' if speech.stopped and speech.spoken else '')
                     + (', NOT spoken' if failed else ''))
     except Exception as e:
         failed = True
+        if speech is not None:
+            speech.stopped = True        # a reply that broke off is not read out to the end
         logger.error(f"[DEVICES] {device_id}: the turn failed: {e}", exc_info=True)
     finally:
+        if speech is not None:
+            speech.finish()              # the worker goes home whatever happened
         _free_slot(device_id)
         cue(device_id, 'error' if failed else 'idle')
 

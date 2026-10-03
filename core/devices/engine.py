@@ -52,6 +52,7 @@ LOCKABLE = ('power', 'camera', 'screen', 'mic')    # these carry a "Sapphire may
 MAX_FOUND = 64           # things one driver may report as found
 RESERVED = ('found',)    # names a device may not have: the routes use them
 CLEAR = '__CLEAR__'
+KEPT = 'set'            # what public() shows for a stored secret; sent back, it means "as it is"
 PAGE = 'Settings > Devices'
 SCREEN = 4000            # characters of one help screen, about 1k tokens
 MOST = 8                 # actions a capability shows when the screen is over that
@@ -357,7 +358,7 @@ def _clean(schema, incoming, previous):
     for field in schema:
         key = field['key']
         if field.get('secret'):
-            if key in incoming:
+            if key in incoming and incoming[key] != KEPT:    # the page's own word for "stored" is not a key
                 v = incoming[key]
                 ops[key] = None if v in ('', None, CLEAR) else str(v)[:16000]
             continue
@@ -571,6 +572,8 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     if enabled is not None:
         row['enabled'] = bool(enabled)
     pending = []
+    if parts is not None and not isinstance(parts, dict):
+        raise DeviceError("parts is an object keyed by driver: {\"satellite\": {...}}.")
     for driver_id, incoming in (parts or {}).items():
         old = _part(row, _slug(driver_id))
         if not old:
@@ -635,7 +638,7 @@ def public(row):
         for field in schema:
             if field.get('secret'):
                 state = held.get(f"{part['driver']}.{field['key']}")
-                values[field['key']] = 'set' if state == 'set' else ''
+                values[field['key']] = KEPT if state == 'set' else ''
                 if state == 'undecryptable':
                     unreadable.append(field['key'])
         parts.append({'driver': part['driver'], 'plugin': part.get('plugin', ''),
@@ -908,6 +911,24 @@ def _result(told, secrets):
             return {'text': text or 'A picture.', 'images': images}
         return text or 'No picture came back.'
     return secrets.scrub(str(told if told is not None else '(no output)'))
+
+
+def speaker(device_id):
+    """Core only, for her voice as it is made: (module, brief, config, secrets)
+    of the part that gives this device a speaker AND can take sound itself
+    (a driver `play(audio, kind, device, config, secrets)`), or None. Her
+    tools never come this way; run() is theirs."""
+    row = rows().get(_slug(device_id))
+    if not row or not row.get('enabled', True):
+        return None
+    for part in row.get('parts', []):
+        try:
+            mod, spec = _driver(part['driver'], part.get('plugin', ''))
+        except DeviceError:
+            continue
+        if 'speaker' in capabilities(part, spec) and callable(getattr(mod, 'play', None)):
+            return mod, _brief(row), dict(part.get('config') or {}), _part_secrets(row['id'], part['driver'])
+    return None
 
 
 def text_of(result):

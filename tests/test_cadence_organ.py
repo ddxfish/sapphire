@@ -475,3 +475,47 @@ def test_device_lane_fails_closed_and_quietly():
     with patch('core.cadence.publish'), patch('core.devices.voice.say') as say2:
         cadence.run_turn('c', 'cue', speak='device:pi')
     say2.assert_not_called()                                           # cancelled = not spoken
+
+
+# --- the device lane, sentence by sentence -------------------------------------------
+
+def test_stream_speech_makes_her_voice_as_she_writes_and_skips_the_whole_say():
+    events = [{'type': 'content', 'text': 'It is noon. '},
+              {'type': 'tts_chunk', 'audio_b64': 'QUJD', 'content_type': 'audio/ogg', 'index': 0},
+              {'type': 'content', 'text': 'The sun is out.'},
+              {'type': 'tts_chunk', 'audio_b64': 'REVG', 'content_type': 'audio/ogg', 'index': 1},
+              {'type': 'final', 'text': 'It is noon. The sun is out.', 'cancelled': False}]
+    sysobj, stream, llm = _system(events)
+    llm.session_manager.get_settings_for.return_value = {'private_chat': False, 'tts': 'x'}
+    cadence._system = sysobj
+    seen = []
+    with patch('core.cadence.publish'), patch('core.devices.voice.say') as say:
+        out = cadence.run_turn('kitchen-chat', 'what time is it', speak='device:kitchen',
+                               source='device:kitchen', on_event=seen.append, stream_speech=True)
+    assert out == 'It is noon. The sun is out.'
+    assert stream.suppress_tts is False                  # the pump runs for this turn
+    assert stream.tts_split_override == 'sentence'
+    assert stream.tts_force is True
+    assert stream.tts_chat_settings == {'private_chat': False, 'tts': 'x'}   # THIS chat gates it
+    assert [e['type'] for e in seen if e['type'] == 'tts_chunk'] == ['tts_chunk', 'tts_chunk']
+    say.assert_not_called()                              # already spoken, sentence by sentence
+
+
+def test_stream_speech_falls_back_to_the_whole_reply_when_no_sentence_was_made():
+    sysobj, stream, llm = _system([{'type': 'content', 'text': 'Hi.'},
+                                   {'type': 'final', 'text': 'Hi.', 'cancelled': False}])
+    llm.session_manager.get_settings_for.return_value = {'private_chat': True}
+    cadence._system = sysobj
+    with patch('core.cadence.publish'), \
+         patch('core.devices.voice.say', return_value=('Said there', True)) as say:
+        assert cadence.run_turn('c', 'cue', speak='device:pi', stream_speech=True) == 'Hi.'
+    say.assert_called_once_with('pi', 'Hi.', chat_settings={'private_chat': True})
+
+
+def test_stream_speech_means_nothing_off_a_device_lane():
+    sysobj, stream, llm = _system([{'type': 'final', 'text': 'Hi.', 'cancelled': False}])
+    cadence._system = sysobj
+    with patch('core.cadence.publish'):
+        cadence.run_turn('c', 'cue', speak='speakers', stream_speech=True)
+    assert stream.suppress_tts is True                   # the speakers lane speaks whole, as before
+    sysobj.tts.speak.assert_called_once()

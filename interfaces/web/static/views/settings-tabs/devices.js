@@ -1,9 +1,11 @@
 // settings-tabs/devices.js - Settings > Devices (tmp/device-manager-plan.md)
 //
-// The list, the add form, and the device window. Every form is drawn by the
+// The list, the add window, and the device window. Every form is drawn by the
 // shared settings renderer from the driver's own schema; this file holds no
-// driver knowledge. The window's first tab is Status, then one tab per
-// capability. The page saves with its own buttons (selfSaving).
+// driver knowledge. Add asks what is being added (one card per type), then
+// only what that type needs to work (the fields its driver marks `setup`),
+// then opens the device window. The window's first tab is Status, then one
+// tab per capability. The page saves with its own buttons (selfSaving).
 //
 // A device is online or offline, nothing else (core/devices/health.py
 // believes; the page only reads). A probe in flight pulses the dot and never
@@ -53,10 +55,9 @@ function drawPage(container) {
             <div class="setting-help">Machines and gadgets Sapphire can use by name. Only this page can add or change them.</div>
             <button class="btn btn-sm btn-primary" id="dev-add-btn">+ Add Device</button>
         </div>
-        <div id="dev-add" hidden></div>
         <div id="dev-filter"></div>
         <div id="dev-list"><p class="text-muted">Loading...</p></div>`;
-    container.querySelector('#dev-add-btn').addEventListener('click', () => drawAddForm());
+    container.querySelector('#dev-add-btn').addEventListener('click', () => openAdd());
     container.querySelector('#dev-filter').addEventListener('click', e => {
         const pill = e.target.closest('[data-type]');
         if (!pill) return;
@@ -134,78 +135,104 @@ function card(d) {
 
 // ---- add a device ----------------------------------------------------------
 
-function drawAddForm() {
-    const box = page.querySelector('#dev-add');
-    const usable = drivers.filter(d => d.available);
-    box.hidden = false;
-    box.innerHTML = `
-        <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">
-            <h4 style="margin:0 0 10px">Add a device</h4>
+// A name no device has yet: the type, then the type with a number.
+function freeName(driver) {
+    const taken = new Set(devices.map(d => d.id));
+    let id = driver, n = 1;
+    while (taken.has(id)) id = `${driver}-${++n}`;
+    return id;
+}
+
+// What a type needs before it can work at all: the fields its driver marks
+// `setup`, and any field that shows only because of one of them.
+function setupFields(d) {
+    const keys = new Set(d.config_schema.filter(f => f.setup).map(f => f.key));
+    return d.config_schema
+        .filter(f => keys.has(f.key) || (f.show_if && Object.keys(f.show_if).some(k => keys.has(k))))
+        .map(f => ({ ...withLook(f, d.driver), tab: undefined }));
+}
+
+function typeCard(d) {
+    const caps = (d.capabilities || []).join(' · ');
+    return `
+    <button type="button" class="ui-card" data-driver="${esc(d.driver)}" ${d.available ? '' : 'disabled'}
+            style="cursor:${d.available ? 'pointer' : 'not-allowed'};text-align:left;font:inherit;${d.available ? '' : 'opacity:0.55'}">
+        <div style="font-size:1.6em;line-height:1.2">${d.icon || ''}</div>
+        <div class="ui-card-title" style="padding-right:0">${esc(d.label)}</div>
+        <div class="ui-card-body" style="margin-top:2px">${esc(caps)}</div>
+        ${d.available ? '' : `<div class="ui-card-body" style="color:var(--text-muted)">${esc(d.note || 'not available')}</div>`}
+    </button>`;
+}
+
+function openAdd() {
+    const modal = showModal(`${ICON} Add a device`,
+        [{ type: 'html', value: '<div id="dev-add"></div>' }], null, { wide: true });
+    const body = modal.element.querySelector('#dev-add');
+    const footer = modal.element.querySelector('.modal-footer');
+    let addBtn = null;
+
+    // step 1: what are you adding?
+    const pick = () => {
+        addBtn?.remove(); addBtn = null;
+        body.innerHTML = drivers.length
+            ? `<div class="setting-help" style="margin-bottom:10px">What are you adding?</div>
+               <div class="ui-grid ui-grid-sm">${drivers.map(typeCard).join('')}</div>`
+            : '<p class="text-muted" style="font-size:0.9em">No device types yet. Enable a plugin that provides one, such as SSH.</p>';
+        body.querySelectorAll('[data-driver]').forEach(c => c.addEventListener('click', () => {
+            const d = drivers.find(x => x.driver === c.dataset.driver && x.available);
+            if (d) setup(d);
+        }));
+    };
+
+    // step 2: only what this type needs
+    const setup = d => {
+        const schema = setupFields(d);
+        body.innerHTML = `
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <button type="button" class="btn btn-sm" id="dev-add-back">&larr; Back</button>
+                <b>${d.icon || ''} ${esc(d.label)}</b>
+            </div>
             <div class="settings-grid">
                 <div class="setting-row"><div class="setting-label"><label>Name</label>
-                    <div class="setting-help">What Sapphire calls it. Lowercase, no spaces. Example: desktop</div></div>
-                    <div class="setting-input"><input type="text" id="dev-new-id" placeholder="desktop"></div></div>
-                <div class="setting-row"><div class="setting-label"><label>Display name</label></div>
-                    <div class="setting-input"><input type="text" id="dev-new-label" placeholder="My desktop"></div></div>
+                    <div class="setting-help">What Sapphire calls it. Lowercase, no spaces.</div></div>
+                    <div class="setting-input"><input type="text" id="dev-new-id" value="${esc(freeName(d.driver))}"></div></div>
+            </div>
+            <div id="dev-new-fields" style="margin-top:8px"></div>
+            <div class="settings-grid" style="margin-top:8px">
                 <div class="setting-row"><div class="setting-label"><label>Location</label>
                     <div class="setting-help">${LOCATION_HELP}</div></div>
                     <div class="setting-input"><input type="text" id="dev-new-location" placeholder="Living Room" maxlength="60"></div></div>
-                <div class="setting-row"><div class="setting-label"><label>Type</label></div>
-                    <div class="setting-input"><select id="dev-new-driver">
-                        ${drivers.map(d => `<option value="${esc(d.driver)}" ${d.available ? '' : 'disabled'}>${
-                            esc(d.label)}${d.available ? '' : ' - ' + esc(d.note)}</option>`).join('')}
-                    </select></div></div>
-            </div>
-            <div id="dev-new-fields" style="margin-top:8px"></div>
-            <div style="display:flex;gap:8px;margin-top:12px">
-                <button class="btn btn-sm btn-primary" id="dev-new-save">Add</button>
-                <button class="btn btn-sm" id="dev-new-cancel">Cancel</button>
-            </div>
-        </div>`;
-    const pick = box.querySelector('#dev-new-driver');
-    const fields = box.querySelector('#dev-new-fields');
-    const current = () => drivers.find(d => d.driver === pick.value && d.available);
-    const drawFields = () => {
-        const d = current();
-        if (!d) {
-            fields.innerHTML = `<p class="text-muted" style="font-size:0.9em">${
-                drivers.length ? 'Pick a type that is available.'
-                               : 'No device types yet. Enable a plugin that provides one, such as SSH.'}</p>`;
-            return;
-        }
-        if (!d.config_schema.length) {
-            fields.innerHTML = '<p class="text-muted" style="font-size:0.9em">Nothing else to set up for this type.</p>';
-            return;
-        }
-        renderSettingsForm(fields, d.config_schema.map(f => ({ ...withLook(f, d.driver), tab: undefined })), {});
-    };
-    if (usable.length) pick.value = usable[0].driver;
-    pick.addEventListener('change', drawFields);
-    drawFields();
+            </div>`;
+        const fields = body.querySelector('#dev-new-fields');
+        if (schema.length) renderSettingsForm(fields, schema, {});
+        else fields.innerHTML = '<p class="text-muted" style="font-size:0.9em;margin:4px 0">Nothing else to set up for this type. Everything it has can be changed in its window.</p>';
+        body.querySelector('#dev-add-back').addEventListener('click', pick);
+        body.querySelector('#dev-new-id').focus();
 
-    box.querySelector('#dev-new-cancel').addEventListener('click', () => { box.hidden = true; box.innerHTML = ''; });
-    box.querySelector('#dev-new-save').addEventListener('click', async ev => {
-        const d = current();
-        if (!d) return showToast('Pick a device type first', 'error');
-        const id = box.querySelector('#dev-new-id').value.trim().toLowerCase();
-        if (!id) return showToast('Give the device a name', 'error');
-        ev.currentTarget.disabled = true;
-        try {
-            const res = await call('POST', '', {
-                id, label: box.querySelector('#dev-new-label').value.trim(),
-                location: box.querySelector('#dev-new-location').value.trim(),
-                driver: d.driver,
-                config: d.config_schema.length ? readSettingsForm(fields, d.config_schema) : {},
-            });
-            showToast(res.warning || `Added ${id}`, res.warning ? 'warning' : 'success');
-            box.hidden = true; box.innerHTML = '';
-            await loadList();
-            openDevice(id, undefined, { test: true });     // new: ask it once, the window fills in
-        } catch (e) {
-            showToast(e.message, 'error');
-            ev.currentTarget.disabled = false;
-        }
-    });
+        addBtn = document.createElement('button');
+        addBtn.className = 'btn btn-primary';
+        addBtn.textContent = 'Add and test';
+        footer.prepend(addBtn);
+        addBtn.addEventListener('click', async () => {
+            const id = body.querySelector('#dev-new-id').value.trim().toLowerCase();
+            if (!id) return showToast('Give the device a name', 'error');
+            addBtn.disabled = true;
+            try {
+                const res = await call('POST', '', {
+                    id, label: '', location: body.querySelector('#dev-new-location').value.trim(),
+                    driver: d.driver, config: schema.length ? readSettingsForm(fields, schema) : {},
+                });
+                showToast(res.warning || `Added ${id}`, res.warning ? 'warning' : 'success');
+                modal.close();
+                await loadList();
+                openDevice(id, undefined, { test: true });     // new: ask it once, the window fills in
+            } catch (e) {
+                showToast(e.message, 'error');
+                addBtn.disabled = false;
+            }
+        });
+    };
+    pick();
 }
 
 // ---- the device modal ------------------------------------------------------

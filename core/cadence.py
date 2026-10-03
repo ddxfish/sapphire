@@ -232,18 +232,33 @@ def armed():
 
 # ── the turn ────────────────────────────────────────────────────────────────
 
-def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=None):
+def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=None,
+             stream_speech=False):
     """One unprompted turn on `chat` through THE engine, live to the wire.
     Raises ChatBusy when the chat has a turn in flight. Returns her text.
     on_event(event) sees every event of THIS turn as it happens (the bus
-    cannot say whose turn a tool belongs to). Its faults are swallowed."""
+    cannot say whose turn a tool belongs to). Its faults are swallowed.
+    stream_speech=True (a device lane): her voice is made sentence by
+    sentence while she writes, as `tts_chunk` events on_event takes to the
+    device; the lane below speaks the whole reply only when no sentence was
+    made (no voice engine, a refused chat, every sentence dropped)."""
     system = _system
     if system is None:
         raise RuntimeError('cadence organ not started')
     llm = system.llm_chat
     sm = llm.session_manager
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
-    stream.suppress_tts = True            # the pump stays inert; the lane below speaks
+    sentences = 0                         # tts_chunk events this turn made
+    if stream_speech and isinstance(speak, str) and speak.startswith('device:'):
+        # the pump runs for THIS chat whatever the browser's streaming
+        # setting says, split at sentences (first sound at the first
+        # sentence, as on a phone call), gated by this chat's own settings
+        stream.suppress_tts = False
+        stream.tts_split_override = 'sentence'
+        stream.tts_force = True
+        stream.tts_chat_settings = sm.get_settings_for(chat) or {'private_chat': True}
+    else:
+        stream.suppress_tts = True        # the pump stays inert; the lane below speaks
     stream.images_ephemeral = True        # frames reach the model this turn only
     try:
         active = sm.get_active_chat_name()
@@ -275,6 +290,8 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
                 thinking_chars += len(ev.get('text') or '')
             elif et == 'tool_end':
                 tools_ran = True
+            elif et == 'tts_chunk':
+                sentences += 1
             elif et == 'final':
                 cancelled = bool(ev.get('cancelled'))
                 if ev.get('error'):
@@ -329,9 +346,10 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
             system.tts.speak(final, chat_settings=gate_settings)
         except Exception as e:
             logger.warning(f"[CADENCE] speakers lane failed: {e}")
-    elif isinstance(speak, str) and speak.startswith('device:') and final:
+    elif isinstance(speak, str) and speak.startswith('device:') and final and not sentences:
         # the device lane: the reply is spoken on the satellite that heard
-        # the question. Same gate rule as above - THIS chat's settings.
+        # the question, whole, when none of it was spoken as it was made.
+        # Same gate rule as above - THIS chat's settings.
         try:
             from core.devices import voice
             gate_settings = sm.get_settings_for(chat) or {'private_chat': True}

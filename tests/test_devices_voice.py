@@ -3,6 +3,8 @@
 # Real engine, real registry with the satellite driver, real secrets store on
 # a temp file. The speech engines, the turn engine and the network are faked.
 import asyncio
+import base64
+import threading
 import types
 import importlib
 import json
@@ -110,7 +112,8 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
                                'config': {'url': 'http://192.168.0.221:8090', 'camera': True, 'chat': '',
                                           'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
-                                          'look_speaking': 'green spin', 'look_nolink': 'red pulse',
+                                          'look_tool': 'purple pulse', 'look_speaking': 'cyan solid',
+                                          'look_nolink': 'red pulse',
                                           'lights_from': '08:00', 'lights_until': '00:00', 'look_night': 'off'}}
     assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power']
     view = engine.public(row)
@@ -124,7 +127,8 @@ def test_hear_runs_a_turn_and_answers_on_the_same_device(home):
         out = voice.hear('pi2', b'RIFFaudio')
     assert out == ACCEPTED
     run_turn.assert_called_once_with('open-chat', HEADER + '\nwhat time is it',
-                                     speak='device:pi2', source='device:pi2', on_event=ANY)
+                                     speak='device:pi2', source='device:pi2', on_event=ANY,
+                                     stream_speech=True)
 
 
 def test_hear_answers_before_the_turn_has_run(home):
@@ -245,7 +249,7 @@ def test_a_turn_that_fails_ends_on_the_error_light(home):
 def test_the_light_follows_the_tools_of_its_own_turn(home):
     watch, seen = _cues()
 
-    def run_turn(chat, text, speak=None, source=None, on_event=None):
+    def run_turn(chat, text, speak=None, source=None, on_event=None, **kw):
         on_event({'type': 'content', 'text': 'Let me look.'})
         on_event({'type': 'tool_start', 'name': 'web_search'})
         on_event({'type': 'tool_end', 'name': 'web_search'})
@@ -258,13 +262,118 @@ def test_the_light_follows_the_tools_of_its_own_turn(home):
 def test_an_answer_the_device_could_not_say_ends_on_the_error_light(home):
     watch, seen = _cues()
 
-    def run_turn(chat, text, speak=None, source=None, on_event=None):
+    def run_turn(chat, text, speak=None, source=None, on_event=None, **kw):
         with patch.object(engine, 'run', return_value=('Could not reach it.', False)):
             voice.say('pi2', 'It is noon.')                       # what the reply lane does
         return 'It is noon.'
     with patch('core.cadence.run_turn', side_effect=run_turn), watch:
         voice.hear('pi2', b'RIFFaudio')
     assert seen[-1] == ('pi2', 'error')
+
+
+# --- her voice, as it is made ----------------------------------------------------
+
+def _speaking_device(answers=None):
+    """The satellite's doors, answering health and every /audio/speak in turn."""
+    sent, answers = [], list(answers or [])
+
+    def request(method, url, **kw):
+        sent.append((method, url, kw))
+        if url.endswith('/health'):
+            return SimpleNamespace(status_code=200, content=b'{}', json=lambda: {'ok': True})
+        said = answers.pop(0) if answers else {'ok': True}
+        return SimpleNamespace(status_code=200, content=b'{}', json=lambda: said)
+    return patch.object(sat.net, 'request', request), sent
+
+
+def _sentences(*words):
+    for i, w in enumerate(words):
+        yield {'type': 'content', 'text': w + ' '}
+        yield {'type': 'tts_chunk', 'audio_b64': base64.b64encode(w.encode()).decode(),
+               'content_type': 'audio/ogg', 'index': i}
+
+
+def test_her_reply_is_spoken_sentence_by_sentence_as_it_is_made(home):
+    watch, seen = _cues()
+    door, sent = _speaking_device()
+
+    def run_turn(chat, text, speak=None, source=None, on_event=None, stream_speech=False):
+        assert stream_speech is True                          # the satellite can take sound as made
+        for ev in _sentences('It is noon.', 'The sun is out.'):
+            on_event(ev)
+        return 'It is noon. The sun is out.'
+    with patch('core.cadence.run_turn', side_effect=run_turn), door, watch:
+        assert voice.hear('pi2', b'RIFFaudio') == ACCEPTED
+    posts = [kw for m, url, kw in sent if url.endswith('/audio/speak')]
+    assert [p['files']['audio'][1] for p in posts] == [b'It is noon.', b'The sun is out.']  # in order, whole
+    assert seen == [('pi2', 'thinking'), ('pi2', 'idle')]       # idle only after the last sentence played
+    home.system.tts.render.assert_not_called()                  # nothing rendered twice
+
+
+def test_the_device_can_stop_the_rest_of_the_reply(home):
+    door, sent = _speaking_device(answers=[{'ok': True, 'stopped': True}])
+
+    def run_turn(chat, text, speak=None, source=None, on_event=None, **kw):
+        for ev in _sentences('One.', 'Two.', 'Three.'):
+            on_event(ev)
+        return 'One. Two. Three.'
+    with patch('core.cadence.run_turn', side_effect=run_turn), door:
+        voice.hear('pi2', b'RIFFaudio')
+    posts = [kw for m, url, kw in sent if url.endswith('/audio/speak')]
+    assert len(posts) == 1                                      # the button stopped it after one
+
+
+def test_a_device_that_cannot_take_sound_as_made_hears_the_reply_whole(home):
+    with patch.object(engine, 'speaker', return_value=None), _turn() as run_turn:
+        voice.hear('pi2', b'RIFFaudio')
+    assert run_turn.call_args.kwargs['stream_speech'] is False   # cadence's whole-reply lane
+
+
+def test_a_reply_that_breaks_off_is_not_read_to_the_end(home):
+    watch, seen = _cues()
+    door, sent = _speaking_device()
+    started, played = threading.Event(), []
+
+    def slow(method, url, **kw):
+        if url.endswith('/audio/speak'):
+            played.append(kw['files']['audio'][1])
+            started.set()
+            time.sleep(0.2)                                     # the first sentence is playing
+        return SimpleNamespace(status_code=200, content=b'{}', json=lambda: {'ok': True})
+
+    def run_turn(chat, text, speak=None, source=None, on_event=None, **kw):
+        for ev in _sentences('One.', 'Two.', 'Three.'):
+            on_event(ev)
+        started.wait(2)
+        raise RuntimeError('provider down')
+    with patch('core.cadence.run_turn', side_effect=run_turn), patch.object(sat.net, 'request', slow), watch:
+        voice.hear('pi2', b'RIFFaudio')
+    time.sleep(0.5)
+    assert seen[-1] == ('pi2', 'error')
+    assert played == [b'One.']                                  # Two and Three were never sent
+    assert all(not t.name.startswith('device-speech') or not t.is_alive() for t in threading.enumerate())
+
+
+def test_the_engine_names_the_speaker_core_may_hand_sound_to(home):
+    mod, brief, config, secrets = engine.speaker('pi2')
+    assert mod is sat and brief['id'] == 'pi2' and config['url'] == 'http://192.168.0.221:8090'
+    assert secrets.get('token') == 'body-key-abcdefgh'
+    assert engine.speaker('nope') is None
+    with patch.object(sat, 'play', None):                       # a driver without the door
+        assert engine.speaker('pi2') is None
+    engine.update('pi2', enabled=False)
+    assert engine.speaker('pi2') is None                        # a device that is turned off
+
+
+def test_speech_feed_takes_only_sound(home):
+    speech = voice.Speech('pi2')
+    assert speech.ready
+    speech.feed({'type': 'tts_chunk', 'audio_b64': ''})
+    speech.feed({'type': 'tts_chunk', 'audio_b64': '%%%not-base64'})
+    speech.feed({'type': 'tts_chunk'})
+    assert speech.queue.empty() and speech._thread is None       # no worker for nothing
+    assert speech.wait(0.1) is True
+    assert not voice.Speech('nope').ready
 
 
 def _on_a_loop(work):
@@ -597,6 +706,23 @@ def test_fit_goes_up_and_to_two_channels_too():
     sound, rate, _, _ = _read(audio)
     assert rate == 24000 and sound.shape == (12000, 2)
     assert 0.4 < _level(sound, rate, 1000) < 0.6
+
+
+def test_fit_trims_the_silence_round_her_words_to_a_breath():
+    """A sentence rendered alone carries ~0.3 s of silence before and ~0.4 s
+    after; sentence after sentence on a device, that is a hole at every
+    joint. fit() leaves 80 ms before and 200 ms after, no more."""
+    import numpy as np
+    rate = 24000
+    quiet = np.zeros((int(0.3 * rate), 1), dtype='float32')
+    padded = np.vstack([quiet, _tone(1000, rate, seconds=0.5), np.vstack([quiet, quiet])])   # 0.3 + 0.5 + 0.6 s
+    audio, _ = voice.fit(_file(padded, rate, 'WAV', 'PCM_16'), 'audio/wav', PLAYS)
+    sound, out_rate, _, _ = _read(audio)
+    assert abs(len(sound) / out_rate - (0.08 + 0.5 + 0.20)) < 0.02
+    loud = np.flatnonzero(np.abs(sound).max(axis=1) > 0.01)
+    assert abs(loud[0] / out_rate - 0.08) < 0.01 and abs((len(sound) - loud[-1]) / out_rate - 0.20) < 0.01
+    silence, _ = voice.fit(_file(np.vstack([quiet, quiet]), rate, 'WAV', 'PCM_16'), 'audio/wav', PLAYS)
+    assert abs(len(_read(silence)[0]) / 16000 - 0.6) < 0.02                  # nothing to trim round: left as it is
 
 
 def test_fit_hands_on_untouched_what_already_fits():

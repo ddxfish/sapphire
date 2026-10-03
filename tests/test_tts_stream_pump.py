@@ -9,7 +9,7 @@ tests/test_tts_streaming.py.
 """
 import base64
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -858,3 +858,38 @@ def test_end_of_stream_summary_log_includes_dropped_count(enable_streaming, capl
     assert end_summary, f"missing end-of-stream summary: {msgs}"
     assert "2 dropped" in end_summary[0], \
         f"end summary doesn't include drop count: {end_summary[0]!r}"
+
+
+# --- force: a satellite's turn runs the pump whatever the switch says ----------------
+
+def test_a_forced_pump_runs_with_the_streaming_switch_off_and_a_blob_provider(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "TTS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
+
+    class Blob:                                  # a cloud voice: one blob per request, no stream door
+        audio_content_type = "audio/ogg"
+        supports_streaming = False
+
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, text, voice, speed):
+            self.calls.append(text)
+            return b"OGGS-" + text.encode()
+    provider = Blob()
+    with patch("core.voice_privacy.tts_gate_reason", return_value=None):
+        pump = StreamingTTSPump(system=_make_system(provider=provider), force=True,
+                                split_override="sentence", chat_settings={"private_chat": False})
+        assert pump.enabled is True
+        events = pump.push("It is noon here. The sun is out. ")
+        events += list(pump.flush_and_close())
+    chunks = [e for e in events if e["type"] == "tts_chunk"]
+    assert [c["text"] for c in chunks] == ["It is noon here.", "The sun is out."]
+    assert provider.calls == ["It is noon here.", "The sun is out."]      # rendered one sentence at a time
+
+
+def test_a_forced_pump_still_needs_a_voice_engine(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
+    assert StreamingTTSPump(system=_make_system(tts_attr=False), force=True).enabled is False

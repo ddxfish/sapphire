@@ -78,9 +78,16 @@ class StreamingTTSPump:
                  voice_override: Optional[str] = None,
                  split_override: Optional[str] = None,
                  disabled: bool = False,
-                 chat_settings: Optional[dict] = None):
+                 chat_settings: Optional[dict] = None,
+                 force: bool = False):
         self.system = system
         self.tts = getattr(system, "tts", None)
+        # force=True: the owner wants speech as it is made whatever the
+        # Settings > TTS streaming switch says (a satellite's turn: the only
+        # way its speaker gets the first sentence early). A provider without
+        # a streaming door still works - _stream_synth renders each chunk
+        # with generate(). Only "no provider at all" stops a forced pump.
+        self._force = bool(force)
         # Settings of the chat that PRODUCED the text, when the owner knows
         # (/api/tts/stream with `chat`). The privacy gate judges these instead
         # of the effective chat (broadsword H3). None = legacy resolution.
@@ -165,6 +172,8 @@ class StreamingTTSPump:
 
     @property
     def enabled(self) -> bool:
+        if self._force:
+            return self.provider is not None
         return bool(
             getattr(config, "TTS_ENABLED", False)
             and getattr(config, "TTS_STREAMING_ENABLED", False)

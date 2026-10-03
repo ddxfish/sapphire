@@ -31,9 +31,9 @@ SPEC = {
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power'],
     'config_schema': [
-        {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status',
+        {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status', 'setup': True,
          'placeholder': 'http://192.168.0.221:8090'},
-        {'key': 'token', 'type': 'string', 'widget': 'password', 'secret': True, 'tab': 'Status',
+        {'key': 'token', 'type': 'string', 'widget': 'password', 'secret': True, 'tab': 'Status', 'setup': True,
          'label': 'Key Sapphire sends',
          'help': "The satellite's own key (SAPPH_BODY_TOKEN on a Pi body). Stored scrambled."},
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
@@ -41,7 +41,7 @@ SPEC = {
          'help': "Off = Sapphire is not offered a camera on this satellite."},
         {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'capability': 'mic',
          'help': "The chat this satellite's questions land in. Empty = the last chat used."},
-        {'key': 'voice_key', 'type': 'string', 'widget': 'password', 'secret': True,
+        {'key': 'voice_key', 'type': 'string', 'widget': 'password', 'secret': True, 'setup': True,
          'capability': 'mic', 'label': 'Key the satellite sends',
          'help': "Proves a question came from this satellite. Stored scrambled. On a Pi "
                  "body this is SAPPH_BRAIN_TOKEN, next to SAPPH_DEVICE_ID."},
@@ -53,8 +53,11 @@ SPEC = {
          'default': 'yellow spin'},
         {'key': 'look_thinking', 'type': 'string', 'label': 'Thinking', 'capability': 'light',
          'default': 'rainbow spin'},
+        {'key': 'look_tool', 'type': 'string', 'label': 'Using a tool', 'capability': 'light',
+         'default': 'purple pulse',
+         'help': 'While she looks something up or works a device, between thinking and speaking.'},
         {'key': 'look_speaking', 'type': 'string', 'label': 'Speaking', 'capability': 'light',
-         'default': 'green spin'},
+         'default': 'cyan solid'},
         {'key': 'look_nolink', 'type': 'string', 'label': 'No link to Sapphire', 'capability': 'light',
          'default': 'red pulse'},
         {'key': 'lights_from', 'type': 'string', 'label': 'Lights on from', 'capability': 'light',
@@ -69,7 +72,7 @@ SPEC = {
     ],
 }
 
-LOOKS = ('resting', 'listening', 'thinking', 'speaking', 'nolink', 'night')
+LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 
 QUICK = 8                     # seconds for a plain request
@@ -90,6 +93,10 @@ SPEC_FRESH = 3600             # seconds a device's palette is kept: it changes w
 
 class Problem(Exception):
     """A reason fit to show as it is."""
+
+
+class Unfit(Problem):
+    """Sound this satellite cannot play, by the format it stated."""
 
 
 class Missing(Problem):
@@ -394,6 +401,37 @@ def status(device, config, secrets):
     return out
 
 
+def play(audio, kind, device, config, secrets):
+    """Sound on the satellite, answered when it has finished playing: what the
+    satellite said back ({'ok', 'stopped'?}). A board that states the format
+    it plays gets the sound itself, fitted; one that does not gets the file
+    as it was made. Raises Unfit when the sound cannot be made to fit, Problem
+    when the satellite could not play it. Core's voice lane calls this once
+    per sentence as her reply is made."""
+    from core.devices import voice
+    plays = _health(device, config, secrets).get('plays')
+    seconds = None
+    if plays is not None:
+        audio, kind = voice.fit(audio, kind, plays)
+        if audio is None:
+            raise Unfit(kind)
+        seconds = round(max(0, len(audio) - 44) / (plays['rate'] * plays['channels'] * 2), 2)
+        r = _call('POST', '/audio/speak', config, secrets, timeout=SPEAK_WAIT, data=audio,
+                  headers={'Content-Type': kind})
+    else:
+        ext = {'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3'}.get(kind, 'ogg')
+        r = _call('POST', '/audio/speak', config, secrets, timeout=SPEAK_WAIT,
+                  files={'audio': (f'speech.{ext}', audio, kind)})
+    try:
+        said = r.json()
+    except ValueError:
+        said = {}
+    said = said if isinstance(said, dict) else {}
+    if seconds is not None:
+        said.setdefault('seconds', seconds)          # of sound, as fitted: what a log can time against
+    return said
+
+
 def _say(text, device, config, secrets):
     from core.devices import voice
     text = str(text or '').strip()
@@ -402,17 +440,10 @@ def _say(text, device, config, secrets):
     audio, kind = voice.render(text)             # first: a refused voice asks the satellite nothing
     if audio is None:
         return f"Nothing was said: {kind}", False
-    plays = _health(device, config, secrets).get('plays')
-    if plays is not None:     # a board that states its format gets the sound itself, no form around it
-        audio, kind = voice.fit(audio, kind, plays)
-        if audio is None:
-            return f"Nothing was said: {kind}", False
-        _call('POST', '/audio/speak', config, secrets, timeout=SPEAK_WAIT, data=audio,
-              headers={'Content-Type': kind})
-    else:
-        ext = {'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3'}.get(kind, 'ogg')
-        _call('POST', '/audio/speak', config, secrets, timeout=SPEAK_WAIT,
-              files={'audio': (f'speech.{ext}', audio, kind)})
+    try:
+        play(audio, kind, device, config, secrets)
+    except Unfit as e:
+        return f"Nothing was said: {e}", False
     short = text if len(text) <= 80 else text[:77] + '...'
     return f'Said there: "{short}"', True
 

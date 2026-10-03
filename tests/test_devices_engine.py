@@ -196,6 +196,13 @@ def test_update_replaces_and_clears_a_secret(host):
     _add()
     core.update('desktop', parts={'fake': {'password': 'new-pass-long'}})
     assert core._part_secrets('desktop', 'fake').get('password') == 'new-pass-long'
+    # the page's own word for "a secret is stored", sent back as it was shown,
+    # changes nothing (a client that round-trips public() verbatim must not
+    # overwrite a key with the word "set" - it happened, 2026-10-03)
+    shown = core.public(core.get('desktop'))['parts'][0]['values']['password']
+    assert shown == core.KEPT
+    core.update('desktop', parts={'fake': {'password': shown}})
+    assert core._part_secrets('desktop', 'fake').get('password') == 'new-pass-long'
     core.update('desktop', parts={'fake': {'password': ''}})
     assert host.sec.status('desktop') == {}
 
@@ -204,6 +211,8 @@ def test_update_refuses_a_bad_part_and_changes_nothing(host):
     _add()
     with pytest.raises(core.DeviceError):
         core.update('desktop', label='X', parts={'nope': {}})
+    with pytest.raises(core.DeviceError, match='keyed by driver'):
+        core.update('desktop', label='X', parts=[{'driver': 'fake'}])      # a list, not a 500
     with pytest.raises(core.DeviceError, match='reserved'):
         core.update('desktop', label='X', parts={'fake': {'commands': [{'name': 'run', 'command': 'x'}]}})
     assert core.get('desktop')['label'] == "Krem's desktop"

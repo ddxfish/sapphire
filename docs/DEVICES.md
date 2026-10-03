@@ -23,11 +23,17 @@ default.
 ## Add a device
 
 1. System > Devices > **+ Add Device**.
-2. Name it. The name is what Sapphire calls it, for example `desktop`.
-3. Give it a **Location** if you like, for example `Living Room`. Sapphire sees it
-   in her device list, and at the top of anything a device hears.
-4. Pick a type. A greyed-out type names the plugin to enable.
-5. Fill in the fields and press **Add**. The device window opens on its Status tab.
+2. **What are you adding?** One card per type. A greyed-out card names the
+   plugin to enable.
+3. Only what that type needs to work: a name (one is filled in, change it if
+   you like; it is what Sapphire calls it, for example `desktop`), the
+   address and keys for a satellite, host and user for an SSH machine, nothing
+   at all for this computer. A **Location** if you like, for example `Living
+   Room`: Sapphire sees it in her device list, and at the top of anything the
+   device hears.
+4. **Add and test**. The device window opens and checks it once. Everything
+   else - looks, chat, camera, power - has a sensible default and is on the
+   window's tabs.
 
 ## The device window
 
@@ -240,12 +246,15 @@ returns to, and it is kept after a restart. Fine settings are written
 `name=value`: `bpm=40 speed=fast floor=0.05 ceiling=0.4`.
 
 **Its looks** are settings on the Light tab, in the same words, one for each
-state: Resting, Listening, Thinking, Speaking, No link to Sapphire. `rainbow`
-is a color too, and `rainbow` is an animation.
+state: Resting, Listening, Thinking, Using a tool, Speaking, No link to
+Sapphire. `rainbow` is a color too, and `rainbow` is an animation. New
+satellites start yellow for listening, rainbow for thinking, purple for a
+tool, cyan for speaking.
 
 ```
-Thinking   rainbow spin
-Speaking   green spin bpm=90 ceiling=0.6
+Thinking      rainbow spin
+Using a tool  purple pulse
+Speaking      cyan solid ceiling=0.6
 ```
 
 **Lights on from / until** are clock times, by the board's own clock. Outside
@@ -260,6 +269,14 @@ and the ring goes dark again when she is done. What she `set`s shows too, so
 "a white light for the night" works at 2 am. The board keeps the time from
 Sapphire, no internet clock. A Pi body from 0.7.0 takes all of this; an older
 one keeps its own looks and hours.
+
+**Her answer starts early.** A satellite hears her reply one sentence at a
+time, as she writes it, so the first words come a second or two after she
+starts instead of after the whole reply is written and rendered. The ring
+stays on thinking or tool between sentences and goes to idle when she is
+done. A Pi body (0.7.2) keeps its speaker open for the whole reply, so the
+sentences run on without a hole. Pressing play/pause once stops the rest
+of that reply.
 
 **She knows where a voice came from.** Every question a satellite hears
 arrives with one line above it, and you see that line in the chat too:

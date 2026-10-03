@@ -452,6 +452,28 @@ def test_a_look_at_its_health_is_always_fresh_and_a_silent_board_is_forgotten(bo
     assert not ok and text.startswith('Could not reach')
 
 
+def test_play_is_the_door_core_speaks_through_as_her_voice_is_made(board):
+    """One sentence at a time: fitted for a board that states its format, the
+    file as made for one that does not, and the board's answer comes back."""
+    with patch.object(voice, 'fit', return_value=(b'RIFF-fitted', 'audio/wav')):
+        assert sat.play(b'OggS-one', 'audio/ogg', DEV, CFG, KEY) == {'ok': True, 'seconds': 0.0}   # fitted: it knows how long
+    assert board[-1].kw['data'] == b'RIFF-fitted'
+    older = {k: v for k, v in BOARD.items() if k != 'plays'}
+    with patch.dict(REAL, {('GET', '/health'): older, ('POST', '/audio/speak'): {'ok': True, 'stopped': True}}):
+        sat._about.clear()
+        assert sat.play(b'OggS-two', 'audio/ogg', DEV, CFG, KEY) == {'ok': True, 'stopped': True}
+    assert board[-1].kw['files'] == {'audio': ('speech.ogg', b'OggS-two', 'audio/ogg')}
+    odd = dict(BOARD, plays={"type": "audio/opus", "rate": 16000})
+    with patch.dict(REAL, {('GET', '/health'): odd}), pytest.raises(sat.Unfit):
+        sat._about.clear()
+        sat.play(b'OggS-three', 'audio/ogg', DEV, CFG, KEY)
+
+
+def test_setup_is_what_a_satellite_needs_before_it_can_work():
+    """Add Device asks for these and nothing else; the rest keep their defaults."""
+    assert [f['key'] for f in sat.SPEC['config_schema'] if f.get('setup')] == ['url', 'token', 'voice_key']
+
+
 def test_the_camera_switch_belongs_to_the_camera():
     field = next(f for f in sat.SPEC['config_schema'] if f['key'] == 'camera')
     assert field['capability'] == 'camera' and field['tab'] == 'Status'
@@ -460,8 +482,8 @@ def test_the_camera_switch_belongs_to_the_camera():
 # --- the looks and the hours ---------------------------------------------------------
 
 LOOKS = {'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1', 'look_listening': 'yellow spin',
-         'look_thinking': 'rainbow spin', 'look_speaking': 'green spin', 'look_nolink': 'red pulse',
-         'look_night': 'off'}
+         'look_thinking': 'rainbow spin', 'look_tool': 'purple pulse', 'look_speaking': 'cyan solid',
+         'look_nolink': 'red pulse', 'look_night': 'off'}
 
 
 def test_the_looks_are_checked_at_save():
@@ -470,6 +492,7 @@ def test_the_looks_are_checked_at_save():
     assert 'Listening' in sat.validate(dict(good, look_listening='yellow spin fast wobble'))[1]
     assert 'has no time' in sat.validate(dict(good, look_thinking='rainbow spin 5s'))[1]
     assert 'Night' in sat.validate(dict(good, look_night='sapphire pulse 2h'))[1]
+    assert sat.validate(dict(good, look_tool='purple pulse 3s'))[1].startswith('Tool:')
     assert 'clock times' in sat.validate(dict(good, lights_from='7pm'))[1]
     assert sat.validate(dict(good, lights_from='', lights_until=''))[1] == ''
     assert sat.validate(dict(good, look_night='sapphire pulse ceiling=0.05'))[1] == ''
@@ -491,7 +514,8 @@ def test_a_save_hands_the_looks_and_hours_to_the_board(board):
         'resting': {'color': 'sapphire', 'animation': 'heartbeat', 'bpm': 33, 'ceiling': 0.1},
         'listening': {'color': 'yellow', 'animation': 'spin'},
         'thinking': {'color': 'rainbow', 'animation': 'spin'},
-        'speaking': {'color': 'green', 'animation': 'spin'},
+        'tool': {'color': 'purple', 'animation': 'pulse'},
+        'speaking': {'color': 'cyan', 'animation': 'solid'},
         'nolink': {'color': 'red', 'animation': 'pulse'},
         'night': {'color': 'off'},
         'from': '07:00', 'until': '23:00'}

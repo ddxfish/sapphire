@@ -2,9 +2,9 @@
   "name": "ssh",
   "short_display_name": "SSH",
   "version": "1.2.0",
-  "description": "SSH \u2014 remote command execution on configured servers",
+  "description": "SSH — remote command execution on configured servers",
   "author": "sapphire",
-  "icon": "\ud83d\udda5\ufe0f",
+  "icon": "🖥️",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {
@@ -15,7 +15,7 @@
       {
         "driver": "ssh",
         "label": "SSH machine",
-        "icon": "\ud83d\udda5\ufe0f",
+        "icon": "🖥️",
         "module": "device_driver.py",
         "capabilities": [
           "ssh",
@@ -26,12 +26,14 @@
             "key": "host",
             "type": "string",
             "label": "Host",
-            "placeholder": "192.168.0.10"
+            "placeholder": "192.168.0.10",
+            "setup": true
           },
           {
             "key": "user",
             "type": "string",
-            "label": "User"
+            "label": "User",
+            "setup": true
           },
           {
             "key": "port",
@@ -65,7 +67,8 @@
                 "label": "Password",
                 "value": "password"
               }
-            ]
+            ],
+            "setup": true
           },
           {
             "key": "key_path",

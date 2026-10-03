@@ -170,6 +170,8 @@ own module. The MIDI plugin brings two: a hardware synth, and a plain MIDI keybo
 
 Fields land on the tab of the driver's first capability. Add `"capability": "sound"` to a field to put it on another tab, or `"tab": "Status"` to put it with the device's health. How to reach a device belongs on Status when the driver has several capabilities.
 
+**Setup.** Add `"setup": true` to the fields a device needs before it can work at all - an address, a key, a user name. Add Device asks for those and nothing else (plus any field that shows only because of one of them, through `show_if`); every other field keeps its default until the user opens the device window. A driver with no setup fields asks for a name only.
+
 **Secrets.** A field with `"secret": true` is never stored in the device row. It goes to the device secrets file, scrambled with the machine-bound key, outside `user/` and outside backups. The page shows "Set", never the value. Your driver receives it at call time.
 
 ### What the functions are given
