@@ -3,6 +3,7 @@
 # Real engine, real registry with the satellite driver, real secrets store on
 # a temp file. The speech engines, the turn engine and the network are faked.
 import asyncio
+import types
 import importlib
 import json
 import time
@@ -14,6 +15,7 @@ from fastapi import HTTPException
 
 from core.chat.chat import ChatBusy
 from core.devices import engine, voice
+import core.devices.health as health
 from core.devices.drivers import satellite as sat
 from core.routes import devices as routes
 
@@ -58,6 +60,7 @@ def home(tmp_path):
              patch.object(sec, 'CONFIG_DIR', tmp_path), \
              patch.object(sec, '_crypto', lambda: mgr), \
              patch.object(engine, '_store', lambda: store), \
+             patch.object(health, '_store', lambda: types.SimpleNamespace(get=lambda k, d=None: d, save=lambda k, v: None)), \
              patch.object(engine, '_all_plugin_info', lambda: []), \
              patch.object(engine, '_managed', lambda: False), \
              patch.object(voice, '_system', lambda: system), \
@@ -65,14 +68,14 @@ def home(tmp_path):
              patch.object(voice, 'stt_refusal', lambda settings=None: ''):
             sec.reload()
             importlib.reload(reg)
-            engine._status.clear()
+            health._belief.clear(); health._saved = None
             for held in (voice._waiting, voice._showing, voice._listeners, sat._about):
                 held.clear()
             engine.add('pi2', 'Kitchen', 'satellite',
                        {'url': 'http://192.168.0.221:8090', 'token': 'body-key-abcdefgh',
                         'voice_key': 'voice-key-12345678'})
             yield SimpleNamespace(system=system, sm=sm, stt=stt, store=store, heard=heard)
-            engine._status.clear()
+            health._belief.clear(); health._saved = None
             for held in (voice._waiting, voice._showing, voice._listeners, sat._about):
                 held.clear()
             importlib.reload(reg)

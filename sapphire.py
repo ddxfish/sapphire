@@ -1278,6 +1278,7 @@ class VoiceChatSystem:
             ("live turns", self._drain_live_turns),
             # before the plugins go: their drivers let go of what they started
             ("device presence", lambda: __import__('core.devices.presence', fromlist=['stop']).stop()),
+            ("device health", lambda: __import__('core.devices.health', fromlist=['stop']).stop()),
             ("plugin services", _pl.stop_all_services),
             ("plugin daemons", _pl.stop_all_daemons),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
@@ -1402,6 +1403,12 @@ def run():
             _presence.start()
         except Exception as e:
             logger.error(f"Device presence did not start: {e}", exc_info=True)
+        # Is each device reachable: one keeper believes online or offline.
+        try:
+            from core.devices import health as _health
+            _health.start()
+        except Exception as e:
+            logger.error(f"Device health did not start: {e}", exc_info=True)
 
         # Dev mode: auto-reload plugins on file changes
         import os

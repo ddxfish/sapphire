@@ -284,7 +284,7 @@ def test_problems_read_like_sentences():
     with answer(error=requests.exceptions.ConnectionError('boom body-key-abcdefgh')):
         st = sat.status(DEV, CFG, KEY)
         assert st == {'online': False, 'detail': 'Could not reach 192.168.0.221:8090. '
-                                                 'Is the satellite powered and on the network?'}
+                                                 'Check that it is powered and on the network.'}
     with answer(error=requests.exceptions.Timeout()):
         assert run('wake', 'read') == ('No answer from 192.168.0.221:8090 within 8s.', False)
     with answer(Reply({"detail": "bad token"}, 401)):

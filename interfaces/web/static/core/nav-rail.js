@@ -1,7 +1,20 @@
 // core/nav-rail.js - Navigation rail with flyout support
-import { switchView } from './router.js';
+import { switchView, getCurrentView } from './router.js';
 
 const MOBILE_MAX_VISIBLE = 6;
+
+// A flyout item may name a tab inside the settings view (data-tab). Entering
+// the view fresh, settings.show() reads the one-shot window._settingsTab;
+// already on it, the view's own settings-navigate door switches the tab.
+function go(viewId, tab) {
+    if (tab && getCurrentView() === viewId) {
+        document.getElementById(`view-${viewId}`)
+            ?.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab }, bubbles: true }));
+        return;
+    }
+    if (tab) window._settingsTab = tab;
+    switchView(viewId);
+}
 
 export function initNavRail() {
     const rail = document.getElementById('nav-rail');
@@ -14,7 +27,7 @@ export function initNavRail() {
         if (flyoutItem) {
             e.stopPropagation();
             const viewId = flyoutItem.dataset.view;
-            if (viewId) switchView(viewId);
+            if (viewId) go(viewId, flyoutItem.dataset.tab);
             // Close any open flyouts
             rail.querySelectorAll('.nav-group-parent').forEach(p => p.classList.remove('flyout-open'));
             return;
@@ -130,10 +143,11 @@ function initMobileOverflow(rail) {
             menu.innerHTML = '';
             // DOM API, not innerHTML — labels stay safe even if nav items
             // ever carry HTML. Day-ruiner #A defense-depth.
-            const addRow = (viewId, icon, label, extraClass = '') => {
+            const addRow = (viewId, icon, label, extraClass = '', tab = '') => {
                 const btn = document.createElement('button');
                 btn.className = 'nav-overflow-item' + extraClass;
                 if (viewId) btn.dataset.view = viewId;
+                if (tab) btn.dataset.tab = tab;
                 const iconSpan = document.createElement('span');
                 iconSpan.textContent = icon;
                 const labelSpan = document.createElement('span');
@@ -156,12 +170,12 @@ function initMobileOverflow(rail) {
                     group.querySelector('.nav-icon')?.textContent || '',
                     group.querySelector('.nav-label')?.textContent || group.dataset.view);
                 group.querySelectorAll('.nav-flyout-item').forEach(fi => {
-                    if (fi.dataset.view === group.dataset.view) return;  // parent row covers it
+                    if (fi.dataset.view === group.dataset.view && !fi.dataset.tab) return;  // parent row covers it
                     const txt = fi.textContent.trim();
                     const sp = txt.indexOf(' ');
                     addRow(fi.dataset.view,
                         sp > 0 ? txt.slice(0, sp) : '',
-                        sp > 0 ? txt.slice(sp + 1) : txt, ' child');
+                        sp > 0 ? txt.slice(sp + 1) : txt, ' child', fi.dataset.tab || '');
                 });
             });
 
@@ -205,7 +219,7 @@ function initMobileOverflow(rail) {
                 return;
             }
             const viewId = item.dataset.view;
-            if (viewId) switchView(viewId);
+            if (viewId) go(viewId, item.dataset.tab);
             menu.classList.add('hidden');
         });
     }

@@ -231,7 +231,7 @@ turned off is not told. Keep `apply` short; it runs while the user waits.
 - **Secrets stay out of text.** Never put a secret in a result, a log line, or a URL. Core scrubs results as a second line of defense, not a first.
 - **Quote what she types.** If her value reaches a shell, quote it (`shlex.quote`). Refuse templates that would put it inside quotes.
 - **Anything that moves needs a bound.** An action that starts something must end without a second call: a duration, a watchdog, or a device-side timeout. A dead controller means OFF.
-- **Status is cached for 30 seconds.** `device_status` always asks fresh. Keep `status()` under a few seconds for an offline device.
+- **A keeper calls `status()` on its own clock** (every 30 s while a device is online, every 90 s while it is offline) and keeps one belief per device: online or offline. One answer makes it online; two misses in a row make it offline; the last state survives a restart. The page and `device_list` read the belief and never wait on you. `device_status` and the Test button ask fresh. Keep `status()` under a few seconds for an offline device.
 
 ## Testing your driver
 

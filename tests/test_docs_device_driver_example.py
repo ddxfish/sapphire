@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from core.devices import engine
+import core.devices.health as health
 
 GUIDE = Path(__file__).absolute().parent.parent / 'docs' / 'plugin-author' / 'devices.md'
 MOD = 'plugins.my-lamp.device_driver'
@@ -73,6 +74,7 @@ def lamp(tmp_path):
              patch.object(sec, 'CONFIG_DIR', tmp_path), \
              patch.object(sec, '_crypto', lambda: mgr), \
              patch.object(engine, '_store', lambda: store), \
+             patch.object(health, '_store', lambda: types.SimpleNamespace(get=lambda k, d=None: d, save=lambda k, v: None)), \
              patch.object(engine, '_plugin_info', lambda n: {'enabled': True, 'loaded': True}), \
              patch.object(engine, '_all_plugin_info', lambda: []), \
              patch.object(engine, '_managed', lambda: False):
@@ -81,14 +83,14 @@ def lamp(tmp_path):
             reg.CORE_DRIVERS = ()
             engine._modules.clear()
             engine._modules_gen = None
-            engine._status.clear()
+            health._belief.clear(); health._saved = None
             sys.modules[MOD] = module
             assert reg.register_driver(decl['driver'], decl, manifest['name'])
             yield types.SimpleNamespace(manifest=manifest, decl=decl, module=module, sent=sent)
             sys.modules.pop(MOD, None)
             engine._modules.clear()
             engine._modules_gen = None
-            engine._status.clear()
+            health._belief.clear(); health._saved = None
             importlib.reload(reg)
             sec.reload()
 
@@ -200,6 +202,7 @@ def test_the_guides_presence_example_runs_through_the_real_keeper(tmp_path):
         return bool(test())
 
     with patch.object(engine, '_store', lambda: store), \
+         patch.object(health, '_store', lambda: types.SimpleNamespace(get=lambda k, d=None: d, save=lambda k, v: None)), \
          patch.object(engine, '_plugin_info', lambda n: {'enabled': True, 'loaded': True}), \
          patch.object(engine, '_all_plugin_info', lambda: []), \
          patch.object(engine, '_managed', lambda: False), \
@@ -244,5 +247,5 @@ def test_the_guides_presence_example_runs_through_the_real_keeper(tmp_path):
             sys.modules.pop(name, None)
             engine._modules.clear()
             engine._modules_gen = None
-            engine._status.clear()
+            health._belief.clear(); health._saved = None
             importlib.reload(reg)

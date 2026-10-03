@@ -13,9 +13,16 @@ Sapphire itself.
 
 Any plugin can bring more types. A type appears when its plugin is enabled.
 
+## The page
+
+System > Devices in the rail (or the Devices tab in Settings). One card per
+device: its dot, name, what it can do, and its state. When the devices are of
+more than one type, a row of pills at the top filters by type; **All** is the
+default.
+
 ## Add a device
 
-1. Settings > Devices > **+ Add Device**.
+1. System > Devices > **+ Add Device**.
 2. Name it. The name is what Sapphire calls it, for example `desktop`.
 3. Give it a **Location** if you like, for example `Living Room`. Sapphire sees it
    in her device list, and at the top of anything a device hears.
@@ -24,7 +31,7 @@ Any plugin can bring more types. A type appears when its plugin is enabled.
 
 ## The device window
 
-- **Status** shows online or offline, the reason when it is offline, and any readings. **Test now** checks it fresh.
+- **Status** shows online or offline, the reason when it is offline, and any readings. **Test now** checks it fresh. Sapphire checks every device on her own in the background; a device goes offline after two missed checks in a row and comes back on the first answer, so one slow reply never flips it. A pulsing dot means a check is running right now.
 - One tab per thing the device can do. Each lists its actions with a **Try** button. The box beside it sends what you type; the grey text in it is only an example. Empty is allowed: an action that reads something, like `volume`, answers with it.
 - **Save** keeps the window open. Try runs the saved version.
 
@@ -283,7 +290,7 @@ and the reason is logged.
    SAPPH_BRAIN_TOKEN=the-same-key
    ```
 
-   `SAPPH_DEVICE_ID` is the device's name in Settings > Devices.
+   `SAPPH_DEVICE_ID` is the device's name in System > Devices.
 3. Restart the Pi: `sudo reboot`. Restarting only the service can reset a Pi
    whose sound card driver has not been fixed.
 
@@ -305,7 +312,7 @@ them. A Pi that still runs the old setup must be moved over before it can be
 heard again:
 
 1. Update Sapphire first. The new addresses only exist in the new version.
-2. Add the Pi in Settings > Devices as a **Satellite**, with a key.
+2. Add the Pi in System > Devices as a **Satellite**, with a key.
 3. Put the new `main.py` and `body_events.py` on the Pi, and give it its two
    settings as described in "Give a Pi its own key".
 4. Put `device_list`, `device_status` and `device_action` in the toolsets she

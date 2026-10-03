@@ -53,12 +53,15 @@ def _saved(row, failed, problems=()):
 
 def list_devices():
     e = _engine()
-    found = e.statuses(wait_s=0)      # never blocks the page; answers land in the cache
+    found = e.statuses()              # what is believed; never blocks the page
     devices = []
     for device_id, row in e.rows().items():
         v = e.public(row)
+        first = v["parts"][0] if v["parts"] else {}
         devices.append({"id": v["id"], "label": v["label"], "enabled": v["enabled"],
                         "location": v["location"],
+                        "driver": first.get("driver", ""),
+                        "type": first.get("label", "").split(" (")[0],     # the pill: "Satellite", not the aside
                         "capabilities": [c["capability"] for c in e.describe(row) if not c["error"]],
                         "missing": [p["driver"] for p in v["parts"] if not p["available"]],
                         "status": found.get(device_id)})
@@ -222,6 +225,8 @@ async def _device_key(device_id, request, door):
     key = auth[7:].strip() if auth.startswith('Bearer ') else ''
     if not await asyncio.to_thread(voice.key_ok, device_id, key):
         raise HTTPException(status_code=401, detail="unknown device or wrong key")
+    from core.devices import health
+    health.seen(device_id.strip().lower())     # it spoke with its own key: it is online
     return key
 
 

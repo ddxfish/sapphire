@@ -37,14 +37,12 @@ import re
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
 STORE = 'devices'          # the state file's name: user/plugin_state/devices.json
 ID_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,32}$')
-STATUS_TTL = 30          # seconds a status answer stays fresh
-LIST_WAIT = 6            # seconds device_list waits for stale devices
 MAX_DEVICES = 64
 MAX_ROWS = 50            # items in one rows field
 MAX_PICTURES = 4         # pictures one action may answer with
@@ -59,8 +57,7 @@ PAGE = 'Settings > Devices'
 _lock = threading.RLock()
 _modules = {}            # driver id -> loaded driver module
 _modules_gen = None
-_status = {}             # device id -> {'online', 'parts', 'ts'}
-_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix='device-status')
+_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix='device-status')   # health.py probes on it
 
 
 class DeviceError(Exception):
@@ -77,6 +74,11 @@ def _store():
 def _secrets():
     from core.devices import secret_store
     return secret_store
+
+
+def _health():
+    from core.devices import health
+    return health
 
 
 def _registry():
@@ -522,7 +524,8 @@ def add(device_id, label, driver_id, config=None, location=''):
     _secrets().delete(device_id)
     _write(lambda t: t.__setitem__(device_id, row))
     failed = _apply_secrets(device_id, part['driver'], ops)
-    _forget_status(device_id)
+    _health().forget(device_id)          # a reused name inherits no belief: offline until it answers
+    _health().poke(device_id)
     _changed()
     return row, failed
 
@@ -583,8 +586,10 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     failed = []
     for driver_id, ops in pending:
         failed += _apply_secrets(target, driver_id, ops)
-    _forget_status(device_id)
-    _forget_status(target)
+    if target != device_id:
+        _health().rename(device_id, target)
+    else:
+        _health().poke(target)           # its settings may have changed: look again soon
     _changed()
     return row, failed
 
@@ -593,7 +598,7 @@ def remove(device_id):
     row = get(device_id)
     _write(lambda t: t.pop(row['id'], None))
     _secrets().delete(row['id'])
-    _forget_status(row['id'])
+    _health().forget(row['id'])
     _changed()
     return row
 
@@ -672,14 +677,12 @@ def _brief(row):
 
 
 # --- status ------------------------------------------------------------------
-
-def _forget_status(device_id):
-    with _lock:
-        _status.pop(device_id, None)
-
+# What is BELIEVED about a device lives in health.py (online or offline, with
+# hysteresis, kept across restarts). _probe only asks.
 
 def _probe(row):
-    """Ask every part how it is. Never raises."""
+    """Ask every part how it is, right now. Never raises. The answer is raw:
+    health.told() decides what it means."""
     parts = []
     for part in row.get('parts', []):
         entry = {'driver': part['driver'], 'online': False, 'detail': '', 'readings': {}}
@@ -705,40 +708,22 @@ def _probe(row):
             logger.error(f"[DEVICES] {part['driver']}.status failed: {e}", exc_info=True)
             entry['detail'] = f"driver error: {e}"
         parts.append(entry)
-    result = {'online': bool(parts) and all(p['online'] for p in parts),
-              'parts': parts, 'ts': time.time()}
-    with _lock:
-        _status[row['id']] = result
-    return result
-
-
-def _cached(device_id):
-    with _lock:
-        hit = _status.get(device_id)
-    if hit and time.time() - hit['ts'] < STATUS_TTL:
-        return hit
-    return None
+    return {'online': bool(parts) and all(p['online'] for p in parts),
+            'parts': parts, 'ts': time.time()}
 
 
 def status(device_id, fresh=True):
-    """One device's health. fresh=True always asks the device."""
+    """What is believed about one device: {'online', 'checking', 'ts',
+    'misses', 'parts'}. fresh=True asks the device first and believes the
+    answer; fresh=False never blocks."""
     row = get(device_id)
-    return (None if fresh else _cached(row['id'])) or _probe(row)
+    return _health().check(row) if fresh else _health().view(row['id'])
 
 
-def statuses(wait_s=0):
-    """{id: status or None} for every enabled device. Stale ones are asked in
-    parallel; wait_s is how long to wait for their answers (0 = do not wait,
-    the answers land in the cache for the next call)."""
-    table = {k: v for k, v in rows().items() if v.get('enabled', True)}
-    out = {k: _cached(k) for k in table}
-    jobs = {k: _pool.submit(_probe, table[k]) for k, hit in out.items() if hit is None}
-    if jobs and wait_s:
-        wait(list(jobs.values()), timeout=wait_s)
-        for k, job in jobs.items():
-            if job.done() and not job.exception():
-                out[k] = job.result()
-    return out
+def statuses():
+    """{id: belief} for every enabled device. Never blocks: the health
+    keeper asks the devices on its own clock."""
+    return _health().views()
 
 
 # --- what she reads ----------------------------------------------------------
@@ -775,12 +760,11 @@ def list_text():
     table = {k: v for k, v in rows().items() if v.get('enabled', True)}
     if not table:
         return f"No devices yet. The user adds them in {PAGE}.", True
-    found = statuses(wait_s=LIST_WAIT)
+    found = statuses()
     placed = any(_place(row.get('location')) for row in table.values())
     lines = []
     for device_id, row in table.items():
-        st = found.get(device_id)
-        state = 'checking' if st is None else ('online' if st['online'] else 'offline')
+        state = 'online' if found[device_id]['online'] else 'offline'
         where = (_place(row.get('location')) or '-',) if placed else ()
         lines.append((device_id, state) + where + (', '.join(_caps(row)) or '-',))
     first = next(iter(table))
@@ -812,9 +796,11 @@ def status_text(device_id):
         row = _usable(device_id)
     except DeviceError as e:
         return str(e), False
-    st = _probe(row)
-    lines = [(p['driver'], 'ok' if p['online'] else 'DOWN', p['detail'] or '-') for p in st['parts']]
+    st = _health().check(row)
+    lines = [(p['driver'], 'ok' if p['online'] else 'down', p['detail'] or '-') for p in st['parts']]
     out = [f"{_head(row, st)} (checked just now)", _columns_text(lines)]
+    if st['online'] and st['misses']:
+        out.append("It did not answer just now. It counts as offline if it misses again.")
     for p in st['parts']:
         for k, v in p['readings'].items():
             out.append(f"  {k}: {v}")
@@ -824,16 +810,18 @@ def status_text(device_id):
 
 
 def _down_note(st, driver=None):
-    """One line that saves her a wasted call when the device is offline."""
-    down = [p for p in st['parts'] if not p['online'] and driver in (None, p['driver'])]
-    if not down:
+    """One line that saves her a wasted call when the device is believed
+    offline. A single miss says nothing here."""
+    if st['online']:
         return ''
-    why = down[0]['detail'] or 'no answer'
+    down = [p for p in st['parts'] if not p['online']]
+    mine = [p for p in down if p['driver'] == driver] or down
+    why = (mine[0]['detail'] if mine else '') or ('not heard from yet' if not st['ts'] else 'no answer')
     return f"Offline: {why}\nCommands will fail until it is back."
 
 
 def _capability_list(row, caps):
-    st = _cached(row['id']) or _probe(row)
+    st = _health().view(row['id'])
     lines, errors = [], []
     for c in caps:
         if c['error']:
@@ -866,7 +854,7 @@ def _action_list(row, cap):
         args = [row['id'], cap['capability'], name] + ([a['example']] if a['example'] else [])
         lines.append((name, a['help'] or '-', _call(*args)))
     body = _columns_text(lines) or f"  (no actions yet - the user adds them in {PAGE})"
-    st = _cached(row['id']) or _probe(row)
+    st = _health().view(row['id'])
     return '\n'.join(x for x in (f"{row['id']} / {cap['capability']}", body,
                                   _down_note(st, cap['driver'])) if x)
 

@@ -155,7 +155,7 @@ def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
     except requests.exceptions.Timeout:
         raise Problem(f"No answer from {where} within {timeout}s.")
     except requests.exceptions.RequestException:
-        raise Problem(f"Could not reach {where}. Is the satellite powered and on the network?")
+        raise Problem(f"Could not reach {where}. Check that it is powered and on the network.")
     if r.status_code in (401, 403):
         raise Problem("The satellite refused the key. Enter its key again in Settings > Devices.")
     if r.status_code >= 400:

@@ -4,6 +4,11 @@
 // shared settings renderer from the driver's own schema; this file holds no
 // driver knowledge. The window's first tab is Status, then one tab per
 // capability. The page saves with its own buttons (selfSaving).
+//
+// A device is online or offline, nothing else (core/devices/health.py
+// believes; the page only reads). A probe in flight pulses the dot and never
+// changes the words. The list is drawn as cards on the daemon page's CSS, and
+// a row of type pills filters it when the devices are of more than one type.
 
 import { renderSettingsForm, readSettingsForm } from '../../shared/plugin-settings-renderer.js';
 import { showModal, escapeHtml as esc } from '../../shared/modal.js';
@@ -17,7 +22,10 @@ const LOCATION_HELP = 'The room or place it is in. Sapphire sees it, so she know
 
 let page = null;        // the tab's container
 let drivers = [];
+let devices = [];       // the list as it was last loaded
+let typeFilter = '';    // a driver label, or '' for every type
 let timer = null;
+let onPoll = null;      // the open device window reads each poll, so it never has to ask itself
 
 const call = (method, path = '', body) => fetchWithTimeout(API + path, {
     method,
@@ -25,10 +33,16 @@ const call = (method, path = '', body) => fetchWithTimeout(API + path, {
     body: body ? JSON.stringify(body) : undefined,
 }, 30000);
 
-const dot = on => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:${
-    on === true ? 'var(--success,#4caf50)' : on === false ? 'var(--error,#e53935)' : 'var(--text-muted,#888)'}"></span>`;
-
-const stateWord = d => !d.enabled ? 'off' : !d.status ? 'checking' : d.status.online ? 'online' : 'offline';
+const ago = ts => { const s = Math.max(0, Math.round(Date.now() / 1000 - ts)); return s < 90 ? `${s}s ago` : `${Math.round(s / 60)}m ago`; };
+const stateWord = d => !d.enabled ? 'off' : d.status?.online ? 'online' : 'offline';
+const when = st => !st ? '' : st.checking ? 'checking now' : st.ts ? `checked ${ago(st.ts)}` : 'not checked yet';
+// Green or red, never a third colour for "checking": a probe in flight pulses instead.
+const dot = (d, size = 10) => {
+    const st = d.enabled ? d.status : null;
+    const cls = 'sched-status-dot' + (!st ? '' : st.online ? ' running' : ' stopped') + (st?.checking ? ' pulse' : '');
+    return `<span class="${cls}" style="width:${size}px;height:${size}px;margin:0;flex-shrink:0;${
+        st ? '' : 'background:var(--text-muted,#888)'}" title="${stateWord(d)}"></span>`;
+};
 
 // ---- the page --------------------------------------------------------------
 
@@ -40,8 +54,15 @@ function drawPage(container) {
             <button class="btn btn-sm btn-primary" id="dev-add-btn">+ Add Device</button>
         </div>
         <div id="dev-add" hidden></div>
+        <div id="dev-filter"></div>
         <div id="dev-list"><p class="text-muted">Loading...</p></div>`;
     container.querySelector('#dev-add-btn').addEventListener('click', () => drawAddForm());
+    container.querySelector('#dev-filter').addEventListener('click', e => {
+        const pill = e.target.closest('[data-type]');
+        if (!pill) return;
+        typeFilter = pill.dataset.type;
+        drawList();
+    });
     container.querySelector('#dev-list').addEventListener('click', e => {
         const row = e.target.closest('[data-device]');
         if (row) openDevice(row.dataset.device);
@@ -60,27 +81,55 @@ async function loadList() {
     try {
         const data = await call('GET');
         drivers = data.drivers || [];
-        const devices = data.devices || [];
-        if (!devices.length) {
-            list.innerHTML = `<p class="text-muted" style="font-size:0.9em">No devices yet. Add one to get started.</p>`;
-            return;
-        }
-        list.innerHTML = devices.map(d => {
-            const caps = (d.capabilities || []).join(', ') || 'nothing yet';
-            const missing = (d.missing || []).length
-                ? ` <span style="color:var(--error,#e53935)">driver off: ${esc(d.missing.join(', '))}</span>` : '';
-            return `
-            <div class="setting-row" data-device="${esc(d.id)}" style="padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
-                <div class="setting-label">
-                    <label style="cursor:pointer">${dot(d.enabled ? d.status?.online : null)}${esc(d.id)}</label>
-                    <div class="setting-help">${esc(d.label)}${d.location ? ' - ' + esc(d.location) : ''} - ${esc(caps)}${missing}</div>
-                </div>
-                <div class="setting-input" style="text-align:right"><span class="text-muted">${stateWord(d)}</span></div>
-            </div>`;
-        }).join('');
+        devices = (data.devices || []).sort((a, b) =>
+            (a.type || '').localeCompare(b.type || '') || a.id.localeCompare(b.id));   // by type, then name: stable
+        drawList();
     } catch (e) {
         list.innerHTML = `<p style="color:var(--error)">Could not load devices: ${esc(e.message)}</p>`;
     }
+}
+
+function drawList() {
+    const list = page?.querySelector('#dev-list');
+    const bar = page?.querySelector('#dev-filter');
+    if (!list || !bar) return;
+    const counts = {};
+    for (const d of devices) if (d.type) counts[d.type] = (counts[d.type] || 0) + 1;
+    const types = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+    if (typeFilter && !counts[typeFilter]) typeFilter = '';
+    // one type = nothing to choose, so no pills
+    const pill = (t, label) => `<button type="button" class="ui-pill${typeFilter === t ? ' ui-pill-on' : ''}" data-type="${esc(t)}">${esc(label)}</button>`;
+    bar.innerHTML = types.length < 2 ? '' : `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${
+        pill('', `All (${devices.length})`)}${types.map(t => pill(t, `${t} (${counts[t]})`)).join('')}</div>`;
+    const shown = typeFilter ? devices.filter(d => d.type === typeFilter) : devices;
+    list.innerHTML = devices.length ? shown.map(card).join('')
+        : `<p class="text-muted" style="font-size:0.9em">No devices yet. Add one to get started.</p>`;
+    onPoll?.(devices);
+}
+
+function card(d) {
+    const st = d.enabled ? d.status : null;
+    const icon = drivers.find(x => x.driver === d.driver)?.icon || '';
+    const caps = (d.capabilities || []).join(' · ') || 'nothing yet';
+    const missing = (d.missing || []).length
+        ? ` <span style="color:var(--error,#e53935)">driver off: ${esc(d.missing.join(', '))}</span>` : '';
+    const readings = (st?.parts || []).flatMap(p => Object.entries(p.readings || {})).slice(0, 2)
+        .map(([k, v]) => `${k} ${v}`);
+    const meta = [stateWord(d), when(st), ...readings].filter(Boolean);
+    return `
+    <div class="sched-task-card" data-device="${esc(d.id)}" style="cursor:pointer">
+        ${dot(d)}
+        <div class="sched-task-info">
+            <div class="sched-task-name">${icon ? icon + ' ' : ''}${esc(d.id)}${d.label && d.label !== d.id
+                ? ` <span class="text-muted" style="font-weight:400">${esc(d.label)}</span>` : ''}</div>
+            <div class="sched-task-schedule">${esc(caps)}${missing}</div>
+            <div class="sched-task-meta">${meta.map(esc).join(' · ')}</div>
+        </div>
+        <div class="sched-task-actions" style="flex-direction:column;align-items:flex-end;gap:4px">
+            ${d.location ? `<span class="text-muted" style="font-size:var(--font-xs)">${esc(d.location)}</span>` : ''}
+            ${d.type ? `<span class="sched-plugin-badge">${esc(d.type)}</span>` : ''}
+        </div>
+    </div>`;
 }
 
 // ---- add a device ----------------------------------------------------------
@@ -151,7 +200,7 @@ function drawAddForm() {
             showToast(res.warning || `Added ${id}`, res.warning ? 'warning' : 'success');
             box.hidden = true; box.innerHTML = '';
             await loadList();
-            openDevice(id);
+            openDevice(id, undefined, { test: true });     // new: ask it once, the window fills in
         } catch (e) {
             showToast(e.message, 'error');
             ev.currentTarget.disabled = false;
@@ -205,15 +254,16 @@ function modalSchema(device) {
 
 function statusHTML(device) {
     const st = device.status;
-    if (!device.enabled) return `<div class="setting-help">${dot(null)}This device is turned off.</div>`;
-    if (!st) return `<div class="setting-help">${dot(null)}Not checked yet.</div>`;
-    const age = Math.max(0, Math.round(Date.now() / 1000 - st.ts));
-    const parts = st.parts.map(p => `
+    const head = text => `<div style="display:flex;align-items:center;gap:8px">${dot(device, 9)}${text}</div>`;
+    if (!device.enabled) return head('<span class="setting-help">This device is turned off.</span>');
+    if (!st) return head('<span class="setting-help">Nothing is known about it yet.</span>');
+    const parts = (st.parts || []).map(p => `
         <div style="margin:4px 0 0 17px" class="setting-help">${esc(p.driver)}: ${p.online ? 'ok' : 'down'}${
             p.detail ? ' - ' + esc(p.detail) : ''}${
             Object.entries(p.readings || {}).map(([k, v]) => `<br>${esc(k)}: ${esc(v)}`).join('')}</div>`).join('');
-    return `<div>${dot(st.online)}<b>${st.online ? 'Online' : 'Offline'}</b>
-        <span class="text-muted" style="margin-left:6px">checked ${age}s ago</span></div>${parts}`;
+    const note = st.online && st.misses ? `<div style="margin:4px 0 0 17px" class="setting-help">It did not answer the last ${
+        st.misses === 1 ? 'check' : st.misses + ' checks'}. It counts as offline if it misses again.</div>` : '';
+    return head(`<b>${st.online ? 'Online' : 'Offline'}</b><span class="text-muted">${when(st)}</span>`) + parts + note;
 }
 
 function mountStatus(el, device, redraw) {
@@ -306,7 +356,7 @@ function mountActions(el, device, cap) {
     });
 }
 
-async function openDevice(id, tab) {
+async function openDevice(id, tab, opts = {}) {
     let device;
     try {
         device = (await call('GET', `/${encodeURIComponent(id)}`)).device;
@@ -317,6 +367,16 @@ async function openDevice(id, tab) {
     const body = modal.element.querySelector('#dev-modal');
     let schema = [];
     let root = null;      // a fresh element per draw, so old listeners die with it
+
+    // Each list poll brings this device's state too: the window shows it without asking.
+    onPoll = list => {
+        if (!modal.element.isConnected) { onPoll = null; return; }
+        const d = list.find(x => x.id === device.id);
+        const el = root?.querySelector('#dev-status');
+        if (!d || !d.status || !el) return;
+        device.status = d.status;
+        el.innerHTML = statusHTML(device);
+    };
 
     const activeTab = () => root?.querySelector('.ps-tab.active')?.dataset.psTab;
     const draw = (dev, want) => {
@@ -337,6 +397,7 @@ async function openDevice(id, tab) {
         else draw(dev, activeTab());
     };
     draw(device, tab);
+    if (opts.test) root.querySelector('#dev-test')?.click();
 
     const save = document.createElement('button');
     save.className = 'btn btn-primary';

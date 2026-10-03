@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from core.devices import engine as core
+import core.devices.health as health
 from core.devices import presence
 
 MOD = 'plugins.fakeplug.keys_driver'
@@ -78,6 +79,7 @@ def rig():
          patch.object(core, '_plugin_info', lambda n: {'enabled': True, 'loaded': True}), \
          patch.object(core, '_all_plugin_info', lambda: []), \
          patch.object(core, '_managed', lambda: False), \
+             patch.object(health, '_store', lambda: types.SimpleNamespace(get=lambda k, d=None: d, save=lambda k, v: None)), \
          patch.object(core, '_part_secrets', lambda device_id, driver_id: sec.Secrets(device_id, {})), \
          patch.object(sec, 'delete', lambda device_id: True), \
          patch.object(sec, 'status', lambda device_id: {}), \
@@ -88,7 +90,7 @@ def rig():
         reg.CORE_DRIVERS = ()
         core._modules.clear()
         core._modules_gen = None
-        core._status.clear()
+        health._belief.clear(); health._saved = None
         sys.modules[MOD] = m
         assert reg.register_driver('keys', DRIVER, 'fakeplug')
         box.mod = m
@@ -106,7 +108,7 @@ def rig():
             sys.modules.pop(MOD, None)
             core._modules.clear()
             core._modules_gen = None
-            core._status.clear()
+            health._belief.clear(); health._saved = None
             importlib.reload(reg)
 
 

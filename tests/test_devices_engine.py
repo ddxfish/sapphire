@@ -16,6 +16,7 @@ import pytest
 from fastapi import HTTPException
 
 from core.devices import engine as core
+from core.devices import health
 from core.routes import devices as routes
 
 ROOT = Path(__file__).absolute().parent.parent
@@ -53,6 +54,9 @@ class FakeStore:
     def update_with_lock(self, k, mutator, default=None):
         self.d[k] = mutator(self.d.get(k, default))
         return self.d[k]
+
+    def save(self, k, v):
+        self.d[k] = v
 
 
 def _fake_driver(seen):
@@ -95,7 +99,7 @@ def host(tmp_path):
     from core.credentials_manager import CredentialsManager
     import core.devices.registry as reg
     import core.devices.secret_store as sec
-    seen, store = [], FakeStore()
+    seen, store, hstore = [], FakeStore(), FakeStore()
     with patch('core.credentials_manager.CREDENTIALS_FILE', tmp_path / 'credentials.json'), \
          patch('core.credentials_manager.SCRAMBLE_SALT_FILE', tmp_path / '.scramble_salt'), \
          patch('core.credentials_manager.CONFIG_DIR', tmp_path):
@@ -104,6 +108,7 @@ def host(tmp_path):
              patch.object(sec, 'CONFIG_DIR', tmp_path), \
              patch.object(sec, '_crypto', lambda: mgr), \
              patch.object(core, '_store', lambda: store), \
+             patch.object(health, '_store', lambda: hstore), \
              patch.object(core, '_plugin_info', lambda n: {'enabled': True, 'loaded': True}), \
              patch.object(core, '_all_plugin_info', lambda: []), \
              patch.object(core, '_managed', lambda: False):
@@ -112,14 +117,14 @@ def host(tmp_path):
             reg.CORE_DRIVERS = ()              # these tests run on the fake driver alone
             core._modules.clear()
             core._modules_gen = None
-            core._status.clear()
+            health._belief.clear(); health._saved = None
             sys.modules[MOD] = _fake_driver(seen)
             assert reg.register_driver('fake', DRIVER, 'fakeplug')
-            yield types.SimpleNamespace(seen=seen, store=store, reg=reg, sec=sec, tmp=tmp_path)
+            yield types.SimpleNamespace(seen=seen, store=store, hstore=hstore, reg=reg, sec=sec, tmp=tmp_path)
             sys.modules.pop(MOD, None)
             core._modules.clear()
             core._modules_gen = None
-            core._status.clear()
+            health._belief.clear(); health._saved = None
             importlib.reload(reg)
             sec.reload()
 
@@ -242,6 +247,7 @@ def test_empty_list(host):
 def test_list_text_format(host):
     _add()
     _add('fm1', host='dead')
+    core.status('desktop'), core.status('fm1')      # the keeper has looked once
     text, ok = core.list_text()
     assert ok and text == ('Devices (2):\n'
                            '  desktop  online   shell, lamp\n'
@@ -251,6 +257,7 @@ def test_list_text_format(host):
 
 def test_help_at_every_level(host):
     _add(allow_all=True)
+    core.status('desktop')                 # the keeper's first look
     text, ok = core.run('desktop')
     assert ok and text == ('desktop - Krem\'s desktop - online\n'
                            '  shell  run commands  device_action("desktop","shell","close_firefox")\n'
@@ -266,6 +273,8 @@ def test_help_at_every_level(host):
 
 def test_offline_is_said_before_she_wastes_a_call(host):
     _add(host='dead')
+    assert core.run('desktop')[0].endswith('Offline: not heard from yet\nCommands will fail until it is back.')
+    core.status('desktop')                 # the keeper's first look
     text, ok = core.run('desktop')
     assert ok and text == ('desktop - Krem\'s desktop - offline\n'
                            '  shell  run commands  device_action("desktop","shell","close_firefox")\n'
@@ -485,6 +494,7 @@ def test_location_is_part_of_what_she_reads(host):
     core.update('desktop', location='Office')
     assert core.public(core.get('desktop'))['location'] == 'Office'
     assert core._brief(core.get('desktop'))['location'] == 'Office'
+    core.status('desktop'), core.status('fm1')
     assert core.list_text()[0] == ('Devices (2):\n'
                                    '  desktop  online   Office  shell, lamp\n'
                                    '  fm1      offline  -       shell, lamp\n'
@@ -507,25 +517,71 @@ def test_status_text(host):
     assert core.status_text('nope')[1] is False
 
 
-# --- status cache ------------------------------------------------------------
+# --- what is believed (health.py) --------------------------------------------
 
-def test_status_is_cached_until_asked_fresh(host):
+def test_a_device_never_heard_from_is_offline_and_reads_never_block(host):
     _add()
+    st = core.status('desktop', fresh=False)
+    assert st['online'] is False and st['ts'] == 0 and st['parts'] == []
     core.status('desktop', fresh=False)
-    core.status('desktop', fresh=False)
+    assert ('status', 'desktop') not in host.seen           # nothing was asked
+    assert core.status('desktop', fresh=True)['online'] is True
     assert host.seen.count(('status', 'desktop')) == 1
-    core.status('desktop', fresh=True)
-    assert host.seen.count(('status', 'desktop')) == 2
-    core.update('desktop', label='changed')          # a change forgets the old answer
-    core.status('desktop', fresh=False)
-    assert host.seen.count(('status', 'desktop')) == 3
+    assert core.status('desktop', fresh=False)['online'] is True
 
 
-def test_statuses_waits_for_stale_devices(host):
+def test_one_answer_is_online_two_misses_are_offline(host):
+    _add()
+    assert core.status('desktop')['online'] is True
+    core.update('desktop', parts={'fake': {'host': 'dead'}})     # keeps the belief, asks again later
+    assert core.status('desktop', fresh=False)['online'] is True
+    text, ok = core.status_text('desktop')                        # miss 1: she asked, it did not answer
+    assert ok and text.splitlines()[0] == "desktop - Krem's desktop - online (checked just now)"
+    assert '  fake  down  dead:22' in text and 'did not answer just now' in text
+    st = core.status('desktop', fresh=False)
+    assert st['online'] is True and st['misses'] == 1 and st['parts'][0]['online'] is False
+    assert 'Offline' not in core.run('desktop')[0]                # one miss says nothing to her
+    st = core.status('desktop')                                   # miss 2
+    assert st['online'] is False and st['misses'] == 2
+    assert core.run('desktop')[0].endswith('Offline: dead:22\nCommands will fail until it is back.')
+    core.update('desktop', parts={'fake': {'host': 'tower'}})
+    assert core.status('desktop')['online'] is True               # one answer brings it back
+
+
+def test_statuses_never_asks_and_the_last_state_survives_a_restart(host):
     _add()
     _add('fm1', host='dead')
-    found = core.statuses(wait_s=5)
+    found = core.statuses()
+    assert set(found) == {'desktop', 'fm1'}
+    assert ('status', 'desktop') not in host.seen and found['desktop']['online'] is False
+    core.status('desktop')
+    core.status('fm1')
+    assert host.hstore.d['online'] == {'desktop': True, 'fm1': False}   # written when a belief flips
+    health._belief.clear(); health._saved = None                  # a restart
+    found = core.statuses()
     assert found['desktop']['online'] is True and found['fm1']['online'] is False
+    assert host.seen.count(('status', 'desktop')) == 1            # believed, not asked again
+
+
+def test_a_device_that_talks_with_its_own_key_has_checked_in(host):
+    _add()
+    assert core.status('desktop', fresh=False)['online'] is False
+    health.seen('desktop')
+    st = core.status('desktop', fresh=False)
+    assert st['online'] is True and st['ts'] > 0
+    assert host.hstore.d['online'] == {'desktop': True}
+
+
+def test_rename_keeps_the_belief_and_a_reused_name_does_not(host):
+    _add()
+    core.status('desktop')
+    core.update('desktop', new_id='tower')
+    assert core.status('tower', fresh=False)['online'] is True
+    assert host.hstore.d['online'] == {'tower': True}
+    core.remove('tower')
+    assert host.hstore.d['online'] == {}
+    _add('tower')
+    assert core.status('tower', fresh=False)['online'] is False
 
 
 # --- drivers -----------------------------------------------------------------
@@ -781,6 +837,7 @@ def test_what_it_said_holds_while_it_is_away_and_follows_when_it_says_otherwise(
     def away(device, config, secrets):
         return {'online': False, 'detail': 'no answer'}
     sys.modules[MOD].status = away
+    assert core.status('desktop')['online'] is True             # one miss is not away
     assert core.status('desktop')['online'] is False
     assert _tabs() == ['lamp']
     _says(['Shell', 'lamp'])                     # it came back with new firmware
@@ -844,8 +901,9 @@ def test_a_field_of_something_the_device_lacks_is_not_shown_and_keeps_its_value(
 def test_the_window_shows_what_the_device_just_said(host):
     _add()
     _says(['lamp'])
+    assert [c['capability'] for c in routes.test_device('desktop')['device']['capabilities']] == ['lamp']
     seen = routes.get_device('desktop')['device']
-    assert [c['capability'] for c in seen['capabilities']] == ['lamp']       # first look already
+    assert [c['capability'] for c in seen['capabilities']] == ['lamp']       # kept with the device
     _says(['shell'])
     out = routes.test_device('desktop')
     assert out['status']['online'] is True
