@@ -4,7 +4,7 @@ Teach Sapphire to use a machine or a gadget. **Devices** is part of core: it own
 
 Anything can be a device: a thermostat, a television, a robot arm. If your code can reach it, Sapphire can use it, and it gets the same page, the same three tools and the same help as every built-in device.
 
-Reference drivers: **`plugins/ssh`** (stored logins, user-written commands), the FM-1 synth plugin (two device types, every action runs one of the plugin's own tools), and the two that ship inside core, `core/devices/drivers/satellite.py` and `computer.py`.
+Reference drivers: **`plugins/ssh`** (stored logins, user-written commands), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the two that ship inside core, `core/devices/drivers/satellite.py` and `computer.py`.
 
 ## What Sapphire sees
 
@@ -166,7 +166,7 @@ restart is needed.
 | `presence` | no | `true`: its things come and go, and the driver is kept told. See Things that come and go |
 
 `devices` is a list. One plugin may bring several device types, each with its
-own module. The FM-1 plugin brings two: the synth, and a plain MIDI keyboard.
+own module. The MIDI plugin brings two: a hardware synth, and a plain MIDI keyboard.
 
 Fields land on the tab of the driver's first capability. Add `"capability": "sound"` to a field to put it on another tab, or `"tab": "Status"` to put it with the device's health. How to reach a device belongs on Status when the driver has several capabilities.
 

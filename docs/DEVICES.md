@@ -9,7 +9,7 @@ Sapphire itself.
 | Satellite | Sapphire | A room box with mic, speaker, light and camera: a Raspberry Pi, an ESP32 board |
 | SSH machine | the SSH plugin | Any machine you can log in to |
 | WiFi gadget | the gadget plugin | A small board with a light, a screen, a button |
-| FM-1 synth, MIDI keyboard | the FM-1 plugin | Instruments she plays and hears |
+| Hardware synth, MIDI keyboard | the MIDI plugin | Instruments she plays and hears |
 
 Any plugin can bring more types. A type appears when its plugin is enabled.
 
@@ -110,7 +110,7 @@ this computer has no Screen tab.
 ## MIDI keyboard
 
 A plain MIDI keyboard makes no sound of its own. This device gives it one: the
-computer becomes the instrument. It comes with the FM-1 plugin. Linux only.
+computer becomes the instrument. It comes with the MIDI plugin. Linux only.
 
 1. Plug the keyboard in.
 2. **+ Add Device**, type **MIDI keyboard**.
@@ -248,11 +248,18 @@ Thinking   rainbow spin
 Speaking   green spin bpm=90 ceiling=0.6
 ```
 
-**Lights on from / until** are clock times. Outside them the ring rests dark.
-A state still shows while she is answering, and what she `set`s shows too, so
-"a white light for the night" works at 2 am. Both empty = always on. The
-board keeps the time from Sapphire, no internet clock. (A Pi body keeps its
-own looks and night light; these settings are for boards that take them.)
+**Lights on from / until** are clock times, by the board's own clock. Outside
+them the ring shows **Outside those hours** instead of resting: `off` is dark,
+and `sapphire pulse ceiling=0.05` is a soft night light. A new satellite starts
+at 08:00 to 00:00 and `off`, which is what the boards do before any save. Both
+times empty = always on.
+
+**Listening, thinking and speaking always show**, at any hour and even after
+`off` turned the ring dark: when you say her name at 6 am the yellow comes up,
+and the ring goes dark again when she is done. What she `set`s shows too, so
+"a white light for the night" works at 2 am. The board keeps the time from
+Sapphire, no internet clock. A Pi body from 0.7.0 takes all of this; an older
+one keeps its own looks and hours.
 
 **She knows where a voice came from.** Every question a satellite hears
 arrives with one line above it, and you see that line in the chat too:

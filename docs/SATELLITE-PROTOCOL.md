@@ -63,7 +63,7 @@ A board answers only the addresses of what it has.
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
 | `light` | `GET /led/spec` | Its colors and animations |
 | `light` | `GET` and `PUT /led/baseline` | Its resting light, kept after a restart |
-| `light` | `PUT /led/looks` | After a save in Settings > Devices: `{"resting", "listening", "thinking", "speaking", "nolink"}`, each a look, plus `"from"` and `"until"` clock times. A board without it answers 404 and keeps its own |
+| `light` | `PUT /led/looks` | After a save in Settings > Devices: `{"resting", "listening", "thinking", "speaking", "nolink", "night"}`, each a look, plus `"from"` and `"until"` clock times. A look that is not sent is kept. A board without the door answers 404 and keeps its own |
 | `wake` | `GET /wakeword` | `{"enabled", "running", "model"}` |
 | `wake` | `POST /wakeword?enabled=true` | Listen for the wake word, or stop |
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
@@ -75,6 +75,15 @@ arrives.
 
 **A refusal** is any status from 400 up with `{"detail": "the reason"}`. The
 reason is shown as it is. 401 or 403 means the key was wrong.
+
+**What the light shows, first wins:** a state of the board (listening, thinking,
+tool, speaking, error); then what she set with `/led`, held for its time, or
+dark after `{"state": "off"}` until `{"state": "idle"}`; then, inside the hours,
+the resting look, and outside them the `night` look, where the color `off` is
+dark. A state always shows, through a blackout and at any hour, so the ring
+says when she is listening. The hours are by the board's own local time; the
+same `from` and `until` means always on. Built in, before any save: dark from
+00:00 to 08:00. The Pi body (0.7.0) and the ESP32 firmware keep this order.
 
 ## What the board sends to Sapphire
 

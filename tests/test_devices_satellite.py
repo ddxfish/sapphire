@@ -460,7 +460,8 @@ def test_the_camera_switch_belongs_to_the_camera():
 # --- the looks and the hours ---------------------------------------------------------
 
 LOOKS = {'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1', 'look_listening': 'yellow spin',
-         'look_thinking': 'rainbow spin', 'look_speaking': 'green spin', 'look_nolink': 'red pulse'}
+         'look_thinking': 'rainbow spin', 'look_speaking': 'green spin', 'look_nolink': 'red pulse',
+         'look_night': 'off'}
 
 
 def test_the_looks_are_checked_at_save():
@@ -468,8 +469,17 @@ def test_the_looks_are_checked_at_save():
     assert sat.validate(dict(good))[1] == ''
     assert 'Listening' in sat.validate(dict(good, look_listening='yellow spin fast wobble'))[1]
     assert 'has no time' in sat.validate(dict(good, look_thinking='rainbow spin 5s'))[1]
+    assert 'Night' in sat.validate(dict(good, look_night='sapphire pulse 2h'))[1]
     assert 'clock times' in sat.validate(dict(good, lights_from='7pm'))[1]
     assert sat.validate(dict(good, lights_from='', lights_until=''))[1] == ''
+    assert sat.validate(dict(good, look_night='sapphire pulse ceiling=0.05'))[1] == ''
+
+
+def test_a_new_satellite_rests_dark_from_midnight_to_eight():
+    """One truth with the boards' built-in: the page starts where they start."""
+    by = {f['key']: f for f in sat.SPEC['config_schema']}
+    assert (by['lights_from']['default'], by['lights_until']['default']) == ('08:00', '00:00')
+    assert by['look_night']['default'] == 'off'
 
 
 def test_a_save_hands_the_looks_and_hours_to_the_board(board):
@@ -483,6 +493,7 @@ def test_a_save_hands_the_looks_and_hours_to_the_board(board):
         'thinking': {'color': 'rainbow', 'animation': 'spin'},
         'speaking': {'color': 'green', 'animation': 'spin'},
         'nolink': {'color': 'red', 'animation': 'pulse'},
+        'night': {'color': 'off'},
         'from': '07:00', 'until': '23:00'}
 
 

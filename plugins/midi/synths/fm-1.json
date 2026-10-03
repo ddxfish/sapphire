@@ -1,0 +1,244 @@
+{
+  "id": "fm-1",
+  "name": "M-VAVE FM-1",
+  "about": "Pocket FM synth with mini keys, Bluetooth MIDI and USB. Voices are the 128 banks loaded on the box (A-D); it cannot report their names, so this list must match what is loaded. Effects are switched with controllers on channel 2.",
+  "port_names": [
+    "FM-1_BLE",
+    "FM-1"
+  ],
+  "fx_channel": 1,
+  "effects": {
+    "filter": {
+      "switch": 0,
+      "levels": {
+        "type": [
+          1,
+          2
+        ],
+        "cutoff": [
+          2,
+          107
+        ],
+        "q": [
+          3,
+          10
+        ]
+      }
+    },
+    "reverb": {
+      "switch": 4,
+      "levels": {
+        "type": [
+          5,
+          2
+        ],
+        "decay": [
+          6,
+          100
+        ],
+        "mix": [
+          7,
+          100
+        ]
+      }
+    },
+    "delay": {
+      "switch": 8,
+      "levels": {
+        "decay": [
+          9,
+          100
+        ],
+        "rate": [
+          10,
+          100
+        ],
+        "mix": [
+          11,
+          100
+        ]
+      }
+    },
+    "distortion": {
+      "switch": 12,
+      "levels": {
+        "gain": [
+          13,
+          100
+        ],
+        "tone": [
+          14,
+          100
+        ],
+        "level": [
+          15,
+          100
+        ]
+      }
+    },
+    "chorus": {
+      "switch": 16,
+      "levels": {
+        "freq": [
+          17,
+          100
+        ],
+        "depth": [
+          18,
+          100
+        ],
+        "mix": [
+          19,
+          100
+        ]
+      }
+    },
+    "phaser": {
+      "switch": 20,
+      "levels": {
+        "freq": [
+          21,
+          100
+        ],
+        "depth": [
+          22,
+          100
+        ],
+        "mix": [
+          23,
+          100
+        ]
+      }
+    }
+  },
+  "voices": [
+    "BRASS 1",
+    "BRASS 2",
+    "BRASS 3",
+    "STRINGS 1",
+    "STRINGS 2",
+    "STRINGS 3",
+    "ORCHESTRA",
+    "PIANO 1",
+    "PIANO 2",
+    "PIANO 3",
+    "E.PIANO 1",
+    "GUITAR 1",
+    "GUITAR 2",
+    "SYN-LEAD 1",
+    "BASS 1",
+    "BASS 2",
+    "E.ORGAN 1",
+    "PIPES 1",
+    "HARPSICH 1",
+    "CLAV 1",
+    "VIBE 1",
+    "MARIMBA",
+    "KOTO",
+    "FLUTE 1",
+    "ORCH-CHIME",
+    "TUB BELLS",
+    "STEEL DRUM",
+    "TIMPANI",
+    "REFS WHISL",
+    "VOICE 1",
+    "TRAIN",
+    "TAKE OFF",
+    "PIANO 4",
+    "PIANO 5",
+    "E.PIANO 2",
+    "E.PIANO 3",
+    "E.PIANO 4",
+    "PIANO 5THS",
+    "CELESTE",
+    "TOY PIANO",
+    "HARPSICH 2",
+    "HARPSICH 3",
+    "CLAV 2",
+    "CLAV 3",
+    "E.ORGAN 2",
+    "E.ORGAN 3",
+    "E.ORGAN 4",
+    "E.ORGAN 5",
+    "PIPES 2",
+    "PIPES 3",
+    "PIPES 4",
+    "CALIOPE",
+    "ACCORDION",
+    "SITAR",
+    "GUITAR 3",
+    "GUITAR 4",
+    "GUITAR 5",
+    "GUITAR 6",
+    "LUTE",
+    "BANJO",
+    "HARP 1",
+    "HARP 2",
+    "BASS 3",
+    "BASS 4",
+    "SYN-LEAD 2",
+    "SYN-LEAD 3",
+    "SYN-LEAD 4",
+    "SYN-LEAD 5",
+    "SYN-CLAV 1",
+    "SYN-CLAV 2",
+    "SYN-CLAV 3",
+    "SYN-PIANO",
+    "SYNBRASS 1",
+    "SYNBRASS 2",
+    "SYNORGAN 1",
+    "SYNORGAN 2",
+    "SYN-VOX",
+    "SYN-ORCH",
+    "SYN-BASS 1",
+    "SYN-BASS 2",
+    "HARP-FLUTE",
+    "BELL-FLUTE",
+    "E.P-BRS BC",
+    "T.BL-EXPA",
+    "CHIME-STRG",
+    "B.DRM-SNAR",
+    "SHIMMER",
+    "EVOLUTION",
+    "WATER GDN",
+    "WASP STING",
+    "LASER GUN",
+    "DESCENT",
+    "OCTAVE WAR",
+    "GRAND PRIX",
+    "ST.HELENS",
+    "EXPLOSION",
+    "DRUMS",
+    "SNARE DR.1",
+    "SNARE DR.2",
+    "TOM-TOM 1",
+    "TOM-TOM 2",
+    "BASS DR. 1",
+    "BASS DR. 2",
+    "SIZ. CYMB.",
+    "HI-HAT",
+    "E. DRUMS 1",
+    "E. DRUMS 2",
+    "E. DRUMS 3",
+    "E. DRUMS 4",
+    "E. DRUMS 5",
+    "TIMBALES 1",
+    "TIMBALES 2",
+    "CONGAS 1",
+    "CONGAS 2",
+    "JPN.DRUM 1",
+    "JPN.DRUM 2",
+    "JPN.DRUM 3",
+    "JPN.DRUM 4",
+    "QUIEKER",
+    "TIMPANI 1",
+    "TIMPANI 2",
+    "HAND CLAP1",
+    "HAND CLAP2",
+    "TAP SLAP",
+    "W. BLOCK 1",
+    "W. BLOCK 2",
+    "CASTANET 1",
+    "CASTANET 2"
+  ]
+}

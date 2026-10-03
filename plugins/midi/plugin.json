@@ -1,0 +1,126 @@
+{
+  "name": "midi",
+  "short_display_name": "MIDI",
+  "version": "1.0.0",
+  "description": "Play music together over MIDI. She plays a hardware synth or the computer's own, loops a beat, listens to the keys, shapes the sound, saves songs as MP3 and MIDI, and a plain MIDI keyboard gets a voice from the computer. Synths she knows by name (the M-VAVE FM-1) get their own voices and effects; any other plays with General MIDI. Pages such as the Game Room's piano board can hear the keys live. Linux only (alsa-utils).",
+  "author": "sapphire",
+  "icon": "🎹",
+  "priority": 150,
+  "default_enabled": true,
+  "settingsUI": "auto",
+  "capabilities": {
+    "tools": [
+      "tools/midi_tools.py"
+    ],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "song/{name}",
+        "handler": "routes/songs.py:serve"
+      },
+      {
+        "method": "GET",
+        "path": "tap",
+        "handler": "routes/tap.py:stream"
+      },
+      {
+        "method": "GET",
+        "path": "tap/clock",
+        "handler": "routes/tap.py:clock"
+      }
+    ],
+    "settings": [
+      {
+        "key": "synth_names",
+        "type": "string",
+        "label": "Synth port names",
+        "default": "",
+        "placeholder": "empty = every synth she knows (FM-1_BLE, FM-1)",
+        "help": "MIDI port names of hardware synths to look for, in order; the first one that is connected wins. Leave it empty to look for every synth she has a profile for. No Bluetooth address is needed. `aconnect -l` lists the names."
+      },
+      {
+        "key": "keyboard_names",
+        "type": "string",
+        "label": "Other keyboards she hears",
+        "default": "",
+        "help": "MIDI port names of other keyboards she listens to, alongside the synth. Leave it empty and she hears every keyboard that is plugged in. A MIDI keyboard device's own list of what plays through it holds here too.",
+        "placeholder": "empty = every keyboard that is plugged in"
+      },
+      {
+        "key": "reply_voice",
+        "type": "string",
+        "label": "After listening, she answers",
+        "default": "speakers",
+        "options": [
+          {
+            "label": "Out loud, on this machine's speakers",
+            "value": "speakers"
+          },
+          {
+            "label": "In text only",
+            "value": "off"
+          }
+        ],
+        "help": "How her reply is delivered when a listen finishes and she hears what was played."
+      }
+    ],
+    "devices": [
+      {
+        "driver": "synth",
+        "label": "Hardware synth (FM-1 and others)",
+        "icon": "🎹",
+        "module": "synth_driver.py",
+        "capabilities": [
+          "notes",
+          "sound"
+        ],
+        "config_schema": []
+      },
+      {
+        "driver": "midi-keyboard",
+        "label": "MIDI keyboard (the computer makes its sound)",
+        "icon": "🎹",
+        "module": "keyboard_driver.py",
+        "capabilities": [
+          "sound",
+          "notes"
+        ],
+        "config_schema": [
+          {
+            "key": "sources",
+            "type": "found",
+            "label": "Plays through it",
+            "tab": "Status",
+            "all_label": "Every MIDI source",
+            "only_label": "Only these",
+            "help": "Keyboards and synths that are plugged in or linked over Bluetooth. The sound is on while one of them is here, and goes off by itself a little after the last one leaves."
+          },
+          {
+            "key": "instrument",
+            "type": "string",
+            "label": "Instrument",
+            "default": "piano",
+            "help": "A name like piano, organ or strings, or a General MIDI number from 1 to 128."
+          },
+          {
+            "key": "loudness",
+            "type": "number",
+            "label": "Loudness",
+            "default": 60,
+            "min": 0,
+            "max": 100,
+            "help": "How loud the instrument is, in percent. The computer's own volume comes on top."
+          },
+          {
+            "key": "soundfont",
+            "type": "string",
+            "label": "SoundFont file",
+            "placeholder": "empty = the one that is installed",
+            "help": "Optional. The path of an .sf2 or .sf3 file with other instrument sounds."
+          }
+        ],
+        "presence": true
+      }
+    ]
+  }
+}

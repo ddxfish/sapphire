@@ -58,14 +58,18 @@ SPEC = {
         {'key': 'look_nolink', 'type': 'string', 'label': 'No link to Sapphire', 'capability': 'light',
          'default': 'red pulse'},
         {'key': 'lights_from', 'type': 'string', 'label': 'Lights on from', 'capability': 'light',
-         'placeholder': '07:00', 'help': 'Outside these hours the ring rests dark. Both empty = always on. '
-                                          'A state still shows, and so does what she sets.'},
+         'default': '08:00', 'placeholder': '08:00',
+         'help': 'Outside these hours the ring shows the look below instead of resting. '
+                 'Both empty = always on. Listening, thinking and speaking show at any hour, '
+                 'and so does what she sets.'},
         {'key': 'lights_until', 'type': 'string', 'label': 'until', 'capability': 'light',
-         'placeholder': '23:00'},
+         'default': '00:00', 'placeholder': '00:00'},
+        {'key': 'look_night', 'type': 'string', 'label': 'Outside those hours', 'capability': 'light',
+         'default': 'off', 'help': 'off = dark. Or something soft: sapphire pulse ceiling=0.05'},
     ],
 }
 
-LOOKS = ('resting', 'listening', 'thinking', 'speaking', 'nolink')
+LOOKS = ('resting', 'listening', 'thinking', 'speaking', 'nolink', 'night')
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 
 QUICK = 8                     # seconds for a plain request
@@ -126,8 +130,8 @@ def validate(config):
 
 
 def apply(device, config, secrets):
-    """After a save: the looks and the hours go to the board. A Pi body has
-    no such door and keeps its own; that is not a fault."""
+    """After a save: the looks and the hours go to the board. An early Pi
+    body (before 0.7.0) has no such door and keeps its own; that is not a fault."""
     body = {name: parse_light(config.get(f'look_{name}')) for name in LOOKS}
     body = {k: v for k, v in body.items() if v}
     body['from'] = str(config.get('lights_from') or '')

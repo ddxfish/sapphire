@@ -111,7 +111,7 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
                                           'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
                                           'look_speaking': 'green spin', 'look_nolink': 'red pulse',
-                                          'lights_from': '', 'lights_until': ''}}
+                                          'lights_from': '08:00', 'lights_until': '00:00', 'look_night': 'off'}}
     assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power']
     view = engine.public(row)
     assert view['parts'][0]['values']['token'] == 'set' and view['parts'][0]['values']['voice_key'] == 'set'
