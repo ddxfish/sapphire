@@ -436,6 +436,18 @@
     "short": "Minutes of vault inactivity before auto-lock",
     "long": "The prompt vault locks itself after this many minutes without vault activity (chat turns wearing a vault prompt, vault edits, unlocks). Listing prompt names does not count as activity. Changes apply to a running timer immediately. Minimum 1 minute; default 30."
   },
+  "INSTANCE_NAME": {
+    "short": "This Sapphire's name on your network",
+    "long": "Shown to another Sapphire that adds this one as a device, and in the open health answer at /api/health. Empty = no name is given out. Example: prime, desk, laptop."
+  },
+  "MCP_SERVER_ENABLED": {
+    "short": "Serve her tools over MCP at /mcp",
+    "long": "The Model Context Protocol door. A client with one of her API tokens (Settings > System > API Keys) can ask her something in a named chat, tell her something, and call the tools ticked below. Another Sapphire added as a device uses this; so can Claude Code or Claude Desktop. Off = /mcp answers 404."
+  },
+  "MCP_SERVER_TOOLS": {
+    "short": "Tools shared over MCP",
+    "long": "The tools a client may call, besides ask and tell. Tools of plugins that keep their own memory scopes are not offered yet."
+  },
   "METRICS_ENABLED": {
     "short": "Record local token-usage metrics",
     "long": "Records per-LLM-call token usage in a local SQLite database (user/metrics/) for the dashboard's usage charts. Purely on-device either way — this only controls whether the local table is written at all."

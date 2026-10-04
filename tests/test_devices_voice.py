@@ -106,7 +106,7 @@ def _cues():
 # --- the satellite is a core driver, always there ------------------------------
 
 def test_the_satellite_driver_is_present_without_any_plugin(home):
-    assert [d['driver'] for d in engine.drivers()] == ['satellite', 'computer']      # both ship inside core
+    assert [d['driver'] for d in engine.drivers()] == ['sapphire', 'satellite', 'computer']   # all three ship inside core, by label
     row = engine.get('pi2')
     assert row['parts'][0] == {'driver': 'satellite', 'plugin': 'core',
                                'config': {'url': 'http://192.168.0.221:8090', 'camera': True, 'chat': '',

@@ -51,9 +51,18 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/health` | Health check |
+| GET | `/api/health` | Health check, open. `name` when the instance has one, `mcp: true` when the MCP door is on |
 | GET | `/api/status` | Unified UI state (prompt, context, spice, TTS/STT readiness) |
 | GET | `/api/init` | Mega initialization (all toolsets, prompts, personas, spices, settings) |
+
+### MCP (Model Context Protocol)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/mcp` | Streamable HTTP MCP server, tools only, JSON answers, no session. Off until Settings > MCP Server turns it on (404). Bearer API token |
+| GET | `/api/mcp/tools` | Every tool with its state for the settings page: `{enabled, tools: [{name, description, module, plugin, scoped, exposed, own}]}` |
+
+The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notifications get 202. It always offers two tools of its own: `ask` (`text`, `chat`, `from`: a turn in that chat, made if missing, her answer as the result) and `tell` (the same without waiting). The rest are the tools ticked in settings; tools of plugins that declare scopes are not offered yet. Clients: another Sapphire added as a device, or `claude mcp add --transport http sapphire https://host:8073/mcp --header "Authorization: Bearer <token>"`.
 
 ### Chat
 

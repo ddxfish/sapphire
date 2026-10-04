@@ -1,3 +1,7 @@
+# 2.13.3 - MCP Server
+- MCP server allows other apps to use Sapphire with key
+- Added "Other Sapphire" to list of devices we can add
+- MCP feature: talk
 # 2.13.2 - Device Manager
 - Settings > Device Manager can add devices
 - Devices register capabilities

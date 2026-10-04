@@ -27,8 +27,17 @@ router = APIRouter()
 
 @router.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """Health check endpoint. Open: no login. Says this instance's name when
+    the user gave it one (Settings > Dashboard > INSTANCE_NAME) and whether
+    the MCP door is on, so another Sapphire can tell who answered."""
+    import config
+    out = {"status": "ok"}
+    name = str(getattr(config, 'INSTANCE_NAME', '') or '').strip()[:40]
+    if name:
+        out["name"] = name
+    if getattr(config, 'MCP_SERVER_ENABLED', False):
+        out["mcp"] = True
+    return out
 
 
 @router.get("/api/history")

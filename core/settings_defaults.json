@@ -10,7 +10,8 @@
     "PERSONA_FAVORITES": [],
     "USER_TIMEZONE": "UTC",
     "DASHBOARD_DISPLAY_NAME": "Sapphire",
-    "DASHBOARD_FONTS_AUTOFETCH": true
+    "DASHBOARD_FONTS_AUTOFETCH": true,
+    "INSTANCE_NAME": ""
   },
   
   "network": {
@@ -29,6 +30,12 @@
     "METRICS_ENABLED": true,
     "VAULT_IDLE_MINUTES": 30,
     "PRIVATE_ALLOW_UNFLAGGED_TOOLS": false
+  },
+
+  "mcp_server": {
+    "_comment": "POST /mcp: her tools for an MCP client with an API token (another Sapphire, Claude Code). ask and tell are always offered; MCP_SERVER_TOOLS names the rest.",
+    "MCP_SERVER_ENABLED": false,
+    "MCP_SERVER_TOOLS": []
   },
   
   "backups": {

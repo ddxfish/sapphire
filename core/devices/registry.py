@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 MAX_FIELDS = 40
 MAX_CAPABILITIES = 16
 CORE = 'core'                     # the owner name of a driver that ships inside core
-CORE_DRIVERS = ('satellite', 'computer')     # their ids (core/devices/drivers/<id>.py): no plugin may claim one
+CORE_DRIVERS = ('satellite', 'computer', 'sapphire')     # their ids (core/devices/drivers/<id>.py): no plugin may claim one
 _ID_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,32}$')
 
 _lock = threading.Lock()

@@ -22,6 +22,7 @@ import imagesTab from './settings-tabs/images.js';
 
 import backupTab from './settings-tabs/backup.js';
 import devicesTab from './settings-tabs/devices.js';
+import mcpTab from './settings-tabs/mcp.js';
 import systemTab from './settings-tabs/system.js';
 import helpTab from './settings-tabs/help-tab.js';
 import videosTab from './settings-tabs/videos-tab.js';
@@ -31,7 +32,7 @@ import { getRegisteredTabs } from '../shared/plugin-registry.js';
 import { snapScroll } from '../shared/dom-guard.js';
 import { commitInto, mergeInto } from '../shared/settings-commit.js';
 
-const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, devicesTab, systemTab, helpTab, videosTab];
+const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, devicesTab, mcpTab, systemTab, helpTab, videosTab];
 
 let container = null;
 let activeTab = 'dashboard';
@@ -203,7 +204,7 @@ function syncDynamicTabs() {
     dynamicTabs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
-const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', 'embedding', 'devices']);
+const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', 'embedding', 'devices', 'mcp']);
 
 function getAllTabs() {
     // Insert dynamic tabs between plugins and system

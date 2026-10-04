@@ -362,6 +362,28 @@ heard again:
 Small boards with a light, a screen, or a button. The gadget plugin ships the
 program for the board and the setup steps. See its README.
 
+## Another Sapphire
+
+A second Sapphire on your network, as a device. She is reached through her
+MCP door, so first, over there: **Settings > MCP Server**, switch it on, and
+make a token under **System > API Keys**. Then here: Add Device > **Another
+Sapphire**: her address (`https://192.168.0.201:8073`), that token, and the
+name of the chat on her side where this Sapphire's words should land. The
+chat is made over there the first time it is used.
+
+- **Chat**: `ask` lands in that chat with a line saying who is asking, and
+  her answer comes back as the result. `tell` does not wait. She is told to
+  answer in her message; a question that came in this way cannot itself ask
+  a Sapphire back, so two of them never go round in circles.
+- **Her tools**: whatever her user ticked under MCP Server, by name. Her
+  words fill the tool's arguments in order, the last one taking the rest:
+  `device_action` with `pi2 light set purple pulse`. A wrong guess answers
+  with the list, as it does at home.
+
+Status shows her name when she gave herself one (**MCP Server > This
+Sapphire's name**), how many tools she shares, and says so when her door is
+off or the token is refused.
+
 ## Hosted Sapphire
 
 Devices are switched off on a hosted Sapphire. It has no home network to reach.
