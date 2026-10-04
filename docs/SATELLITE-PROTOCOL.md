@@ -55,6 +55,7 @@ A board answers only the addresses of what it has.
 | Has | Request | What it does |
 |---|---|---|
 | `speaker` | `POST /audio/speak` | Plays the sound. Answers when it has taken the sound, within 150 s - a board that plays as it goes may still be sounding its last second: `{"ok": true}`, or `{"ok": true, "stopped": true}` when the board's own button cut it short |
+| `speaker` | `POST /audio/stop` | Cuts what is playing and refuses the rest of that reply for a few seconds: `{"stopped": true}`, or `{"stopped": false}` when nothing was playing. A board without it answers 404; Sapphire then only stops sending |
 | `speaker` | `GET /sounds` | Its stored sounds: `{"sounds": [{"name": "ping"}]}` |
 | `speaker` | `POST /audio/effect?name=ping` | Plays one stored sound |
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
@@ -110,6 +111,27 @@ firmware keep this order, and both state `plays`.
 Sapphire's address is HTTPS with her own certificate, for example
 `https://192.168.0.69:8073`.
 
+### Its wake word fired
+
+Two boards in one room hear the same wake word, and so does Sapphire's own
+microphone. Before it has anything to send, a board may ask for the wake:
+
+```
+POST /api/devices/den/wake
+Authorization: Bearer <voice key>
+```
+
+| Answer | Meaning |
+|---|---|
+| `{"ok": true, "yours": true}` | Record and send as usual |
+| `{"ok": true, "yours": false, "taken_by": "pi2"}` | Another listener heard it first. Stop recording, send nothing, show the resting light |
+
+Ask alongside the recording, never before it: the round trip must not delay
+the start of listening. A board that does not ask is still answered once
+(a repeat of what another listener heard is dropped at `/voice`). If
+Sapphire's own microphone takes the wake a moment after a board was told
+`yours`, the board's light stream carries `standdown` (below).
+
 ### What it heard
 
 After its wake word, the board records until the speaker stops, then sends it:
@@ -128,6 +150,7 @@ A form with the file field `audio` works too.
 |---|---|
 | `{"ok": true, "heard": "what time is it", "accepted": true}` | A turn has started. Her answer arrives later at `/audio/speak` |
 | `{"ok": true, "heard": "", "accepted": false}` | No speech was in it |
+| `{"ok": true, "heard": "", "accepted": false, "taken_by": "pi2"}` | Another board, or Sapphire's own microphone, heard the same words first and is answering. Show the resting light; nothing is coming |
 | `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
 | 401 | Wrong key, or no such device |
 | 413 | Larger than 20 MB |
@@ -150,6 +173,7 @@ It answers server-sent events. Each is one line of JSON after `data: `.
 |---|---|
 | `connected` | The stream is open. `now` is the time in seconds since 1970 and `tz` the zone as a POSIX string (`EST5EDT,M3.2.0,M11.1.0`): a board keeps local time from them |
 | `thinking` | She is working on what this board heard |
+| `standdown` | Sapphire's own microphone took the wake this board is recording: end the recording, send nothing, resting light |
 | `tool` | She is using a tool. `tool_name` names it |
 | `idle` | The turn is over |
 | `error` | This board got no answer |

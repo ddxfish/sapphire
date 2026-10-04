@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import config
 from core.audio import convert_to_mono, resample_audio
 from core.event_bus import publish, Events
+from core.devices import wake as room     # one listener answers a wake word: this app first
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,13 @@ class WakeWordDetector:
         start_time.value = time.time()
         logger.info("Wake word detected! Starting to listen...")
 
+        # The room is this app's now: a satellite that heard the same words
+        # stands down (core/devices/wake.py). Never allowed to break the wake.
+        try:
+            room.claim(room.MAIN)
+        except Exception as e:
+            logger.debug(f"wake claim failed: {e}")
+
         # Stop wakeword audio stream to avoid conflict with STT recorder
         # Both use the same audio device - running simultaneously causes heap corruption
         if self.audio_recorder:
@@ -320,6 +328,10 @@ class WakeWordDetector:
                 text = stt_event.input
 
             logger.info(f"Transcribed: user text hidden")
+            try:
+                room.heard(room.MAIN, text)
+            except Exception:
+                pass
             # voice_turn: stream the reply into any open web page live
             # (VOICE_TURN events) + make the Stop button work on this turn.
             self.system.process_llm_query(text, voice_turn=True)
@@ -328,6 +340,10 @@ class WakeWordDetector:
             logger.error(f"Error during recording: {e}")
             self.system.speak_error('recording')
         finally:
+            try:
+                room.release(room.MAIN)
+            except Exception:
+                pass
             logger.info(f"Total wake word handling took: {(time.time() - start_time.value)*1000:.1f}ms")
 
             # Wait for TTS to finish before restarting wakeword audio —

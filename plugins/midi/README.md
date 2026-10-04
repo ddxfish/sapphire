@@ -179,6 +179,14 @@ one is, it keeps first place.
 The synth opens no network door. It is steered through its own command line,
 which only this plugin holds.
 
+**It is gentle on the audio system.** fluidsynth is started at the graph's
+rate (48 kHz) with a 256-frame cycle (5 ms), chorus off, and a gain that
+cannot clip (0.6 at loudness 100; fluidsynth's own default is 0.2 and it has
+no limiter). fluidsynth's defaults — a 64-frame cycle at 44.1 kHz — make a
+PipeWire desktop run *every* app at a 1.3 ms quantum while the synth is up,
+and anything heavy on the graph (EasyEffects) crackles, keys pressed or not.
+Loudness is a quiet slider by design: turn the room up, not the synth.
+
 **The volume slider on the keyboard.** It sends MIDI controller 7, and a pedal
 sends controller 11. Both reach the computer's synth scaled to 48-127 in place
 of 0-127 (`softsynth.ROUTER`), so they still work and can never reach silence.

@@ -330,6 +330,7 @@ def describe(device, config):
         'speaker': {'label': 'Speaker', 'help': 'speak in that room', 'actions': {
             'say': {'help': 'say it out loud there, in your voice', 'example': 'Dinner is ready',
                     'values': '<text>'},
+            'stop': {'help': 'stop what you are saying there', 'example': '', 'values': '(no value)'},
             'sound': {'help': 'play a stored sound. No value lists them', 'example': '',
                       'values': '[name]'},
             'volume': {'help': 'set it, or step it. No value reads it', 'example': '80',
@@ -448,6 +449,24 @@ def _say(text, device, config, secrets):
     return f'Said there: "{short}"', True
 
 
+def _stop(device, config, secrets):
+    """Stop her voice there: core drops the sentences still to be sent
+    (voice.halt), the satellite cuts what is playing (POST /audio/stop). A
+    program without that door is said so; its current sentence ends itself."""
+    from core.devices import voice
+    more = voice.halt(device['id'])
+    try:
+        out = _json(_call('POST', '/audio/stop', config, secrets))
+    except Missing:
+        return ("Stopped: nothing more will be said there. The sentence playing now ends by itself; "
+                "this satellite's program has no stop door yet."), True
+    except Problem as e:
+        return (f"Stopped what was still to come, but the satellite could not be told: {e}"), more
+    if out.get('stopped'):
+        return "Stopped.", True
+    return "Stopped what was still to come; nothing was playing there." if more else "Nothing was playing there.", True
+
+
 VOLUME_STEP = 10
 
 
@@ -493,6 +512,8 @@ def run(device, capability, action, value, config, secrets, call_tool):
         if capability == 'speaker':
             if action == 'say':
                 return _say(value, device, config, secrets)
+            if action == 'stop':
+                return _stop(device, config, secrets)
             if action == 'volume':
                 return _volume(value, config, secrets)
             if action == 'sound':

@@ -6,13 +6,19 @@
 #           thread, and the answer is spoken on the SAME device.
 #   say()   speak on a device, whole: her `say` action, and the reply lane
 #           of cadence.run_turn when a reply could not be spoken as it was
-#           made.
+#           made. say_all() is the same on every device that can speak at
+#           once (the composite device `all`): rendered once, played on each.
+#   halt()  core's half of a stop: her sentences still to be sent to a
+#           device are dropped. The driver's `stop` action calls it, then
+#           tells the device to cut what is playing.
 #   Speech  her reply spoken on a device sentence by sentence, as the turn
 #           makes it: the device hears the first sentence while she is still
 #           writing the third. The turn feeds it, a worker plays in order.
 #   cue()   what a device's light should show: thinking, tool, idle, error.
 #           Only the device whose turn it is gets them. A device holds one
 #           stream open to receive them (GET /api/devices/{id}/events).
+# One wake gets one answer: hear() asks wake.py whether the main app or
+# another satellite already holds the room, and drops a repeat of its words.
 #
 # Both privacy gates apply: a private chat never sends audio to a cloud
 # speech engine, and never sends its reply to a cloud voice engine.
@@ -33,6 +39,8 @@ import tempfile
 import threading
 import time
 
+from core.devices import wake
+
 logger = logging.getLogger(__name__)
 
 MAX_AUDIO = 20 * 1024 * 1024
@@ -43,14 +51,17 @@ RATES = (8000, 48000)      # the sample rates a device may ask for, lowest and h
 QUIET = 0.01               # below this a sample is silence, for the trim
 HEAD, TAIL = 0.08, 0.20    # seconds of silence left before and after her words
 CUE_FRESH = 300            # seconds a cue is still worth showing to a late stream
-CUES = ('thinking', 'tool', 'idle', 'error')
+CUES = ('thinking', 'tool', 'idle', 'error', 'standdown')   # standdown: another listener took this wake
 SPEECH_WAIT = 600          # seconds a turn waits for the last sentence to finish playing
+SAY_ALL_WAIT = 180         # seconds say_all waits for the slowest device
 
 _speaking_for = contextvars.ContextVar('device_voice_chat_settings', default=None)
 _lock = threading.Lock()
 _waiting = {}              # device id -> questions waiting or running
 _showing = {}              # device id -> the cue its light should show right now
 _listeners = {}            # device id -> [(loop, queue)] of open light streams
+_live = {}                 # device id -> [Speech] with sentences still to play
+wake.told = lambda device_id: cue(device_id, 'standdown')   # the main app took a satellite's claim
 _spoke = threading.local() # did the reply lane manage to speak, on this thread
 
 
@@ -330,6 +341,8 @@ class Speech:
             return
         self.queue.put((audio, str(event.get('content_type') or 'audio/ogg')))
         if self._thread is None:
+            with _lock:
+                _live.setdefault(self.device_id, []).append(self)
             self._thread = threading.Thread(target=self._play_all, daemon=True,
                                             name=f'device-speech-{self.device_id}')
             self._thread.start()
@@ -348,12 +361,20 @@ class Speech:
             return False
         return True
 
+    def _forget(self):
+        with _lock:
+            held = _live.get(self.device_id, [])
+            if self in held:
+                held.remove(self)
+            if not held:
+                _live.pop(self.device_id, None)
+
     def _play_all(self):
         mod, device, config, secrets = self.door
         while True:
             item = self.queue.get()
             if item is None:
-                return
+                return self._forget()
             if self.stopped:
                 continue                             # drain what is left, play nothing
             audio, kind = item
@@ -385,6 +406,90 @@ def say(device_id, text, chat_settings=None):
         _speaking_for.reset(token)
     _spoke.ok = bool(ok)
     return _engine().text_of(said), ok
+
+
+def halt(device_id):
+    """Her sentences still to be sent to this device are dropped. True when
+    a reply was being spoken there. What the device is playing this moment
+    is the driver's to cut."""
+    with _lock:
+        live = list(_live.get(device_id, ()))
+    for speech in live:
+        speech.stopped = True
+    return bool(live)
+
+
+def say_all(text):
+    """Say it on every device that can speak, at once: her voice rendered
+    once (gated like render), fitted and played on each device on its own
+    thread. A device whose button stops it stops the others. Returns (one
+    line per device, ok). say('all', ...) comes here through the engine."""
+    e = _engine()
+    text = str(text or '').strip()
+    if not text:
+        return "say: the value is what to say. Example: Dinner is ready", True
+    doors = e.speakers()
+    if not doors:
+        return "No device can speak right now.", False
+    audio, kind = render(text)
+    if audio is None:
+        return f"Nothing was said: {kind}", False
+    said, first = {}, []
+
+    def one(door):
+        mod, device, config, secrets = door
+        try:
+            out = mod.play(audio, kind, device, config, secrets)
+        except Exception as ex:
+            said[device['id']] = f"not said: {ex}"
+            return
+        if not (isinstance(out, dict) and out.get('stopped')):
+            said[device['id']] = 'said'
+            return
+        with _lock:
+            lead = not first
+            first.append(device['id'])
+        if lead:                                     # the one that was stopped first stops the rest
+            said[device['id']] = 'stopped there, so stopped everywhere'
+            stop_all(but=device['id'])
+        else:
+            said[device['id']] = 'stopped'
+    threads = [threading.Thread(target=one, args=(d,), daemon=True, name=f"say-all-{d[1]['id']}") for d in doors]
+    for t in threads:
+        t.start()
+    end = time.monotonic() + SAY_ALL_WAIT
+    for t in threads:
+        t.join(max(0.0, end - time.monotonic()))
+    lines = [f"{d[1]['id']}: {said.get(d[1]['id'], 'still playing')}" for d in doors]
+    ok = any(v in ('said', 'stopped', 'stopped there, so stopped everywhere') for v in said.values())
+    short = text if len(text) <= 80 else text[:77] + '...'
+    return f'Said on {len(doors)} device(s): "{short}"\n' + '\n'.join(lines), ok
+
+
+def stop_all(but=None):
+    """Stop her voice on every device whose speaker has a `stop` action,
+    each on its own thread. Returns (one line per device, ok)."""
+    e = _engine()
+    todo = []
+    for device_id, row in e.rows().items():
+        if device_id == but or not row.get('enabled', True):
+            continue
+        cap = next((c for c in e.describe(row) if c['capability'] == 'speaker'), None)
+        if cap and not cap['error'] and 'stop' in cap['actions']:
+            todo.append(device_id)
+    if not todo:
+        return "No device has a stop.", False
+    said = {}
+
+    def one(device_id):
+        told, ok = e.run(device_id, 'speaker', 'stop', owner=True)
+        said[device_id] = e.text_of(told) if ok else f"not stopped: {e.text_of(told)}"
+    threads = [threading.Thread(target=one, args=(d,), daemon=True, name=f'stop-all-{d}') for d in todo]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    return '\n'.join(f"{d}: {said.get(d, 'no answer yet')}" for d in todo), any(not v.startswith('not stopped') for v in said.values())
 
 
 def origin_line(row):
@@ -465,7 +570,32 @@ def _turn(row, chat, heard):
         if speech is not None:
             speech.finish()              # the worker goes home whatever happened
         _free_slot(device_id)
+        wake.release(device_id)
         cue(device_id, 'error' if failed else 'idle')
+
+
+def woke(device_id):
+    """A device's wake word fired and it asks for the room before it has
+    anything to send (POST /api/devices/{id}/wake). {'ok', 'yours'} and, when
+    not, 'taken_by'. A device that is refused records nothing and shows its
+    resting light. Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True) or not _voice_part(row):
+            return {'ok': False, 'error': f"There is no device named '{device_id}' with a microphone, or it is turned off."}
+        yours, taken_by = wake.claim(row['id'])
+        if not yours:
+            logger.info(f"[DEVICES] {row['id']} woke; the room is {taken_by}'s")
+            return {'ok': True, 'yours': False, 'taken_by': taken_by}
+        logger.info(f"[DEVICES] {row['id']} woke and holds the room")
+        return {'ok': True, 'yours': True}
+    except Exception as e:
+        logger.error(f"[DEVICES] woke({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
 def hear(device_id, audio, suffix='.wav'):
@@ -498,23 +628,44 @@ def hear(device_id, audio, suffix='.wav'):
         if gate:
             return {'ok': False, 'error': gate, 'chat': chat}
 
-        heard, problem = transcribe(audio, suffix)
-        if problem:
-            return {'ok': False, 'error': problem, 'chat': chat}
-        if not heard:
-            logger.info(f"[DEVICES] {row['id']}: audio arrived, no speech in it")
-            return {'ok': True, 'heard': '', 'accepted': False, 'chat': chat}
-        logger.info(f"[DEVICES] {row['id']} heard {len(heard)} chars for chat '{chat}'")
-
-        if not _take_slot(row['id']):
-            return {'ok': False, 'busy': True, 'heard': heard, 'chat': chat,
-                    'error': f"'{row['id']}' already has {MAX_WAITING} questions waiting."}
+        # One wake, one answer: the main app or another satellite may have
+        # heard the same words (core/devices/wake.py). With nobody ahead,
+        # this device holds the room from here; behind someone, its words
+        # are compared with theirs and a repeat is dropped unanswered.
+        others = wake.shadowed(row['id'])
+        mine = not others
+        if mine and not wake.holds(row['id']):      # a device that claimed at its wake holds it already
+            wake.claim(row['id'])
         try:
-            _spawn(_turn, row, chat, heard)
-        except Exception:
-            _free_slot(row['id'])
-            raise
-        return {'ok': True, 'heard': heard, 'accepted': True, 'chat': chat}
+            heard, problem = transcribe(audio, suffix)
+            if problem:
+                return {'ok': False, 'error': problem, 'chat': chat}
+            if not heard:
+                logger.info(f"[DEVICES] {row['id']}: audio arrived, no speech in it")
+                return {'ok': True, 'heard': '', 'accepted': False, 'chat': chat}
+            if mine:
+                wake.heard(row['id'], heard)
+            else:
+                twin = next((o for o in others if wake.same(wake.words_of(o), heard)), None)
+                if twin:
+                    logger.info(f"[DEVICES] {row['id']} heard what {twin['who']} heard "
+                                f"({len(heard)} chars), not answered twice")
+                    return {'ok': True, 'heard': '', 'accepted': False, 'chat': chat, 'taken_by': twin['who']}
+            logger.info(f"[DEVICES] {row['id']} heard {len(heard)} chars for chat '{chat}'")
+
+            if not _take_slot(row['id']):
+                return {'ok': False, 'busy': True, 'heard': heard, 'chat': chat,
+                        'error': f"'{row['id']}' already has {MAX_WAITING} questions waiting."}
+            try:
+                _spawn(_turn, row, chat, heard)
+            except Exception:
+                _free_slot(row['id'])
+                raise
+            mine = False                     # the turn releases the room when it ends
+            return {'ok': True, 'heard': heard, 'accepted': True, 'chat': chat}
+        finally:
+            if mine:
+                wake.release(row['id'])
     except Exception as e:
         logger.error(f"[DEVICES] hear({device_id}) failed: {e}", exc_info=True)
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}

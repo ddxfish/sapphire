@@ -50,7 +50,8 @@ MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
 PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
 LOCKABLE = ('power', 'camera', 'screen', 'mic')    # these carry a "Sapphire may use this" switch
 MAX_FOUND = 64           # things one driver may report as found
-RESERVED = ('found',)    # names a device may not have: the routes use them
+ALL = 'all'              # the composite device: her voice on every device that can speak
+RESERVED = ('found', ALL)   # names a device may not have: the routes and `all` use them
 CLEAR = '__CLEAR__'
 KEPT = 'set'            # what public() shows for a stored secret; sent back, it means "as it is"
 PAGE = 'Settings > Devices'
@@ -780,9 +781,12 @@ def fleet():
     """[{'id', 'location', 'online', 'caps'}] for every enabled device: what the
     tool descriptions say, so she can act without a list call."""
     found = statuses()
-    return [{'id': k, 'location': _place(row.get('location')), 'online': found[k]['online'],
-             'caps': _caps(row)}
-            for k, row in rows().items() if row.get('enabled', True)]
+    out = [{'id': k, 'location': _place(row.get('location')), 'online': found[k]['online'],
+            'caps': _caps(row)}
+           for k, row in rows().items() if row.get('enabled', True)]
+    if len(speakers(online=False)) >= 2:
+        out.append({'id': ALL, 'location': '', 'online': True, 'caps': ['speaker'], 'every': True})
+    return out
 
 
 def list_text():
@@ -796,6 +800,8 @@ def list_text():
         state = 'online' if found[device_id]['online'] else 'offline'
         where = (_place(row.get('location')) or '-',) if placed else ()
         lines.append((device_id, state) + where + (', '.join(_caps(row)) or '-',))
+    if len(speakers(online=False)) >= 2:
+        lines.append((ALL, 'online') + (('-',) if placed else ()) + ('speaker: say on every device that can, and stop',))
     first = next(iter(table))
     return f"Devices ({len(table)}):\n{_columns_text(lines)}\nNext: {_call(first)}", True
 
@@ -805,6 +811,9 @@ def _usable(device_id):
     row = rows().get(_slug(device_id))
     if row and not row.get('enabled', True):
         raise DeviceError(f"'{row['id']}' is turned off in {PAGE}.")
+    if _slug(device_id) == ALL:
+        raise DeviceError(f"'{ALL}' is not one device: it is her voice on every device that can speak. "
+                          f"{_call(ALL, 'speaker', 'say', '<text>')}")
     if not row:
         names = [k for k, v in rows().items() if v.get('enabled', True)]
         known = f" Devices: {', '.join(names)}." if names else f" No devices exist yet. The user adds them in {PAGE}."
@@ -931,6 +940,38 @@ def speaker(device_id):
     return None
 
 
+def speakers(online=True):
+    """The doors of every enabled device whose speaker takes her sound
+    itself (see speaker()): the devices `all` speaks on. With online=True,
+    those the health keeper has asked and believes offline are left out; one
+    never asked yet is tried."""
+    found = statuses() if online else {}
+    out = []
+    for device_id in rows():
+        view = found.get(device_id) or {}
+        if online and view.get('ts') and not view.get('online'):
+            continue
+        door = speaker(device_id)
+        if door:
+            out.append(door)
+    return out
+
+
+def _run_all(capability, action, value):
+    """`all`: say it on every device that can speak, or stop them."""
+    from core.devices import voice
+    cap, act = _slug(capability), _slug(action)
+    names = ', '.join(d[1]['id'] for d in speakers(online=False)) or 'none yet'
+    screen = (f"'{ALL}' speaks on every device that can ({names}). "
+              f"{_call(ALL, 'speaker', 'say', '<text>')} says it everywhere at once; "
+              f"{_call(ALL, 'speaker', 'stop')} stops it. For anything else, name one device.")
+    if not cap or not act:
+        return screen, True
+    if cap != 'speaker' or act not in ('say', 'stop'):
+        return screen, False
+    return voice.say_all(value) if act == 'say' else voice.stop_all()
+
+
 def text_of(result):
     """The words of what run() answered, for a caller that shows no pictures."""
     return str(result.get('text') or '') if isinstance(result, dict) else str(result)
@@ -945,6 +986,8 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
     that is locked for her still runs."""
     if not _slug(device_id):
         return list_text()
+    if _slug(device_id) == ALL:
+        return _run_all(capability, action, value)
     try:
         row = _usable(device_id)
     except DeviceError as e:

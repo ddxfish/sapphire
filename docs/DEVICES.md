@@ -226,6 +226,7 @@ What Sapphire can do with it:
 
 ```
 device_action("kitchen","speaker","say","Dinner is ready")
+device_action("kitchen","speaker","stop")
 device_action("kitchen","speaker","volume","80")
 device_action("kitchen","speaker","sound","ping")
 device_action("kitchen","mic","listen","10")
@@ -235,6 +236,39 @@ device_action("kitchen","wake","off")
 device_action("kitchen","camera","look")
 device_action("kitchen","power","restart")
 ```
+
+**Stop.** `stop` ends what she is saying there: nothing more of that reply
+is sent, and the satellite cuts the sentence playing (Pi body 0.7.3 and the
+ESP32 program have the door; an older body's sentence ends by itself). The
+Speaker tab of the device window has a **stop** row with a Try button. On a
+Pi body, one tap of the speaker's play/pause button while she is talking
+does the same.
+
+**Two satellites in one room.** When two of them hear your wake word, or a
+satellite and this computer's own microphone do, Sapphire answers once. The
+main app's microphone wins over any satellite. A satellite asks for the wake
+the moment it hears it; the one that asks first records and answers, the
+other's light goes back to resting within a second and it sends nothing. A
+board that cannot ask (an older body) is still answered once: its recording
+is transcribed and dropped if it says what the other heard, so a second
+person asking something else at the other box is still answered. Nothing to
+set up. A Pi body does not listen for its wake word while its own speaker
+plays, so her saying "hey Sapphire" cannot wake it (the ESP32 cancels its
+own speaker and needs no such rule).
+
+**All of them at once.** `all` is every device that can speak, as one name:
+
+```
+device_action("all","speaker","say","Dinner is ready")
+device_action("all","speaker","stop")
+```
+
+Her voice is rendered once and played on each at the same moment; a device
+that is offline is left out and said so. `all` appears once two devices can
+speak, and only speaks: volume and everything else stay per device. The
+devices do not play in lockstep, so two in the same room sound like a doubled
+voice; across rooms it is fine. A question asked at one satellite is still
+answered on that satellite alone.
 
 **The camera.** `look` takes one picture and she sees it. The ring spins red and
 the satellite pings for 2 seconds first, so nobody in the room is caught

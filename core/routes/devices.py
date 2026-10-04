@@ -258,6 +258,16 @@ async def _heard(request, limit):
     return await audio.read(), suffix
 
 
+@router.post("/api/devices/{device_id}/wake")
+async def devices_wake(device_id: str, request: Request):
+    """A satellite's wake word fired: may it take this one? Answered at
+    once, before it has recorded anything. {'yours': false} means another
+    satellite, or Sapphire's own microphone, heard the same wake first."""
+    await _device_key(device_id, request, 'wake')
+    from core.devices import voice
+    return await asyncio.to_thread(voice.woke, device_id)
+
+
 @router.post("/api/devices/{device_id}/voice")
 async def devices_voice(device_id: str, request: Request):
     """A satellite heard its wake word and sends what was said. The answer

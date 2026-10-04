@@ -31,7 +31,12 @@ FONTS = ('/usr/share/sounds/sf2/default-GM.sf2', '/usr/share/sounds/sf2/FluidR3_
          '/usr/share/soundfonts/FluidR3_GM.sf2', '/usr/share/sounds/sf2/TimGM6mb.sf2')
 AUDIO = ('pipewire', 'pulseaudio', 'alsa')
 READY_WAIT = 6             # seconds for its port to appear
-LOUDEST = 1.5              # fluidsynth gain at 100 percent
+LOUDEST = 0.6              # fluidsynth gain at 100 percent. fluidsynth has no limiter and
+                           # its own default is 0.2: FluidR3's piano at 0.9 clips on a chord
+PERIOD = 256               # frames per cycle it asks the audio system for. Its default, 64,
+                           # drags a PipeWire graph down to a 1.3 ms quantum for EVERY app
+                           # (EasyEffects then crackles, keys pressed or not); 256 = 5 ms
+RATE = 48000               # what a desktop graph runs at; 44100 meant resampling every buffer
 GRACE = 20                 # seconds it stays on after the last source left
 PLUMBING = ('System', 'Midi Through', NAME)             # never a source
 OURS = ('aplaymidi', 'aseqdump', 'aseqsend', 'aconnect')   # her own playing and listening
@@ -321,6 +326,8 @@ def start(instrument=None, loudness=None, soundfont=''):
         for audio in AUDIO:
             proc = subprocess.Popen(
                 ['fluidsynth', '-a', audio, '-m', 'alsa_seq', '-q', '-g', f"{_gain(state['loudness']):.2f}",
+                 '-r', str(RATE), '-o', f'audio.period-size={PERIOD}', '-o', 'audio.periods=2',
+                 '-o', 'synth.chorus.active=0',             # chorus smears a piano; reverb stays
                  '-o', 'midi.autoconnect=0', '-p', NAME, sf],
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
             end = time.monotonic() + READY_WAIT

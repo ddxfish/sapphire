@@ -208,7 +208,7 @@ def test_a_keyboard_that_is_plugged_in_simply_plays(rig):
     proc = rig.box.procs[0]
     assert rig.synth.running() and rig.box.links == {'20:0'}
     assert proc.told[-1] == 'prog 0 19'                               # as the user set it: organ
-    assert proc.cmd[proc.cmd.index('-g') + 1] == '0.75'
+    assert proc.cmd[proc.cmd.index('-g') + 1] == '0.30'
     tend(rig, A)
     tend(rig, A)
     assert len(rig.box.procs) == 1 and proc.told[-1] == 'prog 0 19'   # told again: nothing to do
@@ -425,7 +425,11 @@ def test_the_sound_comes_on_as_the_user_set_it(rig):
     assert ok and text == 'The sound is on: organ, loudness 50%. AKM320 plays through it.'
     proc = rig.box.procs[0]
     assert proc.cmd[:5] == ['fluidsynth', '-a', 'pipewire', '-m', 'alsa_seq']
-    assert proc.cmd[proc.cmd.index('-g') + 1] == '0.75'                 # 50% of the loudest
+    assert proc.cmd[proc.cmd.index('-g') + 1] == '0.30'                 # 50% of the loudest
+    # gentle on the audio graph: a sane cycle at the graph's rate, no chorus
+    assert proc.cmd[proc.cmd.index('-r') + 1] == '48000'
+    assert 'audio.period-size=256' in proc.cmd and 'audio.periods=2' in proc.cmd
+    assert 'synth.chorus.active=0' in proc.cmd
     assert proc.cmd[-1] == rig.synth.FONTS[0]
     assert 'midi.autoconnect=0' in proc.cmd                             # it links nothing by itself
     assert '-s' not in proc.cmd and '--server' not in proc.cmd          # no network door is opened
@@ -459,10 +463,10 @@ def test_instrument_and_loudness(rig):
     text, ok = run(rig, 'sound', 'instrument', 'kazoo')
     assert not ok and text.startswith("No instrument called 'kazoo'.")
     assert run(rig, 'sound', 'loudness', '80%') == ('Loudness 80%.', True)
-    assert rig.box.procs[0].told[-1] == 'gain 1.20'
+    assert rig.box.procs[0].told[-1] == 'gain 0.48'
     for wrong in ('loud', '140', '-1'):
         assert run(rig, 'sound', 'loudness', wrong)[1] is False
-    assert rig.box.procs[0].told[-1] == 'gain 1.20'                     # a bad value changed nothing
+    assert rig.box.procs[0].told[-1] == 'gain 0.48'                     # a bad value changed nothing
 
 
 def test_off(rig):

@@ -79,6 +79,9 @@ def _fleet_line(fleet):
     """One device per clause: name, place, online or offline, what it can do."""
     said = []
     for d in fleet[:FLEET_MAX]:
+        if d.get('every'):
+            said.append(f"{d['id']}: speaker say on every device that can speak, at once")
+            continue
         where = f" ({d['location']})" if d['location'] else ''
         caps = ', '.join(d['caps']) or 'nothing yet'
         said.append(f"{d['id']}{where} {'online' if d['online'] else 'offline'}: {caps}")
