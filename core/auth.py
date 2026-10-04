@@ -59,10 +59,9 @@ def validate_csrf(request: Request, token: Optional[str] = None) -> bool:
 async def require_login(request: Request):
     """Dependency that requires login. Raises HTTPException if not logged in.
 
-    Three accepted auth paths, tried in order:
+    Two accepted auth paths, tried in order:
       1. Session cookie         — browser users (request.session.logged_in)
       2. Authorization: Bearer  — external integrations (named API tokens; 2026-05-21)
-      3. X-API-Key              — internal tools / legacy callers (bcrypt password hash)
     """
     from core.setup import is_setup_complete, get_password_hash
 
@@ -99,11 +98,6 @@ async def require_login(request: Request):
             except Exception as e:
                 # Don't let an api_tokens fault block auth-by-other-means
                 logger.warning(f"api_tokens.verify raised: {e!r}")
-
-    # 3. X-API-Key auth (internal/tool calls, e.g. meta.py) — bcrypt password hash
-    api_key = request.headers.get('X-API-Key')
-    if api_key and stored_hash and secrets.compare_digest(api_key, stored_hash):
-        return True
 
     # Not authenticated
     if request.url.path.startswith('/api/'):

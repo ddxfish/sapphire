@@ -286,3 +286,61 @@ def test_require_login_revoked_token_no_longer_works(temp_tokens_file, mock_requ
         with pytest.raises(HTTPException) as ei:
             asyncio.run(require_login(req))
     assert ei.value.status_code == 401
+
+
+# ─── X-API-Key retired (2026-10-03) ─────────────────────────────────────────
+# The bcrypt password hash used to double as an API key. It is a login
+# secret only now: the header is not a credential and exempts nothing.
+
+_FAKE_HASH = "$2b$12$" + "a" * 53
+
+
+def test_require_login_ignores_x_api_key(temp_tokens_file, mock_request_factory):
+    """Even the exact stored hash in X-API-Key does not authenticate."""
+    from core.auth import require_login
+    from fastapi import HTTPException
+
+    req = mock_request_factory(headers={"X-API-Key": _FAKE_HASH})
+    with patch("core.setup.is_setup_complete", return_value=True), \
+         patch("core.setup.get_password_hash", return_value=_FAKE_HASH):
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(require_login(req))
+    assert ei.value.status_code == 401
+
+
+def _csrf_run(mock_request_factory, headers, session):
+    """Drive the real csrf_protection middleware; returns (response, reached)."""
+    from core.api_fastapi import csrf_protection
+
+    req = mock_request_factory(headers=headers, session=session, path="/api/settings/X")
+    req.method = "PUT"
+    reached = []
+
+    async def call_next(_req):
+        reached.append(True)
+        return "handler-response"
+
+    return asyncio.run(csrf_protection(req, call_next)), bool(reached)
+
+
+def test_csrf_not_skipped_by_x_api_key(mock_request_factory):
+    """A logged-in cookie with an X-API-Key header and no token is refused —
+    the header used to switch the whole check off."""
+    resp, reached = _csrf_run(
+        mock_request_factory,
+        headers={"X-API-Key": "junk"},
+        session={"logged_in": True, "csrf_token": "real-token"},
+    )
+    assert reached is False
+    assert resp.status_code == 403
+
+
+def test_csrf_leaves_cookieless_callers_alone(mock_request_factory):
+    """A Bearer caller has no session cookie, so the check never applies."""
+    resp, reached = _csrf_run(
+        mock_request_factory,
+        headers={"Authorization": "Bearer sk_anything"},
+        session={},
+    )
+    assert reached is True
+    assert resp == "handler-response"

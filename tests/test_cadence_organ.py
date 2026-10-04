@@ -519,3 +519,39 @@ def test_stream_speech_means_nothing_off_a_device_lane():
         cadence.run_turn('c', 'cue', speak='speakers', stream_speech=True)
     assert stream.suppress_tts is True                   # the speakers lane speaks whole, as before
     sysobj.tts.speak.assert_called_once()
+
+
+def test_a_turn_with_tools_answers_with_every_round_of_her_prose():
+    """Round one says 'let me look', a tool runs, round two has the answer.
+    The engine's `final` carries round two only; her message is both (over
+    MCP, Blue saw only Purple's second half - 2026-10-03)."""
+    events = [{'type': 'content', 'text': 'Let me check '}, {'type': 'content', 'text': 'the weather.'},
+              {'type': 'tool_start', 'name': 'web_search'}, {'type': 'tool_end', 'name': 'web_search'},
+              {'type': 'tool_start', 'name': 'get_website'}, {'type': 'tool_end', 'name': 'get_website'},
+              {'type': 'content', 'text': 'It is 64 and clear.'},
+              {'type': 'final', 'text': 'It is 64 and clear. (hooked)', 'cancelled': False}]
+    sysobj, stream, llm = _system(events)
+    cadence._system = sysobj
+    with patch('core.cadence.publish') as publish:
+        out = cadence.run_turn('c', 'weather?')
+    assert out == 'Let me check the weather.\n\nIt is 64 and clear. (hooked)'      # final stands for the last round only
+    assert publish.call_args.args[1]['text'] == out
+
+
+def test_a_tool_round_with_no_words_adds_nothing():
+    events = [{'type': 'tool_start', 'name': 'x'}, {'type': 'tool_end', 'name': 'x'},
+              {'type': 'content', 'text': '<think>hm</think>'}, {'type': 'tool_start', 'name': 'y'}, {'type': 'tool_end', 'name': 'y'},
+              {'type': 'content', 'text': 'Done.'}, {'type': 'final', 'text': 'Done.', 'cancelled': False}]
+    sysobj, stream, llm = _system(events)
+    cadence._system = sysobj
+    with patch('core.cadence.publish'):
+        assert cadence.run_turn('c', 'go') == 'Done.'
+
+
+def test_a_refused_turn_keeps_none_of_the_rounds():
+    events = [{'type': 'content', 'text': 'Starting.'}, {'type': 'tool_start', 'name': 'x'}, {'type': 'tool_end', 'name': 'x'},
+              {'type': 'final', 'text': 'refused', 'cancelled': False, 'error': True}]
+    sysobj, stream, llm = _system(events)
+    cadence._system = sysobj
+    with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='refused'):
+        cadence.run_turn('c', 'go')

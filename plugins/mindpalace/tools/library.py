@@ -27,6 +27,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import numpy as np
+from statistics import NormalDist
 
 logger = logging.getLogger(__name__)
 
@@ -2503,32 +2504,11 @@ def delete_collection(scope, cid):
 # per-scope matrix is a cache keyed on (count, max_id): any write rebuilds.
 
 RRF_K = 60
-VEC_MIN = 0.30                              # cosine floor, explicit search
-# Mixed rides need to EARN the seat (Kermit sip, 2026-07-18): 0.30 let
-# "Kermit the Frog" pull every frog-adjacent Alice passage into a search
-# that never aimed at the library.
-VEC_MIN_MIXED = 0.40
 LIB_MIXED_CHAR_CAP = 1800                   # hard budget for the 🏛 append
 LIB_CHAR_CAP = 6000                         # hard budget, explicit search
 SNIPPET_LEN = 240                           # mixed teaser excerpt
 NOTE_MIXED_MAX = 600                        # notes ride whole only under this
 NOTE_FULL_MAX = 1500                        # explicit-search whole-note ceiling
-# Cross-modal (text query → pixels) cosines live on a MUCH smaller scale
-# than text-text — nomic vision measured 0.02-0.08 on this box. Floor at
-# 0.05; ranking does the heavy lifting. TUNING DIAL for real photos.
-VIS_MIN = 0.05
-
-
-def _vis_min():
-    """Vision match floor — Settings → Embedding (VISION_MATCH_THRESHOLD).
-    Cross-modal cosines run lower than text-text in the shared space, so
-    the shipped default stays permissive; raise it when photo hits flood a
-    search (Krem, 2026-07-27). Falls back to VIS_MIN."""
-    try:
-        import config
-        return float(getattr(config, 'VISION_MATCH_THRESHOLD', VIS_MIN))
-    except Exception:
-        return VIS_MIN
 PHOTO_CAP = 5                                # photos shown, explicit search
 PHOTO_CAP_MIXED = 3
 DOC_CAPS = {'high': 5, 'med': 4, 'low': 3}   # explicit layer=knowledge search
@@ -2538,6 +2518,51 @@ PAGE_CHUNKS = 5
 RANGE_MAX = 12
 
 _matrix_cache = {}
+
+# ─── Gates are RELATIVE, not absolute (2026-10-03) ───────────────────────────
+# nomic's spaces are anisotropic: unrelated text-text sits ~0.36-0.46,
+# unrelated text-pixel ~0.00-0.05; real matches ~0.60+ / ~0.065+. One fixed
+# cosine can't serve both — the old 0.30 was sub-noise for captions (a banana
+# bread recipe matched 'cyberpunk bar' at 0.40, so every caption in a small
+# library matched every query) and unreachable for pixels (best possible
+# ~0.10), so photo search was silently OFF wherever the dial sat there.
+# A hit now needs ONE of two things:
+#   1. stand out from the scope's own score distribution for THIS query —
+#      leave-one-out z (a lone match must not inflate its own baseline)
+#      against a bar that rises with N, so the max of many noise draws
+#      doesn't pass just for being the max (FALSE_HITS expected per query);
+#   2. be strong outright: Z_SURE σ above the space's prior null — a scope
+#      of four beach photos asked for 'beach' must not fail because none
+#      stands out from its siblings.
+# The per-space prior (mean, std, pseudo-count) was measured on the nomic
+# pair (calibration 2026-10-03: 15 images, 117 doc chunks) and anchors the
+# estimate while the scope is tiny; at N=1 it IS the gate (pixels 0.05,
+# text 0.54 — the old VIS_MIN by another road).
+Z_MIN = 2.0           # explicit search / view
+Z_MIN_MIXED = 2.5     # riding inside an all-layer search — earn the seat (Kermit sip, 2026-07-18)
+Z_SURE = 3.0          # strong on its own, neighbors or not
+FALSE_HITS = 0.5      # noise items allowed through per query, in expectation
+_PRIOR = {'text': (0.42, 0.06, 8), 'img': (0.02, 0.015, 8)}
+
+
+def _zmin(n, base=Z_MIN):
+    """The bar for n candidates: at least `base`, higher once n is large
+    enough that the max of n noise draws would clear it by chance."""
+    return max(base, NormalDist().inv_cdf(1 - FALSE_HITS / max(n, 1)))
+
+
+def _gate(scores, space, base=Z_MIN):
+    """→ bool mask over scores: which ones are hits (see above)."""
+    s = np.asarray(scores, dtype=np.float64)
+    if not len(s):
+        return np.zeros(0, dtype=bool)
+    m0, s0, k = _PRIOR[space]
+    n = len(s) - 1
+    tot, tot2 = s.sum() - s, (s * s).sum() - s * s
+    mean = (k * m0 + tot) / (k + n)
+    var = (k * (s0 * s0 + m0 * m0) + tot2) / (k + n) - mean * mean
+    z = (s - mean) / np.sqrt(np.maximum(var, 1e-12))
+    return (z >= _zmin(len(s), base)) | ((s - m0) / s0 >= Z_SURE)
 
 
 def _imp_word(imp):
@@ -2573,9 +2598,10 @@ def _scope_matrix(scope, provider, dim):
     return ids, scales, matrix
 
 
-def _vector_hits(scope, query, limit, floor=VEC_MIN):
-    """[(chunk_id, cosine)] best-first. dequant folded into the score:
-    cos = (M_int8 · q) × scale/127 — one matmul, no decompressed copy kept."""
+def _vector_hits(scope, query, limit, zmin=Z_MIN):
+    """[(chunk_id, cosine)] best-first, gated by _gate. dequant folded into
+    the score: cos = (M_int8 · q) × scale/127 — one matmul, no decompressed
+    copy kept."""
     emb = _embedder()
     if not getattr(emb, 'available', False):
         return []
@@ -2588,9 +2614,9 @@ def _vector_hits(scope, query, limit, floor=VEC_MIN):
     if not len(ids):
         return []
     scores = (matrix.astype(np.float32) @ q) * (scales / 127.0)
+    hit = _gate(scores, 'text', zmin)
     order = np.argsort(-scores)[:limit]
-    return [(int(ids[i]), float(scores[i])) for i in order
-            if scores[i] >= floor]
+    return [(int(ids[i]), float(scores[i])) for i in order if hit[i]]
 
 
 def _fts_hits(scope, query, limit):
@@ -2646,9 +2672,15 @@ def _img_matrix(scope, dim):
 _vis_space_warned = False
 
 
-def _photo_hits(scope, query, limit):
-    """[(doc_id, cosine)] — the text query against PIXELS (shared vector
-    space). This is the half of the fusion EXIF can't do: scene content.
+def _photo_rank(scope, query, limit, zmin=Z_MIN):
+    """The text query against PIXELS (shared vector space) — the half of
+    the fusion EXIF can't do: scene content. → (ranked, status, total):
+    ranked = [(doc_id, cosine, hit)] best-first over this scope's pictures
+    (hit per _gate), status = 'ok' | 'no_embedder' | 'no_images' |
+    'space_mismatch', total = pictures with a pixel vector here. Callers
+    that only want the hits use _photo_hits; the view tool wants the rest
+    so an empty answer can say WHY (the old one blamed the embedder for
+    every empty — including 'nothing scored high enough').
 
     The shared-space gate is an ASSUMPTION about the text embedder (nomic
     v1.5's 768 space, which the vision tower is aligned to). A swapped text
@@ -2657,10 +2689,10 @@ def _photo_hits(scope, query, limit):
     global _vis_space_warned
     emb = _embedder()
     if not getattr(emb, 'available', False):
-        return []
+        return [], 'no_embedder', 0
     qv = emb.embed([query], prefix='search_query')
     if qv is None:
-        return []
+        return [], 'no_embedder', 0
     q = np.asarray(qv[0], dtype=np.float32)
     qdim = int(q.shape[0])
     prov = str(getattr(emb, 'provider_id', '') or '')
@@ -2669,20 +2701,21 @@ def _photo_hits(scope, query, limit):
         # Empty at THIS dim while image vectors exist at another → the text
         # embedder was swapped out of the vision model's space. Without this,
         # photos just vanish from every search with zero telemetry.
+        with get_connection() as conn:
+            other = conn.execute(
+                'SELECT v.dim FROM img_vectors v JOIN documents d '
+                'ON d.id = v.doc_id WHERE d.scope = ? AND v.dim != ? '
+                'LIMIT 1', (scope, qdim)).fetchone()
+        if not other:
+            return [], 'no_images', 0
         if not _vis_space_warned:
-            with get_connection() as conn:
-                other = conn.execute(
-                    'SELECT v.dim FROM img_vectors v JOIN documents d '
-                    'ON d.id = v.doc_id WHERE d.scope = ? AND v.dim != ? '
-                    'LIMIT 1', (scope, qdim)).fetchone()
-            if other:
-                _vis_space_warned = True
-                logger.warning(
-                    f"[LIBRARY] photo search OFF: text embedder '{prov}' is "
-                    f"{qdim}-dim, image vectors are {other[0]}-dim. Photos "
-                    f"return to search when a vision-space-compatible text "
-                    f"embedder is active.")
-        return []
+            _vis_space_warned = True
+            logger.warning(
+                f"[LIBRARY] photo search OFF: text embedder '{prov}' is "
+                f"{qdim}-dim, image vectors are {other[0]}-dim. Photos "
+                f"return to search when a vision-space-compatible text "
+                f"embedder is active.")
+        return [], 'space_mismatch', 0
     with get_connection() as conn:
         vprov_row = conn.execute(
             'SELECT v.provider FROM img_vectors v JOIN documents d '
@@ -2697,10 +2730,16 @@ def _photo_hits(scope, query, limit):
             f"in '{vprov}' (nomic space) but the text embedder is '{prov}' "
             f"— same dimension, different space, cosines are noise.")
     scores = (matrix.astype(np.float32) @ q) * (scales / 127.0)
+    hit = _gate(scores, 'img', zmin)
     order = np.argsort(-scores)[:limit]
-    floor = _vis_min()
-    return [(int(ids[i]), float(scores[i])) for i in order
-            if scores[i] >= floor]
+    return ([(int(ids[i]), float(scores[i]), bool(hit[i])) for i in order],
+            'ok', int(len(ids)))
+
+
+def _photo_hits(scope, query, limit, zmin=Z_MIN):
+    """[(doc_id, cosine)] — the hits only (search_library's feeder)."""
+    ranked, _status, _total = _photo_rank(scope, query, limit, zmin)
+    return [(d, s) for d, s, ok in ranked if ok]
 
 
 PHOTO_DESC_MAX = 256   # caption cap on the result LINE (full text stays put)
@@ -2813,10 +2852,10 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
         return "Search query cannot be empty.", False
     ensure_scan_async()   # watched folders freshen in the background
     over = max(limit * 4, 24)
-    fused = _fuse(_vector_hits(scope, query, over,
-                               VEC_MIN_MIXED if mixed else VEC_MIN),
+    zmin = Z_MIN_MIXED if mixed else Z_MIN
+    fused = _fuse(_vector_hits(scope, query, over, zmin),
                   _fts_hits(scope, query, over))
-    vis = _photo_hits(scope, query, over)
+    vis = _photo_hits(scope, query, over, zmin)
     if not fused and not vis:
         return ("" if mixed else f"The library has no matches for '{query}'."), False
     caps = MIXED_CAPS if mixed else DOC_CAPS
@@ -2825,6 +2864,7 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
         cur = conn.cursor()
         docs, order = {}, []
         photos = {}   # doc_id → pool score (metadata-text hits + vision hits)
+        how = {}      # doc_id → {'caption', 'pixels'}: what actually matched
         for cid, score in fused:
             row = cur.execute('SELECT doc_id, seq, chapter, content FROM '
                               'doc_chunks WHERE id = ?', (cid,)).fetchone()
@@ -2844,6 +2884,7 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
                     # vision ranks within; rendered as metadata lines below.
                     docs[doc_id] = None
                     photos[doc_id] = photos.get(doc_id, 0.0) + score
+                    how.setdefault(doc_id, set()).add('caption')
                     continue
                 d['hits'] = []
                 d['score'] = score * (0.7 + d['importance'] / 2.0)
@@ -2867,6 +2908,7 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
                     or (d['private_key'] and d['private_key'] != pk)):
                 continue
             photos[did] = photos.get(did, 0.0) + 1.0 / (RRF_K + rank + 1)
+            how.setdefault(did, set()).add('pixels')
         keep = [docs[i] for i in order if docs[i] and docs[i]['hits']]
         keep.sort(key=lambda d: -d['score'])
         keep = keep[:limit]
@@ -2946,11 +2988,12 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
                 r = cur.execute('SELECT title, meta, description FROM '
                                 'documents WHERE id = ?', (did,)).fetchone()
                 if r:
-                    shown.append(_photo_line(did, r[0], r[1], r[2]))
+                    shown.append(_photo_line(did, r[0], r[1], r[2])
+                                 + f" ({'+'.join(sorted(how.get(did, ())))})")
             if shown:
                 lines.append(f"\n🖼 Photos — {len(shown)} of {len(photos)} "
-                             f"matched (image RAG: pixels and captions "
-                             f"matched against your phrase):")
+                             f"matched (image RAG — each line says what "
+                             f"matched: pixels, caption, or both):")
                 lines.extend(shown)
                 more = len(photos) - len(shown)
                 tail = f"; {more} more behind this search" if more else ""

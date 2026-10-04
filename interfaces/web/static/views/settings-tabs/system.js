@@ -104,8 +104,7 @@ export default {
                 <h4 style="margin:0 0 8px;font-size:var(--font-sm)">Login Password</h4>
                 <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 12px">
                     The password for this web UI. This tab stays logged in after changing it;
-                    every other device is logged out. Scripts sending the old hash as
-                    <code>X-API-Key</code> need the new one — API Keys below are unaffected.
+                    every other device is logged out. API Keys below are unaffected.
                     Forgot it? The install guide covers the reset.
                 </p>
                 <form id="pw-form" autocomplete="off" style="display:flex;flex-direction:column;gap:8px;max-width:360px">

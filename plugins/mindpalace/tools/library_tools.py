@@ -2,7 +2,9 @@
 # Library (Knowledge v3) — her tool surface (P3b, 2026-07-17).
 # Five tools: `library` (the card catalog — drawers WITH descriptions, that's
 # how she finds where to look), `read_document` (sequential reading + range
-# digs), `memory_view_image` (library pictures by query → a numbered sheet;
+# digs), `memory_view_image` (library pictures by query → the one match itself, a
+# numbered sheet of several, or an honest 'none look like that' with the
+# nearest listed and no pixels spent — gated relatively, see library.py;
 # one doc by id; one picture from this chat by img: handle — the combined
 # image_view retired 2026-09-10, Krem's vote A: one door per source),
 # `local_view_images` (files/folders on this machine → a numbered sheet,
@@ -204,32 +206,55 @@ def _memory_view_image(arguments):
     if did:
         return _view_one(f'doc:{did}', pk or None)
     count = _clamp(arguments.get('count'), 6, 1, 12)
-    hits = lib._photo_hits(scope, query, count * 2)
-    rows = []
+    ranked, status, total = lib._photo_rank(scope, query, count * 2)
+    # An empty answer names its cause — the old one blamed the embedder for
+    # all four (down / no pictures / swapped space / nothing scored).
+    if status == 'no_embedder':
+        return "Can't search pictures right now: the text embedder is unavailable (Settings → Embedding).", False
+    if status == 'space_mismatch':
+        return ("Picture search is off: the active text embedder isn't in the vision model's space "
+                "(the log has the dims). Captions still search via search_memory."), False
+    if not total:
+        return ("This chat's library has no pictures yet (or none have been embedded) — "
+                "memory_save_image puts one in."), True
+    rows = []       # (doc row, hit) best-first, behind the private + missing walls
     with lib.get_connection() as conn:
-        for doc_id, _score in hits:
+        for doc_id, _score, hit in ranked:
             r = conn.execute("SELECT id, title, meta, description, private_key, status FROM documents "
                              "WHERE id = ? AND scope = ? AND kind = 'image'", (doc_id, scope)).fetchone()
             if not r or r[5] == 'missing' or (r[4] and r[4] != pk):
                 continue
-            rows.append(r)
+            rows.append((r, hit))
             if len(rows) >= count:
                 break
     if not rows:
-        why = '' if hits else ' (pixel search needs a vision-capable embedder; captions are searchable via search_memory)'
-        return f"No library images match '{query}'{why}.", True
+        return f"No viewable pictures for '{query}' in this chat's library ({total} exist — keyed or missing).", True
+    line = lambda r: lib._photo_line(r[0], r[1], r[2], r[3]).strip()
+    strong = [r for r, hit in rows if hit]
+    weak = [r for r, hit in rows if not hit]
+    if not strong:
+        # Nothing cleared the gate: say so, list the nearest, spend no pixels.
+        closest = "\n".join(f"{i}. {line(r)}" for i, r in enumerate(weak, 1))
+        return (f"None of the {total} picture(s) in this chat's library look like '{query}'. "
+                f"Closest, all weak (not shown — memory_view_image(document_id=N) opens one):\n{closest}"), True
     entries = []
-    for r in rows:
+    for r in strong:
         src, thumb, render, _ext = lib.image_paths(scope, r[0])
         pick = thumb or render or src
-        entries.append({'raw': pick.read_bytes() if pick else None, 'stash': False,      # already stored: tiles off the route
-                        'thumb': _ROUTE.format(did=r[0], what='thumb', scope=quote(scope)),
-                        'full': _ROUTE.format(did=r[0], what='file', scope=quote(scope)),
-                        'title': r[1] or ''})
-    lines = [f"{i}. {lib._photo_line(r[0], r[1], r[2], r[3]).strip()}" for i, r in enumerate(rows, 1)]
+        e = {'raw': pick.read_bytes() if pick else None, 'stash': False,      # already stored: tiles off the route
+             'thumb': _ROUTE.format(did=r[0], what='thumb', scope=quote(scope)),
+             'full': _ROUTE.format(did=r[0], what='file', scope=quote(scope)),
+             'title': r[1] or ''}
+        if len(strong) == 1 and (render or src):      # one match → the picture itself, not its thumb
+            e['show'] = (render or src).read_bytes()
+        entries.append(e)
+    lines = [f"{i}. {line(r)}" for i, r in enumerate(strong, 1)]
+    if weak:
+        lines.append("Weaker, not shown: " + "; ".join(line(r) for r in weak))
     images, tail = ci.gallery(f'library: {query}', entries)
-    text = (f"{len(rows)} library image(s) for '{query}', best match first — numbered like the sheet; "
-            f"memory_view_image(document_id=N) for a close-up:\n" + "\n".join(lines) + "\n" + tail)
+    head = (f"1 library picture matches '{query}'; " if len(strong) == 1 else
+            f"{len(strong)} library pictures match '{query}', best first — numbered like the sheet; ")
+    text = head + "memory_view_image(document_id=N) for a close-up:\n" + "\n".join(lines) + "\n" + tail
     return (ci.result(text, images) if images else text), True
 
 

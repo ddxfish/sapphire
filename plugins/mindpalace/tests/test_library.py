@@ -1062,7 +1062,7 @@ def test_vision_job_photo_block_and_cleanup(library, monkeypatch):
     assert row == ('fake:vision', 64) and state == 'done'
     text, found = library.search_library('default', 'PIXELS')
     assert found and '\U0001F5BC Photos — 1 of 1 matched' in text
-    assert 'image RAG' in text                 # she's told HOW these matched
+    assert 'image RAG' in text and '(pixels)' in text   # she's told HOW each one matched
     assert f'[doc {did}] beach' in text and 'memory_view_image' in text
     assert '§' not in text                     # never rendered as sections
     ok, _ = library.delete_document('default', did)
@@ -1285,18 +1285,18 @@ def test_stitch_never_duplicates_overlap(library):
         assert stitched.count(tail) == 1
 
 
-def test_mixed_uses_raised_vector_floor(library, monkeypatch):
+def test_mixed_rides_face_a_higher_bar(library, monkeypatch):
     seen = []
 
-    def spy(scope, query, limit, floor=library.VEC_MIN):
-        seen.append(floor)
+    def spy(scope, query, limit, zmin=library.Z_MIN):
+        seen.append(zmin)
         return []
 
     monkeypatch.setattr(library, '_vector_hits', spy)
     library.search_library('default', 'anything')
     library.search_library('default', 'anything', mixed=True)
-    assert seen == [library.VEC_MIN, library.VEC_MIN_MIXED]
-    assert library.VEC_MIN_MIXED == 0.40
+    assert seen == [library.Z_MIN, library.Z_MIN_MIXED]
+    assert library.Z_MIN_MIXED > library.Z_MIN
 
 
 # --- Arc 2 I5: watch-folders -- index in place, the folder is canonical ------

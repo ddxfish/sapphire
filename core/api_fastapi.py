@@ -458,18 +458,19 @@ async def log_requests(request: Request, call_next):
 
 @app.middleware("http")
 async def csrf_protection(request: Request, call_next):
-    """Validate CSRF token on state-changing requests from browser sessions."""
+    """Validate CSRF token on state-changing requests from browser sessions.
+
+    The one rule: a logged-in session cookie needs the token. No header
+    exempts it — a Bearer caller has no cookie, so it never lands here."""
     if request.method not in ("GET", "HEAD", "OPTIONS"):
-        # API key auth (internal/tool calls) — skip CSRF
-        if not request.headers.get('X-API-Key'):
-            # Form-based endpoints handle their own CSRF
-            if request.url.path not in ("/login", "/setup"):
-                if request.session.get('logged_in'):
-                    csrf_header = request.headers.get('X-CSRF-Token')
-                    session_token = request.session.get('csrf_token')
-                    if not csrf_header or not session_token or csrf_header != session_token:
-                        from starlette.responses import JSONResponse
-                        return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+        # Form-based endpoints handle their own CSRF
+        if request.url.path not in ("/login", "/setup"):
+            if request.session.get('logged_in'):
+                csrf_header = request.headers.get('X-CSRF-Token')
+                session_token = request.session.get('csrf_token')
+                if not csrf_header or not session_token or csrf_header != session_token:
+                    from starlette.responses import JSONResponse
+                    return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
     return await call_next(request)
 
 

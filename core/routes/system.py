@@ -1141,9 +1141,8 @@ async def change_password(request: Request, _=Depends(require_login)):
     enough to rotate it. Same 5-per-minute limiter as the auth pages so a
     hijacked tab can't brute-force the current one. Every OTHER session is
     logged out (require_login compares the cookie's salt stamp to the live
-    hash); this tab re-stamps and stays in. NOTE for legacy scripts: the
-    X-API-Key header IS the bcrypt hash, so it rotates too — bearer tokens
-    (API Keys, right below this card) are unaffected. 2026-09-08."""
+    hash); this tab re-stamps and stays in. Bearer tokens (API Keys, right
+    below this card) are unaffected. 2026-09-08."""
     from core.auth import check_endpoint_rate, get_client_ip
     from core.setup import get_password_hash, verify_password, save_password_hash
     check_endpoint_rate(request, 'password', max_calls=5, window=60)

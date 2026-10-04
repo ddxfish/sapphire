@@ -117,7 +117,8 @@ def _two_library_images(tmp_path):
 
 def test_query_sheet_from_the_library(tmp_path, monkeypatch, scope_default):
     cat, dog = _two_library_images(tmp_path)
-    monkeypatch.setattr(lib, '_photo_hits', lambda scope, query, limit: [(dog, 0.9), (cat, 0.8), (999999, 0.5)])
+    monkeypatch.setattr(lib, '_photo_rank', lambda scope, query, limit, zmin=None:
+                        ([(dog, 0.9, True), (cat, 0.8, True), (999999, 0.5, True)], 'ok', 3))
     out, ok = lt.execute('memory_view_image', {'query': 'animals'}, {})
     assert ok and len(out['images']) == 1 and _sheet(out).size == (800, 400)
     assert f"1. [doc {dog}] a dog" in out['text'] and f"2. [doc {cat}] a cat" in out['text']
@@ -135,10 +136,23 @@ def test_query_edges_and_document_lane(tmp_path, monkeypatch, scope_default):
     cat, _dog = _two_library_images(tmp_path)
     assert lt.execute('memory_view_image', {}, {})[1] is False
     assert lt.execute('memory_view_image', {'image_id': 'nope'}, {})[1] is False   # not an img: handle
-    monkeypatch.setattr(lib, '_photo_hits', lambda scope, query, limit: [])
+    # empties name their cause (the old message blamed the embedder for all of them)
+    monkeypatch.setattr(lib, '_photo_rank', lambda *a, **k: ([], 'no_embedder', 0))
     text, ok = lt.execute('memory_view_image', {'query': 'zzz'}, {})
-    assert ok and "No library images match 'zzz'" in text and 'embedder' in text
+    assert not ok and 'embedder' in text
+    monkeypatch.setattr(lib, '_photo_rank', lambda *a, **k: ([], 'no_images', 0))
+    text, ok = lt.execute('memory_view_image', {'query': 'zzz'}, {})
+    assert ok and 'no pictures' in text and 'memory_save_image' in text
+    monkeypatch.setattr(lib, '_photo_rank', lambda *a, **k: ([(cat, 0.02, False)], 'ok', 2))
+    text, ok = lt.execute('memory_view_image', {'query': 'zzz'}, {})
+    assert ok and isinstance(text, str) and "None of the 2 picture(s)" in text   # no pixels spent
+    assert f"1. [doc {cat}] a cat" in text and 'weak' in text
     monkeypatch.setattr(ci, '_scope', lambda: 'default')        # the doc: lane resolves scope itself
+    # one strong + weak runners-up → the match itself, the rest named below the line
+    monkeypatch.setattr(lib, '_photo_rank', lambda *a, **k: ([(cat, 0.09, True), (_dog, 0.02, False)], 'ok', 2))
+    out, ok = lt.execute('memory_view_image', {'query': 'cats'}, {})
+    assert ok and len(out['images']) == 1 and 'looking at it now' in out['text']
+    assert f"1. [doc {cat}] a cat" in out['text'] and f"Weaker, not shown: [doc {_dog}] a dog" in out['text']
     out, ok = lt.execute('memory_view_image', {'document_id': cat}, {})
     assert ok and isinstance(out, dict) and 'from the library' in out['text']
 

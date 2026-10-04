@@ -169,7 +169,6 @@ Sapphire creates `user/` directory with your settings and data. Run once before 
 
 - **Change it** in Settings › System › Login Password. Enter the current one, pick a new one (10+ characters). The tab you did it from stays logged in; every other device and browser is asked to log in again once.
 - **Forgot it?** Stop Sapphire, delete the `secret_key` file from the config directory, start again — you get the setup page back. Config directory: Linux `~/.config/sapphire/`, macOS `~/Library/Application Support/Sapphire/`, Windows `%APPDATA%\Sapphire\`.
-- Scripts that still send the bcrypt hash as `X-API-Key` stop working after a change — mint a token under API Keys instead (see [API.md](API.md)).
 
 ---
 

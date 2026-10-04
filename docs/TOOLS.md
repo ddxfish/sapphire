@@ -67,7 +67,7 @@ One primitive (`core/images.py`), one return contract, one handle. Every tool th
 | Tool | Module | What it does |
 |------|--------|--------------|
 | `web_view_images` | web.py | Search the web for images (`query`, `count` 1-12 default 6, `page`), or look at one image `url`. `view` defaults true. Safe search = Settings › Images |
-| `memory_view_image` | mindpalace library_tools.py | A remembered picture: library pictures by what's in them (`query`, `count`) as a numbered sheet with `[doc N]` ids; one `document_id`; or one picture from this chat by `image_id` (`img:<id>`) |
+| `memory_view_image` | mindpalace library_tools.py | A remembered picture: library pictures by what's in them (`query`, `count`) — one match is shown itself, several as a numbered sheet with `[doc N]` ids, none = an honest 'none look like that' with the nearest listed and no pixels spent (matches are relative to the scope's own scores, never an absolute cosine); one `document_id`; or one picture from this chat by `image_id` (`img:<id>`) |
 | `local_view_images` | mindpalace library_tools.py | Image files on this machine: `paths` (one → the image; several → a sheet) or a `folder` (paged, subfolders listed) |
 | `memory_save_image` | mindpalace library_tools.py | Keep an image in the library under a topic (Knowledge tab; pixel + caption search; optional `private_key`) |
 | `get_website` (`show_image_urls`) | web.py | `true` appends the page's image URLs (alt, size) to the text; `only` returns just that list |

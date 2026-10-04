@@ -9,7 +9,7 @@ Routes are split across modules under `core/routes/`, plus a few app-level route
 ### Browser Session
 Log in at `/login` with your password. Sessions last 30 days.
 
-### Named API Tokens (Programmatic Access — preferred)
+### Named API Tokens (Programmatic Access)
 For scripts, external tools, and integrations, mint a named token at **Settings > System > API Keys** (or `POST /api/system/api-tokens`) and send it as a Bearer header:
 
 ```bash
@@ -17,28 +17,10 @@ curl -k https://localhost:8073/api/status \
   -H "Authorization: Bearer $SAPPHIRE_TOKEN"
 ```
 
-The full token value is shown **once** at creation — copy it then. Listing shows only the last 4 characters; each token is individually revocable (`DELETE /api/system/api-tokens/{token_id}`). Prefer this over X-API-Key: named, revocable per caller, and it never exposes your password hash.
-
-### X-API-Key (legacy)
-Older scripts and internal tools may still send the bcrypt password hash as a header:
-
-```bash
-curl -k https://localhost:8073/api/status \
-  -H "X-API-Key: $(cat ~/.config/sapphire/secret_key)"
-```
-
-The key is the bcrypt hash stored in your config directory:
-
-| OS | Path |
-|----|------|
-| Linux | `~/.config/sapphire/secret_key` |
-| macOS | `~/Library/Application Support/Sapphire/secret_key` |
-| Windows | `%APPDATA%\Sapphire\secret_key` |
-
-This file is created during initial setup. To reset, delete it and restart Sapphire.
+The full token value is shown **once** at creation — copy it then. Listing shows only the last 4 characters; each token is individually revocable (`DELETE /api/system/api-tokens/{token_id}`).
 
 ### CSRF
-CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Bearer-token and X-API-Key auth **bypass CSRF** — no extra headers needed. The `/ws/conversation` WebSocket accepts session cookies only (same-origin enforced).
+CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Bearer-token auth needs no CSRF token — no extra headers. The `/ws/conversation` WebSocket accepts session cookies only (same-origin enforced).
 
 ### Rate Limiting
 5 attempts per 60 seconds per IP on auth endpoints.
@@ -650,7 +632,7 @@ Login required, except the two doors a device opens with its own key.
 | GET | `/api/system/api-tokens` | List programmatic API tokens |
 | POST | `/api/system/api-tokens` | Create a named API token |
 | DELETE | `/api/system/api-tokens/{token_id}` | Revoke an API token |
-| POST | `/api/system/password` | Change the login password (`{current, new}`; verifies the current one, 5/min, 10+ chars and ≤72 bytes). The calling tab stays logged in; **every other session is logged out**. Rotates the legacy X-API-Key hash — named bearer tokens are unaffected |
+| POST | `/api/system/password` | Change the login password (`{current, new}`; verifies the current one, 5/min, 10+ chars and ≤72 bytes). The calling tab stays logged in; **every other session is logged out**. Named bearer tokens are unaffected |
 
 ### Media (Tool-Generated Images)
 
@@ -682,9 +664,8 @@ Sapphire API reference for programmatic access. Single FastAPI server, `https://
 
 AUTH:
 - Browser: session cookie via /login (30-day sessions; CSRF token required on mutations)
-- Programmatic (preferred): `Authorization: Bearer <token>` — named API tokens minted at Settings > System > API Keys or POST /api/system/api-tokens (full value shown ONCE at creation; list shows last-4; revoke via DELETE /api/system/api-tokens/{token_id})
-- Programmatic (legacy): `X-API-Key` header carrying the bcrypt password hash from the secret_key file
-- Bearer and X-API-Key both bypass CSRF
+- Programmatic: `Authorization: Bearer <token>` — named API tokens minted at Settings > System > API Keys or POST /api/system/api-tokens (full value shown ONCE at creation; list shows last-4; revoke via DELETE /api/system/api-tokens/{token_id})
+- Bearer auth needs no CSRF token
 - /ws/conversation accepts session-cookie auth only (same-origin enforced)
 - Rate limit: 5 attempts/60s per IP on auth endpoints
 

@@ -269,6 +269,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
     publish(Events.VOICE_TURN_START, {"message_id": mid, "user_text": text,
                                       "chat": chat, "foreign": foreign, "source": source})
     parts, cancelled, errored, overthought = [], False, None, False
+    blocks = []                    # the prose of each round that ended in a tool call: her message is all of them
     thinking_chars = 0             # provider-side thinking events (Claude-style)
     tools_ran = False              # a tool-only turn (a move, no words) is an answer
     rows_before = _live_row_count(sm, chat)
@@ -288,6 +289,13 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
                                                   "chat": chat, "foreign": foreign})
             elif et == 'thinking':
                 thinking_chars += len(ev.get('text') or '')
+            elif et == 'tool_start':
+                # the words before a tool are a round of their own; the engine
+                # starts the next round's prose from nothing, and its `final`
+                # carries only the last round (Blue saw half of Purple, 2026-10-03)
+                if visible_text(''.join(parts)):
+                    blocks.append(''.join(parts))
+                parts = []
             elif et == 'tool_end':
                 tools_ran = True
             elif et == 'tts_chunk':
@@ -299,9 +307,9 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
                     # its notice as content — that is NOT her answer; it used
                     # to be captioned and spoken aloud (scout 3, 2026-09-10)
                     errored = ev.get('text') or 'turn refused'
-                    parts = []
+                    parts, blocks = [], []
                 elif ev.get('text'):
-                    parts = [ev['text']]
+                    parts = [ev['text']]          # the last round as the engine kept it (prefill, post_llm)
             elif et == 'error':
                 errored = ev.get('text') or 'stream error'
             # the thinking budget: in-content <think> that never closes, or
@@ -322,7 +330,8 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         errored = errored or f"{type(e).__name__}: {e}"
     finally:
         llm.end_stream(sid, chat_name)
-    final = visible_text(''.join(parts)) if not cancelled or overthought else ''
+    rounds = [visible_text(b) for b in blocks + [''.join(parts)]]
+    final = '\n\n'.join(r for r in rounds if r) if not cancelled or overthought else ''
     dropped = False
     if overthought or (not final and not errored and not tools_ran):
         # no answer (a think loop, an empty reply): nothing to show, speak, or keep
