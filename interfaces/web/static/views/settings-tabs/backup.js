@@ -4,6 +4,7 @@ import { showDangerConfirm } from '../../shared/danger-confirm.js';
 
 let backups = { daily: [], weekly: [], monthly: [], manual: [], update: [] };
 let expanded = {};
+let sendPoll = null;
 
 export default {
     id: 'backup',
@@ -38,7 +39,11 @@ export default {
 
             <div class="backup-hero">
                 <button class="backup-now-btn" id="backup-now">Backup Now</button>
-                <div class="backup-stats" id="backup-stats"></div>
+                <button class="backup-now-btn backup-send-btn" id="backup-send" disabled title="Sends the newest backup, sealed, to every device that holds backups">Send to devices</button>
+                <div>
+                    <div class="backup-stats" id="backup-stats"></div>
+                    <div class="backup-stats" id="backup-devices"></div>
+                </div>
             </div>
 
             <div class="backup-info" style="margin:16px 0;padding:12px 16px;background:var(--bg-secondary);border-radius:8px;font-size:var(--font-sm);line-height:1.6">
@@ -263,6 +268,41 @@ export default {
             } catch (e) { ui.showToast('Backup failed', 'error'); }
             finally { btn.disabled = false; btn.textContent = 'Backup Now'; }
         });
+
+        // Send to devices (2026-10-06): the nightly ship, on demand. Answers
+        // at once; the health door says when it lands, so poll until it does.
+        el.querySelector('#backup-send')?.addEventListener('click', async () => {
+            const btn = el.querySelector('#backup-send');
+            btn.disabled = true;
+            const since = Date.now() / 1000;
+            let res, data = {};
+            try {
+                res = await fetch('/api/backup/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+                    body: JSON.stringify({})
+                });
+                try { data = await res.json(); } catch {}
+            } catch { ui.showToast('Send failed', 'error'); btn.disabled = false; return; }
+            if (!res.ok) { ui.showToast(data.detail || 'Send failed', 'error'); btn.disabled = false; return; }
+            ui.showToast(`Sending ${data.filename} to ${(data.targets || []).join(', ')}…`, 'info', 6000);
+            const started = Date.now();
+            clearInterval(sendPoll);
+            sendPoll = setInterval(async () => {
+                const h = await this.loadHealth(el);
+                const d = h?.devices;
+                if (!d || d.shipping) {
+                    if (Date.now() - started > 35 * 60 * 1000) clearInterval(sendPoll);
+                    return;
+                }
+                clearInterval(sendPoll);
+                const ls = d.last_ship;
+                if (!ls || ls.ts < since) return;
+                if (ls.error) { ui.showToast(`Not sent: ${ls.error}`, 'error', 12000); return; }
+                for (const r of ls.results || [])
+                    ui.showToast(`${r.target}: ${r.msg}`, r.ok ? 'success' : 'error', r.ok ? 6000 : 12000);
+            }, 5000);
+        });
     },
 
     async loadBackups(el) {
@@ -284,7 +324,8 @@ export default {
         if (!box) return;
         let h = null;
         try { h = await (await fetch('/api/backup/health')).json(); } catch {}
-        if (!h) { box.innerHTML = ''; return; }
+        if (!h) { box.innerHTML = ''; return null; }
+        this.renderDevices(el, h.devices);
         const bad = [];
         if (h.halted) bad.push(`<strong>Backups HALTED</strong> — corruption sentinel(s): <code>${(h.sentinels || []).map(esc).join(', ')}</code>. Fix the affected DB, then delete the flag file(s) in <code>user/health/</code> to resume.`);
         if (h.enabled && h.scheduler_alive === false) bad.push('<strong>Backup scheduler thread is not running</strong> — scheduled backups will not fire until restart.');
@@ -308,9 +349,34 @@ export default {
         if (!bad.length) {
             const age = h.newest && h.newest.age_hours != null ? `${h.newest.age_hours}h ago` : 'n/a';
             box.innerHTML = `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;font-size:var(--font-sm);background:rgba(108,204,108,0.10);border:1px solid rgba(108,204,108,0.4)">&#10003; Backups healthy — newest: ${esc(age)}${h.scheduler_alive ? ' · scheduler running' : ''}${h.encrypt ? ' · encrypted' : ''}${folder}</div>`;
-            return;
+            return h;
         }
         box.innerHTML = `<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:var(--font-sm);line-height:1.6;background:rgba(224,108,108,0.12);border:1px solid var(--danger,#e06c6c)">${bad.map(b => `<div>&#9888; ${b}</div>`).join('')}</div>`;
+        return h;
+    },
+
+    renderDevices(el, d) {
+        // Who holds backups, what is in flight, how the last send went.
+        const line = el.querySelector('#backup-devices');
+        const btn = el.querySelector('#backup-send');
+        if (!line || !btn) return;
+        const targets = d?.targets || [];
+        if (!targets.length) {
+            line.textContent = 'No device holds backups yet (a satellite with a card, or a computer with a backup folder, in Settings > Devices).';
+            btn.disabled = true;
+            return;
+        }
+        let text = `Devices: ${targets.join(' · ')}`;
+        if (d.shipping) text += ` — sending ${d.shipping}…`;
+        else if (d.last_ship) {
+            const ago = Math.round((Date.now() / 1000 - d.last_ship.ts) / 60);
+            const when = ago < 60 ? `${ago} min ago` : `${Math.round(ago / 60)} h ago`;
+            const verdict = d.last_ship.error ? `✗ ${d.last_ship.error}`
+                : (d.last_ship.results || []).map(r => `${r.ok ? '✓' : '✗'} ${r.target}`).join(' ');
+            text += ` — last sent ${when}: ${verdict}`;
+        }
+        line.textContent = text;
+        btn.disabled = !!d.shipping;
     },
 
     async loadRestoreResult(el) {

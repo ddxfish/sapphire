@@ -42,6 +42,11 @@ export function chatChip(target) {
     return `💬 ${esc(target)}`;
 }
 
+/** A Device task's chip: what it runs, no AI (2026-10-06). */
+export function deviceChip(da) {
+    return `<span title="Runs this device action, no AI">\u2699 ${esc(da.device)} \u00b7 ${esc(da.capability)} \u00b7 ${esc(da.action)}${da.value ? ' ' + esc(da.value) : ''}</span>`;
+}
+
 export function formatHourRange(start, end) {
     const fmt = h => {
         if (h === 0) return '12AM';
@@ -163,7 +168,7 @@ export function renderTaskCard(t) {
         t.chance < 100 ? `${t.chance}%` : '',
         t.active_hours_start != null ? `🕓 ${formatHourRange(t.active_hours_start, t.active_hours_end)}` : '',
         statusText,
-        chatChip(t.chat_target),
+        t.device_action?.device ? deviceChip(t.device_action) : chatChip(t.chat_target),
         `Last: ${lastRun}`
     ].filter(Boolean).join(' · ');
 

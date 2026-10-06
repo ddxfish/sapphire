@@ -2399,6 +2399,9 @@ div.hb-response-summary {
 .sched-field-row .sched-field { flex: 1; }
 
 .sched-hint { font-size: var(--font-xs); color: var(--text-muted); margin-top: 2px; display: block; }
+/* Task editor: Chat / Device radio (2026-10-06) */
+.sched-runs label + label { display: inline-flex; align-items: center; gap: 6px; margin: 0 18px 0 0; color: var(--text); cursor: pointer; }
+.sched-runs input[type="radio"] { width: auto; margin: 0; }
 .sched-checkbox { margin-bottom: 8px; font-size: var(--font-sm); }
 .sched-checkbox label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 
@@ -3912,6 +3915,7 @@ div.hb-response-summary {
     transition: opacity 0.15s;
     white-space: nowrap;
 }
+.backup-send-btn { background: transparent; color: var(--trim, var(--accent-blue)); border: 1px solid var(--trim, var(--accent-blue)); }
 .backup-now-btn:hover { opacity: 0.85; }
 .backup-now-btn:disabled { opacity: 0.5; cursor: default; }
 .backup-section-divider {

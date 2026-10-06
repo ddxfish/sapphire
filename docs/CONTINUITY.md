@@ -24,6 +24,8 @@ Your AI doesn't have to wait for you to talk first. Continuity lets Sapphire wak
 
 The **Chat Name** field decides where that happens. Name a chat and the task runs inside it with saved history—she remembers previous runs, and you can read the conversation later. The UI never switches chats on its own. Leave it blank and the task runs in an invisible, ephemeral background context that leaves no chat behind.
 
+**A task can skip the AI entirely.** The editor's **Runs** radio has two settings: **Chat** (the default, everything above) and **Device**. A Device task runs one device action from [Settings > Devices](DEVICES.md) on its schedule with no model in the loop — back up to a satellite's SD card every Sunday at 4 AM, or a folder on a USB stick nightly. Pick the device, the capability and the action from what the device offers; the message and AI sections hide because nobody reads them. Actions that ask for an "I UNDERSTAND" on the Devices page (formatting a card) are never offered on a schedule. The device's answer becomes the task's last response; a failed run shows the same error toast as any other task.
+
 Time-based tasks are half the picture: Sapphire can also react to outside events—Discord messages, email, live phone calls, HTTP requests. Those lanes (daemons, realtime rules, webhooks) share the same task machinery and are covered in [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
 
 ## Task Fields

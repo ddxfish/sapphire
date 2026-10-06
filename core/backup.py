@@ -910,30 +910,33 @@ class Backup:
             target += timedelta(days=1)
         return (target - now).total_seconds(), target
 
+    def newest_backup(self):
+        """{filename, size, age_hours} of the newest backup of any tier, or None."""
+        try:
+            allb = [b for tier in self.list_backups().values() for b in tier]
+            if not allb:
+                return None
+
+            def _mtime(b):
+                try:
+                    return Path(b['path']).stat().st_mtime
+                except OSError:
+                    return 0
+            nb = max(allb, key=_mtime)
+            ts = _mtime(nb)
+            return {'filename': nb.get('filename'), 'size': nb.get('size'),
+                    'age_hours': round((time.time() - ts) / 3600, 1) if ts else None}
+        except Exception as e:
+            logger.warning(f"backup health: list failed: {e}")
+            return None
+
     def health_summary(self):
         """One honest dict about backup health (negspace N11, 2026-08-31).
         The mechanism was well-guarded but every failure mode was invisible:
         sentinel halt had no UI, the status widget lied structurally, a dead
         scheduler thread logged 'started', failures logged under 'complete'.
         Served by GET /api/backup/health; rendered on Settings > Backup."""
-        newest = None
-        try:
-            allb = [b for tier in self.list_backups().values() for b in tier]
-            if allb:
-                def _mtime(b):
-                    try:
-                        return Path(b['path']).stat().st_mtime
-                    except OSError:
-                        return 0
-                nb = max(allb, key=_mtime)
-                ts = _mtime(nb)
-                newest = {
-                    'filename': nb.get('filename'),
-                    'size': nb.get('size'),
-                    'age_hours': round((time.time() - ts) / 3600, 1) if ts else None,
-                }
-        except Exception as e:
-            logger.warning(f"backup health: list failed: {e}")
+        newest = self.newest_backup()
         sentinels = self._active_corruption_sentinels()
         thread = getattr(self, '_scheduler_thread', None)
         try:
@@ -942,6 +945,12 @@ class Backup:
         except Exception:
             password_status = 'unreadable'
         folder = self.backup_dir
+        try:
+            from core import backup_targets
+            devices = backup_targets.status()
+        except Exception as e:
+            logger.warning(f"backup health: targets failed: {e}")
+            devices = {"targets": [], "shipping": None, "last_ship": None}
         return {
             'enabled': bool(getattr(config, 'BACKUPS_ENABLED', True)),
             'sentinels': sentinels,
@@ -954,6 +963,7 @@ class Backup:
             'backup_dir_error': getattr(self, 'backup_dir_error', None),
             'encrypt': bool(getattr(config, 'BACKUPS_ENCRYPT_LOCAL', False)),
             'password_status': password_status,
+            'devices': devices,
         }
 
     def stop(self):

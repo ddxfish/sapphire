@@ -258,6 +258,9 @@ class ContinuityExecutor:
         source = task.get("source", "")
         if source.startswith("plugin:"):
             return self._run_plugin_task(task, progress_callback, response_callback)
+        # A Device task runs one device action, no LLM (2026-10-06)
+        if task.get("device_action"):
+            return self._run_device_task(task, progress_callback, response_callback)
 
         # Deepcopy to protect against update_task mutating the dict while we
         # read it. Scheduler passes live refs from self._tasks.values(), so
@@ -1004,6 +1007,45 @@ class ContinuityExecutor:
         if progress_cb:
             progress_cb(1, 1)
 
+        result["completed_at"] = datetime.now().isoformat()
+        return result
+
+    def _run_device_task(self, task: Dict[str, Any], progress_cb=None, response_cb=None) -> Dict[str, Any]:
+        """Run the task's one device action through the device engine as the
+        owner (core itself): a locked capability still runs, a `danger`
+        action never got past the scheduler's check. The device's answer is
+        the receipt; ok=False is a task error (toast + activity)."""
+        from core.devices import engine
+        da = task.get("device_action") or {}
+        result = {
+            "success": False,
+            "task_id": task.get("id"),
+            "task_name": task.get("name"),
+            "started_at": datetime.now().isoformat(),
+            "responses": [],
+            "errors": []
+        }
+        where = f"{da.get('device')} / {da.get('capability')} / {da.get('action')}"
+        try:
+            told, ok = engine.run(da.get("device"), da.get("capability"), da.get("action"),
+                                  da.get("value") or "", owner=True)
+            text = engine.text_of(told)
+        except Exception as e:
+            logger.error(f"[Continuity] Device task '{task.get('name')}' crashed: {e}", exc_info=True)
+            text, ok = f"{where} failed: {type(e).__name__}", False
+        result["responses"].append({"output": text or None})
+        result["success"] = bool(ok)
+        logger.info(f"[Continuity] Device task '{task.get('name')}' {where} -> "
+                    f"{'ok' if ok else 'FAILED'}: {text[:200] if text else '(no answer)'}")
+        if response_cb and text:
+            try: response_cb(text)
+            except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
+        if not ok:
+            result["errors"].append(text or where)
+            publish(Events.CONTINUITY_TASK_ERROR, {"task": task.get("name", "Unknown"),
+                                                   "error": text or f"{where} failed"})
+        if progress_cb:
+            progress_cb(1, 1)
         result["completed_at"] = datetime.now().isoformat()
         return result
 

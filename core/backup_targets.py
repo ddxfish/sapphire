@@ -100,7 +100,9 @@ class Target:
 # ---------------------------------------------------------------------------
 _providers = []
 _lock = threading.Lock()
-last_ship = None      # {ts, filename, results} for health
+_ship_lock = threading.Lock()   # one ship at a time: a card takes one PUT at a time anyway
+shipping = None       # filename in flight, for health / the Send button
+last_ship = None      # {ts, filename, results[, error]} for health
 
 
 def register_provider(fn):
@@ -175,13 +177,26 @@ def ship(filename: str, to=None):
     any target wants encryption (GATE 1), one thread per target, rotation by
     names after. Returns [{target, ok, msg}]. Raises BackupRefused when the
     local file is missing or sealing is impossible (no password)."""
+    global last_ship, shipping
+    with _ship_lock:
+        shipping = filename
+        try:
+            tl = list(to) if to is not None else targets()
+            if not tl:
+                return []
+            plain = backup_manager.get_backup_path(filename)
+            if not plain:
+                raise BackupRefused(f"Backup not found: {filename}")
+            return _ship_locked(filename, plain, tl)
+        except BackupRefused as e:
+            last_ship = {"ts": time.time(), "filename": filename, "results": [], "error": str(e)}
+            raise
+        finally:
+            shipping = None
+
+
+def _ship_locked(filename, plain, tl):
     global last_ship
-    tl = list(to) if to is not None else targets()
-    if not tl:
-        return []
-    plain = backup_manager.get_backup_path(filename)
-    if not plain:
-        raise BackupRefused(f"Backup not found: {filename}")
     sealed, cleanup = None, (lambda: None)
     if any(t.wants_encryption for t in tl):
         sealed, cleanup = backup_manager.sealed(filename)
@@ -204,6 +219,9 @@ def ship(filename: str, to=None):
     else:
         cleanup()
     last_ship = {"ts": time.time(), "filename": filename, "results": list(results)}
+    for r in results:                      # a failed target is loud, not a log line
+        if not r.get("ok"):
+            backup_manager._alert('backup_ship_failed', target=r.get("target", ""), reason=r.get("msg", ""))
     return results
 
 
@@ -232,9 +250,38 @@ def ship_async(files):
         except Exception as e:
             logger.error(f"Backup targets: ship failed: {e}", exc_info=True)
 
+    global shipping
+    shipping = fn                      # claimed before the thread reaches the lock
     th = threading.Thread(target=_go, daemon=True, name="backup-ship")
     th.start()
     return th
+
+
+def status():
+    """For Settings > Backup: who holds backups right now, what is in
+    flight, how the last ship went."""
+    return {"targets": [t.label for t in targets()], "shipping": shipping, "last_ship": last_ship}
+
+
+def send_async(filename=None):
+    """The Send-to-devices button: ship one local backup (the newest when
+    none is named) to every online target, on a thread. Returns (filename,
+    [labels]); raises BackupRefused when nothing can be done, with the why."""
+    tl = targets()
+    if not tl:
+        raise BackupRefused("No device holds backups yet: give a satellite a card, or set a backup "
+                            "folder on a computer, in Settings > Devices.")
+    if shipping:
+        raise BackupRefused(f"Already sending {shipping}; wait for it to land.")
+    if not filename:
+        newest = backup_manager.newest_backup()
+        if not newest:
+            raise BackupRefused("No backup to send yet. Make one first.")
+        filename = newest["filename"]
+    if not backup_manager.get_backup_path(filename):
+        raise BackupRefused(f"Backup not found: {filename}")
+    ship_async([filename])
+    return filename, [t.label for t in tl]
 
 
 def ship_now(to=None):

@@ -3,6 +3,7 @@
 import { fetchAIConfigData, renderAIConfig, wireAIConfig, readAIConfig } from './ai-config.js';
 import { renderCronTrigger, wireCronTrigger, readCronTrigger } from './trigger-cron.js';
 import { renderEventTrigger, wireEventTrigger, readEventTrigger } from './trigger-event.js';
+import { fetchDevices, renderDeviceAction, wireDeviceAction, readDeviceAction } from './device-action.js';
 import { setupModalClose } from '../modal.js';
 
 const EMOJI_PICKS = [
@@ -44,8 +45,10 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
         if (type === 'daemon') { t.emoji = t.emoji || '\uD83D\uDCE1'; }
     }
 
-    // Fetch AI config data
-    const aiData = await fetchAIConfigData();
+    // Fetch AI config data (+ the device list: a Task may run a device action instead of a chat)
+    const canDevice = type === 'task';
+    const [aiData, devices] = await Promise.all([fetchAIConfigData(), canDevice ? fetchDevices() : []]);
+    const runsDevice = canDevice && !!(t.device_action && t.device_action.device);
 
     // Build trigger section
     const triggerHTML = config.trigger === 'cron'
@@ -77,14 +80,23 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
                     <label>${config.label} Name</label>
                     <input type="text" id="ed-name" value="${_esc(t.name || '')}" placeholder="${_placeholderForType(type)}">
                 </div>
+                ${canDevice ? `
+                <div class="sched-field sched-runs">
+                    <label>Runs</label>
+                    <label><input type="radio" name="ed-runs" value="chat" ${runsDevice ? '' : 'checked'}> Chat <span class="text-muted">— Sapphire gets a message</span></label>
+                    <label><input type="radio" name="ed-runs" value="device" ${runsDevice ? 'checked' : ''}> Device <span class="text-muted">— one device action, no AI</span></label>
+                </div>` : ''}
+                <div id="ed-chat-block" ${runsDevice ? 'style="display:none"' : ''}>
                 <div class="sched-field">
                     <label>${_messageLabel(type)} <span class="help-tip" data-tip="${_messageTip(type)}">?</span></label>
                     <textarea id="ed-message" rows="2" placeholder="${_messageHintForType(type)}">${_esc(t.initial_message || '')}</textarea>
                 </div>
+                </div>
+                ${canDevice ? `<div id="ed-device-block" ${runsDevice ? '' : 'style="display:none"'}>${renderDeviceAction(t, devices)}</div>` : ''}
 
                 ${triggerHTML}
                 ${config.trigger === 'event' ? '<hr class="sched-divider" style="margin-top:20px">' : ''}
-                ${aiHTML}
+                <div id="ed-ai-block" ${runsDevice ? 'style="display:none"' : ''}>${aiHTML}</div>
             </div>
             <div class="sched-editor-footer">
                 <button class="btn-sm" data-action="close">Cancel</button>
@@ -143,12 +155,32 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
     // Wire AI config
     wireAIConfig(modal, t, aiData);
 
+    // Chat / Device radio: the device side hides the message + AI accordions
+    const runsAs = () => modal.querySelector('input[name="ed-runs"]:checked')?.value || 'chat';
+    if (canDevice) {
+        wireDeviceAction(modal, t);
+        modal.querySelectorAll('input[name="ed-runs"]').forEach(r => r.addEventListener('change', () => {
+            const dev = runsAs() === 'device';
+            modal.querySelector('#ed-chat-block').style.display = dev ? 'none' : '';
+            modal.querySelector('#ed-ai-block').style.display = dev ? 'none' : '';
+            modal.querySelector('#ed-device-block').style.display = dev ? '' : 'none';
+        }));
+    }
+
     // Save
     modal.querySelector('#ed-save')?.addEventListener('click', async () => {
         const name = modal.querySelector('#ed-name')?.value?.trim();
         if (!name) { alert('Name is required'); return; }
 
-        const aiConfig = readAIConfig(modal);
+        const device = canDevice && runsAs() === 'device';
+        let deviceAction = {};
+        if (device) {
+            deviceAction = readDeviceAction(modal);
+            if (!deviceAction.device || !deviceAction.capability || !deviceAction.action) {
+                alert('Pick a device, a capability and an action'); return;
+            }
+        }
+        const aiConfig = device ? {} : readAIConfig(modal);
 
         let triggerConfig;
         if (config.trigger === 'cron') {
@@ -162,7 +194,8 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
         const data = {
             name,
             type,
-            initial_message: modal.querySelector('#ed-message')?.value?.trim() || '',
+            initial_message: device ? '' : (modal.querySelector('#ed-message')?.value?.trim() || ''),
+            ...(canDevice ? { device_action: deviceAction } : {}),
             heartbeat: type === 'heartbeat',  // backward compat
             emoji: selectedEmoji || t.emoji || '',
             ...triggerConfig,

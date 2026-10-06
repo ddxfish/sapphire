@@ -372,6 +372,41 @@ class ContinuityScheduler:
             return False
 
     @staticmethod
+    def _check_device_action(data: Dict) -> Dict:
+        """A Device task (2026-10-06: the editor's "Chat / Device" radio) runs
+        one device action with no LLM. The action is checked against what the
+        device describes NOW, so a renamed device or a vanished action is a
+        400 at save time, not a nightly error. A `danger` action (a card
+        format) is never schedulable. Returns the clean dict ({} = Chat)."""
+        da = data.get("device_action")
+        if not da:
+            return {}
+        if not isinstance(da, dict):
+            raise ValueError("device_action must be an object")
+        clean = {k: str(da.get(k) or "").strip() for k in ("device", "capability", "action", "value")}
+        if not (clean["device"] and clean["capability"] and clean["action"]):
+            raise ValueError("A Device task needs a device, a capability and an action")
+        from core.devices import engine
+        try:
+            row = engine.get(clean["device"])
+        except engine.DeviceError as e:
+            raise ValueError(str(e))
+        if not row.get("enabled", True):
+            raise ValueError(f"'{row['id']}' is turned off in Settings > Devices")
+        caps = engine.describe(row)
+        cap = next((c for c in caps if c["capability"] == clean["capability"]), None)
+        if not cap:
+            raise ValueError(f"'{clean['device']}' has no '{clean['capability']}'")
+        if cap.get("error"):
+            raise ValueError(f"{clean['device']} / {clean['capability']}: {cap['error']}")
+        act = (cap.get("actions") or {}).get(clean["action"])
+        if act is None:
+            raise ValueError(f"'{clean['capability']}' on '{clean['device']}' has no action '{clean['action']}'")
+        if act.get("danger"):
+            raise ValueError(f"'{clean['action']}' asks for I UNDERSTAND every time; it cannot run on a schedule")
+        return clean
+
+    @staticmethod
     def _check_llm_provider(data: Dict) -> None:
         """A task's provider must exist (2026-09-21): the editor's list was
         the only check, so a deleted provider stayed pinned and the task
@@ -391,6 +426,7 @@ class ContinuityScheduler:
         if data.get("chat_target") == "__locked__":
             data = {k: v for k, v in data.items() if k != "chat_target"}
         self._check_llm_provider(data)
+        device_action = self._check_device_action(data)
         task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
         import config
         max_daemons = int(config.MAX_DAEMON_TASKS)
@@ -423,7 +459,8 @@ class ContinuityScheduler:
             "prompt": data.get("prompt", "default"),
             "toolset": data.get("toolset", "none"),
             "chat_target": data.get("chat_target", ""),
-            "initial_message": data.get("initial_message", "Hello."),
+            "initial_message": data.get("initial_message", "" if device_action else "Hello."),
+            "device_action": device_action,
             "tts_enabled": data.get("tts_enabled", True),
             "browser_tts": data.get("browser_tts", False),
             "inject_datetime": data.get("inject_datetime", False),
@@ -500,6 +537,8 @@ class ContinuityScheduler:
             if data.get("chat_target") == "__locked__":
                 data = {k: v for k, v in data.items() if k != "chat_target"}
             self._check_llm_provider(data)
+            if "device_action" in data:
+                data = {**data, "device_action": self._check_device_action(data)}
             # The S6 rule for tasks: a provider change drops the old model
             # unless the edit sets one (the editor kept it — V2, 2026-09-21).
             if "provider" in data and "model" not in data \
@@ -519,7 +558,7 @@ class ContinuityScheduler:
             allowed = {
                 "name", "type", "enabled", "schedule", "trigger_config", "chance",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "tts_enabled", "browser_tts", "inject_datetime",
+                "initial_message", "device_action", "tts_enabled", "browser_tts", "inject_datetime",
                 "persona", "voice", "pitch", "speed",
                 "heartbeat", "emoji",
                 "context_limit", "max_parallel_tools", "max_tool_rounds",

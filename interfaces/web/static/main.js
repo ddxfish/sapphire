@@ -913,12 +913,18 @@ function initEventBus() {
     // DB corruption sentinel (backup housekeeping) — halts ALL backups until
     // cleared. Was journalctl-only; this event had zero subscribers before the
     // 2026-07-06 herring hunt (#14).
+    // Every backup alert rides this one event; switch on type (2026-10-06:
+    // the password / ship alerts used to wear the DB-corruption words).
     eventBus.on('sapphire_health_alert', (data) => {
         const dbs = (data?.dbs || []).join(', ');
-        ui.showToast(
+        const words = {
+            backup_password_missing: 'Backup NOT made: encryption is on but no backup password is set. Settings > Backup.',
+            backup_ship_refused: `Backup not sent to devices: ${data?.reason || 'refused'}`,
+            backup_ship_failed: `Backup to ${data?.target || 'a device'} FAILED: ${data?.reason || 'see the log'}`,
+        }[data?.type] ||
             `Database integrity check FAILED${dbs ? ` (${dbs})` : ''} — ` +
-            `backups are halted until the sentinel is cleared in Settings > Backup`,
-            'error', 15000);
+            `backups are halted until the sentinel is cleared in Settings > Backup`;
+        ui.showToast(words, 'error', 15000);
     });
 
     // Re-fetch conversation-mode state and route it through the same event the

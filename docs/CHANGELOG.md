@@ -1,3 +1,7 @@
+# 2.13.5 - Backup Encryption and devices
+- Backup encryption
+- Backup location can be set
+- Can send encrypted backup to devices (esp32, pi, SSH)
 # 2.13.4 - Wakeword Builder
 - make microwakeword or openwakeword
 - Full process in app: synthetic voices, your voice, checks, train, install

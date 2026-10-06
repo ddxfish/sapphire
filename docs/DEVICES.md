@@ -361,7 +361,9 @@ with your backup password and sends it there; the tab's three counts say how
 many daily, weekly and monthly copies the card keeps before the oldest goes.
 `device_action("den","storage","backup")` sends one now;
 `device_action("den","storage","list")` says what is there and how much room
-is left. The card is plain FAT32: pull it, put it in any computer, and the
+is left. For a rhythm of its own (Sundays at 4 AM, say) make a **Device** task
+in Triggers > Scheduled with that same backup action and no AI in the loop
+([Continuity](CONTINUITY.md)). The card is plain FAT32: pull it, put it in any computer, and the
 `README.txt` and `open-backup` scripts beside the archives open a backup with
 your password and nothing else. Nothing ever lands on a card unsealed: Sapphire
 checks before sending and the board checks again before writing. A board that

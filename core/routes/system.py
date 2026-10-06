@@ -39,6 +39,24 @@ async def backup_health(request: Request, _=Depends(require_login)):
     return backup_manager.health_summary()
 
 
+@router.post("/api/backup/send")
+async def send_backup(request: Request, _=Depends(require_login)):
+    """Send one local backup (the newest unless named) to every device that
+    holds backups, sealed first; answers at once, the health door says when
+    it landed (2026-10-06)."""
+    from core import backup_targets
+    from core.backup import BackupRefused
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        filename, labels = backup_targets.send_async((data or {}).get('filename') or None)
+    except BackupRefused as e:
+        raise HTTPException(status_code=409 if 'Already sending' in str(e) else 400, detail=str(e))
+    return {"status": "sending", "filename": filename, "targets": labels}
+
+
 @router.post("/api/backup/create")
 async def create_backup(request: Request, _=Depends(require_login)):
     """Create a backup."""
