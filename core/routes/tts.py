@@ -307,6 +307,13 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
     _sid = _body.get("stream_id") if isinstance(_body, dict) else None
     _sid = str(_sid) if _sid else None
     system.tts.stop()
+    # A persona speaking through the MCP door plays on this machine too, on
+    # its own stream: the same button ends it.
+    try:
+        from core.audio import playback
+        playback.stop()
+    except Exception:
+        pass
     # Phase I isolation: this button belongs to the WEB UI — everything it stops
     # must be scoped to the operator's surface. Unscoped, it muted ALL streams,
     # cancelled ALL generation, and flushed the singleton driver's sink — which

@@ -1,145 +1,156 @@
 #!/usr/bin/env python3
-"""stdio-to-HTTP MCP bridge for claude-code-persona.
+"""stdio MCP bridge to Sapphire's MCP door (POST /mcp).
 
-Claude Code spawns this as a stdio MCP server. It translates JSON-RPC from
-stdin/stdout to HTTP POST against the local Sapphire (self-signed TLS OK on
-loopback). Bearer key is read from the plugin state file — no config plumbing.
+Claude Code spawns this as a stdio MCP server and it carries each call to the
+local Sapphire over HTTPS (her self-signed cert is fine on loopback). Who the
+client is comes from the API token: one that speaks as a persona gets that
+persona's voice (speak, ding, listen) and memory beside ask and tell.
 
-Claude Code MCP config:
-    {
-      "mcpServers": {
-        "sapphire-memory": {
-          "command": "python3",
-          "args": ["/path/to/sapphire/tools/mcp-bridge.py"]
-        }
-      }
-    }
+The connection outlives her restarts. The handshake is answered here when she
+is away, the last good tool list is kept on disk and served meanwhile, and a
+call she cannot take comes back as a tool error to retry, not a dead server.
+
+Setup:
+  1. Sapphire: Settings > MCP Server on. Settings > System > API Keys: add a
+     key and pick the persona it speaks as. Save the token to
+     user/mcp-persona.token.
+  2. The client's MCP config (Claude Code shown; any stdio MCP client works):
+       "mcpServers": {"sapphire": {"command": "python3",
+                                   "args": ["/path/to/sapphire/tools/mcp-bridge.py"]}}
+
+Two clients on one machine each need a key of their own: give each its token
+in its config, as SAPPHIRE_MCP_TOKEN or as a file named by SAPPHIRE_MCP_TOKEN_FILE.
 """
 import json
 import os
 import ssl
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-KEY_FILE = PROJECT_ROOT / 'user' / 'plugin_state' / 'claude-code-persona_mcp_key.json'
-BASE = os.environ.get('SAPPHIRE_BASE', 'https://localhost:8073')
-ENDPOINT = f'{BASE}/api/plugin/claude-code-persona/mcp'
+TOKEN_FILE = Path(os.environ.get('SAPPHIRE_MCP_TOKEN_FILE') or PROJECT_ROOT / 'user' / 'mcp-persona.token')
+TOOLS_FILE = TOKEN_FILE.with_suffix('.tools.json')                # the last tool list she gave this key
+BASE = os.environ.get('SAPPHIRE_BASE', 'https://localhost:8073').rstrip('/')
+ENDPOINT = f'{BASE}/mcp'
+PROTOCOL = '2025-06-18'
+QUICK, LONG = 5, 150           # seconds: the handshake and lists; a call (speak plays to its end, listen waits on a person)
+AWAY = "Sapphire is not answering right now (down or restarting). Try again in a few seconds."
 
-# TLS verification policy: we ship with verify-off because Sapphire's default
-# cert is self-signed and the expected target is loopback. If SAPPHIRE_BASE
-# points at a remote host, refuse to bypass cert verification — that'd be a
-# silent MITM window for anyone who can intercept the path. Force the user to
-# either use a cert a browser would trust, or keep it on localhost.
-_host = (urlparse(BASE).hostname or '').lower()
-_LOOPBACK = {'localhost', '127.0.0.1', '::1'}
-if _host in _LOOPBACK:
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
-else:
-    # Remote target → verify normally. Self-signed cert on a remote host will
-    # fail loudly, which is the correct behavior.
-    _ssl_ctx = ssl.create_default_context()
+# Loopback: her default cert is self-signed, so it is not verified. Any other
+# host is verified normally and a self-signed cert there fails loudly, which
+# is right: skipping it would hand the token to whoever sits on the path.
+_ctx = ssl.create_default_context()
+if (urlparse(BASE).hostname or '').lower() in ('localhost', '127.0.0.1', '::1'):
+    _ctx.check_hostname = False
+    _ctx.verify_mode = ssl.CERT_NONE
 
 
-def _read_key() -> str:
-    if not KEY_FILE.exists():
-        return ''
+def _token():
+    given = os.environ.get('SAPPHIRE_MCP_TOKEN', '').strip()
+    if given:
+        return given
     try:
-        return json.loads(KEY_FILE.read_text()).get('key', '') or ''
-    except Exception:
+        return TOKEN_FILE.read_text(encoding='utf-8').strip()
+    except OSError:
         return ''
 
 
-def _forward(payload: dict) -> dict | None:
-    """POST a JSON-RPC message to Sapphire. Return parsed response dict, or
-    None if it was a notification (server returned 202 / no body)."""
-    key = _read_key()
-    if not key:
-        return {
-            'jsonrpc': '2.0',
-            'id': payload.get('id'),
-            'error': {
-                'code': -32001,
-                'message': (
-                    f'MCP key not found at {KEY_FILE}. '
-                    'Enable the claude-code-persona plugin in Sapphire to generate one.'
-                ),
-            },
-        }
-
-    body = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        ENDPOINT,
-        data=body,
-        method='POST',
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {key}',
-        },
-    )
+def _post(message, timeout):
+    """One JSON-RPC message to her door. Returns (answer, ''), or (None, why)
+    when she could not be reached or refused the token."""
+    token = _token()
+    if not token:
+        return None, (f"No API token: save one to {TOKEN_FILE} (Sapphire > Settings > System > API Keys, "
+                      "with the persona it speaks as).")
+    request = urllib.request.Request(
+        ENDPOINT, data=json.dumps(message).encode('utf-8'), method='POST',
+        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'})
     try:
-        with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx) as resp:
-            status = resp.status
-            raw = resp.read()
+        with urllib.request.urlopen(request, timeout=timeout, context=_ctx) as response:
+            raw = response.read()
     except urllib.error.HTTPError as e:
-        raw = e.read()
-        try:
-            err_body = json.loads(raw)
-        except Exception:
-            err_body = {'message': raw.decode('utf-8', errors='replace')}
-        return {
-            'jsonrpc': '2.0',
-            'id': payload.get('id'),
-            'error': {
-                'code': -32000,
-                'message': f'HTTP {e.code}: {err_body}',
-            },
-        }
-    except Exception as e:
-        return {
-            'jsonrpc': '2.0',
-            'id': payload.get('id'),
-            'error': {'code': -32000, 'message': f'Sapphire unreachable: {e}'},
-        }
-
-    if status == 202 or not raw:
-        # Notification — no response body expected
-        return None
+        if e.code == 401:
+            return None, "Sapphire refused the API token (revoked or mistyped)."
+        if e.code == 404:
+            return None, "Sapphire's MCP server is off. Turn it on under Settings > MCP Server."
+        return None, f"Sapphire answered HTTP {e.code}."
+    except Exception:
+        return None, AWAY
     try:
-        return json.loads(raw)
-    except Exception as e:
-        return {
-            'jsonrpc': '2.0',
-            'id': payload.get('id'),
-            'error': {'code': -32700, 'message': f'Bad JSON from Sapphire: {e}'},
-        }
+        return (json.loads(raw) if raw else None), ''
+    except ValueError:
+        return None, "Sapphire sent something that is not JSON."
+
+
+def _result(ident, value):
+    return {'jsonrpc': '2.0', 'id': ident, 'result': value}
+
+
+def _kept_tools():
+    try:
+        tools = json.loads(TOOLS_FILE.read_text(encoding='utf-8'))
+        return tools if isinstance(tools, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _keep_tools(tools):
+    try:
+        tmp = TOOLS_FILE.with_suffix('.tmp')
+        tmp.write_text(json.dumps(tools), encoding='utf-8')
+        os.replace(tmp, TOOLS_FILE)
+    except OSError:
+        pass
+
+
+def handle(message):
+    """One message from Claude Code in, one answer out, or None when nothing is owed."""
+    method, ident = message.get('method', ''), message.get('id')
+    if ident is None or method.startswith('notifications/'):
+        return None                                     # her door keeps no session: nothing to pass on
+    if method == 'ping':
+        return _result(ident, {})
+    if method == 'initialize':
+        answer, why = _post(message, QUICK)
+        if answer and 'result' in answer:
+            return answer
+        return _result(ident, {
+            'protocolVersion': PROTOCOL,
+            'capabilities': {'tools': {'listChanged': False}},
+            'serverInfo': {'name': 'Sapphire', 'version': 'away'},
+            'instructions': f"Sapphire's MCP door. {why} Her tools work again once she answers.",
+        })
+    if method == 'tools/list':
+        answer, _why = _post(message, QUICK)
+        tools = (answer or {}).get('result', {}).get('tools')
+        if isinstance(tools, list):
+            _keep_tools(tools)
+            return answer
+        return _result(ident, {'tools': _kept_tools()})
+    if method == 'tools/call':
+        answer, why = _post(message, LONG)
+        if answer is not None:
+            return answer
+        return _result(ident, {'content': [{'type': 'text', 'text': why}], 'isError': True})
+    return {'jsonrpc': '2.0', 'id': ident, 'error': {'code': -32601, 'message': f'Method not found: {method}'}}
 
 
 def main():
-    """Read JSON-RPC messages line-by-line from stdin, forward, write responses
-    to stdout. stdio MCP framing is newline-delimited JSON (one message per line)."""
+    """stdio MCP framing: one JSON message per line, each way."""
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         try:
-            msg = json.loads(line)
-        except Exception as e:
-            sys.stdout.write(json.dumps({
-                'jsonrpc': '2.0',
-                'id': None,
-                'error': {'code': -32700, 'message': f'Parse error: {e}'},
-            }) + '\n')
-            sys.stdout.flush()
-            continue
-
-        result = _forward(msg)
-        if result is not None:
-            sys.stdout.write(json.dumps(result) + '\n')
+            message = json.loads(line)
+            answer = handle(message) if isinstance(message, dict) else None
+        except ValueError as e:
+            answer = {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': f'Parse error: {e}'}}
+        if answer is not None:
+            sys.stdout.write(json.dumps(answer) + '\n')
             sys.stdout.flush()
 
 

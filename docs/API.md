@@ -46,6 +46,17 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 
 The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notifications get 202. It always offers two tools of its own: `ask` (`text`, `chat`, `from`: a turn in that chat, made if missing, her answer as the result) and `tell` (the same without waiting). The rest are the tools ticked in settings; tools of plugins that declare scopes are not offered yet. Clients: another Sapphire added as a device, or `claude mcp add --transport http sapphire https://host:8073/mcp --header "Authorization: Bearer <token>"`.
 
+**Persona keys.** An API token made with a persona (`POST /api/system/api-tokens` with `persona`, or the picker under Settings > System > API Keys) is that persona at this door. The client never names a voice or a scope; both come from the persona. These tools are for the client outside and are not in her own toolkit:
+
+| Tool | What it does |
+|------|--------------|
+| `speak` (`text`) | Says the words on this machine's speakers in the persona's voice, pitch and speed. Returns when said. Waits for her own voice to end, holds the wake word off, and never changes her voice |
+| `ding` | Plays a short chime on this machine's speakers |
+| `listen` (`seconds`, 3 to 60) | Offered only when `MCP_SERVER_MIC` is on. A chime, then this machine's microphone records until the speaker stops; returns `Heard: "..."`. The wake word's stream is closed for the length of it and brought back after. Refused during a voice turn of her own, a live conversation, or a private chat with a cloud transcriber |
+| `memory_save`, `memory_search`, `memory_recent`, `memory_delete` | The persona's own memory scope and no other. Not offered when the persona's memory scope is `default`, `global` or unset: no key holds her scope |
+
+`tools/mcp-bridge.py` is a stdio bridge to this door for clients that will not take a self-signed cert (Claude Code). It reads the token from `user/mcp-persona.token` (or `SAPPHIRE_MCP_TOKEN`, or the file named by `SAPPHIRE_MCP_TOKEN_FILE`, so two clients can each hold their own key), answers the handshake itself while she restarts, and serves the last tool list it saw.
+
 ### Chat
 
 | Method | Endpoint | Purpose |
@@ -630,7 +641,7 @@ Login required, except the two doors a device opens with its own key.
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/system/api-tokens` | List programmatic API tokens |
-| POST | `/api/system/api-tokens` | Create a named API token |
+| POST | `/api/system/api-tokens` | Create a named API token. Optional `persona`: the persona it speaks as at the MCP door (400 when there is no such persona) |
 | DELETE | `/api/system/api-tokens/{token_id}` | Revoke an API token |
 | POST | `/api/system/password` | Change the login password (`{current, new}`; verifies the current one, 5/min, 10+ chars and ≤72 bytes). The calling tab stays logged in; **every other session is logged out**. Named bearer tokens are unaffected |
 

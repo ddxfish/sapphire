@@ -740,13 +740,15 @@ class TTSClient:
             _time.sleep(0.1)
         return not self._is_playing
 
-    def render(self, text, chat_settings=None):
+    def render(self, text, chat_settings=None, voice=None, speed=None, pitch=None):
         """Speech as audio bytes, for a speaker that is not this machine (a
         satellite). The same privacy gate, text cleanup and pre_tts hook as
         speak(), so what a device says is what these speakers would have said.
 
         chat_settings: the settings of the chat that PRODUCED the text; None
         resolves the effective chat (see speak()).
+        voice, speed, pitch: another speaker's own (a persona at the MCP
+        door), used for this render only; None keeps her live values.
         Returns (bytes, content_type), or (None, the reason in plain words)."""
         from core.voice_privacy import tts_gate_reason
         gate = tts_gate_reason(chat_settings)
@@ -763,7 +765,7 @@ class TTSClient:
             if event.skip_tts:
                 return None, "Speech was cancelled by a plugin."
             processed = event.tts_text
-        audio = self.generate_audio_data(processed)
+        audio = self.generate_audio_data(processed, voice=voice, speed=speed, pitch=pitch)
         if not audio:
             return None, "The voice engine returned no audio."
         head = bytes(audio[:4])

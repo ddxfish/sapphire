@@ -15,7 +15,7 @@ Sapphire ships with 12 pre-made personas:
 | **Sapphire** | Heart (F) | Your companion in the stars |
 | **Cobalt** | Adam (M) | Cold logic, hot takes |
 | **Anita** | Sky (F) | Battery acid with a conscience |
-| **Claude** | Eric (M) | Two minds, one problem |
+| **Claude** | Fable (M, British) | Two minds, one problem |
 | **Alfred** | Daniel (M, British) | Already handled |
 | **Ada** | Emma (F, British) | I wrote the first algorithm. Keep up with me. |
 | **Einstein** | George (M, British) | Curiosity is its own reward |

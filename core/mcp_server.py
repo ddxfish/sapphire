@@ -4,7 +4,8 @@
 # list and call the tools the user ticked under Settings > MCP Server, plus
 # two tools of this door's own - `ask` and `tell`, a conversation in a named
 # chat. Another Sapphire is the first client (the "Another Sapphire" device);
-# Claude Code is the second.
+# Claude Code is the second. A token that speaks as a persona also gets that
+# persona's voice and memory here (core/mcp_persona.py).
 #
 # The shape is the smallest the protocol allows: Streamable HTTP, one POST,
 # JSON answers (no event stream - nothing here needs to push), no session.
@@ -33,7 +34,8 @@ answering = ContextVar('mcp_answering', default=False)
 _TOOLS = {
     'ask': {
         'name': 'ask',
-        'description': "Ask Sapphire something in one of her chats and get her answer. "
+        'description': "Ask Sapphire something in one of her chats and get her answer. The chat's own "
+                       "persona answers, so a chat set to another persona is how you reach that one. "
                        "The chat is made if it does not exist yet.",
         'inputSchema': {
             'type': 'object',
@@ -111,16 +113,17 @@ def catalogue(system):
     return out
 
 
-def exposed(system):
+def exposed(system, persona=None):
     """The tools this door offers right now, in MCP's own shape:
-    [{name, description, inputSchema}]. Own two first, then the ticked ones
-    that are still here and not scoped."""
-    tools = [dict(_TOOLS[n]) for n in OWN]
+    [{name, description, inputSchema}]. Own two first, then what the caller's
+    persona gives it, then the ticked ones that are still here and not scoped."""
+    from core import mcp_persona
+    tools = [dict(_TOOLS[n]) for n in OWN] + mcp_persona.offered(persona)
     fm = getattr(getattr(system, 'llm_chat', None), 'function_manager', None)
     if fm is None:
         return tools
     scoped, hidden, on = _scoped_plugins(), fm.get_hidden_functions(), set(ticked())
-    seen = set(OWN)
+    seen = set(OWN) | mcp_persona.NAMES
     for info in fm.function_modules.values():
         if (info.get('_plugin') or 'core') in scoped:
             continue
@@ -182,15 +185,16 @@ def _turn(system, chat, text, who, where):
         answering.reset(token)
 
 
-def ask(system, args, where=''):
-    name, reply = _turn(system, args.get('chat'), args.get('text'), args.get('from'), where)
+def ask(system, args, where='', persona=None):
+    # who is asking: what the client says, else the persona its key speaks as
+    name, reply = _turn(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
     logger.info(f"[MCP] ask in '{name}' from {where or 'a client'}: {len(reply or '')} chars back")
     return reply or '(she said nothing)', True
 
 
-def tell(system, args, where=''):
+def tell(system, args, where='', persona=None):
     name = _chat_ready(system, args.get('chat'))
-    text, who = args.get('text'), args.get('from')
+    text, who = args.get('text'), args.get('from') or persona
 
     def go():
         try:
@@ -203,13 +207,17 @@ def tell(system, args, where=''):
 
 # --- a call -----------------------------------------------------------------
 
-def call(system, name, args, where=''):
-    """Run one tool. (text, ok). Never raises for a tool's own failure."""
+def call(system, name, args, where='', persona=None):
+    """Run one tool. (text, ok). Never raises for a tool's own failure.
+    `persona` is the one the caller's token speaks as, or None."""
     args = args if isinstance(args, dict) else {}
     if name == 'ask':
-        return ask(system, args, where)
+        return ask(system, args, where, persona)
     if name == 'tell':
-        return tell(system, args, where)
+        return tell(system, args, where, persona)
+    from core import mcp_persona
+    if name in mcp_persona.NAMES:
+        return mcp_persona.call(system, persona, name, args)
     allowed = {t['name'] for t in exposed(system)}
     if name not in allowed:
         return f"There is no tool named '{name}' on this door.", False
@@ -230,9 +238,15 @@ def _result(ident, value):
     return {'jsonrpc': '2.0', 'id': ident, 'result': value}
 
 
-def handle(system, message, where=''):
+def _persona_line(persona):
+    from core import mcp_persona
+    return mcp_persona.about(persona)
+
+
+def handle(system, message, where='', persona=None):
     """One JSON-RPC message in, one out - or None for a notification, which
-    gets no answer. `where` is the client's address, for her line."""
+    gets no answer. `where` is the client's address, for her line; `persona`
+    is the one the caller's token speaks as, or None."""
     if not isinstance(message, dict) or message.get('jsonrpc') != '2.0' or not isinstance(message.get('method'), str):
         return _error(message.get('id') if isinstance(message, dict) else None, -32600, 'Not a JSON-RPC 2.0 request.')
     method, ident, params = message['method'], message.get('id'), message.get('params') or {}
@@ -248,18 +262,19 @@ def handle(system, message, where=''):
             'capabilities': {'tools': {'listChanged': False}},
             'serverInfo': {'name': 'Sapphire', 'version': _version()},
             'instructions': "Sapphire, a local AI. `ask` her something in a named chat and get her "
-                            "answer; `tell` her without waiting. Other tools are the ones her user chose to share.",
+                            "answer; `tell` her without waiting. Other tools are the ones her user chose to share."
+                            + _persona_line(persona),
         })
     if method == 'ping':
         return _result(ident, {})
     if method == 'tools/list':
-        return _result(ident, {'tools': exposed(system)})
+        return _result(ident, {'tools': exposed(system, persona)})
     if method == 'tools/call':
         name = params.get('name')
         if not isinstance(name, str) or not name:
             return _error(ident, -32602, 'tools/call needs a name.')
         try:
-            text, ok = call(system, name, params.get('arguments') or {}, where)
+            text, ok = call(system, name, params.get('arguments') or {}, where, persona)
         except (ValueError, RuntimeError) as e:          # a reason in words: a busy chat, a turn that failed
             text, ok = str(e), False
         except Exception as e:
@@ -269,10 +284,10 @@ def handle(system, message, where=''):
     return _error(ident, -32601, f"Method not found: {method}")
 
 
-def handle_body(system, body, where=''):
+def handle_body(system, body, where='', persona=None):
     """A request body, parsed: one message or a batch. Returns what to send
     back, or None when nothing is owed (notifications only)."""
     if isinstance(body, list):
-        answers = [a for a in (handle(system, m, where) for m in body) if a is not None]
+        answers = [a for a in (handle(system, m, where, persona) for m in body) if a is not None]
         return answers or None
-    return handle(system, body, where)
+    return handle(system, body, where, persona)

@@ -1145,8 +1145,16 @@ async def create_api_token(request: Request, _=Depends(require_login)):
     name = (data.get('name') or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Token name required")
+    # Optional: the persona this token speaks as at the MCP door (its voice
+    # and its memory scope). A name that is no persona is refused, not dropped:
+    # a token silently made plain would look bound and do nothing.
+    persona = str(data.get('persona') or "").strip() or None
+    if persona:
+        from core.personas import persona_manager
+        if not persona_manager.exists(persona):
+            raise HTTPException(status_code=400, detail=f"There is no persona named '{persona}'")
     try:
-        entry = api_tokens.create(name)
+        entry = api_tokens.create(name, persona=persona)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -1156,6 +1164,7 @@ async def create_api_token(request: Request, _=Depends(require_login)):
         "id": entry["id"],
         "name": entry["name"],
         "token": entry["token"],            # <-- one-time reveal
+        "persona": entry.get("persona"),
         "created_at": entry["created_at"],
         "last_used_at": entry["last_used_at"],
     }

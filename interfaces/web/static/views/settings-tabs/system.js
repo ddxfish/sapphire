@@ -11,12 +11,12 @@ async function listApiTokens() {
     return (await res.json()).tokens || [];
 }
 
-async function createApiToken(name) {
+async function createApiToken(name, persona) {
     const res = await fetch('/api/system/api-tokens', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, persona: persona || null })
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
@@ -57,7 +57,7 @@ async function _renderTokenList(listEl) {
                 <div style="flex:1;min-width:0">
                     <div style="font-weight:600;font-size:var(--font-sm)">${_escapeHtml(t.name)}</div>
                     <div class="text-muted" style="font-size:var(--font-xs);font-family:var(--mono,monospace)">
-                        sk_\u2026${_escapeHtml(t.last4)} \u00B7 created ${_fmtDate(t.created_at)} \u00B7 last used ${_fmtDate(t.last_used_at)}
+                        sk_\u2026${_escapeHtml(t.last4)} \u00B7 created ${_fmtDate(t.created_at)} \u00B7 last used ${_fmtDate(t.last_used_at)}${t.persona ? ` \u00B7 speaks as ${_escapeHtml(t.persona)}` : ''}
                     </div>
                 </div>
                 <button class="btn-sm danger" data-revoke-id="${_escapeHtml(t.id)}">Revoke</button>
@@ -124,12 +124,18 @@ export default {
                     Named bearer tokens for external integrations (mods, scripts, automation).
                     Tokens are shown ONCE at creation \u2014 save it then.
                     Independent of your login password. Revocable per-token.
+                    Give a key a persona and an MCP client that uses it speaks in that persona's voice
+                    and keeps that persona's memory.
                 </p>
 
                 <div style="display:flex;gap:8px;margin-bottom:12px">
                     <input id="apitok-new-name" type="text" placeholder="Token name (e.g. valheim-mod)"
                            maxlength="64"
                            style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <select id="apitok-new-persona" title="The persona this key speaks as at the MCP door"
+                            style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)">
+                        <option value="">No persona</option>
+                    </select>
                     <button class="btn-primary" id="apitok-add">+ Add</button>
                 </div>
 
@@ -277,12 +283,26 @@ export default {
         // ─── API Keys section ───────────────────────────────────────────
         const listEl = el.querySelector('#apitok-list');
         const nameInput = el.querySelector('#apitok-new-name');
+        const personaSelect = el.querySelector('#apitok-new-persona');
         const addBtn = el.querySelector('#apitok-add');
         const revealBox = el.querySelector('#apitok-reveal');
         const revealValue = el.querySelector('#apitok-reveal-value');
 
         // Initial load
         if (listEl) _renderTokenList(listEl);
+        if (personaSelect) {
+            fetch('/api/personas', { credentials: 'same-origin' })
+                .then(r => r.ok ? r.json() : { personas: [] })
+                .then(d => {
+                    for (const p of d.personas || []) {
+                        const o = document.createElement('option');
+                        o.value = p.name;
+                        o.textContent = `Speaks as ${p.name}`;
+                        personaSelect.appendChild(o);
+                    }
+                })
+                .catch(() => {});
+        }
 
         // Create
         addBtn?.addEventListener('click', async () => {
@@ -292,11 +312,12 @@ export default {
                 return;
             }
             try {
-                const created = await createApiToken(name);
+                const created = await createApiToken(name, personaSelect?.value || '');
                 // Reveal the full token ONCE
                 revealValue.textContent = created.token;
                 revealBox.style.display = 'block';
                 nameInput.value = '';
+                if (personaSelect) personaSelect.value = '';
                 await _renderTokenList(listEl);
                 ui.showToast('Token created — copy and save it now', 'success');
             } catch (e) {

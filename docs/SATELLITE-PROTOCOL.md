@@ -41,8 +41,11 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
 
 **`has`** takes these names: `speaker`, `mic`, `light`, `wake`, `camera`,
-`power`, `storage`. A name Sapphire does not know is left out and logged.
+`power`, `storage`, `screen`, `keyboard`. A name Sapphire does not know is left out and logged.
 `storage` is said only while the card is mounted: no card, no Backup tab.
+`keyboard` is a board that types at her instead of listening (a pocket
+terminal, `tmp/pocket-esp32`): it gets the mic's key and chat settings, and
+her reply goes to its `screen` as she writes it (below).
 
 **`plays`** has one type today, `audio/wav`, which is always 16 bit PCM. `rate`
 is 8000 to 48000. `channels` is 1 or 2. A small board plays this with no
@@ -79,6 +82,9 @@ A board answers only the addresses of what it has.
 | `storage` | `GET /storage/{name}` | The bytes back, for a restore |
 | `storage` | `DELETE /storage/{name}` | Rotation: Sapphire keeps the counts set on the device page and drops the oldest |
 | `storage` | `POST /storage/format` | Only a board whose `storage.can` lists `format`: wipes the card and formats it FAT32. The person at the Devices page runs it, never Sapphire |
+| `screen` | `POST /screen` | `{"text", "seconds"}`: a line across the top of its screen for that long (20 s if left out), or `{"clear": true}`. Answers `{"ok": true, "seconds"}`. Her `screen` / `show` action |
+| `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action |
+| `keyboard` | nothing | Sapphire asks nothing of a keyboard. The board sends what was typed (below) and pulls her reply |
 
 **`/audio/speak`** carries the sound as the request body, with its
 `Content-Type`, when the board stated `plays`. The board can play it while it
@@ -168,6 +174,46 @@ A form with the file field `audio` works too.
 The best recording is 16000 Hz, one channel, 16 bit. Limit: 30 requests a
 minute.
 
+### What was typed
+
+A board with a keyboard sends the words instead of a recording:
+
+```
+POST /api/devices/pocket/text
+Authorization: Bearer <voice key>
+Content-Type: text/plain; charset=utf-8
+
+what time is it
+```
+
+JSON `{"text": "..."}` works too. Up to 2000 characters.
+
+| Answer | Meaning |
+|---|---|
+| `{"ok": true, "accepted": true, "chat": "default", "msg": "3f9a1c"}` | A turn has started. Her reply arrives on the screen through the stream below |
+| `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
+
+**Her reply, for a screen.** Her words never ride the events stream: a
+stream that falls behind drops a line, and a dropped line of prose is garbage
+on a screen. The stream carries a doorbell, `{"state": "text", "msg", "rev",
+"have", "done"}`: which reply, its revision, how many characters there are,
+whether she is finished. The board pulls what it lacks:
+
+```
+GET /api/devices/pocket/text?msg=3f9a1c&from=120&max=700
+Authorization: Bearer <voice key>
+
+{"msg": "3f9a1c", "rev": 0, "from": 120, "text": "...", "have": 410, "done": false}
+```
+
+A doorbell comes at most four times a second while she writes, and once more
+with `done`. A missed doorbell is made good by the next one. `rev` goes up
+when her final text differs from what streamed (a tool round joined, thinking
+stripped): the board starts that reply over from `from=0`. `max` is held to
+2000. With no `msg`, the latest reply: what a board that just connected
+should show. The board keeps the last four replies' worth of pulls honest;
+an older `msg` answers with the latest, whose id the board will not match.
+
 ### What its light should show
 
 The board holds one stream open:
@@ -187,6 +233,7 @@ It answers server-sent events. Each is one line of JSON after `data: `.
 | `tool` | She is using a tool. `tool_name` names it |
 | `idle` | The turn is over |
 | `error` | This board got no answer |
+| `text` | A doorbell for a board with a keyboard: `msg`, `rev`, `have`, `done`. Pull the words, see "What was typed". Not a light state |
 
 A line that starts with `:` arrives every 20 seconds and means nothing. When
 the stream ends, open it again. A board only ever hears about its own turns.
@@ -196,6 +243,6 @@ the stream ends, open it again. A board only ever hears about its own turns.
 - Driver: `core/devices/drivers/satellite.py`. It asks `/health` on every status, and at most once a minute before it speaks (`ABOUT_FRESH`).
 - `has` is kept by the engine on the device row (`parts[].has`, `engine.capabilities`). `status()` of any driver may answer it.
 - Conversion: `core/devices/voice.py` `fit(audio, kind, plays)`, checked by `wanted(plays)`. The only place her voice is converted for a device.
-- Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`.
+- Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`; typed words `devices_text` (POST) and `devices_text_read` (GET), which ride `voice.typed`, `voice.Reply` and `voice.reply_text`.
 - Backups onto a board: `core/devices/storage.py` makes a `SatelliteTarget` (in the driver) for every device whose `has` says `storage`; `core/backup_targets.ship` seals once, PUTs, rotates by the device's keep fields, drops the openers. Never plaintext: `Target.check` (Sapphire) + the board's own magic check.
 - `tests/test_docs_satellite_protocol.py` runs this page's health example through the real driver and checks every address in the table.

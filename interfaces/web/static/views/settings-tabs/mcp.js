@@ -12,7 +12,7 @@ export default {
     name: 'MCP Server',
     icon: '\u{1F50C}',
     description: 'Her tools for an MCP client: another Sapphire, Claude Code, Claude Desktop',
-    essentialKeys: ['MCP_SERVER_ENABLED', 'INSTANCE_NAME'],
+    essentialKeys: ['MCP_SERVER_ENABLED', 'INSTANCE_NAME', 'MCP_SERVER_MIC'],
 
     render(ctx) {
         return `
@@ -25,6 +25,9 @@ export default {
                     the tools ticked below. Another Sapphire added as a device uses this door;
                     so can Claude Code: <code>claude mcp add --transport http sapphire
                     https://this-machine:8073/mcp --header "Authorization: Bearer &lt;token&gt;"</code>.
+                    A token that speaks as a persona (pick one when you add the key) also gets
+                    <b>speak</b> and <b>ding</b> on this machine's speakers and that persona's own
+                    memory. The microphone switch below adds <b>listen</b>.
                 </p>
                 ${ctx.renderFields(this.essentialKeys)}
             </div>

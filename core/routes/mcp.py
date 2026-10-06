@@ -3,7 +3,8 @@
 # POST /mcp is the Model Context Protocol over Streamable HTTP, tools only,
 # JSON answers, no session. A client authenticates with one of her API
 # tokens (Settings > System > API Keys) as a bearer; the browser session
-# works too. The door is shut until Settings > MCP Server turns it on.
+# works too. A token that speaks as a persona gets that persona's voice and
+# memory as well. The door is shut until Settings > MCP Server turns it on.
 # GET /api/mcp/tools is for that settings page: every tool, with its state.
 import asyncio
 import logging
@@ -27,6 +28,16 @@ def _server():
     return mcp_server
 
 
+def _persona(request):
+    """The persona the caller's API token speaks as, or None: a plain token,
+    or the browser's own session."""
+    auth = request.headers.get('Authorization') or ''
+    if not auth.startswith('Bearer '):
+        return None
+    from core.api_tokens import api_tokens
+    return api_tokens.persona_of(auth[len('Bearer '):].strip())
+
+
 @router.post("/mcp")
 async def mcp_post(request: Request, _=Depends(require_login), system=Depends(get_system)):
     srv = _server()
@@ -38,7 +49,7 @@ async def mcp_post(request: Request, _=Depends(require_login), system=Depends(ge
         return JSONResponse(status_code=400, content={'jsonrpc': '2.0', 'id': None,
                                                       'error': {'code': -32700, 'message': 'The body is not JSON.'}})
     where = get_client_ip(request)
-    answer = await asyncio.to_thread(srv.handle_body, system, body, where)
+    answer = await asyncio.to_thread(srv.handle_body, system, body, where, _persona(request))
     if answer is None:
         return Response(status_code=202)              # a notification: taken, nothing to say
     return JSONResponse(content=answer, headers={'MCP-Protocol-Version': srv.PROTOCOL})

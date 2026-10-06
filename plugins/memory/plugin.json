@@ -48,7 +48,7 @@
       },
       {
         "key": "people",
-        "label": "people",
+        "label": "contacts",
         "endpoint": "/api/knowledge/people/scopes",
         "data_key": "scopes",
         "value_field": "name",

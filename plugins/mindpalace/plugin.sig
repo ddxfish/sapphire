@@ -4,7 +4,7 @@
   "files": {
     "README.md": "sha256:e8268a919ca1eee89e5d888174e035e525f0da9bf957faddc93ba13f08fe1621",
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
-    "plugin.json": "sha256:56893d131a3e6d2bbeb10baeeb8fe232894d52f381b8611050e8c3b491b60eb7",
+    "plugin.json": "sha256:725f17fd5c6c806aaa543c65e96165a69fb004475836b8ad549bc71024df2d27",
     "routes/browse.py": "sha256:524c98e6c6350c8695ec513e7a8e0a21f077b73954fde8e7b4569baeaef908f3",
     "routes/goals_routes.py": "sha256:5bd7a69960707327c0cb17b92238e8547ba95f338ef2224d2e0bd7580afd64c0",
     "routes/library_routes.py": "sha256:7392b8a14071e09a2b9cf47e2f87c7c98fbc2775f0ee60932c9e741c103162fe",
@@ -72,5 +72,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "u9vLAGtoTy6VCUsz97TVKO/ZmIWbzLlyxwV2FDbwXNeirTYXXnFYJXCFBIyAZDSauO2AB9OaATehwzQEAc8UBQ=="
+  "signature": "flFJ3qKkurP8pr5hCjhU8Cvrp2D3vhgZj5CSKqLTJTg3wtejcg7fZ9HmNna4m8Q49hmdyu8dcu5FKDMns5hzCQ=="
 }

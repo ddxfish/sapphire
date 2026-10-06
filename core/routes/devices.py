@@ -22,6 +22,7 @@ router = APIRouter()
 READS_PER_MIN = 240        # the page polls its list, and a device window reads detail
 WRITES_PER_MIN = 60        # saves, tests, and Try buttons
 VOICE_PER_MIN = 30         # one device, counted per caller address, right or wrong key
+PULL_PER_MIN = 600         # a screen pulls her reply in pieces as she writes: a few a second
 STREAM_QUIET = 20          # seconds of nothing before a light stream is checked and kept alive
 
 
@@ -210,7 +211,7 @@ async def devices_run(device_id: str, request: Request, _=Depends(require_login)
 
 # --- the device doors: a DEVICE calls these, not a browser --------------------
 
-async def _device_key(device_id, request, door):
+async def _device_key(device_id, request, door, per_min=VOICE_PER_MIN):
     """The key a device presented, once it is proven. No login: a device
     proves itself with its own key. 401 says the same for a wrong key and
     for a device that does not exist, so names cannot be probed."""
@@ -218,7 +219,7 @@ async def _device_key(device_id, request, door):
     if why:
         raise HTTPException(status_code=404, detail=why)
     # counted before the key is looked at, so guessing keys is slow
-    check_endpoint_rate(request, f"devices:{door}:{device_id}", max_calls=VOICE_PER_MIN,
+    check_endpoint_rate(request, f"devices:{door}:{device_id}", max_calls=per_min,
                         identity=f"addr:{get_client_ip(request)}")
     from core.devices import voice
     auth = request.headers.get('authorization', '')
@@ -277,6 +278,49 @@ async def devices_voice(device_id: str, request: Request):
     from core.devices import voice
     data, suffix = await _heard(request, voice.MAX_AUDIO)
     return await asyncio.to_thread(voice.hear, device_id, data, suffix)
+
+
+TYPED_BODY_MAX = 16 * 1024
+
+
+@router.post("/api/devices/{device_id}/text")
+async def devices_text(device_id: str, request: Request):
+    """A device with a keyboard sends what was typed: the body as text/plain,
+    or JSON {"text"}. Answered once a turn has started; her reply reaches
+    the device's screen through `text` doorbells on its events stream."""
+    await _device_key(device_id, request, 'text')
+    from core.devices import voice
+    kind = request.headers.get('content-type', '').split(';')[0].strip().lower()
+    raw = bytearray()
+    async for piece in request.stream():
+        raw += piece
+        if len(raw) > TYPED_BODY_MAX:
+            raise HTTPException(status_code=413, detail="That is too much text.")
+    if kind == 'application/json':
+        try:
+            text = (json.loads(bytes(raw).decode('utf-8')) or {}).get('text')
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=422, detail='Send {"text": "..."}, or the text as text/plain.')
+    else:
+        text = bytes(raw).decode('utf-8', 'replace')
+    return await asyncio.to_thread(voice.typed, device_id, text)
+
+
+@router.get("/api/devices/{device_id}/text")
+async def devices_text_read(device_id: str, request: Request):
+    """A piece of her reply, for the device's screen: ?msg=&from=&max=.
+    No msg = the latest reply, for a device that just connected."""
+    await _device_key(device_id, request, 'text-read', per_min=PULL_PER_MIN)
+    from core.devices import voice
+    q = request.query_params
+
+    def number(name, fallback):
+        try:
+            return int(q.get(name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+    return await asyncio.to_thread(voice.reply_text, device_id, str(q.get('msg') or '')[:32],
+                                   number('from', 0), number('max', voice.PULL_MAX))
 
 
 async def light_stream(device_id, key, gone):

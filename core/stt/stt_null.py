@@ -55,7 +55,7 @@ class NullAudioRecorder:
     def _open_stream(self) -> bool:
         return False
 
-    def record_audio(self) -> Optional[str]:
+    def record_audio(self, max_seconds=None, no_speech_timeout=None) -> Optional[str]:
         return None
 
     def stop(self) -> None:

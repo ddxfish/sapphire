@@ -441,6 +441,20 @@ def here_now(row, part):
     return passing(spec, config, found(part['driver'], config))
 
 
+def field_capability(field, has, every):
+    """The capability a config field rides on for a device that has `has`:
+    the first one named that the device has, '' for a field that names none
+    (always shown), None when the device has none of them (hidden). A name
+    the driver never declared counts as always shown, as it always did."""
+    named = field.get('capability')
+    if not named:
+        return ''
+    for cap in (named if isinstance(named, (list, tuple)) else [named]):
+        if cap in has or cap not in every:
+            return cap
+    return None
+
+
 def capabilities(part, spec):
     """What this part can do: what its driver can do, held to what the device
     itself said it has. A device that never said has all of it."""
@@ -631,9 +645,15 @@ def public(row):
     for part in row.get('parts', []):
         spec = _registry().get_driver(part['driver'])
         has = capabilities(part, spec)
-        # a field that belongs to something this device does not have is not shown
-        schema = [f for f in (spec['config_schema'] if spec else [])
-                  if f.get('capability') in has or f.get('capability') not in spec['capabilities']]
+        # a field that belongs to something this device does not have is not
+        # shown. A field may name several (the key a satellite sends rides on
+        # its mic or its keyboard): the page sees the one this device has.
+        schema = []
+        for f in (spec['config_schema'] if spec else []):
+            cap = field_capability(f, has, spec['capabilities'])
+            if cap is None:
+                continue
+            schema.append(dict(f, capability=cap) if isinstance(f.get('capability'), (list, tuple)) else f)
         values = dict(part.get('config') or {})
         unreadable = []
         for field in schema:

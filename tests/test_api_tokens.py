@@ -344,3 +344,71 @@ def test_csrf_leaves_cookieless_callers_alone(mock_request_factory):
     )
     assert reached is True
     assert resp == "handler-response"
+
+
+# ─── A token that speaks as a persona (the MCP door, core/mcp_persona.py) ────
+
+def test_a_token_keeps_the_persona_it_was_made_with(temp_tokens_file):
+    from core.api_tokens import api_tokens
+
+    bound = api_tokens.create("claude-code", persona="claude")
+    plain = api_tokens.create("valheim-mod")
+    assert bound["persona"] == "claude" and plain["persona"] is None
+    assert api_tokens.persona_of(bound["token"]) == "claude"
+    assert api_tokens.persona_of(plain["token"]) is None
+    assert api_tokens.persona_of("sk_not_a_token") is None
+    assert api_tokens.persona_of("") is None
+
+    listed = {t["name"]: t for t in api_tokens.list_safe()}
+    assert listed["claude-code"]["persona"] == "claude" and listed["valheim-mod"]["persona"] is None
+    assert "token" not in listed["claude-code"]
+
+
+def test_persona_survives_a_reload_and_old_records_read_as_plain(temp_tokens_file):
+    import core.api_tokens as mod
+
+    bound = mod.api_tokens.create("claude-code", persona="  claude  ")
+    data = json.loads(temp_tokens_file.read_text())
+    data["tokens"].append({"id": "old", "name": "from-before", "token": "sk_old_shape",
+                           "created_at": None, "last_used_at": None})      # no persona key at all
+    temp_tokens_file.write_text(json.dumps(data))
+
+    fresh = mod.ApiTokensManager()
+    assert fresh.persona_of(bound["token"]) == "claude"          # trimmed at create
+    assert fresh.persona_of("sk_old_shape") is None
+    assert {t["name"]: t["persona"] for t in fresh.list_safe()} == {"claude-code": "claude", "from-before": None}
+
+
+def test_asking_for_the_persona_does_not_count_as_a_use(temp_tokens_file):
+    from core.api_tokens import api_tokens
+
+    bound = api_tokens.create("claude-code", persona="claude")
+    before = temp_tokens_file.read_text()
+    api_tokens.persona_of(bound["token"])
+    assert temp_tokens_file.read_text() == before
+    assert api_tokens.list_safe()[0]["last_used_at"] is None
+
+
+def _create_through_the_route(body):
+    from core.routes.system import create_api_token
+
+    class _Req:
+        async def json(self):
+            return body
+    return asyncio.run(create_api_token(_Req(), True))
+
+
+def test_the_route_binds_a_real_persona_and_refuses_one_that_is_not(temp_tokens_file, monkeypatch):
+    from fastapi import HTTPException
+    from core.api_tokens import api_tokens
+    from core.personas import persona_manager
+    monkeypatch.setattr(persona_manager, "_personas", {"claude": {"settings": {}}})
+
+    made = _create_through_the_route({"name": "claude-code", "persona": "claude"})
+    assert made["persona"] == "claude" and api_tokens.persona_of(made["token"]) == "claude"
+    assert _create_through_the_route({"name": "plain", "persona": ""})["persona"] is None
+
+    with pytest.raises(HTTPException) as refused:
+        _create_through_the_route({"name": "typo", "persona": "cluade"})
+    assert refused.value.status_code == 400
+    assert [t["name"] for t in api_tokens.list_safe()] == ["claude-code", "plain"]     # the typo made no token

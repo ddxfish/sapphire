@@ -370,6 +370,23 @@ checks before sending and the board checks again before writing. A board that
 can wipe its card shows a **Format** button on the tab, for you only, behind
 an I UNDERSTAND. No card, no tab. Set the password in Settings > Backup.
 
+### A pocket terminal
+
+A satellite with a keyboard and a screen instead of a mic: a small
+touchscreen board you type at. What you type lands in its chat (the
+**Talks in chat** setting, on its Keyboard tab with the key it sends) under a
+line that says it was typed there, and her reply appears on its screen as
+she writes it. Nothing is spoken. She can put a line across the top of its
+screen herself:
+
+```
+device_action("pocket","screen","show","Dinner in ten minutes seconds=60")
+device_action("pocket","screen","clear")
+```
+
+Its light takes the same words as a ring. The first such board is the
+capacitive Cheap Yellow Display: see `tmp/pocket-esp32/README.md`.
+
 ### Give a Pi its own key
 
 1. Make up a long key. Enter it as **Key the satellite sends** on the

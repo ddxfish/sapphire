@@ -20,6 +20,7 @@
 # The key travels without encryption, so a satellite has to be on the local
 # network. That is checked when the device is saved.
 import hashlib
+import io
 import re
 import threading
 import time
@@ -34,7 +35,7 @@ from core.devices.storage import KEEP_FIELDS, keep_from
 SPEC = {
     'label': 'Satellite (mic, speaker, light)',
     'icon': '\U0001f4e1',
-    'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage'],
+    'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard'],
     'config_schema': [
         {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status', 'setup': True,
          'placeholder': 'http://192.168.1.100:8090'},
@@ -44,10 +45,11 @@ SPEC = {
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
          'capability': 'camera',
          'help': "Off = Sapphire is not offered a camera on this satellite."},
-        {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'capability': 'mic',
+        # the mic's fields, or the keyboard's on a board that types instead of listening
+        {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'capability': ('mic', 'keyboard'),
          'help': "The chat this satellite's questions land in. Empty = the last chat used."},
         {'key': 'voice_key', 'type': 'string', 'widget': 'password', 'secret': True, 'setup': True,
-         'capability': 'mic', 'label': 'Key the satellite sends',
+         'capability': ('mic', 'keyboard'), 'label': 'Key the satellite sends',
          'help': "Proves a question came from this satellite. Stored scrambled. On a Pi "
                  "body this is SAPPH_BRAIN_TOKEN, next to SAPPH_DEVICE_ID."},
         # the looks: what the ring shows in each state, in the words of `light set`
@@ -79,7 +81,9 @@ SPEC = {
 }
 
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
+INBOUND = ('keyboard',)       # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
+_SECONDS = re.compile(r'^seconds=(\d{1,4})$', re.I)
 
 QUICK = 8                     # seconds for a plain request
 ABOUT_FRESH = 60              # seconds what a satellite said about itself is taken as true
@@ -374,6 +378,17 @@ def describe(device, config):
         'shutdown': {'help': 'switch it off. Someone must unplug and replug it to bring it back',
                      'example': ''},
     }}
+    told['screen'] = {'label': 'Screen', 'help': 'its small screen', 'actions': {
+        'show': {'help': 'a line across the top of its screen for a while. seconds= how long, 20 if left out',
+                 'example': 'Dinner in ten minutes', 'values': '<text> [seconds=20]'},
+        'clear': {'help': 'take the line down', 'example': ''},
+        'picture': {'help': 'an image on the whole screen until a tap, or seconds= (60 if left out). '
+                            'An image handle like img:ab12 (the receipt any image tool gives you), doc:N from the '
+                            'library, or last = the newest image in this chat. A landscape image is turned sideways',
+                    'example': 'last seconds=120', 'values': '<img:id | doc:N | last> [seconds=60]'},
+    }}
+    told['keyboard'] = {'label': 'Keyboard', 'help': 'what is typed on it lands in your chat; your reply is shown on its screen',
+                        'actions': {}}
     if config.get('camera', True):
         told['camera'] = {'label': 'Camera', 'help': 'see that room', 'actions': {
             'look': {'help': 'take one picture and see it. The ring warns the room first',
@@ -473,6 +488,61 @@ def play(audio, kind, device, config, secrets):
     if seconds is not None:
         said.setdefault('seconds', seconds)          # of sound, as fitted: what a log can time against
     return said
+
+
+PICTURE_WAIT = 60             # a 300 KB picture over WiFi to a small board, painted as it lands
+
+
+def _seconds_and_rest(value, default):
+    """'last seconds=120' -> ('last', 120)."""
+    words, seconds = [], default
+    for tok in str(value or '').split():
+        m = _SECONDS.match(tok)
+        if m:
+            seconds = max(1, min(3600, int(m.group(1))))
+        else:
+            words.append(tok)
+    return ' '.join(words).strip(), seconds
+
+
+def rgb565(raw, width, height):
+    """An image as the bytes a small panel paints, RGB565 big-endian, fitted
+    inside width x height: (bytes, w, h). A landscape image on a portrait
+    screen is turned a quarter turn so it uses the glass; the board centres
+    what it gets on black."""
+    import numpy as np
+    from PIL import Image, ImageOps
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
+    if (img.width > img.height) != (width > height):
+        img = img.transpose(Image.Transpose.ROTATE_90)
+    img.thumbnail((width, height), Image.Resampling.LANCZOS)
+    a = np.asarray(img, dtype=np.uint16)
+    packed = (a[..., 0] >> 3) << 11 | (a[..., 1] >> 2) << 5 | (a[..., 2] >> 3)
+    return packed.astype('>u2').tobytes(), img.width, img.height
+
+
+def _picture(value, device, config, secrets):
+    from core import images
+    source, seconds = _seconds_and_rest(value, 60)
+    if not source or source == 'last':
+        found = images.last_image_id()
+        if not found:
+            return "There is no image in this chat yet. Make or find one first, then say picture last.", True
+        source = f'img:{found}'
+    try:
+        got = images.resolve(source)
+    except Exception as e:
+        return f"I could not open {source}: {str(e)[:160]}", False
+    screen = _health(device, config, secrets).get('screen')
+    if not isinstance(screen, dict) or not screen.get('w') or not screen.get('h'):
+        return "This board's program has no picture door. Update it.", False
+    try:
+        data, w, h = rgb565(got.data, int(screen['w']), int(screen['h']))
+    except Exception as e:
+        return f"That image could not be made to fit the screen ({type(e).__name__}).", False
+    _call('POST', f'/screen/picture?w={w}&h={h}&seconds={seconds}', config, secrets, timeout=PICTURE_WAIT,
+          data=data, headers={'Content-Type': 'application/octet-stream'})
+    return (f'On the screen of {device["id"]}: {got.label} ({w}x{h}), for {seconds} seconds or until a tap.'), True
 
 
 def _say(text, device, config, secrets):
@@ -770,6 +840,28 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 return f"{device['id']} is restarting{wait}. It will be back in about a minute.", True
             return (f"{device['id']} is shutting down{wait}. To bring it back, someone has to "
                     "unplug its power and plug it in again."), True
+        if capability == 'screen':
+            if action == 'clear':
+                _call('POST', '/screen', config, secrets, json={'clear': True})
+                return 'The line is down.', True
+            if action == 'picture':
+                return _picture(value, device, config, secrets)
+            if action == 'show':
+                words, seconds = [], 20
+                for tok in str(value or '').split():
+                    m = _SECONDS.match(tok)
+                    if m:
+                        seconds = max(1, min(3600, int(m.group(1))))
+                    else:
+                        words.append(tok)
+                text = ' '.join(words)
+                if not text:
+                    return ("show: the text, then seconds= for how long (20 if left out). The screen is "
+                            "small: a few short lines. Example: Dinner in ten minutes seconds=60"), True
+                out = _json(_call('POST', '/screen', config, secrets, json={'text': text[:300], 'seconds': seconds}))
+                shown = out.get('seconds', seconds)
+                cut = ' It was cut to 300 characters.' if len(text) > 300 else ''
+                return f'On the screen of {device["id"]} for {shown:g} seconds: "{text[:300]}".{cut}', True
         if capability == 'camera' and action == 'look':
             if not config.get('camera', True):
                 return "This satellite has no camera.", False

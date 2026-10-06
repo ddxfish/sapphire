@@ -456,6 +456,10 @@
     "short": "Tools shared over MCP",
     "long": "The tools a client may call, besides ask and tell. Tools of plugins that keep their own memory scopes are not offered yet."
   },
+  "MCP_SERVER_MIC": {
+    "short": "Let persona keys listen on this machine's microphone",
+    "long": "A client whose API token speaks as a persona gets a listen tool: a chime plays, this machine's microphone records until the speaker stops (60 seconds at most), and the words heard go back to the client. The audio goes through your speech-to-text provider like any other. Off = the tool is not offered, and no key can open the microphone."
+  },
   "METRICS_ENABLED": {
     "short": "Record local token-usage metrics",
     "long": "Records per-LLM-call token usage in a local SQLite database (user/metrics/) for the dashboard's usage charts. Purely on-device either way — this only controls whether the local table is written at all."

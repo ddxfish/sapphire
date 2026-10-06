@@ -61,8 +61,11 @@ def test_every_address_in_the_table_is_one_the_driver_calls():
     assert len(rows) >= 11
     for has, request, _ in rows:
         assert has.strip('`') in sat.SPEC['capabilities']
-        path = re.search(r'(/[a-z/]+)', request).group(1)
-        assert path in source, f"the page lists {path}, the driver never calls it"
+        found = re.search(r'(/[a-z/]+)', request)
+        if found is None:                      # the board sends, Sapphire asks nothing of it
+            assert has.strip('`') in sat.INBOUND, f"{has} has no address and is not inbound-only"
+            continue
+        assert found.group(1) in source, f"the page lists {found.group(1)}, the driver never calls it"
     assert sorted({r[0].strip('`') for r in rows}) == sorted(sat.SPEC['capabilities'])
 
 

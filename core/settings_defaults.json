@@ -33,9 +33,10 @@
   },
 
   "mcp_server": {
-    "_comment": "POST /mcp: her tools for an MCP client with an API token (another Sapphire, Claude Code). ask and tell are always offered; MCP_SERVER_TOOLS names the rest.",
+    "_comment": "POST /mcp: her tools for an MCP client with an API token (another Sapphire, Claude Code). ask and tell are always offered; MCP_SERVER_TOOLS names the rest. A token that speaks as a persona also gets speak, ding and that persona's memory; MCP_SERVER_MIC adds listen.",
     "MCP_SERVER_ENABLED": false,
-    "MCP_SERVER_TOOLS": []
+    "MCP_SERVER_TOOLS": [],
+    "MCP_SERVER_MIC": false
   },
   
   "backups": {

@@ -117,15 +117,20 @@ class ApiTokensManager:
 
     # ─── Public API ─────────────────────────────────────────────────────────
 
-    def create(self, name: str) -> dict:
+    def create(self, name: str, persona: str = None) -> dict:
         """Create a new token. Returns the full record INCLUDING the plaintext
         token — this is the ONLY moment the full token is exposed by the
-        manager. Subsequent reads use list_safe() which masks it."""
+        manager. Subsequent reads use list_safe() which masks it.
+
+        persona: the persona this token speaks as at the MCP door (its voice,
+        its memory scope — core/mcp_persona.py). None for a plain token. The
+        caller checks the persona exists; it is fixed for the token's life."""
         name = (name or "").strip()
         if not name:
             raise ValueError("Token name required")
         if len(name) > 64:
             raise ValueError("Token name too long (max 64 chars)")
+        persona = (persona or "").strip() or None
 
         with self._lock:
             if any(t.get('name') == name for t in self._tokens):
@@ -135,6 +140,7 @@ class ApiTokensManager:
                 "id": str(uuid.uuid4()),
                 "name": name,
                 "token": _generate_token(),
+                "persona": persona,
                 "created_at": _now_iso(),
                 "last_used_at": None,
             }
@@ -187,6 +193,18 @@ class ApiTokensManager:
             self._save()  # ignore return; auth is the primary concern
             return matched
 
+    def persona_of(self, candidate_token: str) -> Optional[str]:
+        """The persona a token speaks as, or None (no such token, or a plain
+        one). Same constant-time match as verify(), with no last_used write:
+        the caller has already been through verify()."""
+        if not candidate_token:
+            return None
+        with self._lock:
+            for t in self._tokens:
+                if secrets.compare_digest(candidate_token, t.get('token', '')):
+                    return t.get('persona') or None
+        return None
+
     def list_safe(self) -> List[dict]:
         """List tokens with full token value MASKED. For UI display."""
         with self._lock:
@@ -194,6 +212,7 @@ class ApiTokensManager:
                 {
                     "id": t["id"],
                     "name": t["name"],
+                    "persona": t.get("persona"),
                     "last4": _last4(t.get("token", "")),
                     "created_at": t.get("created_at"),
                     "last_used_at": t.get("last_used_at"),

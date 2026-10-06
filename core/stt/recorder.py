@@ -272,11 +272,19 @@ class AudioRecorder:
                         logger.error(f"STT retry also failed: {classify_audio_error(e2)}")
             return False
 
-    def record_audio(self) -> Optional[str]:
+    def record_audio(self, max_seconds=None, no_speech_timeout=None) -> Optional[str]:
         """
         Record audio until silence is detected.
         Returns path to WAV file, or None if no speech detected.
+
+        max_seconds, no_speech_timeout: one recording's own limits, for a
+        caller that waits longer for the first word than a wake does
+        (core/stt/listen.py). None keeps the settings' values.
         """
+        if max_seconds is None:
+            max_seconds = config.RECORDER_MAX_SECONDS
+        if no_speech_timeout is None:
+            no_speech_timeout = config.RECORDER_NO_SPEECH_TIMEOUT
         logger.debug(f"Recording state before: {self._recording}")
         
         # Clean up previous recording if needed
@@ -360,7 +368,7 @@ class AudioRecorder:
                 frames.append(audio_data)
                 
                 # Early abort if no speech detected within timeout (accidental wakeword trigger)
-                if not has_speech and (time.time() - start_time) > config.RECORDER_NO_SPEECH_TIMEOUT:
+                if not has_speech and (time.time() - start_time) > no_speech_timeout:
                     if self._silero_score_count > 0:
                         n = getattr(self, '_silero_score_count', 0)
                         mean = (self._silero_prob_sum / n) if n else 0.0
@@ -376,7 +384,7 @@ class AudioRecorder:
                         logger.info("No speech detected within timeout - early abort")
                     break
                 
-                if time.time() - start_time > config.RECORDER_MAX_SECONDS:
+                if time.time() - start_time > max_seconds:
                     if has_speech:
                         break
                     # No speech within max time — fall through to cleanup below

@@ -109,6 +109,7 @@ Auto-updater
 Docker
 REST API
 MCP server
+MCP persona keys
 
 ## Plugins
 ### Mind

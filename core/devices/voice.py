@@ -17,6 +17,12 @@
 #   cue()   what a device's light should show: thinking, tool, idle, error.
 #           Only the device whose turn it is gets them. A device holds one
 #           stream open to receive them (GET /api/devices/{id}/events).
+#   typed() a device with a keyboard sends what was typed (a pocket
+#           terminal). The turn runs the same way; her reply goes to the
+#           device's SCREEN, not its speaker: Reply keeps the text as she
+#           writes it and rings the device's stream with a `text` doorbell
+#           ({msg, rev, have, done}); the device pulls what it lacks from
+#           reply_text(). A doorbell can be dropped, the text never is.
 # One wake gets one answer: hear() asks wake.py whether the main app or
 # another satellite already holds the room, and drops a repeat of its words.
 #
@@ -38,6 +44,7 @@ import queue
 import tempfile
 import threading
 import time
+import uuid
 
 from core.devices import wake
 
@@ -51,9 +58,14 @@ RATES = (8000, 48000)      # the sample rates a device may ask for, lowest and h
 QUIET = 0.01               # below this a sample is silence, for the trim
 HEAD, TAIL = 0.08, 0.20    # seconds of silence left before and after her words
 CUE_FRESH = 300            # seconds a cue is still worth showing to a late stream
-CUES = ('thinking', 'tool', 'idle', 'error', 'standdown')   # standdown: another listener took this wake
+CUES = ('thinking', 'tool', 'idle', 'error', 'standdown', 'text')   # standdown: another listener took this wake; text: a doorbell
 SPEECH_WAIT = 600          # seconds a turn waits for the last sentence to finish playing
 SAY_ALL_WAIT = 180         # seconds say_all waits for the slowest device
+TYPED_MAX = 2000           # chars a device may type at once
+TEXT_MAX = 12000           # chars of one reply kept for a screen
+TEXT_KEEP = 4              # replies kept per device, for a pull that comes late
+DOORBELL_GAP = 0.25        # seconds between doorbells while she writes
+PULL_MAX = 2000            # chars one pull may ask for
 
 _speaking_for = contextvars.ContextVar('device_voice_chat_settings', default=None)
 _lock = threading.Lock()
@@ -61,6 +73,7 @@ _waiting = {}              # device id -> questions waiting or running
 _showing = {}              # device id -> the cue its light should show right now
 _listeners = {}            # device id -> [(loop, queue)] of open light streams
 _live = {}                 # device id -> [Speech] with sentences still to play
+_replies = {}              # device id -> [Reply] to typed questions, newest last
 wake.told = lambda device_id: cue(device_id, 'standdown')   # the main app took a satellite's claim
 _spoke = threading.local() # did the reply lane manage to speak, on this thread
 
@@ -215,20 +228,32 @@ def transcribe(audio, suffix='.wav'):
 
 # --- which device, which chat --------------------------------------------------
 
-def _voice_part(row):
-    """The part of this device that has a microphone, or None."""
+def _part_with(row, *names):
+    """The part of this device that has one of these capabilities, or None."""
     e = _engine()
     for part in row.get('parts', []):
-        if 'mic' in e.capabilities(part, e._registry().get_driver(part.get('driver'))):
+        caps = e.capabilities(part, e._registry().get_driver(part.get('driver')))
+        if any(n in caps for n in names):
             return part
     return None
+
+
+def _voice_part(row):
+    """The part of this device that has a microphone, or None."""
+    return _part_with(row, 'mic')
+
+
+def _talk_part(row):
+    """The part that talks to her: a microphone or a keyboard. It holds the
+    key the device sends and the chat its words land in."""
+    return _part_with(row, 'mic', 'keyboard')
 
 
 def key_ok(device_id, presented):
     """True when `presented` is the key stored for this device's voice."""
     e = _engine()
     row = e.rows().get(str(device_id or '').strip().lower())
-    part = _voice_part(row) if row and row.get('enabled', True) else None
+    part = _talk_part(row) if row and row.get('enabled', True) else None
     if not part or not presented:
         return False
     try:
@@ -267,7 +292,7 @@ def cue(device_id, state, **more):
     with _lock:
         if state in ('thinking', 'tool'):
             _showing[device_id] = payload
-        else:
+        elif state != 'text':            # a doorbell says nothing about the light
             _showing.pop(device_id, None)
         streams = list(_listeners.get(device_id, ()))
     for loop, queue in streams:
@@ -295,9 +320,10 @@ def unlisten(device_id, loop, queue):
             _listeners.pop(device_id, None)
 
 
-def _follow(device_id, event, speech=None):
+def _follow(device_id, event, speech=None, reply=None):
     """The light follows the tools of this device's own turn, and each
-    sentence of her voice goes to the device as it is made."""
+    sentence of her voice goes to the device as it is made; for a typed
+    question each piece of her text goes to its Reply instead."""
     kind = event.get('type')
     if kind == 'tool_start':
         cue(device_id, 'tool', tool_name=str(event.get('name') or '')[:60])
@@ -305,6 +331,85 @@ def _follow(device_id, event, speech=None):
         cue(device_id, 'thinking')
     elif kind == 'tts_chunk' and speech is not None:
         speech.feed(event)
+    elif kind == 'content' and reply is not None:
+        reply.add(event.get('text') or '')
+
+
+# --- her words, as they are written -------------------------------------------------
+
+class Reply:
+    """Her reply to one typed question, as a screen follows it: the text so
+    far, a revision that goes up when her final text differs from what
+    streamed (a tool round joined, thinking stripped), and a doorbell on the
+    device's stream at most every DOORBELL_GAP seconds saying how much there
+    is. The device pulls the words with reply_text(); a doorbell lost on a
+    full stream is made good by the next one."""
+
+    def __init__(self, device_id):
+        self.device_id = device_id
+        self.msg = uuid.uuid4().hex[:12]
+        self.rev = 0
+        self.text = ''                   # what a screen may show: the stream with its thinking taken out
+        self.done = False
+        self._raw = ''
+        self._rang = 0.0
+        with _lock:
+            held = _replies.setdefault(device_id, [])
+            held.append(self)
+            del held[:-TEXT_KEEP]
+
+    def add(self, text):
+        """A piece of her stream. A model that thinks inside its text
+        (<think>...</think>) streams that too; only what she is saying
+        reaches the screen (Krem saw the tags on the glass, 2026-10-06)."""
+        if not text or self.done:
+            return
+        from core import think
+        self._raw = (self._raw + text)[:TEXT_MAX * 4]
+        shown = think.strip(self._raw)[:TEXT_MAX]
+        if shown == self.text:
+            return
+        if not shown.startswith(self.text):      # the visible text changed under the device: a new revision
+            self.rev += 1
+        self.text = shown
+        self.ring()
+
+    def ring(self, force=False):
+        now = time.monotonic()
+        if not force and now - self._rang < DOORBELL_GAP:
+            return
+        self._rang = now
+        cue(self.device_id, 'text', msg=self.msg, rev=self.rev, have=len(self.text), done=self.done)
+
+    def finish(self, final):
+        """Her text as the turn kept it. More of the same is just more to
+        pull; a different text (tool rounds joined, a prefill) is a new
+        revision, pulled from the start."""
+        final = str(final or '')[:TEXT_MAX]
+        if final and final != self.text:
+            if not final.startswith(self.text):
+                self.rev += 1
+            self.text = final
+        self.done = True
+        self.ring(force=True)
+
+    def slice(self, start, limit):
+        start = max(0, min(int(start), len(self.text)))
+        limit = max(1, min(int(limit), PULL_MAX))
+        return {'msg': self.msg, 'rev': self.rev, 'from': start, 'text': self.text[start:start + limit],
+                'have': len(self.text), 'done': self.done}
+
+
+def reply_text(device_id, msg='', start=0, limit=PULL_MAX):
+    """A piece of her reply for a device's screen: the message named, or the
+    latest when none is (a device that just connected). A message that is no
+    longer kept answers with the latest, whose id the device will not match."""
+    with _lock:
+        held = list(_replies.get(str(device_id or '').strip().lower(), ()))
+    if not held:
+        return {'msg': '', 'rev': 0, 'from': 0, 'text': '', 'have': 0, 'done': True}
+    rec = next((r for r in held if r.msg == msg), None) if msg else held[-1]
+    return (rec or held[-1]).slice(start if rec else 0, limit)
 
 
 # --- her voice, as it is made ----------------------------------------------------
@@ -503,6 +608,14 @@ def origin_line(row):
             + " Your reply is spoken aloud there.]")
 
 
+def typed_line(row):
+    """The same line for words typed on a device's keyboard: her reply is
+    read on its small screen, not heard."""
+    spoken = origin_line(row)
+    return spoken.replace('[Voice from device', '[Typed on device', 1) \
+                 .replace('Your reply is spoken aloud there.', 'Your reply is shown on its small screen.', 1)
+
+
 def _spawn(fn, *args):
     threading.Thread(target=fn, args=args, daemon=True, name='device-turn').start()
 
@@ -524,27 +637,28 @@ def _free_slot(device_id):
             _waiting.pop(device_id, None)
 
 
-def _turn(row, chat, heard):
+def _turn(row, chat, heard, reply=None):
     """One question from start to finish, on its own thread. Never raises.
     Her reply is spoken on the device as it is made (Speech); a device whose
     driver cannot take sound that way hears it whole at the end, through
-    the reply lane. The light ends on idle, or on error when the person got
-    no answer."""
+    the reply lane. With a Reply (a typed question) nothing is spoken: her
+    text goes to the device's screen as she writes it. The light ends on
+    idle, or on error when the person got no answer."""
     device_id, failed, speech = row['id'], False, None
     lane = f"device:{device_id}"
     try:
         from core import cadence
         from core.chat.chat import ChatBusy
         cue(device_id, 'thinking')
-        text = f"{origin_line(row)}\n{heard}"
+        text = f"{typed_line(row) if reply else origin_line(row)}\n{heard}"
         give_up = time.monotonic() + BUSY_WAIT
         _spoke.ok = None
-        speech = Speech(device_id)
+        speech = Speech(device_id) if reply is None else None
         while True:
             try:
-                reply = cadence.run_turn(chat, text, speak=lane, source=lane,
-                                         on_event=lambda ev: _follow(device_id, ev, speech),
-                                         stream_speech=speech.ready)
+                said = cadence.run_turn(chat, text, speak=lane if speech else None, source=lane,
+                                        on_event=lambda ev: _follow(device_id, ev, speech, reply),
+                                        stream_speech=bool(speech and speech.ready))
                 break
             except ChatBusy:
                 if time.monotonic() >= give_up:
@@ -553,11 +667,17 @@ def _turn(row, chat, heard):
                     failed = True
                     return
                 time.sleep(1)
+        if reply is not None:
+            reply.finish(said)
+            failed = not said
+            logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}' on its screen, "
+                        f"{len(said or '')} chars, rev {reply.rev}")
+            return
         speech.finish()
         speech.wait()
-        if reply and (_spoke.ok is False or (speech.problem and not speech.spoken)):
+        if said and (_spoke.ok is False or (speech.problem and not speech.spoken)):
             failed = True                # she answered, and the device could not say it
-        logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}', {len(reply or '')} chars"
+        logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}', {len(said or '')} chars"
                     + (f', {speech.spoken} sentence(s) as made' if speech.spoken else '')
                     + (', stopped at the device' if speech.stopped and speech.spoken else '')
                     + (', NOT spoken' if failed else ''))
@@ -565,6 +685,8 @@ def _turn(row, chat, heard):
         failed = True
         if speech is not None:
             speech.stopped = True        # a reply that broke off is not read out to the end
+        if reply is not None:
+            reply.finish(reply.text)     # what came through stays; the device learns it is over
         logger.error(f"[DEVICES] {device_id}: the turn failed: {e}", exc_info=True)
     finally:
         if speech is not None:
@@ -595,6 +717,47 @@ def woke(device_id):
         return {'ok': True, 'yours': True}
     except Exception as e:
         logger.error(f"[DEVICES] woke({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
+
+
+def typed(device_id, text):
+    """A device with a keyboard sends what was typed. {'ok', 'accepted',
+    'chat', 'msg'} or {'ok': False, 'error'}. accepted = a turn has started;
+    her reply reaches the device's screen through `text` doorbells and
+    reply_text(). Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        part = _part_with(row, 'keyboard')
+        if not part:
+            return {'ok': False, 'error': f"'{row['id']}' has no keyboard."}
+        text = str(text or '').strip()
+        if not text:
+            return {'ok': False, 'error': 'Nothing was typed.'}
+        if len(text) > TYPED_MAX:
+            return {'ok': False, 'error': f'That is more than {TYPED_MAX} characters.'}
+        sm = _system().llm_chat.session_manager
+        chat = str(part['config'].get('chat') or '').strip() or sm.get_active_chat_name()
+        if sm.get_settings_for(chat) is None:
+            return {'ok': False, 'error': f"The chat '{chat}' set for '{row['id']}' does not exist."}
+        logger.info(f"[DEVICES] {row['id']} typed {len(text)} chars for chat '{chat}'")
+        if not _take_slot(row['id']):
+            return {'ok': False, 'busy': True, 'chat': chat,
+                    'error': f"'{row['id']}' already has {MAX_WAITING} questions waiting."}
+        reply = Reply(row['id'])
+        try:
+            _spawn(_turn, row, chat, text, reply)
+        except Exception:
+            _free_slot(row['id'])
+            raise
+        return {'ok': True, 'accepted': True, 'chat': chat, 'msg': reply.msg}
+    except Exception as e:
+        logger.error(f"[DEVICES] typed({device_id}) failed: {e}", exc_info=True)
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 

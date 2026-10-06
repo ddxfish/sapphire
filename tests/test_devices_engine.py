@@ -813,13 +813,13 @@ def test_a_crash_is_a_500_without_its_detail(host):
 def test_the_routes_are_all_behind_login():
     """Every devices route must carry require_login. A route without it would
     hand the device list, and the Try button, to anyone on the network.
-    The THREE exceptions are the doors a device opens with its own key: its
-    wake, what it heard, and what its light should show
-    (tests/test_devices_voice.py and tests/test_devices_wake.py prove that
-    lock on them)."""
+    The FIVE exceptions are the doors a device opens with its own key: its
+    wake, what it heard, what it typed and the pull of her reply, and what
+    its light should show (tests/test_devices_voice.py, test_devices_wake.py
+    and test_devices_text_lane.py prove that lock on them)."""
     from core.auth import require_login
     found = [r for r in routes.router.routes if r.path.startswith('/api/devices')]
-    assert len(found) == 11
+    assert len(found) == 13
     assert not [r.path for r in routes.router.routes if r.path.startswith('/api/body')]
     open_doors = []
     for r in found:
@@ -827,6 +827,7 @@ def test_the_routes_are_all_behind_login():
         if require_login not in deps:
             open_doors.append(r.path)
     assert open_doors == ['/api/devices/{device_id}/wake', '/api/devices/{device_id}/voice',
+                          '/api/devices/{device_id}/text', '/api/devices/{device_id}/text',
                           '/api/devices/{device_id}/events']
 
 
