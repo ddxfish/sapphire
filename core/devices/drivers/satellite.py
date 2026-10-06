@@ -33,9 +33,10 @@ from core.backup_targets import Target
 from core.devices.storage import KEEP_FIELDS, keep_from
 
 SPEC = {
-    'label': 'Satellite (mic, speaker, light)',
+    'label': 'Satellite (a board that speaks the protocol)',
     'icon': '\U0001f4e1',
-    'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard'],
+    'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
+                     'sensors'],
     'config_schema': [
         {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status', 'setup': True,
          'placeholder': 'http://192.168.1.100:8090'},
@@ -372,6 +373,10 @@ def describe(device, config):
             'on': {'help': 'listen for the wake word', 'example': ''},
             'off': {'help': 'stop listening for it', 'example': ''},
         }},
+        'sensors': {'label': 'Sensors', 'help': 'what the board measures: a light sensor, a module for '
+                    'temperature or humidity. A name ends in its unit (temp_c, humidity_pct)', 'actions': {
+            'read': {'help': 'every sensor, measured now', 'example': ''},
+        }},
     }
     told['power'] = {'label': 'Power', 'help': 'restart it or shut it down', 'actions': {
         'restart': {'help': 'restart the whole satellite. Back in about a minute', 'example': ''},
@@ -447,13 +452,15 @@ def status(device, config, secrets):
     if isinstance(h.get('free_internal_kb'), (int, float)):      # the RAM TLS needs; a board says it from 0.2.1
         readings['free RAM'] = f"{int(h['free_internal_kb'])} KB internal"
     for name, value in (h.get('sensors') or {}).items() if isinstance(h.get('sensors'), dict) else ():
-        if isinstance(value, (int, float, str)):             # a board's own sensors: name -> number (0.2.0 pocket)
-            readings[f"{str(name)[:24]} sensor"] = str(value)[:24]
+        if isinstance(value, (int, float, str)):             # its sensors: name -> number (pocket 0.2.0)
+            readings[str(name)[:24]] = str(value)[:24]
     st = h.get('storage') if isinstance(h.get('storage'), dict) else {}
     if isinstance(st.get('free_bytes'), (int, float)):
         from core.devices.storage import _gb
         readings['card'] = f"{_gb(st['free_bytes'])} free" + \
             (f" of {_gb(st['total_bytes'])}" if st.get('total_bytes') else '')
+    elif st.get('mounted') is False:                              # a slot with no card in it (pocket 0.2.0)
+        readings['card'] = 'none: put one in (FAT32) and restart the board'
     where = urlsplit(str(config.get('url') or '')).netloc
     out = {'online': bool(h.get('ok', True)), 'readings': readings,
            'detail': f"{h.get('name') or h.get('body_name') or device['id']} at {where}"}
@@ -833,6 +840,14 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 w = _json(_call('GET', '/wakeword', config, secrets))
                 state = 'listening' if w.get('enabled') and w.get('running') else 'not listening'
                 return f"It is {state}" + (f" for {w['model']}." if w.get('model') else '.'), True
+        if capability == 'sensors' and action == 'read':
+            try:
+                got = _json(_call('GET', '/sensors', config, secrets)).get('sensors')
+            except Missing:                                   # an older board: what /health last said
+                got = (_health(device, config, secrets, fresh=True) or {}).get('sensors')
+            if not isinstance(got, dict) or not got:
+                return "No sensor answered.", False
+            return ' · '.join(f"{k}: {v}" for k, v in got.items()), True
         if capability == 'power' and action in ('restart', 'shutdown'):
             try:
                 out = _json(_call('POST', f'/power?action={action}', config, secrets))

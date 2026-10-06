@@ -36,14 +36,15 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `plays` | The one sound format it plays. Sapphire converts her voice to it |
 | `link.connected` | Its events stream to Sapphire is open |
 | `volume`, `temp_c` | Optional readings |
-| `sensors` | Optional: the board's own sensors as `{"name": number}` (a light sensor's raw value, a battery). Each shows as a reading on the device's page, named `<name> sensor` |
+| `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` with a card in; a board with a slot but no card may say `{"mounted": false}` (the page then reads "card: none") and leaves `storage` out of `has` |
+| `sensors` | With `sensors` in `has`: the board's own sensors as `{"name": number}` (a light sensor's raw value, a battery). Each shows as a reading on the device's page |
 | `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
 
 **`has`** takes these names: `speaker`, `mic`, `light`, `wake`, `camera`,
-`power`, `storage`, `screen`, `keyboard`. A name Sapphire does not know is left out and logged.
+`power`, `storage`, `screen`, `keyboard`, `sensors`. A name Sapphire does not know is left out and logged.
 `storage` is said only while the card is mounted: no card, no Backup tab.
 `keyboard` is a board that types at her instead of listening (a pocket
 terminal, `tmp/pocket-esp32`): it gets the mic's key and chat settings, and
@@ -86,6 +87,7 @@ A board answers only the addresses of what it has.
 | `storage` | `POST /storage/format` | Only a board whose `storage.can` lists `format`: wipes the card and formats it FAT32. The person at the Devices page runs it, never Sapphire |
 | `screen` | `POST /screen` | `{"text", "seconds"}`: a line across the top of its screen for that long (20 s if left out), or `{"clear": true}`. Answers `{"ok": true, "seconds"}`. Her `screen` / `show` action |
 | `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action |
+| `sensors` | `GET /sensors` | What it measures, now: `{"sensors": {"light": 1234, "temp_c": 23.5}}`. A name ends in its unit; a light sensor with no calibration sends its raw reading. The same object in `/health` feeds the readings on the device's page. Her `sensors` / `read` action |
 | `keyboard` | nothing | Sapphire asks nothing of a keyboard. The board sends what was typed (below) and pulls her reply |
 
 **`/audio/speak`** carries the sound as the request body, with its

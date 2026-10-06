@@ -29,6 +29,7 @@ REAL = {
                          "brain_events": {"connected": True}},
     ('GET', '/sounds'): {"sounds": [{"name": "ping", "ext": ".wav", "bytes": 70604}], "count": 1},
     ('GET', '/wakeword'): {"running": True, "enabled": True, "model": "hey_sapphire", "threshold": 0.5},
+    ('GET', '/sensors'): {"sensors": {"light": 1234, "temp_c": 23.5}},
     ('GET', '/led/spec'): {"colors": ["cyan", "sapphire", "soft_blue", "off"], "color_aliases": ["red", "blue"],
                            "animations": {"solid": "no motion", "blink": "on and off", "heartbeat": "ba-bump",
                                           "breathe": "rise and fall"},
@@ -84,7 +85,8 @@ def test_spec_registers_as_a_core_driver():
     importlib.reload(reg)
     assert reg.register_driver('satellite', sat.SPEC, 'core', builtin=True)
     spec = reg.get_driver('satellite')
-    assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard']
+    assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
+                                    'sensors']
     assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))
     assert spec['locked_by_default'] == []                    # she may restart a satellite
     assert [f['key'] for f in spec['config_schema'] if f.get('secret')] == ['token', 'voice_key']
@@ -534,3 +536,12 @@ def test_a_board_that_refuses_a_look_is_heard_at_save(board):
         return Reply({"detail": "the thinking look names a color this ring does not know"}, status=400)
     with patch.object(sat.net, 'request', refuse), pytest.raises(DeviceError, match='thinking look'):
         sat.apply(DEV, dict(CFG, **LOOKS), KEY)
+
+
+def test_sensors_read_and_readings(pi):
+    told, ok = run('sensors', 'read')
+    assert ok and told == 'light: 1234 · temp_c: 23.5'
+    assert pi[-1].path == '/sensors'
+    with patch.dict(REAL, {('GET', '/health'): dict(REAL[('GET', '/health')], sensors={"light": 1234})}):
+        st = sat.status(DEV, CFG, KEY)
+    assert st['readings']['light'] == '1234'

@@ -226,6 +226,12 @@ board. Any board that speaks the [Satellite Protocol](SATELLITE-PROTOCOL.md)
 can be added here. Sapphire ships a program for the Waveshare ESP32-S3 audio
 board: see `firmware/satellite-esp32/README.md`.
 
+A board with sensors (a light sensor, a temperature or humidity module) gets
+a **Sensors** tab with one action, `read`, which measures everything now;
+each sensor also shows as a reading in the status strip. A name ends in its
+unit, like `temp_c` or `humidity_pct`; a bare light sensor sends its raw
+number until it is calibrated.
+
 Add one with **+ Add Device**, type **Satellite**:
 
 | Field | What to enter |
