@@ -84,6 +84,9 @@ class Fake:
     def names(self):
         return list(self.store)
 
+    def sizes(self):
+        return {n: len(b) for n, b in self.store.items()}
+
     def delete(self, name):
         self.store.pop(name, None)
 
@@ -250,3 +253,25 @@ def test_ship_now_makes_manual_and_ships(mgr):
     fn, res = T.ship_now(to=[t])
     assert fn.endswith("_manual.tar.gz") and res[0]["ok"]
     assert any(n.endswith("_manual.sapphirebak") for n in t.store)
+
+
+def test_ship_verifies_size_on_the_target_and_drops_a_short_copy(mgr):
+    """The plain check after every ship: the target's own listing must show
+    exactly the bytes sent. A target that kept a short copy gets it deleted
+    and the ship fails loudly."""
+    from core import backup_targets as T
+
+    class Short(Fake):
+        def put(self, path, name):
+            self.check(path, name)
+            self.store[name] = Path(path).read_bytes()[:-1]      # one byte lost
+            self.puts.append(name)
+
+    t = Short(remote=True)
+    fn = _plain(mgr)
+    res = T.ship(fn, to=[t])
+    assert not res[0]["ok"] and "bytes" in res[0]["msg"]
+    assert not any(n.endswith(".sapphirebak") for n in t.store)
+    good = Fake(remote=True)
+    res = T.ship(fn, to=[good])
+    assert res[0]["ok"] and "verified" in res[0]["msg"]

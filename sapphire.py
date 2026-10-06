@@ -1411,6 +1411,12 @@ def run():
             _dev_engine.retell()          # the device tools' descriptions name the fleet
         except Exception as e:
             logger.error(f"Device health did not start: {e}", exc_info=True)
+        # Devices with storage are backup targets: the 3am run ships to them.
+        try:
+            from core.devices import storage as _dev_storage
+            _dev_storage.register()
+        except Exception as e:
+            logger.error(f"Device backup targets did not register: {e}", exc_info=True)
 
         # Dev mode: auto-reload plugins on file changes
         import os

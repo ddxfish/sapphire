@@ -16,6 +16,7 @@ import { renderSettingsForm, readSettingsForm } from '../../shared/plugin-settin
 import { showModal, escapeHtml as esc } from '../../shared/modal.js';
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
+import { showDangerConfirm } from '../../shared/danger-confirm.js';
 
 const API = '/api/devices';
 const ICON = String.fromCodePoint(0x1F39B, 0xFE0F);
@@ -344,7 +345,7 @@ function mountActions(el, device, cap) {
                 : 'Nothing to run yet.'}</div>
             ${names.map(n => `
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px" data-action="${esc(n)}">
-                    <code style="min-width:120px">${esc(n)}</code>
+                    <code style="min-width:120px" title="${cap.actions[n].owner ? 'Only you, from this page. Sapphire cannot run it.' : ''}">${esc(n)}${cap.actions[n].owner ? ' <span style="color:var(--text-muted);font-size:var(--font-xs)">you only</span>' : ''}</code>
                     <input type="text" class="dev-try-value"
                         placeholder="${esc(cap.actions[n].example ? 'for example ' + cap.actions[n].example : 'value (optional)')}"
                         style="flex:1;min-width:0">
@@ -368,6 +369,12 @@ function mountActions(el, device, cap) {
         const row = btn.closest('[data-action]');
         if (cap.capability === 'power'
             && !confirm(`${row.dataset.action} "${device.id}" now?`)) return;
+        const danger = cap.actions[row.dataset.action]?.danger;
+        if (danger && !(await showDangerConfirm({
+            title: `${row.dataset.action} on ${device.id}`,
+            warnings: [danger, 'This cannot be undone.'],
+            buttonLabel: row.dataset.action,
+        }))) return;
         btn.disabled = true;
         out.hidden = false; out.textContent = 'Running...';
         showPics([]);

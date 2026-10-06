@@ -48,7 +48,7 @@ MAX_ROWS = 50            # items in one rows field
 MAX_PICTURES = 4         # pictures one action may answer with
 MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
 PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
-LOCKABLE = ('power', 'camera', 'screen', 'mic')    # these carry a "Sapphire may use this" switch
+LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage')    # these carry a "Sapphire may use this" switch
 MAX_FOUND = 64           # things one driver may report as found
 ALL = 'all'              # the composite device: her voice on every device that can speak
 RESERVED = ('found', ALL)   # names a device may not have: the routes and `all` use them
@@ -684,7 +684,12 @@ def describe(row):
                 a = a if isinstance(a, dict) else {}
                 actions[_slug(name)] = {'help': str(a.get('help') or '')[:160],
                                         'example': str(a.get('example') or '')[:200],
-                                        'values': str(a.get('values') or '')[:80]}
+                                        'values': str(a.get('values') or '')[:80],
+                                        # owner: the person at the page only, never her
+                                        # (run() refuses). danger: the page asks for
+                                        # I UNDERSTAND first, with these words.
+                                        'owner': bool(a.get('owner')),
+                                        'danger': str(a.get('danger') or '')[:200]}
             out.append({'capability': cap, 'label': str(info.get('label') or cap),
                         'help': str(info.get('help') or '')[:120],
                         'driver': part['driver'], 'actions': actions, 'error': '',
@@ -865,7 +870,7 @@ def _block(row, c, limit):
     if c['locked']:
         return f"{c['capability']} (locked) - {LOCKED_NOTE}"
     title = c['capability'] + (f" - {c['help']}" if c['help'] else '')
-    items = list(c['actions'].items())
+    items = [(n, a) for n, a in c['actions'].items() if not a.get('owner')]   # hers to read: not the owner-only ones
     lines = [(f"{name} {a['values']}".strip(), a['help'] or '-') for name, a in items[:limit]]
     body = _columns_text(lines) or f"  (no actions yet - the user adds them in {PAGE})"
     more = f"  ... {len(items) - limit} more: {_call(row['id'], c['capability'])}" if len(items) > limit else ''
@@ -883,8 +888,8 @@ def _screen(row, caps, only=None):
     head = f"{_head(row, st)}, " + (f"checked {_age(st['ts'])}" if st['ts'] else 'not checked yet')
     readings = [f"{k} {v}" for p in st['parts'] for k, v in p['readings'].items()][:READINGS]
     usable = [c for c in shown if not c['error'] and not c['locked'] and c['actions']]
-    pick = next(((c, n, a) for c in usable for n, a in c['actions'].items() if a['example']), None) \
-        or next(((c, n, a) for c in usable for n, a in c['actions'].items()), None)
+    pick = next(((c, n, a) for c in usable for n, a in c['actions'].items() if a['example'] and not a.get('owner')), None) \
+        or next(((c, n, a) for c in usable for n, a in c['actions'].items() if not a.get('owner')), None)
     if pick:
         c, n, a = pick
         foot = 'Run one: ' + _call(*([row['id'], c['capability'], n] + ([a['example']] if a['example'] else [])))
@@ -938,6 +943,31 @@ def speaker(device_id):
         if 'speaker' in capabilities(part, spec) and callable(getattr(mod, 'play', None)):
             return mod, _brief(row), dict(part.get('config') or {}), _part_secrets(row['id'], part['driver'])
     return None
+
+
+def doors(capability, hook, online=True):
+    """Core only: (module, brief, config, secrets) of every enabled part that
+    has `capability` and a callable driver function `hook` — the shape
+    speaker() has for sound, for any capability core drives itself (storage:
+    hook 'storage_target'). With online=True, devices the health keeper
+    believes offline are left out; one never asked yet is tried."""
+    found = statuses() if online else {}
+    out = []
+    for device_id, row in rows().items():
+        if not row.get('enabled', True):
+            continue
+        view = found.get(device_id) or {}
+        if online and view.get('ts') and not view.get('online'):
+            continue
+        for part in row.get('parts', []):
+            try:
+                mod, spec = _driver(part['driver'], part.get('plugin', ''))
+            except DeviceError:
+                continue
+            if capability in capabilities(part, spec) and callable(getattr(mod, hook, None)):
+                out.append((mod, _brief(row), dict(part.get('config') or {}),
+                            _part_secrets(row['id'], part['driver'])))
+    return out
 
 
 def speakers(online=True):
@@ -1010,6 +1040,8 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
         return _screen(row, caps, only=cap), True
     if act not in cap['actions']:
         return f"'{cap_name}' has no action '{action}'.\n{_screen(row, caps, only=cap)}", False
+    if cap['actions'][act].get('owner') and not owner:
+        return f"'{act}' on '{row['id']}' is for the person at {PAGE} only.", False
 
     part = _part(row, cap['driver'])
     try:

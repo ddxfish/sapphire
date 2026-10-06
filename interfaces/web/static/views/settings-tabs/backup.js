@@ -20,16 +20,14 @@ export default {
 
             <div class="backup-section-divider" style="margin-top:12px">
                 <h4 style="margin:0 0 6px;font-size:var(--font-sm)">Encryption</h4>
-                <div style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:8px;line-height:1.7">
-                    One backup password for everything that gets sealed: backups sent to devices and the offsite vault (always), and local backups (only if you turn that on below).
-                    Stored scrambled in <code>~/.config/sapphire/</code>, never inside a backup.<br>
-                    <strong>Write it down.</strong> A sealed backup opens with this password and nothing else &mdash; not even us.
+                <div style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:8px;line-height:1.6">
+                    One password seals everything that leaves this machine. <strong>Write it down</strong> &mdash; nothing else opens a sealed backup.
                 </div>
-                <div id="backup-pw-warn"></div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <span id="backup-pw-state" style="font-size:var(--font-xs);font-weight:600;padding:4px 9px;border-radius:999px;white-space:nowrap;background:var(--bg-tertiary);color:var(--text-muted)">&hellip;</span>
                     <input type="password" id="backup-pw" autocomplete="new-password" placeholder="Set the backup password…"
-                        style="flex:1;min-width:220px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box">
-                    <button class="btn-sm" id="backup-pw-save">Save password</button>
+                        style="flex:1;min-width:200px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box">
+                    <button class="btn-sm" id="backup-pw-save">Save</button>
                     <span id="backup-pw-msg" style="font-size:var(--font-xs);color:var(--text-secondary)"></span>
                 </div>
                 <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:var(--font-sm);cursor:pointer">
@@ -295,10 +293,17 @@ export default {
         if (!h.newest && h.enabled) bad.push('<strong>No backups exist yet.</strong>');
         if (h.backup_dir_error) bad.push(`<strong>Backup folder:</strong> ${esc(h.backup_dir_error)}`);
         if (h.encrypt && h.password_status !== 'ok') bad.push(`<strong>Encryption is on but the backup password is ${h.password_status === 'missing' ? 'not set' : 'unreadable'}</strong> \u2014 no backups are being made. ${h.password_status === 'missing' ? 'Set one' : 'Re-enter it'} in the Encryption box below.`);
-        const pwWarn = el.querySelector('#backup-pw-warn');
+        const pwState = el.querySelector('#backup-pw-state');
         const pwInput = el.querySelector('#backup-pw');
-        if (pwInput) pwInput.placeholder = h.password_status === 'ok' ? 'Password saved \u2014 enter a new one to change it' : 'Set the backup password\u2026';
-        if (pwWarn) pwWarn.innerHTML = h.password_status === 'ok' ? '' : `<div style="font-size:var(--font-xs);color:var(--text-secondary);margin-bottom:6px">${h.password_status === 'missing' ? 'No backup password yet. Devices and the offsite vault will not receive backups until one is set.' : '\u26A0 The saved password can\u2019t be read on this machine \u2014 re-enter it.'}</div>`;
+        const pwOk = h.password_status === 'ok';
+        if (pwInput) pwInput.placeholder = pwOk ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022  type a new one to change it' : 'Set the backup password\u2026';
+        if (pwState) {
+            pwState.textContent = pwOk ? '\u2713 Password set' : (h.password_status === 'missing' ? '\u2717 No password' : '\u26A0 Password unreadable');
+            pwState.style.background = pwOk ? 'rgba(108,204,108,0.15)' : 'rgba(224,108,108,0.15)';
+            pwState.style.color = pwOk ? 'var(--success,#6ecc6e)' : 'var(--danger,#e06c6c)';
+            pwState.title = pwOk ? 'Stored scrambled in ~/.config/sapphire, never inside a backup'
+                : (h.password_status === 'missing' ? 'Devices and the offsite vault receive nothing until one is set' : 'The saved password cannot be read on this machine. Re-enter it.');
+        }
         const folder = h.backup_dir ? ` \u00b7 folder: <code>${esc(h.backup_dir)}</code>` : '';
         if (!bad.length) {
             const age = h.newest && h.newest.age_hours != null ? `${h.newest.age_hours}h ago` : 'n/a';

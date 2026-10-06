@@ -38,9 +38,11 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `volume`, `temp_c` | Optional readings |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
+| `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
 
 **`has`** takes these names: `speaker`, `mic`, `light`, `wake`, `camera`,
-`power`. A name Sapphire does not know is left out and logged.
+`power`, `storage`. A name Sapphire does not know is left out and logged.
+`storage` is said only while the card is mounted: no card, no Backup tab.
 
 **`plays`** has one type today, `audio/wav`, which is always 16 bit PCM. `rate`
 is 8000 to 48000. `channels` is 1 or 2. A small board plays this with no
@@ -72,6 +74,11 @@ A board answers only the addresses of what it has.
 | `wake` | `PUT /wakeword/model?name=hey_marcus&threshold=0.97&format=tflite&phrase=hey+marcus` | A new wake word model: the bytes are the request body (`application/octet-stream`). `format` is `tflite` (microWakeWord, for an ESP32; `sliding_window` and `step_ms` ride along) or `onnx` (openWakeWord, for a Pi). The body keeps it across restarts, listens for it from then on, and answers `{"model": name, "threshold"}`; `GET /wakeword` reports the new name. The Wakeword Maker's Install page sends this. A body without the door answers 404 and the page says to copy the files by hand |
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
 | `power` | `POST /power?action=restart` | `restart` or `shutdown`. Answers first, then acts: `{"in_s": 3}` |
+| `storage` | `GET /storage` | What is kept: `{"free_bytes", "total_bytes", "path", "files": [{"name", "size", "mtime"}], "can": []}` |
+| `storage` | `PUT /storage/{name}` | A backup onto the card: the bytes are the request body (`application/octet-stream`, `Content-Length` required, `X-Sha256` optional). The board writes `name.partial`, renames when complete, answers `{"ok": true, "name", "size", "sha256"}`. It REFUSES with 400 any name that is not `sapphire_*.sapphirebak` carrying the `SAPPHIREBAK` magic in its first 12 bytes, except the four opener files (`README.txt`, `open-backup.sh`, `open-backup.bat`, `decrypt_backup.py`): plaintext backups never land on a satellite, even if Sapphire has a bug. 409 while another PUT runs, 411 without a length, 507 when it does not fit. A 70 MB backup takes a minute or two over WiFi; the board must still answer `/health` meanwhile |
+| `storage` | `GET /storage/{name}` | The bytes back, for a restore |
+| `storage` | `DELETE /storage/{name}` | Rotation: Sapphire keeps the counts set on the device page and drops the oldest |
+| `storage` | `POST /storage/format` | Only a board whose `storage.can` lists `format`: wipes the card and formats it FAT32. The person at the Devices page runs it, never Sapphire |
 
 **`/audio/speak`** carries the sound as the request body, with its
 `Content-Type`, when the board stated `plays`. The board can play it while it
@@ -190,4 +197,5 @@ the stream ends, open it again. A board only ever hears about its own turns.
 - `has` is kept by the engine on the device row (`parts[].has`, `engine.capabilities`). `status()` of any driver may answer it.
 - Conversion: `core/devices/voice.py` `fit(audio, kind, plays)`, checked by `wanted(plays)`. The only place her voice is converted for a device.
 - Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`.
+- Backups onto a board: `core/devices/storage.py` makes a `SatelliteTarget` (in the driver) for every device whose `has` says `storage`; `core/backup_targets.ship` seals once, PUTs, rotates by the device's keep fields, drops the openers. Never plaintext: `Target.check` (Sapphire) + the board's own magic check.
 - `tests/test_docs_satellite_protocol.py` runs this page's health example through the real driver and checks every address in the table.

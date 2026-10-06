@@ -9,13 +9,22 @@
 # The screen is seen through the screenshot plugin's own tool, so there is
 # ONE screenshot program in Sapphire. With that plugin off, this driver has
 # no screen.
+# Storage (2026-10-06): a folder on this machine - a USB stick, a NAS mount,
+# a second disk - as a place core/backup_targets ships backups to. The only
+# target kind that may hold plain backups (its own switch, off by default):
+# the stick is in your hand, it never left the house.
 import logging
+import os
 import platform
 import re
 import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
+
+from core.backup_targets import Target
+from core.devices.storage import KEEP_FIELDS, keep_from
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +33,7 @@ SCREEN_TOOL = 'get_screenshot'
 SPEC = {
     'label': 'This computer',
     'icon': '\U0001f4bb',
-    'capabilities': ['sound', 'screen', 'power'],
+    'capabilities': ['sound', 'screen', 'power', 'storage'],
     'locked_by_default': ['power'],
     'uses_tools': [SCREEN_TOOL],
     'config_schema': [
@@ -33,6 +42,15 @@ SPEC = {
         {'key': 'loudest', 'type': 'number', 'label': 'Loudest Sapphire may set', 'default': 100,
          'min': 10, 'max': 100, 'capability': 'sound',
          'help': 'In percent. She is held to this. Your own volume keys are not.'},
+        {'key': 'backup_path', 'type': 'string', 'label': 'Backup folder', 'capability': 'storage', 'tab': 'Backup',
+         'placeholder': '/media/usb/sapphire-backups  or  D:\\sapphire-backups',
+         'help': 'A folder that already exists: on a USB stick, a NAS mount, a second disk. '
+                 'Empty = no backups go here. A folder inside Sapphire\'s own user/ is refused.'},
+        {'key': 'backup_encrypt', 'type': 'boolean', 'label': 'Seal them', 'capability': 'storage', 'tab': 'Backup',
+         'default': False,
+         'help': 'On = sealed .sapphirebak files that only the backup password opens. '
+                 'Off = plain .tar.gz you can open anywhere (this folder is on your own machine).'},
+        *KEEP_FIELDS,
     ],
 }
 
@@ -382,7 +400,84 @@ def describe(device, config):
     if not _windows():
         power['sleep'] = {'help': 'put it to sleep', 'example': ''}
     told['power'] = {'label': 'Power', 'help': 'restart it, shut it down, or sleep', 'actions': power}
+    if str(config.get('backup_path') or '').strip():     # no folder set = no Backup actions (the fields still show)
+        told['storage'] = {'label': 'Backup', 'help': 'copies of her memory in a folder here: a stick, a NAS',
+                           'actions': {
+            'backup': {'help': 'back everything up into that folder now', 'example': ''},
+            'list': {'help': 'what is in the folder and how much room is left', 'example': ''},
+        }}
     return told
+
+
+# --- backups into a folder here ----------------------------------------------
+
+class FolderTarget(Target):
+    """A folder on this machine as a place backups go. remote=False: the one
+    kind that may hold plain backups, by its own `backup_encrypt` switch."""
+    kind = 'folder'
+    remote = False
+
+    def __init__(self, device, config):
+        self.label = f"{device['id']}:{config.get('backup_path')}"
+        self.keep = keep_from(config)
+        self.encrypt = bool(config.get('backup_encrypt', False))
+        self.path = _folder(config)
+
+    def info(self):
+        try:
+            u = shutil.disk_usage(self.path)
+            return {'free_bytes': u.free, 'total_bytes': u.total, 'path': str(self.path)}
+        except OSError:
+            return {'path': str(self.path)}
+
+    def names(self):
+        return list(self.sizes())
+
+    def sizes(self):
+        return {p.name: p.stat().st_size for p in self.path.iterdir() if p.is_file()}
+
+    def put(self, path, name):
+        self.check(path, name)
+        part = self.path / (name + '.partial')
+        shutil.copyfile(path, part)
+        os.replace(part, self.path / name)
+
+    def delete(self, name):
+        if '/' not in name and '\\' not in name:
+            (self.path / name).unlink(missing_ok=True)
+
+    def get(self, name, dst):
+        shutil.copyfile(self.path / name, dst)
+
+
+def _folder(config):
+    """The backup folder, which must already exist (a stick that is not
+    plugged in must not become a folder on the main disk) and must not be
+    inside Sapphire's own user/. Raises Problem."""
+    raw = str(config.get('backup_path') or '').strip()
+    if not raw:
+        raise Problem("No backup folder is set. Enter one in Settings > Devices.")
+    p = Path(os.path.expanduser(raw))
+    if not p.is_dir():
+        raise Problem(f"The backup folder {raw} is not there. Is the drive plugged in / mounted?")
+    try:
+        from core.backup import backup_manager
+        if p.resolve().is_relative_to(backup_manager.user_dir.resolve()):
+            raise Problem("The backup folder cannot be inside Sapphire's own user/ folder.")
+    except OSError:
+        pass
+    if not os.access(p, os.W_OK):
+        raise Problem(f"The backup folder {raw} cannot be written.")
+    return p
+
+
+def storage_target(device, config, secrets):
+    """Core's door (core/devices/storage.py): this folder as a backup target,
+    or None when no folder is set. A folder that is set but missing raises,
+    so the nightly log says why nothing landed."""
+    if not str(config.get('backup_path') or '').strip():
+        return None
+    return FolderTarget(device, config)
 
 
 def status(device, config, secrets):
@@ -400,6 +495,13 @@ def status(device, config, secrets):
     except Problem:
         pass
     readings['screen'] = 'can be seen' if _can_see() else 'the screenshot plugin is off'
+    if str(config.get('backup_path') or '').strip():
+        try:
+            from core.devices.storage import _gb
+            info = FolderTarget(device, config).info()
+            readings['backup folder'] = f"{_gb(info['free_bytes'])} free" if 'free_bytes' in info else 'there'
+        except Problem as e:
+            readings['backup folder'] = str(e)
     return {'online': True, 'readings': readings,
             'detail': f"{platform.node() or 'this computer'}, {platform.system()}"}
 
@@ -441,6 +543,13 @@ def run(device, capability, action, value, config, secrets, call_tool):
             return call_tool(SCREEN_TOOL, {'source': 'local'})
         if capability == 'power' and action in _POWER:
             return _power(action), True
+        if capability == 'storage':
+            from core.devices import storage as st
+            target = FolderTarget(device, config)      # Problem when unset or missing
+            if action == 'backup':
+                return st.backup_now(target)
+            if action == 'list':
+                return st.listing_text(target, target.info()), True
     except Problem as e:
         return str(e), False
     return f"This computer has no {capability} / {action}.", False

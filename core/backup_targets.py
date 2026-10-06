@@ -66,6 +66,11 @@ class Target:
     def names(self):
         raise NotImplementedError
 
+    def sizes(self):
+        """{name: bytes} of what is there, when the target can say (the
+        board's listing, a folder's stat). {} when it cannot."""
+        return {}
+
     def delete(self, name: str):
         raise NotImplementedError
 
@@ -128,11 +133,24 @@ def _ship_one(t: Target, plain: Path, sealed):
     try:
         t.check(path, name)                       # GATE 2
         have = set(t.names())
+        sent = path.stat().st_size
         if name in have:
             verb = "already there"
         else:
             t.put(path, name)
-            verb = f"shipped ({path.stat().st_size // (1024 * 1024)} MB)"
+            verb = f"shipped ({sent // (1024 * 1024)} MB)"
+        # The plain check after every ship: what the target says it holds
+        # must be exactly what was sent (the drivers' sha256 runs underneath).
+        there = t.sizes()
+        if name not in set(t.names()):
+            raise BackupRefused(f"{name} is not on {t.label} after the ship")
+        if name in there and int(there[name]) != sent:
+            try:
+                t.delete(name)
+            finally:
+                raise BackupRefused(f"{name} on {t.label} is {there[name]} bytes, sent {sent}: dropped it")
+        if name in there:
+            verb += ", verified"
         doomed = select_doomed(list(t.names()), t.keep)
         for d in doomed:
             try:

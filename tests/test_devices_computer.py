@@ -120,7 +120,7 @@ def test_it_is_a_core_driver_with_power_locked():
     assert 'computer' in reg.CORE_DRIVERS
     assert reg.register_driver('computer', pc.SPEC, 'core', builtin=True)
     spec = reg.get_driver('computer')
-    assert spec['capabilities'] == ['sound', 'screen', 'power']
+    assert spec['capabilities'] == ['sound', 'screen', 'power', 'storage']
     assert spec['locked_by_default'] == ['power']             # she may not switch the user's machine off
     assert spec['uses_tools'] == ['get_screenshot']
     assert not [f for f in spec['config_schema'] if f.get('secret')]

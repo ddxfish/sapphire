@@ -84,7 +84,7 @@ def test_spec_registers_as_a_core_driver():
     importlib.reload(reg)
     assert reg.register_driver('satellite', sat.SPEC, 'core', builtin=True)
     spec = reg.get_driver('satellite')
-    assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power']
+    assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage']
     assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))
     assert spec['locked_by_default'] == []                    # she may restart a satellite
     assert [f['key'] for f in spec['config_schema'] if f.get('secret')] == ['token', 'voice_key']

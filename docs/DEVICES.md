@@ -113,6 +113,16 @@ down with it, and says so.
 **The screen** has the same switch. With the Screenshot plugin switched off,
 this computer has no Screen tab.
 
+### Backups into a folder here
+
+The **Backup** tab on this computer takes a folder that already exists: a USB
+stick, a NAS mount, a second disk. Every night Sapphire copies the local backup
+there and keeps the counts you set. A folder on your own machine may hold plain
+`.tar.gz` backups (the default); tick **Seal them** to get `.sapphirebak` files
+that only the backup password opens. A folder inside Sapphire's own `user/` is
+refused. A stick that is not plugged in is reported, never replaced by a folder
+on the main disk. The opener scripts land beside the backups either way.
+
 ## MIDI keyboard
 
 A plain MIDI keyboard makes no sound of its own. This device gives it one: the
@@ -342,6 +352,21 @@ to 20 seconds for it. After that it is dropped and the ring blinks red.
 **Private chats.** A private chat never sends audio to a cloud speech engine,
 and never sends its reply to a cloud voice engine. The satellite stays silent
 and the reason is logged.
+
+### Backups on its card
+
+A satellite with a card (the ESP32 board's TF slot, a folder on a Pi) gets a
+**Backup** tab. Every night, after the local backup, Sapphire seals a copy
+with your backup password and sends it there; the tab's three counts say how
+many daily, weekly and monthly copies the card keeps before the oldest goes.
+`device_action("den","storage","backup")` sends one now;
+`device_action("den","storage","list")` says what is there and how much room
+is left. The card is plain FAT32: pull it, put it in any computer, and the
+`README.txt` and `open-backup` scripts beside the archives open a backup with
+your password and nothing else. Nothing ever lands on a card unsealed: Sapphire
+checks before sending and the board checks again before writing. A board that
+can wipe its card shows a **Format** button on the tab, for you only, behind
+an I UNDERSTAND. No card, no tab. Set the password in Settings > Backup.
 
 ### Give a Pi its own key
 
