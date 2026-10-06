@@ -1,0 +1,39 @@
+{
+  "name": "game-piano-protagonist",
+  "short_display_name": "Piano Protagonist",
+  "display_name": "Game: Piano Protagonist",
+  "description": "Falling-notes piano practice for the Game Room. Pick a chord lesson or a public-domain tune and loop it: the notes drop toward a keyboard on screen and you play along on a MIDI keyboard, on the keyboard linked to her machine, or on the computer's keys. Hear the song or not, score each pass or not.",
+  "version": "0.3.1",
+  "emoji": "🎹",
+  "author": "Krem & Claude",
+  "default_enabled": true,
+  "capabilities": {
+    "games": [
+      {
+        "id": "piano-protagonist",
+        "title": "Piano Protagonist",
+        "genre": "music",
+        "desc": "We have Guitar Hero at home. Pick a song, loop it, play along on the keys. Ten chords, a shelf of old tunes, three difficulties, and a score only if you ask for one.",
+        "icon": "🎹",
+        "surfaces": [
+          "room"
+        ],
+        "room_defaults": {
+          "cadence_mode": "off",
+          "session_end_summary": false,
+          "send_frames": false
+        },
+        "entry_js": "app/piano-protagonist.js",
+        "keeps_focus": true,
+        "players": "solo at the keys",
+        "facts": [
+          "Three ways to play: a MIDI keyboard in this browser, the keyboard linked to the machine she runs on, or the computer's own keys laid out like a piano with middle C under G",
+          "One mode: the song loops with a rest between passes until you stop it, and the keys are live the whole time",
+          "The speaker button plays the song as it scrolls or leaves the bars silent; slow it to ¼, ½ or ¾ speed",
+          "Scoring is optional and quiet: a number in the corner after each pass (pitch × timing × hold × streak), sparks for a catch, nothing for a miss",
+          "Nothing is kept and she takes no part yet. Paste your own tunes in the game's settings: name | bpm | notation, one per line"
+        ]
+      }
+    ]
+  }
+}
