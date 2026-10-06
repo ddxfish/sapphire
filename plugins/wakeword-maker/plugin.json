@@ -1,0 +1,392 @@
+{
+  "name": "wakeword-maker",
+  "display_name": "Wakeword Maker",
+  "short_display_name": "Wakeword Maker",
+  "version": "1.0.0",
+  "description": "Make your own wake word. One dataset of your phrase, synthesized in thousands of voices and recorded in your own, then two models: openWakeWord for the desktop and the Pi, microWakeWord for the ESP32.",
+  "emoji": "\ud83d\udde3\ufe0f",
+  "author": "sapphire",
+  "default_enabled": false,
+  "environment": {
+    "python": "3.11",
+    "pip": [
+      "--extra-index-url=https://download.pytorch.org/whl/cu128",
+      "torch==2.10.0+cu128; sys_platform != \"darwin\"",
+      "torchaudio==2.10.0+cu128; sys_platform != \"darwin\"",
+      "torch==2.10.0; sys_platform == \"darwin\"",
+      "torchaudio==2.10.0; sys_platform == \"darwin\"",
+      "tensorflow==2.21.0",
+      "nvidia-cuda-nvcc-cu12<13; sys_platform != \"darwin\"",
+      "openwakeword==0.6.0",
+      "speechbrain",
+      "audiomentations",
+      "torch-audiomentations",
+      "torchinfo",
+      "torchmetrics",
+      "mutagen",
+      "acoustics",
+      "pronouncing",
+      "pyyaml",
+      "scipy",
+      "soundfile",
+      "piper-tts==1.4.2",
+      "kokoro==0.9.4",
+      "faster-whisper",
+      "pymicro-features",
+      "mmap_ninja",
+      "webrtcvad-wheels",
+      "datasets",
+      "ai-edge-litert",
+      "https://github.com/whatsnowplaying/audio-metadata/archive/d4ebb23.tar.gz",
+      "optuna",
+      "onnx",
+      "onnxscript",
+      "tensorboard"
+    ]
+  },
+  "capabilities": {
+    "app": {
+      "label": "Wakeword Maker",
+      "icon": "\ud83d\udde3\ufe0f",
+      "description": "Record, synthesize, rate, train and install your own wake word"
+    },
+    "daemon": {
+      "entry": "daemon.py"
+    },
+    "settings": [
+      {
+        "key": "data_dir",
+        "type": "string",
+        "label": "Data folder",
+        "default": "",
+        "placeholder": "",
+        "help": "Where everything lives: recordings, synthetic clips, downloaded datasets, models. Empty = wakeword/ inside the Sapphire folder, which is kept out of git and the nightly backup. Set another folder to use a bigger drive. Budget 30 GB."
+      },
+      {
+        "key": "device",
+        "type": "string",
+        "label": "Compute",
+        "default": "auto",
+        "options": [
+          {
+            "label": "Auto (GPU when there is one)",
+            "value": "auto"
+          },
+          {
+            "label": "GPU",
+            "value": "cuda"
+          },
+          {
+            "label": "CPU",
+            "value": "cpu"
+          }
+        ],
+        "help": "Where synthesis, rating and training run. CPU works for everything and is slow for the ESP32 model."
+      },
+      {
+        "key": "qa_whisper_model",
+        "type": "string",
+        "label": "Whisper model for rating clips",
+        "default": "base.en",
+        "help": "The Check tab transcribes every clip to hear whether it says the phrase. base.en is quick; small.en is stricter."
+      }
+    ],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "status",
+        "handler": "routes/api.py:status"
+      },
+      {
+        "method": "POST",
+        "path": "settings/check-dir",
+        "handler": "routes/api.py:check_dir"
+      },
+      {
+        "method": "GET",
+        "path": "datasets",
+        "handler": "routes/api.py:datasets"
+      },
+      {
+        "method": "POST",
+        "path": "datasets/{did}/download",
+        "handler": "routes/api.py:download_dataset"
+      },
+      {
+        "method": "DELETE",
+        "path": "datasets/{did}",
+        "handler": "routes/api.py:delete_dataset"
+      },
+      {
+        "method": "GET",
+        "path": "projects",
+        "handler": "routes/api.py:list_projects"
+      },
+      {
+        "method": "POST",
+        "path": "projects",
+        "handler": "routes/api.py:create_project"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}",
+        "handler": "routes/api.py:get_project"
+      },
+      {
+        "method": "PUT",
+        "path": "projects/{slug}",
+        "handler": "routes/api.py:update_project"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}",
+        "handler": "routes/api.py:delete_project"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/clips",
+        "handler": "routes/api.py:list_clips"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/clips/{kind}/{src}/{cid}/audio",
+        "handler": "routes/api.py:clip_audio"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}/clips/{kind}/{src}/{cid}",
+        "handler": "routes/api.py:delete_clip"
+      },
+      {
+        "method": "PUT",
+        "path": "projects/{slug}/clips/{kind}/{src}/{cid}",
+        "handler": "routes/api.py:tag_clip"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/record",
+        "handler": "routes/api.py:record"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/record-satellite",
+        "handler": "routes/api.py:record_satellite"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/upload",
+        "handler": "routes/api.py:upload"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/qa",
+        "handler": "routes/api.py:qa_report"
+      },
+      {
+        "method": "GET",
+        "path": "voices",
+        "handler": "routes/api.py:voice_catalog"
+      },
+      {
+        "method": "GET",
+        "path": "mics",
+        "handler": "routes/api.py:mics"
+      },
+      {
+        "method": "GET",
+        "path": "jobs",
+        "handler": "routes/api.py:list_jobs"
+      },
+      {
+        "method": "POST",
+        "path": "jobs",
+        "handler": "routes/api.py:start_job"
+      },
+      {
+        "method": "GET",
+        "path": "jobs/{jid}",
+        "handler": "routes/api.py:get_job"
+      },
+      {
+        "method": "DELETE",
+        "path": "jobs/{jid}",
+        "handler": "routes/api.py:cancel_job"
+      },
+      {
+        "method": "GET",
+        "path": "jobs/{jid}/log",
+        "handler": "routes/api.py:job_log"
+      },
+      {
+        "method": "GET",
+        "path": "voices/sample",
+        "handler": "routes/api.py:voice_sample"
+      },
+      {
+        "method": "GET",
+        "path": "variations/presets",
+        "handler": "routes/api.py:variation_presets"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/variation",
+        "handler": "routes/api.py:variation_sample"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/record-test",
+        "handler": "routes/api.py:record_test"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/guide",
+        "handler": "routes/api.py:guide"
+      },
+      {
+        "method": "GET",
+        "path": "storage",
+        "handler": "routes/api.py:storage"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/near-misses",
+        "handler": "routes/api.py:near_misses"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/browse",
+        "handler": "routes/api.py:browse"
+      },
+      {
+        "method": "GET",
+        "path": "mics/{device}/settings",
+        "handler": "routes/api.py:mic_settings"
+      },
+      {
+        "method": "POST",
+        "path": "mics/{device}/settings",
+        "handler": "routes/api.py:mic_settings"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/check",
+        "handler": "routes/api.py:check_report"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/delete-dropped",
+        "handler": "routes/api.py:delete_dropped"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/dropped",
+        "handler": "routes/api.py:dropped_report"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/holdout",
+        "handler": "routes/api.py:get_holdout"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/holdout",
+        "handler": "routes/api.py:reshuffle_holdout"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/dryrun",
+        "handler": "routes/api.py:dry_run"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/runs",
+        "handler": "routes/api.py:list_runs"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/runs/{rid}",
+        "handler": "routes/api.py:get_run"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}/runs/{rid}",
+        "handler": "routes/api.py:delete_run"
+      },
+      {
+        "method": "GET",
+        "path": "train/options",
+        "handler": "routes/api.py:train_options"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/runs/{rid}/judge",
+        "handler": "routes/api.py:judge_run"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/try",
+        "handler": "routes/api.py:try_runs"
+      },
+      {
+        "method": "PUT",
+        "path": "projects/{slug}/runs/{rid}",
+        "handler": "routes/api.py:set_run"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/watch",
+        "handler": "routes/api.py:watch_start"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/watch",
+        "handler": "routes/api.py:watch_get"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}/watch",
+        "handler": "routes/api.py:watch_stop"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/watch/chunk",
+        "handler": "routes/api.py:watch_chunk"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/watch/{wid}/{fid}/audio",
+        "handler": "routes/api.py:watch_audio"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/watch/{wid}/{fid}",
+        "handler": "routes/api.py:watch_fate"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/install",
+        "handler": "routes/api.py:install_status"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/install/desktop",
+        "handler": "routes/api.py:install_desktop"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}/install/desktop",
+        "handler": "routes/api.py:install_desktop_restore"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/install/satellite",
+        "handler": "routes/api.py:install_satellite"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/runs/{rid}/file/{name}",
+        "handler": "routes/api.py:run_file"
+      }
+    ]
+  }
+}

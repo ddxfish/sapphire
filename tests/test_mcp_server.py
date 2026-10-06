@@ -81,10 +81,10 @@ def test_ask_runs_a_turn_in_the_named_chat_with_her_line_and_returns_the_answer(
         return 'It is 64 degrees.'
     with patch('core.cadence.run_turn', side_effect=run_turn):
         out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={
-            'text': 'what is the weather?', 'chat': 'desk-sapph', 'from': 'another Sapphire, desk-sapph'}), where='192.168.0.69')
+            'text': 'what is the weather?', 'chat': 'desk-sapph', 'from': 'another Sapphire, desk-sapph'}), where='192.168.1.101')
     assert out['result'] == {'content': [{'type': 'text', 'text': 'It is 64 degrees.'}], 'isError': False}
-    assert seen['chat'] == 'desk-sapph' and seen['source'] == 'mcp:192.168.0.69'
-    assert seen['text'] == ('[This is from another Sapphire, desk-sapph at 192.168.0.69. '
+    assert seen['chat'] == 'desk-sapph' and seen['source'] == 'mcp:192.168.1.101'
+    assert seen['text'] == ('[This is from another Sapphire, desk-sapph at 192.168.1.101. '
                             'Answer in your message; no tool is needed to reply.]\nwhat is the weather?')
     assert seen['answering'] is True                      # the belt under the braces, on during her turn
     assert mcp.answering.get() is False                   # and off again after
@@ -179,7 +179,7 @@ def test_bad_requests_are_named(world):
 # --- the route ----------------------------------------------------------------------
 
 class _Request:
-    def __init__(self, body, ip='192.168.0.69'):
+    def __init__(self, body, ip='192.168.1.101'):
         self._body, self.headers, self.client = body, {}, SimpleNamespace(host=ip)
 
     async def json(self):

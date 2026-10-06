@@ -74,7 +74,7 @@ def home(tmp_path):
             for held in (voice._waiting, voice._showing, voice._listeners, sat._about):
                 held.clear()
             engine.add('pi2', 'Kitchen', 'satellite',
-                       {'url': 'http://192.168.0.221:8090', 'token': 'body-key-abcdefgh',
+                       {'url': 'http://192.168.1.100:8090', 'token': 'body-key-abcdefgh',
                         'voice_key': 'voice-key-12345678'})
             yield SimpleNamespace(system=system, sm=sm, stt=stt, store=store, heard=heard)
             health._belief.clear(); health._saved = None
@@ -109,7 +109,7 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
     assert [d['driver'] for d in engine.drivers()] == ['sapphire', 'satellite', 'computer']   # all three ship inside core, by label
     row = engine.get('pi2')
     assert row['parts'][0] == {'driver': 'satellite', 'plugin': 'core',
-                               'config': {'url': 'http://192.168.0.221:8090', 'camera': True, 'chat': '',
+                               'config': {'url': 'http://192.168.1.100:8090', 'camera': True, 'chat': '',
                                           'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
                                           'look_tool': 'purple pulse', 'look_speaking': 'cyan solid',
@@ -356,7 +356,7 @@ def test_a_reply_that_breaks_off_is_not_read_to_the_end(home):
 
 def test_the_engine_names_the_speaker_core_may_hand_sound_to(home):
     mod, brief, config, secrets = engine.speaker('pi2')
-    assert mod is sat and brief['id'] == 'pi2' and config['url'] == 'http://192.168.0.221:8090'
+    assert mod is sat and brief['id'] == 'pi2' and config['url'] == 'http://192.168.1.100:8090'
     assert secrets.get('token') == 'body-key-abcdefgh'
     assert engine.speaker('nope') is None
     with patch.object(sat, 'play', None):                       # a driver without the door
@@ -472,8 +472,8 @@ def test_say_carries_the_chat_settings_to_the_voice_engine(home):
         out = voice.say('pi2', 'It is noon.', chat_settings={'private_chat': True})
     assert out == ('Said there: "It is noon."', True)
     home.system.tts.render.assert_called_once_with('It is noon.', chat_settings={'private_chat': True})
-    assert [url for _, url, _ in sent] == ['http://192.168.0.221:8090/health',
-                                           'http://192.168.0.221:8090/audio/speak']
+    assert [url for _, url, _ in sent] == ['http://192.168.1.100:8090/health',
+                                           'http://192.168.1.100:8090/audio/speak']
     assert voice._speaking_for.get() is None                  # never leaks into the next call
 
 
@@ -507,7 +507,7 @@ class _Audio:
         return self._data
 
 
-def _request(key=None, addr='192.168.0.221', audio=None, body=None, kind=''):
+def _request(key=None, addr='192.168.1.100', audio=None, body=None, kind=''):
     """What a device sent: the form file `audio`, or with `kind` the sound
     itself as the body, arriving in small pieces."""
     headers = {'authorization': f'Bearer {key}'} if key else {}

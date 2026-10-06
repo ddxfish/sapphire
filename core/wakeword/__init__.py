@@ -90,31 +90,25 @@ def get_available_models():
         'all': all_models
     }
 
+USER_MODELS_DIR = Path(__file__).parent.parent.parent / 'user' / 'wakeword' / 'models'
+
+
 def resolve_model_path(model_name):
     """
     Resolve a model name to its path.
-    
-    For builtins, returns just the name (OWW handles it).
-    For core/custom models, returns the full path.
+
+    The user's own file wins: user/wakeword/models/ first, then core/wakeword/models/, then the built-in names
+    (which OWW resolves itself). So a wake word someone trained under the same name as a shipped model (the
+    Wakeword Maker installs "hey sapphire" as hey_sapphire) is the one that listens. 2026-10-05.
+    For builtins without a user file, returns just the name; otherwise the full path.
     """
-    if model_name in BUILTIN_MODELS:
-        return model_name
-    
-    # Check core models first
-    if CORE_MODELS_DIR.exists():
-        for ext in ['.onnx', '.tflite']:
-            for model_file in CORE_MODELS_DIR.rglob(f'{model_name}{ext}'):
-                return str(model_file)
-    
-    # Check user custom models
-    user_models_dir = Path(__file__).parent.parent.parent / 'user' / 'wakeword' / 'models'
-    
-    if user_models_dir.exists():
-        for ext in ['.onnx', '.tflite']:
-            for model_file in user_models_dir.rglob(f'{model_name}{ext}'):
-                return str(model_file)
-    
-    # Fallback: assume it's a builtin or path
+    for folder in (USER_MODELS_DIR, CORE_MODELS_DIR):
+        if folder.exists():
+            for ext in ['.onnx', '.tflite']:
+                for model_file in folder.rglob(f'{model_name}{ext}'):
+                    return str(model_file)
+
+    # Fallback: a builtin name, or a path
     return model_name
 
-__all__ = ['AudioRecorder', 'WakeWordDetector', 'get_available_models', 'resolve_model_path', 'BUILTIN_MODELS', 'CORE_MODELS_DIR']
+__all__ = ['AudioRecorder', 'WakeWordDetector', 'get_available_models', 'resolve_model_path', 'BUILTIN_MODELS', 'CORE_MODELS_DIR', 'USER_MODELS_DIR']

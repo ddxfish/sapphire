@@ -67,6 +67,10 @@ user_restore
 tmp/nova-vault.key
 
 CLAUDE-PENDING.md
+CLAUDE-OLD.md
 
 firmware
 tools/wardrobe/
+
+# Wakeword Maker's data folder (recordings, datasets, models): big, and kept out of backups too
+/wakeword/

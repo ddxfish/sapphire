@@ -216,7 +216,7 @@ Add one with **+ Add Device**, type **Satellite**:
 
 | Field | What to enter |
 |---|---|
-| Address | Where the satellite listens, like `http://192.168.0.221:8090` |
+| Address | Where the satellite listens, like `http://192.168.1.100:8090` |
 | Key Sapphire sends | The satellite's own key |
 | Has a camera | Turn off for a satellite with no camera. Sapphire is then not offered one |
 | Talks in chat | The chat its questions land in. Empty means the last chat used. A name means always that chat |
@@ -401,7 +401,7 @@ program for the board and the setup steps. See its README.
 A second Sapphire on your network, as a device. She is reached through her
 MCP door, so first, over there: **Settings > MCP Server**, switch it on, and
 make a token under **System > API Keys**. Then here: Add Device > **Another
-Sapphire**: her address (`https://192.168.0.201:8073`), that token, and the
+Sapphire**: her address (`https://192.168.1.102:8073`), that token, and the
 name of the chat on her side where this Sapphire's words should land. The
 chat is made over there the first time it is used.
 

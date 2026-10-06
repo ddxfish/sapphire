@@ -108,7 +108,7 @@ TOPIC → DOC:
 - Chats — create, configure, organize, import/export: CHATS.md
 - Appearance — themes, fonts, scenes, motion: APPEARANCE.md
 - Memory (classic): MEMORY.md · Mind Palace (opt-in v3 engine): MIND-PALACE.md
-- Knowledge base: KNOWLEDGE.md · Goals: GOALS.md · Entities/contacts: PEOPLE.md · Self sheet: SELF.md
+- Knowledge base: KNOWLEDGE.md · Goals: GOALS.md · Entities/contacts: PEOPLE.md · Self sheet: MIND-PALACE.md · Feature list: SELF.md
 - Triggers — heartbeat, scheduled tasks: CONTINUITY.md · daemons, webhooks: DAEMONS-WEBHOOKS.md
 - Agents (background workers): AGENTS.md · Toolmaker (AI-built tools): TOOLMAKER.md
 - Plugins — install, enable, store: PLUGINS.md · authoring: plugin-author/README.md · signing: SIGNING.md

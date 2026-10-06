@@ -1,3 +1,6 @@
+# 2.13.4 - Wakeword Builder
+- make microwakeword or openwakeword
+- Full process in app: synthetic voices, your voice, checks, train, install
 # 2.13.3 - MCP Server
 - MCP server allows other apps to use Sapphire with key
 - Added "Other Sapphire" to list of devices we can add

@@ -293,7 +293,7 @@ def test_say_on_all_renders_once_and_plays_on_every_device_at_once(two):
     assert text.splitlines() == ['Said on 2 device(s): "Dinner is ready"', 'esp: said', 'pi2: said']
     two.system.tts.render.assert_called_once()
     posts = [url for m, url, kw in sent if url.endswith('/audio/speak')]
-    assert sorted(posts) == ['http://192.168.0.221:8090/audio/speak', 'http://192.168.0.4:80/audio/speak']
+    assert sorted(posts) == ['http://192.168.0.4:80/audio/speak', 'http://192.168.1.100:8090/audio/speak']
 
 
 def test_say_on_all_skips_a_device_believed_offline_but_tries_one_never_asked(two):
@@ -306,7 +306,7 @@ def test_say_on_all_skips_a_device_believed_offline_but_tries_one_never_asked(tw
 
 
 def test_a_button_stop_on_one_device_stops_the_others(two):
-    answers = {'http://192.168.0.221:8090/audio/speak': {'ok': True, 'stopped': True}}
+    answers = {'http://192.168.1.100:8090/audio/speak': {'ok': True, 'stopped': True}}
     sent = []
 
     def request(method, url, **kw):
@@ -322,7 +322,7 @@ def test_a_button_stop_on_one_device_stops_the_others(two):
         text, ok = engine.run('all', 'speaker', 'say', 'One. Two. Three.')
     assert ok and 'pi2: stopped there, so stopped everywhere' in text
     assert ('POST', 'http://192.168.0.4:80/audio/stop') in sent   # the other was told to cut it
-    assert ('POST', 'http://192.168.0.221:8090/audio/stop') not in sent   # not the one whose button it was
+    assert ('POST', 'http://192.168.1.100:8090/audio/stop') not in sent   # not the one whose button it was
 
 
 def test_say_on_all_with_nothing_to_say_or_no_voice(two):
@@ -345,7 +345,7 @@ def test_stop_drops_her_next_sentences_and_tells_the_device(home):
     assert speech.stopped is True                                  # core's half: nothing more is sent
     speech.finish(); speech.wait()
     assert 'pi2' not in voice._live
-    assert [url for m, url, kw in sent if url.endswith('/audio/stop')] == ['http://192.168.0.221:8090/audio/stop']
+    assert [url for m, url, kw in sent if url.endswith('/audio/stop')] == ['http://192.168.1.100:8090/audio/stop']
 
 
 def test_stop_on_a_satellite_without_the_door_is_said_plainly(home):
@@ -364,7 +364,7 @@ def test_stop_on_all_reaches_every_speaker(two):
         text, ok = engine.run('all', 'speaker', 'stop')
     assert ok
     assert sorted(url for m, url, kw in sent if url.endswith('/audio/stop')) == [
-        'http://192.168.0.221:8090/audio/stop', 'http://192.168.0.4:80/audio/stop']
+        'http://192.168.0.4:80/audio/stop', 'http://192.168.1.100:8090/audio/stop']
     assert set(text.splitlines()) <= {'esp: Stopped.', 'pi2: Stopped.', 'esp: Nothing was playing there.',
                                       'pi2: Nothing was playing there.'}
 

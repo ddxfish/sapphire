@@ -32,7 +32,7 @@ SPEC = {
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power'],
     'config_schema': [
         {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status', 'setup': True,
-         'placeholder': 'http://192.168.0.221:8090'},
+         'placeholder': 'http://192.168.1.100:8090'},
         {'key': 'token', 'type': 'string', 'widget': 'password', 'secret': True, 'tab': 'Status', 'setup': True,
          'label': 'Key Sapphire sends',
          'help': "The satellite's own key (SAPPH_BODY_TOKEN on a Pi body). Stored scrambled."},
@@ -113,7 +113,7 @@ def validate(config):
         url = 'http://' + url
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
-        return config, f"'{url}' is not a usable address. Example: http://192.168.0.221:8090"
+        return config, f"'{url}' is not a usable address. Example: http://192.168.1.100:8090"
     if net.classify(parts.hostname) != 'lan':
         return config, ("A satellite has to be on your own network. Its key travels "
                         "without encryption, so an internet address is refused.")
@@ -339,6 +339,10 @@ def describe(device, config):
         'mic': {'label': 'Mic', 'help': 'hear that room', 'actions': {
             'listen': {'help': 'longest wait in seconds, ends when they stop talking', 'example': '10',
                        'values': '[seconds]'},
+            'gain': {'help': 'the microphones\' gain in dB; no value reads it. A board without the door says so',
+                     'example': '36', 'values': '[0-37.5 | up | down]'},
+            'agc': {'help': 'automatic gain control on the board; the board restarts to apply it',
+                    'example': 'on', 'values': '[on | off]'},
         }},
         'light': {'label': 'Light', 'help': 'the light ring', 'actions': {
             'set': {'help': 'color: a name (red, cyan, sapphire, amber, white...) or #hex. animation: solid, '
@@ -380,6 +384,9 @@ def status(device, config, secrets):
         readings['program'] = ' '.join(str(x) for x in (h.get('board'), h['firmware']) if x)[:60]
     if isinstance(h.get('volume'), (int, float)):
         readings['volume'] = f"{int(h['volume'])}%"
+    mic = h.get('mic') if isinstance(h.get('mic'), dict) else {}
+    if mic:
+        readings['mic gain'] = f"{mic.get('gain_db')} dB" + (', AGC on' if mic.get('agc') else '')
     if isinstance(h.get('uptime_s'), (int, float)):
         readings['running for'] = _span(h['uptime_s'])
     if h.get('temp_c') is not None:
@@ -491,6 +498,37 @@ def _volume(value, config, secrets):
         return "This satellite's program has no volume control.", False
 
 
+def _mic_gain(value, config, secrets):
+    """Read, set, or step the microphones' gain (dB). Bodies without a /mic door say so."""
+    want = str(value or '').strip().lower()
+    try:
+        if not want or want in ('up', 'down'):
+            now = _json(_call('GET', '/mic', config, secrets))
+            if not want:
+                return f"Mic gain is {now.get('gain_db')} dB of {now.get('gain_max_db')}; AGC {'on' if now.get('agc') else 'off'}.", True
+            db = float(now.get('gain_db', 0)) + (3 if want == 'up' else -3)
+        else:
+            try:
+                db = float(want)
+            except ValueError:
+                return "mic gain: a number of decibels, or up, down. Example: 36", False
+        out = _json(_call('POST', f'/mic?gain={max(0.0, db):g}', config, secrets))
+        return f"Mic gain is now {out.get('gain_db')} dB (of {out.get('gain_max_db')}).", True
+    except Missing:
+        return "This satellite's program has no mic gain door.", False
+
+
+def _mic_agc(value, config, secrets):
+    want = str(value or '').strip().lower()
+    if want not in ('on', 'off'):
+        return "mic agc: on or off", False
+    try:
+        out = _json(_call('POST', f'/mic?agc={want}', config, secrets))
+        return f"AGC {'on' if out.get('agc') else 'off'}." + (f" {out['note']}." if out.get('note') else ''), True
+    except Missing:
+        return "This satellite's program has no AGC door.", False
+
+
 def _listen(value, config, secrets):
     from core.devices import voice
     seconds = _whole(value, 15, 1, 60, 'The wait')
@@ -505,6 +543,23 @@ def _listen(value, config, secrets):
     if not heard:
         return "Listened, and heard no speech.", True
     return f'Heard: "{heard}"', True
+
+
+def put_model(device, config, secrets, name, data, fmt, threshold, phrase=None, sliding_window=None, step_ms=None):
+    """A new wake word model onto the board (PUT /wakeword/model, the bytes as the body): what the Wakeword Maker's
+    Install page sends. `fmt` is 'tflite' (microWakeWord) or 'onnx' (openWakeWord). Raises Missing when the board's
+    program has no such door; the caller then tells the person to copy the files by hand."""
+    from urllib.parse import urlencode
+    q = {'name': name, 'threshold': threshold, 'format': fmt, 'phrase': phrase or name}
+    if sliding_window is not None:
+        q['sliding_window'] = sliding_window
+    if step_ms is not None:
+        q['step_ms'] = step_ms
+    r = _call('PUT', '/wakeword/model?' + urlencode(q), config, secrets, timeout=180,
+              headers={'Content-Type': 'application/octet-stream'}, data=data)
+    with _lock:
+        _about.pop(device['id'], None)        # its health names the new model from now on
+    return _json(r)
 
 
 def run(device, capability, action, value, config, secrets, call_tool):
@@ -529,6 +584,10 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 return f"Played {name}.", True
         if capability == 'mic' and action == 'listen':
             return _listen(value, config, secrets)
+        if capability == 'mic' and action == 'gain':
+            return _mic_gain(value, config, secrets)
+        if capability == 'mic' and action == 'agc':
+            return _mic_agc(value, config, secrets)
         if capability == 'light':
             if action == 'off':
                 _call('POST', '/led', config, secrets, json={'state': 'off'})

@@ -12,7 +12,7 @@ from core import mcp_server
 from core.devices.drivers import sapphire as sap
 
 DEV = {'id': 'desk-sapph', 'label': 'Desk Sapphire', 'location': 'the office'}
-CFG = {'url': 'https://192.168.0.69:8073', 'chat': 'server-sapph', 'me': 'the Sapphire on the server'}
+CFG = {'url': 'https://192.168.1.101:8073', 'chat': 'server-sapph', 'me': 'the Sapphire on the server'}
 KEY = {'token': 'tok-abcdefghijklmnop'}
 TOOLS = [
     {'name': 'ask', 'description': 'Ask', 'inputSchema': {'type': 'object', 'properties': {'text': {}, 'chat': {}}, 'required': ['text', 'chat']}},
@@ -80,16 +80,16 @@ def run(cap, action, value=''):
 def test_validate_wants_a_lan_address_and_a_chat():
     assert sap.validate({'url': ''})[1] == "Her address is needed."
     assert 'own network' in sap.validate({'url': 'https://sapphire.example.com'})[1]
-    assert 'Name the chat' in sap.validate({'url': '192.168.0.69:8073'})[1]
-    cfg, why = sap.validate({'url': '192.168.0.69:8073/', 'chat': ' server-sapph ', 'me': ''})
-    assert why == '' and cfg['url'] == 'https://192.168.0.69:8073' and cfg['chat'] == 'server-sapph'
+    assert 'Name the chat' in sap.validate({'url': '192.168.1.101:8073'})[1]
+    cfg, why = sap.validate({'url': '192.168.1.101:8073/', 'chat': ' server-sapph ', 'me': ''})
+    assert why == '' and cfg['url'] == 'https://192.168.1.101:8073' and cfg['chat'] == 'server-sapph'
 
 
 # --- what she has, as the far side says -------------------------------------------
 
 def test_status_reads_her_health_and_her_shared_tools(far):
     st = sap.status(DEV, CFG, KEY)
-    assert st['online'] is True and st['detail'] == 'Sapphire desk at 192.168.0.69:8073'
+    assert st['online'] is True and st['detail'] == 'Sapphire desk at 192.168.1.101:8073'
     assert st['has'] == ['chat', 'tools'] and st['readings'] == {'tools shared': '2'}
     assert [c.path for c in far.calls] == ['/api/health', '/mcp']
     assert far.calls[0].kw['headers'].get('Authorization') is None     # health is an open door
@@ -122,7 +122,7 @@ def test_a_sapphire_that_is_not_there(far):
         raise requests.exceptions.ConnectionError('gone')
     with patch.object(sap.net, 'request', gone):
         st = sap.status(DEV, CFG, KEY)
-    assert st == {'online': False, 'detail': 'Could not reach 192.168.0.69:8073. Is she running?'}
+    assert st == {'online': False, 'detail': 'Could not reach 192.168.1.101:8073. Is she running?'}
 
 
 # --- talking ---------------------------------------------------------------------

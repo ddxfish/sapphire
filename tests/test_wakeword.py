@@ -175,6 +175,21 @@ class TestResolveModelPath:
         result = find_custom_model('hey_custom')
         assert result == str(model_file)
     
+    def test_user_file_wins_over_core_and_builtin_names(self, tmp_path, monkeypatch):
+        """A trained model installed under a shipped name (hey_sapphire, or a built-in like alexa) is the one that listens."""
+        import core.wakeword as ww
+        user_dir = tmp_path / 'user' / 'wakeword' / 'models'
+        user_dir.mkdir(parents=True)
+        monkeypatch.setattr(ww, 'USER_MODELS_DIR', user_dir)
+        core_name = next((f.stem for f in ww.CORE_MODELS_DIR.glob('*.onnx')), None) if ww.CORE_MODELS_DIR.exists() else None
+        for name in [n for n in (core_name, ww.BUILTIN_MODELS[0]) if n]:
+            before = ww.resolve_model_path(name)
+            mine = user_dir / f'{name}.onnx'
+            mine.touch()
+            assert ww.resolve_model_path(name) == str(mine), f'{name}: user file should win (was {before})'
+            mine.unlink()
+            assert ww.resolve_model_path(name) == before
+
     def test_prefers_onnx_over_tflite(self, tmp_path):
         """When both .onnx and .tflite exist, should prefer .onnx."""
         models_dir = tmp_path / 'user' / 'wakeword' / 'models'

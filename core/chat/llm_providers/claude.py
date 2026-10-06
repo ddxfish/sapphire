@@ -13,6 +13,7 @@ Handles Claude-specific API differences:
 
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Dict, Any, List, Optional, Generator
@@ -32,33 +33,41 @@ except ImportError:
 
 
 # ── Thinking contracts by model family ─────────────────────────────────────
-# Verified 2026-09-20 against platform.claude.com models overview + migration
-# guide. Three contracts, one switchboard (ClaudeProvider._apply_thinking):
-#   adaptive  Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6 — {type:"adaptive"} +
-#             output_config.effort. OFF must be an explicit {type:"disabled"}:
-#             Opus 5 THINKS WHEN THE PARAM IS OMITTED (4.8 and earlier don't),
-#             so the old omit-to-disable was silent billed thinking with an
-#             empty display. "disabled" is accepted only at effort ≤ high, so
-#             no output_config rides with it.
-#   always    Fable 5 / 5.1 (and Mythos), Opus 5.5 — thinking cannot be turned
-#             off: {type:"disabled"} and budget_tokens both 400 at every
-#             effort. OFF = omit the param (still thinks, display omitted).
-#             History's thinking blocks are never stripped: preserved thinking
-#             treats that as an edit. Opus 5.5 (launch 2026-09-23) defaults to
-#             effort=medium — we always send one, so nothing drifts.
+# Verified 2026-10-04 against Anthropic's model migration guide. Three
+# contracts, one switchboard (ClaudeProvider._apply_thinking). The DEFAULT is
+# the current contract, so a model that ships tomorrow lands on a lane that
+# cannot 400; the older contracts are closed lists that never grow. (Sonnet
+# 5.5 fell through the old default into "disabled" and 400'd, 2026-10-04.)
+#   adaptive  (default) Fable 5 / 5.1 (and Mythos), Opus 5.5, Sonnet 5.5 and
+#             anything newer — {type:"adaptive"} + output_config.effort.
+#             {type:"disabled"} and budget_tokens both 400 here, so OFF = omit
+#             the param: the one "off" no model rejects. These models think
+#             anyway (display omitted, the API's default effort). History's
+#             thinking blocks are never stripped: preserved thinking treats
+#             that as an edit. Sonnet 5.5 alone has a real off switch,
+#             {type:"between_tools"} — not sent yet.
+#   legacy    Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6 — same ON, but OFF must
+#             be an explicit {type:"disabled"}: Opus 5 and Sonnet 5 THINK WHEN
+#             THE PARAM IS OMITTED (4.8 and earlier don't), so omit-to-disable
+#             was silent billed thinking with an empty display. "disabled" is
+#             accepted only at effort ≤ high, so no output_config rides with it.
 #   budget    Haiku 4.5 — extended thinking only: {type:"enabled",
 #             budget_tokens:N} with 1024 ≤ N < max_tokens; adaptive, display
 #             and output_config.effort all 400. OFF = omit (Haiku's default).
 HAIKU_BUDGET_BY_EFFORT = {'low': 2048, 'medium': 6000, 'high': 12000,
                           'xhigh': 12000, 'max': 12000}
 
+# The lookahead keeps the 5.5s (and any later point release) out of the "5"
+# rows while still matching a dated id like claude-opus-5-20260801.
+_LEGACY = re.compile(r'(opus-(5|4-[678])|sonnet-(5|4-6))(?!-\d\b)')
+
 
 def thinking_family(model: str) -> str:
     m = (model or '').lower()
     if 'haiku' in m:
         return 'budget'
-    if 'fable' in m or 'mythos' in m or 'opus-5-5' in m:
-        return 'always'
+    if _LEGACY.search(m):
+        return 'legacy'
     return 'adaptive'
 
 
@@ -236,7 +245,7 @@ class ClaudeProvider(BaseProvider):
         """Write the model family's thinking contract into request_kwargs
         (see the table above the class). Returns True when thinking is really
         OFF and history's thinking blocks must be stripped — never for the
-        always-on family."""
+        default family, which cannot say "off"."""
         model = request_kwargs.get('model') or self.model
         family = thinking_family(model)
         effort = self.config.get('reasoning_effort') or 'high'
@@ -246,18 +255,6 @@ class ClaudeProvider(BaseProvider):
             # Thinking spends from the max_tokens pool — floor it so a small
             # response cap doesn't truncate mid-thought.
             request_kwargs["max_tokens"] = 16000
-
-        if family == 'always':
-            if on:
-                # display defaults to "omitted" (empty thinking text);
-                # "summarized" restores the streamed thinking the UI shows.
-                request_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
-                request_kwargs["output_config"] = {"effort": effort}
-                logger.info(f"[THINK] Claude adaptive thinking enabled (effort: {effort})")
-            else:
-                logger.info(f"[THINK] {model} cannot disable thinking — param omitted "
-                            "(it thinks anyway, display omitted)")
-            return False
 
         if family == 'budget':
             if on:
@@ -269,20 +266,28 @@ class ClaudeProvider(BaseProvider):
             return not on
 
         if on:
+            # display defaults to "omitted" (empty thinking text);
+            # "summarized" restores the streamed thinking the UI shows.
             request_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
             request_kwargs["output_config"] = {"effort": effort}
             logger.info(f"[THINK] Claude adaptive thinking enabled (effort: {effort})")
-        else:
+            return False
+
+        if family == 'legacy':
             request_kwargs["thinking"] = {"type": "disabled"}
             if thinking_enabled:
                 logger.info("[THINK] Thinking disabled for this request")
-        return not on
+            return True
+
+        logger.info(f"[THINK] Thinking off for {model} — param omitted "
+                    "(current models think anyway, display omitted)")
+        return False
 
     def _probe_kwargs(self) -> dict:
         """Health/test probes: Opus 5 thinks when the param is omitted and
         would spend the tiny probe budget on it — say "disabled" where the
         family accepts it."""
-        return {"thinking": {"type": "disabled"}} if thinking_family(self.model) == 'adaptive' else {}
+        return {"thinking": {"type": "disabled"}} if thinking_family(self.model) == 'legacy' else {}
 
     def chat_completion(
         self,

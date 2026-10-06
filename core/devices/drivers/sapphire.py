@@ -28,7 +28,7 @@ SPEC = {
     'capabilities': ['chat', 'tools'],
     'config_schema': [
         {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status', 'setup': True,
-         'placeholder': 'https://192.168.0.201:8073',
+         'placeholder': 'https://192.168.1.102:8073',
          'help': 'Her address on your network. Her MCP door has to be on: Settings > MCP Server, over there.'},
         {'key': 'token', 'type': 'string', 'widget': 'password', 'secret': True, 'tab': 'Status', 'setup': True,
          'label': 'Her API token', 'help': 'Made on that Sapphire under System > API Keys. Stored scrambled.'},
@@ -172,7 +172,7 @@ def validate(config):
         url = 'https://' + url
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
-        return config, f"'{url}' is not a usable address. Example: https://192.168.0.201:8073"
+        return config, f"'{url}' is not a usable address. Example: https://192.168.1.102:8073"
     if net.classify(parts.hostname) != 'lan':
         return config, "Another Sapphire has to be on your own network for now."
     config['url'] = f"{parts.scheme}://{parts.netloc}"

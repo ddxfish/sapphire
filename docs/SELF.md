@@ -1,51 +1,218 @@
-# Reference for AI
+# Sapphire Features
 
-You run in the app Sapphire found at github.com/ddxfish/sapphire
+## Core
+### Chat
+SSE streaming
+Tool call loop
+Per-chat loadout
+Ghost messages
+Thinking blocks
+Image upload vision
+CLIP describe fallback
+File attachments
+RAG docs per-chat
+### History
+SQLite message rows
+Edit regen delete
+Trim compress
+Import export
+Content search
+### LLM
+Claude OpenAI Gemini
+LMStudio custom OpenAI-compat
+Plugin LLM providers
+Auto fallback order
+Per-chat model
+Prompt caching
+Token metrics
+### TTS
+Kokoro local
+Sentence streaming
+Per-chat voice/pitch/speed
+Plugin providers
+### STT
+faster-whisper local
+Fireworks cloud
+Silero VAD
+Hallucination filter
+### Wakeword
+openWakeWord
+Custom models
+Hot swap
+### Conversation
+Hands-free speech
+Barge-in
+Browser phone WebSocket
+### Prompts
+Assembled pieces
+Monolith
+Self-edit tools
+Persona loadout presets
+Persona PNG cards
+Spice prompt randomizer
+### Tools
+Toolsets per-chat
+Web search fetch
+Wikipedia research
+Web image view
+Notepad
+Net checks
+schedule_task
+set_scene set_motion
+set_voice
+list_tools
+search_help_docs
+switch_model switch_toolset
+### Scopes
+Per-chat data scopes
+Global overlay
+### Triggers
+Heartbeat
+Cron tasks
+Daemons event listeners
+Webhooks
+Realtime rules
+Background agents
+### Devices
+Computer vol/screen/power
+Satellites Pi ESP32
+Satellite mic/speaker/light/cam
+Other Sapphire instances
+Presence tracking
+Dual-wake arbiter
+Speak all devices
+### Privacy
+Vault passphrase
+Encrypted private chats
+Local-only providers
+Voice privacy gate
+SOCKS5 proxy
+LAN/WAN split
+### Safety
+Local backup rotation
+One-click restore
+Login API tokens
+Encrypted credentials
+Core integrity check
+### UI
+Web UI :8073
+Themes fonts
+Scenes motions
+Dashboard widgets
+Mind view
+Chat manager
+### System
+Settings hot reload
+Auto-updater
+Docker
+REST API
+MCP server
 
-## Senses
-- Voice: STT, TTS (streaming), wake word, hands-free conversation mode. VOICE.md
-- Phone: real calls over Twilio SIP — answer, converse, call whitelisted contacts. PHONE-CALLS.md
-- Vision: image upload, webcam capture, home assistant camera.
-- Files: text uploads in user-input or RAG big documents in sidebar.
+## Plugins
+### Mind
+Memory embeddings FTS
+Keyed memories
+Knowledge tabs
+People contacts
+Goals subtasks journal
+Mind Palace layers
+Identity self sheet
+Entity cards
+Librarian passes
+Library docs images
+### Voice
+Twilio VOIP
+ElevenLabs TTS
+gTTS TTS
+Piper local TTS
+Voice commands
+TTS captions
+Wakeword maker
+### Comms
+Email IMAP/SMTP
+Discord bot
+Telegram bot/client
+Google Calendar
+### Build
+Claude Code
+Coding harness
+Toolmaker custom tools
+GitHub repos issues
+SSH remote commands
+MCP client
+WordPress admin
+### Media
+ComfyUI images
+SD server images
+Blender bpy control
+Webcam
+Screenshot
+MIDI synth music
+3D avatar
+### Life
+Home Assistant
+Clock timers alarms
+Bitcoin wallet
+### Games
+Game Room host
+Story packs
+Texas Hold'em
+### System
+Status dashboard
+Plugin store
+Remembrance offsite backups
+Widget samples
 
-## Memory
-- Memory: embeddings search with scopes and global overlay; keyed (private-key) entries. MEMORY.md
-- Mind Palace: opt-in layered engine — self sheet, entities, librarian, wake tools. MIND-PALACE.md
-- Knowledge: long-form storage, chunks docs and RAGs each. KNOWLEDGE.md
-- People: contacts, email allow checkmark, call whitelist. PEOPLE.md
-- Goals: tasks and subtasks. GOALS.md
-- Scope: each CHAT picks its scopes (sidebar Mind section); personas bundle defaults.
+## Plugin API
+### Capabilities
+tools
+hooks
+voice_commands
+routes HTTP
+settings UI
+web scripts
+app full page
+sidebar_accordion
+widgets dashboard
+themes
+motions
+providers TTS/STT/LLM/embed
+daemon event sources
+schedule cron
+scopes
+devices drivers
+games
+prompts packs
+memory_layers
+services conda env
+### Hooks
+post_stt pre_chat post_chat
+prompt_inject ghost_inject post_llm
+tools_filter pre_execute post_execute
+pre_tts post_tts on_wake
+tts_stream_start tts_stream_end
+tts_chunk_text tts_chunk_audio
+chat_renamed chat_deleted chat_cleared
+chat_vaulted provider_switched plugins_ready
+### Runtime
+Plugin state KV
+Chat-scoped state
+Reply handlers
+Dynamic tool descriptions
+Cadence unprompted turns
+Perception next-turn frames
+Tools attach files
+privacy_aware flag
+Plugin signing ed25519
+Live toggle
+user/plugins dir
+Store publishing
 
-## Hands
-- Tools: `list_tools` lists. TOOLS.md
-- Toolsets: named tool bundles per chat; extra_toolsets union. TOOLSETS.md
-- Plugins: tools, hooks, widgets, daemons extend you. PLUGINS.md
-- Toolmaker: write your own tools. TOOLMAKER.md
-- MCP: external tool servers.
-- Self-switch: switch_model / switch_toolset (settings-gated, default off).
+## Reference for AI
 
-## Time
-- Heartbeats: every X minutes. CONTINUITY.md
-- Daemons: event listeners — Discord/Email/Telegram. DAEMONS-WEBHOOKS.md
-- Realtime: live-session gates (phone lines). DAEMONS-WEBHOOKS.md
-- Webhooks: HTTP triggers.
-- Scheduled tasks: one-off or repeating.
-- Agents: spawn background workers. AGENTS.md
-
-## Form
-- Persona: prompt + voice + tools + scopes bundle. PERSONAS.md
-- Prompts: assembled (swappable pieces, first section = character) or monolith. PROMPTS.md
-- Spice: per-turn random snippets from the chat's spice set. SPICE.md
-- Self-modify: prompt_view/switch/edit/create/pieces, set_voice.
-- Appearance: set_scene / set_motion restyle the current chat. APPEARANCE.md
-
-## Place
-- Chats: each chat carries its own whole loadout; the chat is the save. CHATS.md
-- Game Room: games and stories played inside chats. GAME-ROOM.md
-- Network: SOCKS proxy, LAN/WAN split, what rides where. NETWORK.md
-- Privacy: vault, private chats, local-only enforcement. PRIVACY.md
-- Backups: local tars + one-click restore + encrypted offsite. BACKUPS.md
-
-## Discover
-- `search_help_docs(query)` — search ALL Sapphire docs, including plugin-author/* dev guides.
-- `search_help_docs(doc_name='network')` — a doc's AI reference; `full=true` for the human doc.
+Sapphire: self-hosted AI companion app, the system you run in. Local-first, private, voice-first, plugin-extensible. github.com/ddxfish/sapphire
+Has: chat, LLMs, TTS, STT, wakeword, phone, memory, tools, triggers, agents, devices, plugins.
+Feature list: search_help_docs(doc_name='self', full=true)
+Search docs: search_help_docs(query='tts')
+Read doc: search_help_docs(doc_name='voice')
+Build: toolmaker (tools), plugin-author/ai-reference (plugins)

@@ -26,7 +26,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
  "has": ["speaker", "mic", "wake"],
  "plays": {"type": "audio/wav", "rate": 16000, "channels": 1},
  "volume": 85, "uptime_s": 61,
- "wakeword": {"enabled": true, "running": true, "model": "hey_sapphire"},
+ "wakeword": {"enabled": true, "running": true, "model": "hey_sapphire", "format": "tflite"},
  "link": {"connected": true}}
 ```
 
@@ -37,6 +37,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `link.connected` | Its events stream to Sapphire is open |
 | `volume`, `temp_c` | Optional readings |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
+| `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 
 **`has`** takes these names: `speaker`, `mic`, `light`, `wake`, `camera`,
 `power`. A name Sapphire does not know is left out and logged.
@@ -60,13 +61,15 @@ A board answers only the addresses of what it has.
 | `speaker` | `POST /audio/effect?name=ping` | Plays one stored sound |
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
 | `speaker` | `POST /volume?level=80` | Sets it, kept across restarts. A board without it answers 404 |
-| `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav |
+| `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav. A body may also take `lead_in` (seconds before the mic opens, default its own cue) and `tone=false` (no ping): the Wakeword Maker asks for `lead_in=0&tone=false` because it tells the person itself when to speak |
+| `mic` | `GET /mic`, `POST /mic?gain=36`, `POST /mic?agc=on` | The microphones' gain in dB (`gain_db`, `gain_max_db`) and the board's automatic gain control. Optional: a body without the door answers 404 and the driver says so |
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
 | `light` | `GET /led/spec` | Its colors and animations |
 | `light` | `GET` and `PUT /led/baseline` | Its resting light, kept after a restart |
 | `light` | `PUT /led/looks` | After a save in Settings > Devices: `{"resting", "listening", "thinking", "tool", "speaking", "nolink", "night"}`, each a look, plus `"from"` and `"until"` clock times. A look that is not sent is kept. A board without the door answers 404 and keeps its own |
 | `wake` | `GET /wakeword` | `{"enabled", "running", "model"}` |
 | `wake` | `POST /wakeword?enabled=true` | Listen for the wake word, or stop |
+| `wake` | `PUT /wakeword/model?name=hey_marcus&threshold=0.97&format=tflite&phrase=hey+marcus` | A new wake word model: the bytes are the request body (`application/octet-stream`). `format` is `tflite` (microWakeWord, for an ESP32; `sliding_window` and `step_ms` ride along) or `onnx` (openWakeWord, for a Pi). The body keeps it across restarts, listens for it from then on, and answers `{"model": name, "threshold"}`; `GET /wakeword` reports the new name. The Wakeword Maker's Install page sends this. A body without the door answers 404 and the page says to copy the files by hand |
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
 | `power` | `POST /power?action=restart` | `restart` or `shutdown`. Answers first, then acts: `{"in_s": 3}` |
 
@@ -109,7 +112,7 @@ firmware keep this order, and both state `plays`.
 ## What the board sends to Sapphire
 
 Sapphire's address is HTTPS with her own certificate, for example
-`https://192.168.0.69:8073`.
+`https://192.168.1.101:8073`.
 
 ### Its wake word fired
 

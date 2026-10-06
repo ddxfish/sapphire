@@ -37,7 +37,9 @@ def _run(provider, messages, gen_params=None):
 
 
 def _claude(**over):
-    return ClaudeProvider({"provider": "claude", "api_key": "x", "model": "claude-test",
+    # A legacy id on purpose: only that family can say "off" out loud. Current
+    # models omit the param instead (pinned in test_model_roster.py).
+    return ClaudeProvider({"provider": "claude", "api_key": "x", "model": "claude-opus-5",
                            "thinking_enabled": True, **over})
 
 
@@ -51,8 +53,8 @@ MSGS = [{"role": "user", "content": "hi"}]
 
 
 def _off(kw):
-    """2026-09-20: on the adaptive family (Opus 5 / 4.x, Sonnet) "off" is an
-    EXPLICIT {type: "disabled"} with no output_config — Opus 5 thinks when the
+    """2026-09-20: on the legacy family (Opus 5 / 4.x, Sonnet 5 / 4.6) "off" is
+    an EXPLICIT {type: "disabled"} with no output_config — Opus 5 thinks when the
     param is omitted, so absence is no longer suppression (see the family
     table in claude.py). No effort may ride with disabled (accepted ≤ high only)."""
     return kw.get("thinking") == {"type": "disabled"} and "output_config" not in kw

@@ -67,3 +67,30 @@ def test_ranking_and_no_match_message(doc_dir):
     assert out.index("[many]") < out.index("[one]")   # most hits first
     miss, ok3 = docs.execute("search_help_docs", {"query": "nothing-here"}, None)
     assert ok3 and "No matches" in miss and "one" in miss
+
+
+def test_no_args_returns_the_self_abstract(doc_dir):
+    write(doc_dir, "SELF.md",
+          "# Features\n\nTwilio VOIP\n\n## Reference for AI\n\nSapphire is the app you run in.\n")
+    write(doc_dir, "OTHER.md", "# Other\n\nunrelated\n")
+    out, ok = docs.execute("search_help_docs", {}, None)
+    assert ok
+    assert out == "Sapphire is the app you run in."   # the abstract alone, no doc list
+    full, ok2 = docs.execute("search_help_docs", {"doc_name": "self", "full": True}, None)
+    assert ok2 and "Twilio VOIP" in full and "app you run in" not in full
+
+
+def test_no_args_without_self_names_the_docs(doc_dir):
+    write(doc_dir, "ONE.md", "# One\n\nbanana\n")
+    out, ok = docs.execute("search_help_docs", {}, None)
+    assert ok and "one" in out
+
+
+def test_shipped_abstract_and_top_docs():
+    """The real docs/: every doc the tool description names exists, and the
+    abstract fits the default wake-tool cap (1024 chars)."""
+    available = docs._get_available_docs()
+    assert not [d for d in docs.TOP_DOCS if d not in available]
+    out, ok = docs.execute("search_help_docs", {}, None)
+    assert ok and 0 < len(out) <= 1024
+    assert "full=true" in out                          # points at the feature list

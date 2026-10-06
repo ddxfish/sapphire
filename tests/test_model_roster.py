@@ -84,10 +84,8 @@ def test_current_flagships_are_offered():
     opts = _core_options()
     assert 'claude-opus-5' in opts['claude'] and 'claude-fable-5-1' in opts['claude']
     assert 'claude-opus-5-5' in opts['claude']
-    assert 'claude-sonnet-5-5' in opts['claude']          # shipped 2026-09-28: adaptive, not always-on
+    assert 'claude-sonnet-5-5' in opts['claude']          # shipped 2026-09-28
     assert 'claude-haiku-4-5' in opts['claude']
-    from core.chat.llm_providers.claude import thinking_family
-    assert thinking_family('claude-sonnet-5-5') == 'adaptive'
     assert 'gpt-6-astra' in opts['openai'] and 'gpt-5.6-terra' in opts['openai']
     assert 'gemini-3.8-flash' in opts['gemini']
 
@@ -192,14 +190,51 @@ def test_probe_kwargs_only_say_disabled_where_the_family_accepts_it():
     assert _claude('claude-haiku-4-5')._probe_kwargs() == {}
 
 
+@pytest.mark.parametrize('model,family', [
+    ('claude-opus-5', 'legacy'), ('claude-opus-5-20260801', 'legacy'),
+    ('claude-opus-4-8', 'legacy'), ('claude-opus-4-7', 'legacy'), ('claude-opus-4-6', 'legacy'),
+    ('claude-sonnet-5', 'legacy'), ('claude-sonnet-4-6', 'legacy'),
+    ('anthropic.claude-sonnet-5', 'legacy'),
+    ('claude-opus-5-5', 'adaptive'), ('claude-opus-5-5-20260923', 'adaptive'),
+    ('claude-sonnet-5-5', 'adaptive'), ('claude-fable-5-1', 'adaptive'),
+    ('claude-mythos-5-1', 'adaptive'),
+    # never seen: must land on the lane that cannot 400
+    ('claude-opus-5-6', 'adaptive'), ('claude-opus-6', 'adaptive'),
+    ('claude-sonnet-6', 'adaptive'), ('claude-newthing-1', 'adaptive'),
+    ('claude-haiku-4-5', 'budget'),
+])
+def test_legacy_is_a_closed_list_and_the_default_is_current(model, family):
+    """Flipped 2026-10-04: the default used to be the lane that says
+    {type:disabled}, so every new model had to be remembered or it 400'd."""
+    from core.chat.llm_providers.claude import thinking_family
+    assert thinking_family(model) == family
+
+
+def test_sonnet55_never_hears_disabled():
+    """Sonnet 5.5 (2026-09-28) 400s on {type:disabled}. It fell through the
+    old default into exactly that — on the health probe too, so it was dead
+    even with thinking on (2026-10-04)."""
+    kw = _kw('claude-sonnet-5-5')
+    assert _claude('claude-sonnet-5-5')._apply_thinking(kw, True, True) is False
+    assert 'thinking' not in kw and 'output_config' not in kw
+    kw = _kw('claude-sonnet-5-5')
+    _claude('claude-sonnet-5-5', reasoning_effort='low')._apply_thinking(kw, True, False)
+    assert kw['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
+    assert kw['output_config'] == {'effort': 'low'}
+    p = _claude('claude-sonnet-5-5')
+    p._client = MagicMock()
+    assert p.health_check() is True
+    assert 'thinking' not in p._client.messages.create.call_args.kwargs
+
+
 def test_opus55_rides_the_always_on_contract():
     """Opus 5.5 (2026-09-23) cannot disable thinking: {type:disabled} and
     budget_tokens 400 at every effort. Same lane as Fable — OFF = omit the
     param, never strip history, probes send nothing. A plain roster row
-    would have failed its own health check via the adaptive lane."""
+    would have failed its own health check via the legacy lane."""
     from core.chat.llm_providers.claude import thinking_family
-    assert thinking_family('claude-opus-5-5') == 'always'
-    assert thinking_family('claude-opus-5') == 'adaptive'
+    assert thinking_family('claude-opus-5-5') == 'adaptive'
+    assert thinking_family('claude-opus-5') == 'legacy'
     kw = _kw('claude-opus-5-5')
     assert _claude('claude-opus-5-5')._apply_thinking(kw, True, True) is False
     assert 'thinking' not in kw and 'output_config' not in kw

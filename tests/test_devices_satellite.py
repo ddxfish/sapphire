@@ -12,7 +12,7 @@ from core.devices.drivers import satellite as sat
 from core.devices import voice
 
 DEV = {'id': 'pi2', 'label': 'Kitchen', 'location': 'Kitchen'}
-CFG = {'url': 'http://192.168.0.221:8090', 'camera': True, 'chat': ''}
+CFG = {'url': 'http://192.168.1.100:8090', 'camera': True, 'chat': ''}
 
 
 class Secrets(dict):
@@ -93,7 +93,7 @@ def test_spec_registers_as_a_core_driver():
 
 def test_validate():
     ok = lambda url: sat.validate({'url': url})
-    assert ok('192.168.0.221:8090/')[0]['url'] == 'http://192.168.0.221:8090'
+    assert ok('192.168.1.100:8090/')[0]['url'] == 'http://192.168.1.100:8090'
     assert ok('http://sapphire-pi:8090')[1] == '' and ok('https://pi.local:8090')[1] == ''
     assert 'needed' in ok('')[1]
     assert 'own network' in ok('http://8.8.8.8:8090')[1]
@@ -114,7 +114,7 @@ def test_the_key_rides_the_header_never_the_address(pi):
 
 def test_status_readings(pi):
     st = sat.status(DEV, CFG, KEY)
-    assert st == {'online': True, 'detail': 'sapphire-pi2 at 192.168.0.221:8090',
+    assert st == {'online': True, 'detail': 'sapphire-pi2 at 192.168.1.100:8090',
                   'readings': {'running for': '2h 5m', 'temperature': '39.4C', 'wake word': 'listening for hey_sapphire',
                                'light': 'idle, heartbeat-step', 'link to Sapphire': 'connected'}}
 
@@ -322,10 +322,10 @@ def test_problems_read_like_sentences():
 
     with answer(error=requests.exceptions.ConnectionError('boom body-key-abcdefgh')):
         st = sat.status(DEV, CFG, KEY)
-        assert st == {'online': False, 'detail': 'Could not reach 192.168.0.221:8090. '
+        assert st == {'online': False, 'detail': 'Could not reach 192.168.1.100:8090. '
                                                  'Check that it is powered and on the network.'}
     with answer(error=requests.exceptions.Timeout()):
-        assert run('wake', 'read') == ('No answer from 192.168.0.221:8090 within 8s.', False)
+        assert run('wake', 'read') == ('No answer from 192.168.1.100:8090 within 8s.', False)
     with answer(Reply({"detail": "bad token"}, 401)):
         assert 'refused the key' in run('wake', 'read')[0]
     with answer(Reply({"detail": "mic busy (wakeword post-fire or concurrent listen)"}, 503)), \
@@ -376,7 +376,7 @@ def board(pi):
 def test_a_board_says_what_it_has_and_the_engine_is_told(board):
     st = sat.status(DEV, CFG, KEY)
     assert st['has'] == ['speaker', 'mic', 'wake']
-    assert st['detail'] == 'den at 192.168.0.221:8090'
+    assert st['detail'] == 'den at 192.168.1.100:8090'
     assert st['readings'] == {'program': 'waveshare-s3-audio 0.1.0', 'volume': '85%', 'running for': '1m 1s',
                               'wake word': 'listening for hey_sapphire', 'link to Sapphire': 'connected'}
 

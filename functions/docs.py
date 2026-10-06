@@ -10,7 +10,7 @@ MODE 1: FULL FILE INCLUDE (for docs that are already AI-friendly)
 -----------------------------------------------------------------
 Add HTML comment at TOP of file:
 
-    <!-- AI_INCLUDE_FULL: Brief summary for listings -->
+    <!-- AI_INCLUDE_FULL: Brief summary -->
     # Troubleshooting
     
     Full doc content here...
@@ -35,9 +35,9 @@ Use for: tutorials, guides with images, docs needing different AI summary.
 =============================================================================
 WHAT THE TOOL DOES
 =============================================================================
-- search_help_docs()         -> Lists all docs with summaries
+- search_help_docs()         -> App abstract (SELF.md's AI section)
 - search_help_docs("name")   -> Returns AI content for that doc
-- Tool description auto-lists available docs
+- Tool description names only TOP_DOCS; query= finds the rest
 =============================================================================
 """
 
@@ -51,6 +51,11 @@ ENABLED = True
 EMOJI = '📚'
 AI_SECTION_MARKER = "## Reference for AI"
 AI_FULL_INCLUDE_PATTERN = r'<!--\s*AI_INCLUDE_FULL:\s*(.+?)\s*-->'
+# The no-arg call answers with this doc's AI section: what the app is.
+ABSTRACT_DOC = "self"
+# The only docs the tool description names. It rides every system prompt,
+# so it stays tiny; query= finds everything else.
+TOP_DOCS = ("self", "tools", "toolmaker", "plugin-author/ai-reference", "troubleshooting")
 
 # Docs directory relative to this file
 DOCS_DIR = Path(__file__).parent.parent / "docs"
@@ -82,11 +87,10 @@ def _get_available_docs() -> dict:
     return docs
 
 
-def _extract_ai_section(filepath: Path, full: bool = False) -> tuple[str, str]:
+def _extract_ai_section(filepath: Path, full: bool = False) -> str:
     """
-    Extract AI content from a doc file.
-    Returns (summary_line, content) tuple.
-    
+    Extract AI content from a doc file. Empty string = nothing to show.
+
     Modes:
     1. full=False (default): Returns AI-optimized content
        - AI_INCLUDE_FULL marker: returns entire file
@@ -100,57 +104,23 @@ def _extract_ai_section(filepath: Path, full: bool = False) -> tuple[str, str]:
         content = filepath.read_text(encoding='utf-8')
     except Exception as e:
         logger.error(f"Failed to read {filepath}: {e}")
-        return ("Error reading file", "")
-    
+        return ""
+
     # Check for full-include marker first (in first 500 chars)
-    header = content[:500]
-    match = re.search(AI_FULL_INCLUDE_PATTERN, header)
-    if match:
-        summary = match.group(1).strip()
+    if re.search(AI_FULL_INCLUDE_PATTERN, content[:500]):
         # Full-include docs return entire file regardless of full param
-        clean_content = re.sub(AI_FULL_INCLUDE_PATTERN, '', content, count=1).strip()
-        return (summary, clean_content)
-    
+        return re.sub(AI_FULL_INCLUDE_PATTERN, '', content, count=1).strip()
+
     # Section mode - behavior depends on full param
     if AI_SECTION_MARKER not in content:
         # No AI marker anywhere → the whole doc IS the reference, for both
         # full modes. Returning empty here turned direct reads of unmarked
         # docs into errors — the read-path half of the invisible-docs bug.
-        first_line = content.split('\n')[0].strip().lstrip('#').strip()
-        summary = first_line[:100] if first_line else "Full document"
-        return (summary, content)
-    
-    # Split on marker
-    parts = content.split(AI_SECTION_MARKER, 1)
-    
-    if full:
-        # Return everything BEFORE the AI section
-        human_content = parts[0].strip()
-        first_line = human_content.split('\n')[0].strip().lstrip('#').strip()
-        summary = first_line[:100] if first_line else "Full document"
-        return (summary, human_content)
-    
-    # Default: return AI section only
-    ai_section = parts[1].strip() if len(parts) > 1 else ""
-    
-    if not ai_section:
-        return ("No AI reference section", "")
-    
-    # First non-empty line is summary
-    lines = ai_section.split('\n')
-    summary = ""
-    for line in lines:
-        line = line.strip()
-        if line and not line.startswith('#'):
-            summary = line[:100]
-            if len(line) > 100:
-                summary += "..."
-            break
-    
-    if not summary:
-        summary = "AI reference available"
-    
-    return (summary, ai_section)
+        return content
+
+    # Everything BEFORE the marker is the human doc, everything after the AI section
+    human_content, ai_section = content.split(AI_SECTION_MARKER, 1)
+    return human_content.strip() if full else ai_section.strip()
 
 
 def _search_across_docs(query: str, available: dict, max_results: int = 6,
@@ -231,16 +201,6 @@ def _match_doc_name(query: str, available: dict) -> str | None:
     return None
 
 
-# Build dynamic tool description with available docs
-_available_docs = _get_available_docs()
-# Keep the tool description compact: it rides every system prompt, so the
-# 20+ plugin-author guides are summarized rather than enumerated.
-_top_docs = sorted(k for k in _available_docs if not k.startswith("plugin-author/"))
-_pa_count = len(_available_docs) - len(_top_docs)
-_doc_list = ", ".join(_top_docs) if _top_docs else "none found"
-if _pa_count:
-    _doc_list += f", plus {_pa_count} plugin-author/* dev guides (e.g. plugin-author/hooks)"
-
 AVAILABLE_FUNCTIONS = ['search_help_docs']
 
 TOOLS = [
@@ -249,21 +209,21 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_help_docs",
-            "description": f"Get Sapphire docs. Available: {_doc_list}\n  query='X' — search all docs (snippets + doc pointers)\n  doc_name='X' — full AI reference for that doc\n  doc_name='X' + full=true — human docs\n  (none) — list all",
+            "description": f"Sapphire docs. No args: what this app is. Top docs: {', '.join(TOP_DOCS)}. self + full=true: feature list.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search term across all doc AI sections. Returns top matches with snippets and which doc has more."
+                        "description": "Search all docs"
                     },
                     "doc_name": {
                         "type": "string",
-                        "description": "Doc name (e.g. 'agents', 'installation'). Fuzzy match."
+                        "description": "Doc to read, fuzzy match"
                     },
                     "full": {
                         "type": "boolean",
-                        "description": "Return human-readable doc instead of AI ref. Default false."
+                        "description": "Whole doc, not the AI summary"
                     }
                 },
                 "required": []
@@ -303,21 +263,14 @@ def execute(function_name: str, arguments: dict, config) -> tuple[str, bool]:
         lines.append(f"Use search_help_docs(doc_name='<name>') for full AI reference.")
         return "\n".join(lines), True
 
-    # No argument: list all docs with summaries
+    # No argument: the app abstract. Kept short in the doc itself — this
+    # answer may ride a wake tool, so it is never padded with a doc list.
     if not doc_name:
-        lines = ["SAPPHIRE DOCUMENTATION", ""]
+        abstract = _extract_ai_section(available[ABSTRACT_DOC]) if ABSTRACT_DOC in available else ""
+        if abstract:
+            return abstract, True
+        return f"Available docs: {', '.join(sorted(available.keys()))}", True
 
-        for name in sorted(available.keys()):
-            summary, _ = _extract_ai_section(available[name])
-            lines.append(f"  {name} - {summary}")
-
-        lines.append("")
-        lines.append("Use search_help_docs(doc_name='<name>') for full AI reference.")
-        lines.append("Use search_help_docs(query='<term>') to search across all docs.")
-        lines.append("Use search_help_docs(doc_name='<name>', full=true) for human docs.")
-
-        return "\n".join(lines), True
-    
     # With argument: get specific doc's content
     matched = _match_doc_name(doc_name, available)
     
@@ -326,7 +279,7 @@ def execute(function_name: str, arguments: dict, config) -> tuple[str, bool]:
         return f"Doc '{doc_name}' not found. Available: {doc_list}", False
     
     filepath = available[matched]
-    summary, content = _extract_ai_section(filepath, full=full)
+    content = _extract_ai_section(filepath, full=full)
     
     if not content:
         return f"Doc '{matched}' exists but has no '## Reference for AI' section yet.", False
