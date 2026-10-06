@@ -119,7 +119,9 @@ The **Backup** tab on this computer takes a folder that already exists: a USB
 stick, a NAS mount, a second disk. Every night Sapphire copies the local backup
 there and keeps the counts you set. A folder on your own machine may hold plain
 `.tar.gz` backups (the default); tick **Seal them** to get `.sapphirebak` files
-that only the backup password opens. A folder inside Sapphire's own `user/` is
+that only the backup password opens. A network share mounted here (SMB, NFS,
+sshfs) is another machine with a local name, so it is always sealed whatever
+the box says: that is how a NAS gets backups. A folder inside Sapphire's own `user/` is
 refused. A stick that is not plugged in is reported, never replaced by a folder
 on the main disk. The opener scripts land beside the backups either way.
 
@@ -200,6 +202,8 @@ name: volume     command: pactl set-sink-volume @DEFAULT_SINK@ {value}%
 ```
 
 **Allow any command** lets her run anything, checked against the SSH plugin's blacklist. Leave it off and she can run only your premade commands.
+
+**Backups there.** Give the machine a **Backup folder** on its Backup tab (absolute, or relative to the login's home, such as `backups/sapphire`) and it holds sealed backups like a satellite's card: the nightly copy after each 3am run, `backup` on demand, and Send to devices on Settings > Backup. `scp` carries the file, then the machine's own `sha256sum` is checked before the copy counts. A Raspberry Pi added this way needs nothing installed on it. Keep counts and the opener scripts work the same as on a card.
 
 ## Where things are stored
 

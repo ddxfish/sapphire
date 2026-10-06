@@ -1,7 +1,7 @@
 {
   "name": "ssh",
   "short_display_name": "SSH",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "SSH — remote command execution on configured servers",
   "author": "sapphire",
   "icon": "🖥️",
@@ -19,7 +19,8 @@
         "module": "device_driver.py",
         "capabilities": [
           "ssh",
-          "power"
+          "power",
+          "storage"
         ],
         "config_schema": [
           {
@@ -143,6 +144,46 @@
             "capability": "power",
             "default": "sudo -n shutdown -h +1",
             "help": "What shuts this machine down. Empty = no shutdown."
+          },
+          {
+            "key": "backup_dir",
+            "type": "string",
+            "label": "Backup folder",
+            "capability": "storage",
+            "tab": "Backup",
+            "placeholder": "backups/sapphire",
+            "help": "A folder on that machine, absolute or relative to the user's home. Set it and this machine holds sealed backups: the nightly one after each 3am run, 'backup' on demand, and Send to devices."
+          },
+          {
+            "key": "keep_daily",
+            "type": "number",
+            "label": "Daily backups to keep",
+            "default": 7,
+            "min": 0,
+            "max": 60,
+            "capability": "storage",
+            "tab": "Backup",
+            "help": "How many of each are kept there before the oldest goes. 0 = keep none new, delete none."
+          },
+          {
+            "key": "keep_weekly",
+            "type": "number",
+            "label": "Weekly backups to keep",
+            "default": 4,
+            "min": 0,
+            "max": 60,
+            "capability": "storage",
+            "tab": "Backup"
+          },
+          {
+            "key": "keep_monthly",
+            "type": "number",
+            "label": "Monthly backups to keep",
+            "default": 3,
+            "min": 0,
+            "max": 60,
+            "capability": "storage",
+            "tab": "Backup"
           }
         ],
         "locked_by_default": [

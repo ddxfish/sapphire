@@ -1,5 +1,8 @@
+# 2.13.6 - MCP Personality
+- Other AIs can use Sapphire's tools, memory, capabilities
+- Claude code etc can ding the user, TTS speak, STT listen
 # 2.13.5 - Backup Encryption and devices
-- Backup encryption
+- Backup encryption in core
 - Backup location can be set
 - Can send encrypted backup to devices (esp32, pi, SSH)
 # 2.13.4 - Wakeword Builder

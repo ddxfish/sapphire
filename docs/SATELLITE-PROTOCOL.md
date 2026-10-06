@@ -36,6 +36,8 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `plays` | The one sound format it plays. Sapphire converts her voice to it |
 | `link.connected` | Its events stream to Sapphire is open |
 | `volume`, `temp_c` | Optional readings |
+| `sensors` | Optional: the board's own sensors as `{"name": number}` (a light sensor's raw value, a battery). Each shows as a reading on the device's page, named `<name> sensor` |
+| `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |

@@ -446,6 +446,9 @@ def status(device, config, secrets):
         readings['link to Sapphire'] = 'connected' if link.get('connected') else 'NOT connected'
     if isinstance(h.get('free_internal_kb'), (int, float)):      # the RAM TLS needs; a board says it from 0.2.1
         readings['free RAM'] = f"{int(h['free_internal_kb'])} KB internal"
+    for name, value in (h.get('sensors') or {}).items() if isinstance(h.get('sensors'), dict) else ():
+        if isinstance(value, (int, float, str)):             # a board's own sensors: name -> number (0.2.0 pocket)
+            readings[f"{str(name)[:24]} sensor"] = str(value)[:24]
     st = h.get('storage') if isinstance(h.get('storage'), dict) else {}
     if isinstance(st.get('free_bytes'), (int, float)):
         from core.devices.storage import _gb

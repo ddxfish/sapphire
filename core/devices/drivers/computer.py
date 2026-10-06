@@ -49,7 +49,8 @@ SPEC = {
         {'key': 'backup_encrypt', 'type': 'boolean', 'label': 'Seal them', 'capability': 'storage', 'tab': 'Backup',
          'default': False,
          'help': 'On = sealed .sapphirebak files that only the backup password opens. '
-                 'Off = plain .tar.gz you can open anywhere (this folder is on your own machine).'},
+                 'Off = plain .tar.gz you can open anywhere (this folder is on your own machine). '
+                 'A network share (SMB, NFS, sshfs) is another machine: it is always sealed.'},
         *KEEP_FIELDS,
     ],
 }
@@ -411,9 +412,45 @@ def describe(device, config):
 
 # --- backups into a folder here ----------------------------------------------
 
+NETWORK_FS = {'cifs', 'smb3', 'smbfs', 'nfs', 'nfs4', 'fuse.sshfs', 'sshfs', 'afpfs', 'davfs',
+              'fuse.davfs', 'fuse.rclone', '9p', 'ceph', 'glusterfs', 'fuse.gvfsd-fuse'}
+
+
+def is_network_mount(path):
+    """True when `path` sits on a network share (SMB/NFS/sshfs mount, a UNC
+    path or a mapped drive on Windows): bytes written there leave this
+    machine, so the never-plaintext-off-box rule applies (2026-10-06)."""
+    raw = str(path)
+    if os.name == 'nt':
+        if raw.startswith('\\\\') or raw.startswith('//'):
+            return True
+        try:
+            import ctypes
+            drive = os.path.splitdrive(os.path.abspath(raw))[0] + '\\'
+            return ctypes.windll.kernel32.GetDriveTypeW(drive) == 4          # DRIVE_REMOTE
+        except Exception:
+            return False
+    try:
+        target = os.path.realpath(raw)
+        best, fstype = '', ''
+        with open('/proc/mounts', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mnt = parts[1].replace('\\040', ' ')
+                if (target == mnt or target.startswith(mnt.rstrip('/') + '/')) and len(mnt) > len(best):
+                    best, fstype = mnt, parts[2]
+        return fstype in NETWORK_FS or fstype.startswith('fuse.') and 'ssh' in fstype
+    except OSError:
+        return False
+
+
 class FolderTarget(Target):
     """A folder on this machine as a place backups go. remote=False: the one
-    kind that may hold plain backups, by its own `backup_encrypt` switch."""
+    kind that may hold plain backups, by its own `backup_encrypt` switch —
+    unless the folder is a network mount, which is another machine with a
+    local name: then the target is remote and seals whatever the switch says."""
     kind = 'folder'
     remote = False
 
@@ -422,6 +459,8 @@ class FolderTarget(Target):
         self.keep = keep_from(config)
         self.encrypt = bool(config.get('backup_encrypt', False))
         self.path = _folder(config)
+        if is_network_mount(self.path):
+            self.remote = True
 
     def info(self):
         try:

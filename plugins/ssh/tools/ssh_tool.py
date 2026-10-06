@@ -231,66 +231,82 @@ def _login_args(auth, folder):
             '-o', 'NumberOfPasswordPrompts=1'], env
 
 
-def _run_remote(server, command, timeout, auth=None):
-    """Run command on remote server via SSH. The ONE ssh runner.
+def _login_opts(server, auth):
+    """(options, key options, env, folder) for one ssh OR scp call. auth=None
+    is the classic path: the server's key_path when it has one, else whatever
+    keys ssh already knows. auth={'mode', 'secret'} is a login whose material
+    lives in the secrets store (a pasted key, a password); it sits in a
+    private `folder` for the length of the call — the caller removes it."""
+    opts = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=5']
+    key, env, folder = [], None, None
+    if auth and auth.get('mode') in ('key_paste', 'password'):
+        folder = _login_dir()
+        more, env = _login_args(auth, folder)
+        opts.extend(more)
+    else:
+        opts.extend(['-o', 'BatchMode=yes'])
+        key_path = server.get('key_path', '')
+        if key_path:
+            key = ['-i', str(Path(key_path).expanduser())]
+    return opts, key, env, folder
 
-    auth=None is the classic path: the server's key_path when it has one,
-    else whatever keys ssh already knows. auth={'mode', 'secret'} is a login
-    whose material lives in the secrets store (a pasted key, a password); it
-    sits in a private folder for the length of this one call."""
-    host = server['host']
-    user = server['user']
-    port = str(server.get('port', 22))
-    key_path = server.get('key_path', '')
 
-    ssh_cmd = [
-        'ssh',
-        '-o', 'StrictHostKeyChecking=accept-new',
-        '-o', 'ConnectTimeout=5',
-    ]
-    env, folder = None, None
+def _exec(server, tool, rest, timeout, auth, what):
+    """Run `tool` (ssh: -p, scp: -P) with the login in place and `rest`
+    after it. Returns (CompletedProcess, None) or (None, error text). The
+    ONE place a login touches a process: material on disk only for the
+    call, errors that happened with material in play never carry their text."""
+    folder = None
     try:
-        if auth and auth.get('mode') in ('key_paste', 'password'):
-            folder = _login_dir()
-            opts, env = _login_args(auth, folder)
-            ssh_cmd.extend(opts)
-            ssh_cmd.extend(['-p', port])
-        else:
-            ssh_cmd.extend(['-o', 'BatchMode=yes', '-p', port])
-            if key_path:
-                expanded_key = str(Path(key_path).expanduser())
-                ssh_cmd.extend(['-i', expanded_key])
-        ssh_cmd.append(f'{user}@{host}')
-        ssh_cmd.append(command)
-
-        logger.info(f"SSH [{server['name']}] ({user}@{host}): {command[:100]}")
-
+        opts, key, env, folder = _login_opts(server, auth)
+        port = str(server.get('port', 22))
+        cmd = [tool, *opts, '-P' if tool == 'scp' else '-p', port, *key, *rest]
         extra = {'env': env, 'stdin': subprocess.DEVNULL} if folder else {}
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            encoding='utf-8', errors='replace',
-            **extra,
-        )
-        return _format_output(server['name'], host, command, result)
-
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              encoding='utf-8', errors='replace', **extra), None
     except subprocess.TimeoutExpired:
-        logger.warning(f"SSH command timed out after {timeout}s: {command[:100]}")
-        return f"[{server['name']}] Command timed out after {timeout}s.", False
+        logger.warning(f"SSH {what} timed out after {timeout}s")
+        return None, f"[{server['name']}] {what} timed out after {timeout}s."
     except FileNotFoundError:
-        return "SSH client not found on system. Is OpenSSH installed?", False
+        return None, "SSH client not found on system. Is OpenSSH installed?"
     except Exception as e:
         if folder:      # login material was in play: the error text stays out
             logger.error(f"SSH error: {type(e).__name__}")
-            return f"SSH error: {type(e).__name__}", False
+            return None, f"SSH error: {type(e).__name__}"
         logger.error(f"SSH error: {e}", exc_info=True)
-        return f"SSH error: {e}", False
+        return None, f"SSH error: {e}"
     finally:
         if folder:
             import shutil
             shutil.rmtree(folder, ignore_errors=True)
+
+
+def _run_remote(server, command, timeout, auth=None, raw=False):
+    """Run command on remote server via SSH. The ONE ssh runner.
+    raw=True answers (stdout, ok) for code that parses the output (the
+    backup target); the usual answer is the formatted report for her."""
+    host, user = server['host'], server['user']
+    logger.info(f"SSH [{server['name']}] ({user}@{host}): {command[:100]}")
+    result, err = _exec(server, 'ssh', [f'{user}@{host}', command], timeout, auth, 'Command')
+    if err:
+        return err, False
+    if raw:
+        ok = result.returncode == 0
+        return (result.stdout if ok else (result.stderr.strip() or result.stdout)[:400]), ok
+    return _format_output(server['name'], host, command, result)
+
+
+def _copy_remote(server, src, dst, timeout, auth=None, get=False):
+    """scp one file: local src → remote dst (get=False) or remote src →
+    local dst (get=True). Paths are passed as given — the backup target
+    only ever uses names it validated. Returns (text, ok)."""
+    host, user = server['host'], server['user']
+    a, b = (f'{user}@{host}:{src}', str(dst)) if get else (str(src), f'{user}@{host}:{dst}')
+    logger.info(f"SCP [{server['name']}] {'from' if get else 'to'} {user}@{host}: {src if get else dst}")
+    result, err = _exec(server, 'scp', ['-q', a, b], timeout, auth, 'Copy')
+    if err:
+        return err, False
+    return (result.stderr.strip() or 'copied')[:400], result.returncode == 0
 
 
 def _format_output(name, host, command, result):

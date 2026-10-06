@@ -16,14 +16,23 @@
 # it for her on one machine and leave it open on another. Its two commands
 # are the USER's words, like a premade command. It starts out locked.
 import base64
+import hashlib
 import re
 import shlex
 
+from core.backup_targets import Target
+from core.devices.storage import keep_from
 from plugins.ssh.tools import ssh_tool
 
 NAME_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,40}$')
 RESERVED = ('run',)
 SLOT = '{value}'
+# A backup folder on the machine: absolute, or relative to the login's home.
+# No spaces, no quotes, no ~ — scp hands the path to the remote as-is, and
+# its sftp mode cannot expand ~ on every server (2026-10-06).
+DIR_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}$|^/[A-Za-z0-9_./-]{1,200}$')
+FILE_RE = re.compile(r'^[A-Za-z0-9_.-]{1,96}$')
+COPY_WAIT = 20 * 60          # a 70 MB blob over a slow link
 
 
 def _slot_is_bare(command):
@@ -55,6 +64,11 @@ def validate(config):
         return config, "Host and user are both needed."
     if config.get('auth') == 'key_file' and not config.get('key_path'):
         return config, "Give the path of the key file, or pick another login."
+    folder = str(config.get('backup_dir') or '').strip().rstrip('/')
+    if folder and (not DIR_RE.match(folder) or '..' in folder.split('/')):
+        return config, ("The backup folder is a plain path: absolute (/srv/sapphire-backups) or "
+                        "relative to the user's home (backups/sapphire). No spaces, quotes or ~.")
+    config['backup_dir'] = folder
     seen = set()
     for c in config.get('commands', []):
         c['name'] = name = c.get('name', '').strip().lower()
@@ -146,6 +160,10 @@ def describe(device, config):
              for name in POWER if _power_command(config, name)}
     if power:
         told['power'] = {'label': 'Power', 'help': 'restart it or shut it down', 'actions': power}
+    if config.get('backup_dir'):
+        told['storage'] = {'label': 'Backup', 'help': 'Sapphire keeps sealed backups in a folder there',
+                           'actions': {'backup': {'help': 'make a backup and send it there now', 'example': ''},
+                                       'list': {'help': 'what is there and how much room is left', 'example': ''}}}
     return told
 
 
@@ -155,10 +173,119 @@ def status(device, config, secrets):
     if error:
         return {'online': False, 'detail': error}
     text, ok = ssh_tool._run_remote(server, 'echo ok', 10, auth)
-    return {'online': bool(ok), 'detail': where if ok else f"{where} - {_reason(text)}"}
+    out = {'online': bool(ok), 'detail': where if ok else f"{where} - {_reason(text)}"}
+    if ok and config.get('backup_dir'):
+        try:
+            info = SshTarget(server, auth, config, device).info()
+            out['readings'] = {'backup folder': f"{config['backup_dir']} ({len(info['files'])} there, "
+                                                f"{info['free_bytes'] // (1024 * 1024):,} MB free)"}
+        except Problem as e:
+            out['readings'] = {'backup folder': str(e)}
+    return out
+
+
+class Problem(Exception):
+    pass
+
+
+class SshTarget(Target):
+    """A folder on an SSH machine as a place backups go (remote: sealed
+    always). scp carries the bytes; a short ssh afterwards checks the sha256
+    and moves .partial into place, the way the satellite board does."""
+    kind = 'ssh'
+    remote = True
+
+    def __init__(self, server, auth, config, device):
+        self.server, self.auth = server, auth
+        self.dir = str(config.get('backup_dir') or '').rstrip('/')
+        self.label = device.get('label') or device.get('id') or server['host']
+        self.keep = keep_from(config)
+        if not self.dir:
+            raise Problem("No backup folder is set for this machine.")
+
+    def _sh(self, command, timeout=60):
+        text, ok = ssh_tool._run_remote(self.server, command, timeout, self.auth, raw=True)
+        if not ok:
+            raise Problem(f"{self.label}: {str(text).strip().splitlines()[-1][:200] if str(text).strip() else 'no answer'}")
+        return text
+
+    def _path(self, name):
+        if not FILE_RE.match(name or ''):
+            raise Problem(f"not a backup name: {name!r}")
+        return f"{self.dir}/{name}"
+
+    def info(self):
+        d = shlex.quote(self.dir)
+        out = self._sh(f"mkdir -p {d} && cd {d} && ls -ln && echo __DF__ && df -Pk . | tail -1")
+        listing, _, df = out.partition('__DF__')
+        files = {}
+        for line in listing.splitlines():
+            parts = line.split()                       # -rw-r--r-- 1 uid gid SIZE mon d time NAME
+            if len(parts) >= 9 and parts[0][0] == '-' and parts[4].isdigit():
+                files[parts[8]] = int(parts[4])
+        dparts = df.split()                            # fs 1024-blocks used AVAIL cap mount
+        free_kb = int(dparts[3]) if len(dparts) >= 4 and dparts[3].isdigit() else 0
+        return {'files': files, 'free_bytes': free_kb * 1024, 'path': self.dir}
+
+    def sizes(self):
+        return self.info()['files']
+
+    def names(self):
+        return list(self.sizes())
+
+    def put(self, path, name):
+        self.check(path, name)
+        dst = self._path(name)
+        with open(path, 'rb') as f:
+            want = hashlib.file_digest(f, 'sha256').hexdigest()
+        self._sh(f"mkdir -p {shlex.quote(self.dir)}")
+        text, ok = ssh_tool._copy_remote(self.server, path, dst + '.partial', COPY_WAIT, self.auth)
+        if not ok:
+            self._sh(f"rm -f {shlex.quote(dst + '.partial')}")
+            raise Problem(f"{self.label}: copy failed: {text}")
+        p = shlex.quote(dst + '.partial')
+        got = self._sh(f"(sha256sum {p} || shasum -a 256 {p}) 2>/dev/null | cut -d' ' -f1").strip()
+        if got != want:
+            self._sh(f"rm -f {p}")
+            raise Problem(f"{self.label}: {name} arrived corrupt (sha256 mismatch); removed it")
+        self._sh(f"mv -f {p} {shlex.quote(dst)}")
+
+    def delete(self, name):
+        self._sh(f"rm -f {shlex.quote(self._path(name))}")
+
+    def get(self, name, dst):
+        text, ok = ssh_tool._copy_remote(self.server, self._path(name), dst, COPY_WAIT, self.auth, get=True)
+        if not ok:
+            raise Problem(f"{self.label}: copy back failed: {text}")
+
+
+def storage_target(device, config, secrets):
+    """Core asks for this when the machine has `storage` (a backup folder)."""
+    if not config.get('backup_dir'):
+        return None
+    server, auth, error = _login(device, config, secrets)
+    if error:
+        raise Problem(error)
+    return SshTarget(server, auth, config, device)
 
 
 def run(device, capability, action, value, config, secrets, call_tool):
+    if capability == 'storage':
+        from core.devices import storage as st
+        try:
+            target = storage_target(device, config, secrets)
+        except Problem as e:
+            return str(e), False
+        if target is None:
+            return "No backup folder is set for this machine. Add one in Settings > Devices.", False
+        if action == 'backup':
+            return st.backup_now(target)
+        if action == 'list':
+            try:
+                return st.listing_text(target, target.info()), True
+            except Problem as e:
+                return str(e), False
+        return f"'{action}' is not a backup action.", False
     if capability == 'power':
         command = _power_command(config, action) if action in POWER else ''
         if not command:

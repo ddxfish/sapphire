@@ -371,3 +371,36 @@ def test_storage_targets_come_from_engine_doors(mgr, board, tmp_path):
         assert [t.kind for t in ts] == ['satellite', 'folder']
         assert st.target_for('den').kind == 'satellite'
         assert st.target_for('nobody') is None
+
+
+# --- a network mount is another machine (2026-10-06) ------------------------------
+
+def test_network_mount_makes_the_folder_remote(tmp_path):
+    from unittest.mock import mock_open
+    from core.backup import BackupRefused
+    cfg = {'backup_path': str(tmp_path), 'backup_encrypt': False}
+    plain = tmp_path / 'sapphire_2026-10-06_030000_daily.tar.gz'
+    plain.write_bytes(b'x' * 10)
+    with patch.object(pc, 'is_network_mount', return_value=False):
+        t = pc.FolderTarget({'id': 'den'}, cfg)
+        assert not t.remote and not t.wants_encryption
+        t.check(plain, plain.name)                      # plain allowed on a local folder
+    with patch.object(pc, 'is_network_mount', return_value=True):
+        t = pc.FolderTarget({'id': 'den'}, cfg)
+        assert t.remote and t.wants_encryption           # the checkbox cannot say otherwise
+        with pytest.raises(BackupRefused):
+            t.check(plain, plain.name)
+
+
+@pytest.mark.skipif(not hasattr(pc, 'os') or pc.os.name == 'nt', reason='/proc/mounts')
+def test_is_network_mount_reads_proc_mounts(tmp_path):
+    from unittest.mock import mock_open
+    mounts = ("/dev/sda1 / ext4 rw 0 0\n"
+              "//nas/backups /mnt/nas cifs rw,vers=3.0 0 0\n"
+              "nas:/export /mnt/nfs\\040share nfs4 rw 0 0\n")
+    with patch('builtins.open', mock_open(read_data=mounts)):
+        assert pc.is_network_mount('/mnt/nas/sapphire') is True
+        assert pc.is_network_mount('/mnt/nas') is True
+        assert pc.is_network_mount('/mnt/nfs share/x') is True
+        assert pc.is_network_mount('/mnt/nasty') is False          # prefix, not a mount
+        assert pc.is_network_mount('/home/me/backups') is False

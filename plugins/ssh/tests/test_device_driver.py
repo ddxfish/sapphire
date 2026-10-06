@@ -293,9 +293,130 @@ def test_manifest_declares_the_driver():
     decl = manifest['capabilities']['devices'][0]
     assert reg.register_driver(decl['driver'], decl, 'ssh')
     spec = reg.get_driver('ssh')
-    assert spec['module'] == 'device_driver.py' and spec['capabilities'] == ['ssh', 'power']
+    assert spec['module'] == 'device_driver.py' and spec['capabilities'] == ['ssh', 'power', 'storage']
     assert spec['locked_by_default'] == ['power']           # she may not restart a machine until the user says so
     secret = [f['key'] for f in spec['config_schema'] if f.get('secret')]
     assert secret == ['private_key', 'password']
     assert (Path(drv.__file__).parent / spec['module']).exists()
     importlib.reload(reg)
+
+
+# --- storage: a folder on the machine as a backup target (2026-10-06) --------
+
+def test_copy_remote_builds_scp_with_the_same_login(ssh):
+    server = {'name': 's', 'host': 'h', 'user': 'u', 'port': 2200, 'key_path': '/keys/id'}
+    text, ok = ssh_tool._copy_remote(server, '/tmp/a.sapphirebak', 'backups/a.sapphirebak.partial', 60)
+    assert ok and ssh.calls[0].cmd == [
+        'scp', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=5',
+        '-o', 'BatchMode=yes', '-P', '2200', '-i', '/keys/id',
+        '-q', '/tmp/a.sapphirebak', 'u@h:backups/a.sapphirebak.partial']
+    ssh_tool._copy_remote(server, 'backups/a.sapphirebak', '/tmp/back', 60, get=True)
+    assert ssh.calls[1].cmd[-2:] == ['u@h:backups/a.sapphirebak', '/tmp/back']
+
+
+def test_copy_remote_password_login_leaves_nothing_behind(ssh):
+    server = {'name': 's', 'host': 'h', 'user': 'u', 'port': 22, 'key_path': ''}
+    ssh_tool._copy_remote(server, '/tmp/a', 'b', 60, {'mode': 'password', 'secret': 'hunter2-long'})
+    call = ssh.calls[0]
+    assert call.cmd[0] == 'scp' and 'SSH_ASKPASS' in call.env and 'hunter2-long' not in ' '.join(call.cmd)
+    assert leftovers(ssh.tmp) == []
+
+
+def test_validate_backup_dir():
+    assert drv.validate(cfg(backup_dir='backups/sapphire'))[1] == ''
+    assert drv.validate(cfg(backup_dir='/srv/sapphire-backups/'))[0]['backup_dir'] == '/srv/sapphire-backups'
+    for bad in ('~/backups', 'my backups', '../up', "x'y", '/a/../b'):
+        assert 'plain path' in drv.validate(cfg(backup_dir=bad))[1], bad
+
+
+def test_describe_offers_storage_only_with_a_folder():
+    assert 'storage' not in drv.describe({'id': 'box'}, cfg())
+    told = drv.describe({'id': 'box'}, cfg(backup_dir='backups/sapphire'))
+    assert set(told['storage']['actions']) == {'backup', 'list'}
+
+
+class _Remote:
+    """A fake machine: answers the few shell lines the target speaks."""
+    def __init__(self):
+        self.files = {}
+        self.sha = {}
+        self.cmds = []
+
+    def run(self, server, command, timeout, auth=None, raw=False):
+        self.cmds.append(command)
+        if 'ls -ln' in command:
+            rows = ''.join(f"-rw-r--r-- 1 1000 1000 {n} Oct  6 02:20 {name}\n" for name, n in self.files.items())
+            return f"total 8\ndrwxr-xr-x 2 1000 1000 4096 Oct  6 02:20 .\n{rows}__DF__\n/dev/sda1 100000000 50000000 20480000 50% /\n", True
+        if 'sha256sum' in command:
+            part = [w for w in command.split() if w.endswith('.partial')][0]
+            return self.sha.get(part, 'deadbeef') + '\n', True
+        if command.startswith('mv -f'):
+            src, dst = command.split()[2], command.split()[3]
+            self.files[dst.rsplit('/', 1)[-1]] = self.files.pop(src.rsplit('/', 1)[-1])
+            return '', True
+        if command.startswith('rm -f'):
+            self.files.pop(command.split()[2].rsplit('/', 1)[-1], None)
+            return '', True
+        return '', True
+
+    def copy(self, server, src, dst, timeout, auth=None, get=False):
+        import hashlib
+        data = open(src, 'rb').read()
+        self.files[str(dst).rsplit('/', 1)[-1]] = len(data)
+        self.sha[str(dst)] = hashlib.sha256(data).hexdigest()
+        return 'copied', True
+
+
+@pytest.fixture
+def remote():
+    r = _Remote()
+    with patch.object(ssh_tool, '_run_remote', r.run), patch.object(ssh_tool, '_copy_remote', r.copy):
+        yield r
+
+
+def _target(**over):
+    return drv.storage_target({'id': 'box', 'label': 'Den PC'}, cfg(backup_dir='backups/sapphire', **over),
+                              SimpleNamespace(get=lambda k: None))
+
+
+def test_target_put_verifies_sha_then_moves_into_place(remote, tmp_path):
+    from core import backup_crypto
+    blob = tmp_path / 'sapphire_2026-10-06_030000_daily.sapphirebak'
+    blob.write_bytes(backup_crypto.MAGIC + b'\x00' * 100)
+    t = _target()
+    assert t.remote and t.kind == 'ssh' and t.label == 'Den PC'
+    t.put(blob, blob.name)
+    assert remote.files == {blob.name: 112}
+    assert t.sizes() == {blob.name: 112}
+    assert any(c.startswith('mv -f backups/sapphire/') for c in remote.cmds)
+    info = t.info()
+    assert info['free_bytes'] == 20480000 * 1024 and info['path'] == 'backups/sapphire'
+    t.delete(blob.name)
+    assert remote.files == {}
+
+
+def test_target_put_drops_a_corrupt_arrival(remote, tmp_path):
+    from core import backup_crypto
+    blob = tmp_path / 'sapphire_2026-10-06_030000_daily.sapphirebak'
+    blob.write_bytes(backup_crypto.MAGIC + b'\x00' * 10)
+    remote.copy = lambda server, src, dst, timeout, auth=None, get=False: (
+        remote.files.__setitem__(str(dst).rsplit('/', 1)[-1], 22) or ('copied', True))   # no sha recorded → deadbeef
+    with patch.object(ssh_tool, '_copy_remote', remote.copy):
+        with pytest.raises(drv.Problem, match='corrupt'):
+            _target().put(blob, blob.name)
+    assert remote.files == {}
+
+
+def test_target_refuses_plaintext_and_bad_names(remote, tmp_path):
+    from core.backup import BackupRefused
+    plain = tmp_path / 'sapphire_2026-10-06_030000_daily.tar.gz'
+    plain.write_bytes(b'x' * 10)
+    with pytest.raises(BackupRefused):
+        _target().put(plain, plain.name)
+    with pytest.raises(drv.Problem):
+        _target().delete('../etc/passwd')
+    assert remote.files == {}
+
+
+def test_storage_target_is_none_without_a_folder():
+    assert drv.storage_target({'id': 'box'}, cfg(), SimpleNamespace(get=lambda k: None)) is None
