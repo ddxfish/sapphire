@@ -90,6 +90,8 @@ SOCKS5 proxy
 LAN/WAN split
 ### Safety
 Local backup rotation
+Backup folder choice
+Sealed backups option
 One-click restore
 Login API tokens
 Encrypted credentials

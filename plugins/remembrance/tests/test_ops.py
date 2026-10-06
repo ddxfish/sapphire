@@ -15,12 +15,28 @@ from plugins.remembrance import ops, schedule
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
-    # No PluginState / user/ writes; backup temp lands in tmp_path.
+    # No PluginState / real user/ writes: the backup manager gets a tiny fake
+    # user/ under tmp_path and its backup folder beside it. The gate itself
+    # (password → sentinel → cap → tar → seal → verify → unlink) is CORE's
+    # export_encrypted since 2026-10-06; these tests drive it through ops.
+    import core.backup as B
     monkeypatch.setattr(ops, "_set_last_result", lambda ok, msg: None)
     monkeypatch.setattr(ops, "get_prefs", lambda: {
         "offsite_extra_patterns": [], "offsite_max_mb": 2048,
         "offsite_cron_hour": None, "auto_enabled": False})
-    monkeypatch.setattr(ops.backup_manager, "backup_dir", tmp_path)
+    bm = ops.backup_manager
+    monkeypatch.setattr(bm, "base_dir", tmp_path)
+    monkeypatch.setattr(bm, "user_dir", tmp_path / "user")
+    bm.user_dir.mkdir()
+    (bm.user_dir / "notes.txt").write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(bm, "backup_dir", tmp_path)
+    monkeypatch.setattr(bm, "_alert", lambda kind, **d: None)
+
+    class Cfg:
+        BASE_DIR = tmp_path
+        BACKUPS_EXCLUDE_PATTERNS = []
+        BACKUPS_ENCRYPT_LOCAL = False
+    monkeypatch.setattr(B, "config", Cfg)
     return monkeypatch
 
 
@@ -62,29 +78,16 @@ def test_cap_exceeded_refuses_before_creating(env):
     assert called == []   # refused BEFORE building a giant blob
 
 
-def _fake_create(backup_type, extra_patterns=None, dest_dir=None):
-    """Stand-in for core create_backup: writes a plain tar.gz (as core now
-    always does — encryption moved into this plugin)."""
-    import tarfile
-    from pathlib import Path
-    p = Path(dest_dir) / "sapphire_x_offsite.tar.gz"
-    with tarfile.open(p, "w:gz"):
-        pass
-    return p.name
-
-
 def test_happy_path_encrypts_verifies_uploads(env, tmp_path):
-    """Plain tar from core → REAL encrypt in ops → ciphertext verify → upload.
-    The plaintext tar must be gone by upload time; temp dir cleaned after."""
+    """Real tar from core → REAL seal (encrypt + verify) → upload. The
+    plaintext tar must be gone by upload time; temp dir cleaned after."""
     _account(env)
-    env.setattr(ops.backup_manager, "estimate_size", lambda extra_patterns=None: {"total_bytes": 1000})
-    env.setattr(ops.backup_manager, "create_backup", _fake_create)
 
     seen = {}
     def fake_upload(acct, blob, cadence, comment=""):
         seen.update(cadence=cadence, comment=comment, blob_exists=blob.exists(),
                     blob_name=blob.name,
-                    plaintext_gone=not (blob.parent / "sapphire_x_offsite.tar.gz").exists(),
+                    plaintext_gone=not list(blob.parent.glob("*.tar.gz")),
                     is_ciphertext=ops.backup_crypto.is_encrypted_backup(blob))
         return {"id": "abc123", "size_bytes": 4, "usage_bytes": 4, "quota_bytes": 1000}
     env.setattr(ops.client, "upload", fake_upload)
@@ -101,11 +104,9 @@ def test_happy_path_encrypts_verifies_uploads(env, tmp_path):
 def test_verify_blocks_plaintext_upload(env, tmp_path):
     """The pre-upload check: if 'encryption' silently passed plaintext through
     (blob still opens as tar), the upload MUST be refused — never trust
-    encrypt_file, prove it."""
+    encrypt_file, prove it (core's seal does; this pins that ops honours it)."""
     import shutil as sh
     _account(env)
-    env.setattr(ops.backup_manager, "estimate_size", lambda extra_patterns=None: {"total_bytes": 1000})
-    env.setattr(ops.backup_manager, "create_backup", _fake_create)
     env.setattr(ops.backup_crypto, "encrypt_file", lambda src, dst, pw: sh.copy2(src, dst))
 
     uploads = []

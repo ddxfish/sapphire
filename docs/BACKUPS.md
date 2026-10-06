@@ -4,9 +4,9 @@ Sapphire automatically backs up your data so you can recover from mistakes, corr
 
 ## What it is
 
-Backups are plain `.tar.gz` archives of the entire `user/` directory, written to `user_backups/` next to it. A scheduler creates them daily and rotates old ones out by tier; the Update button takes one automatically before pulling new code; and any backup — scheduled, manual, or a file you carried in from another machine — restores through the UI without touching a terminal.
+Backups are plain `.tar.gz` archives of the entire `user/` directory, written to `user_backups/` next to it (or any folder you pick — see [Where backups are stored](#where-backups-are-stored)). A scheduler creates them daily and rotates old ones out by tier; the Update button takes one automatically before pulling new code; and any backup — scheduled, manual, or a file you carried in from another machine — restores through the UI without touching a terminal.
 
-One design line worth knowing: **local backups are deliberately plaintext.** They sit on the same disk as the live data, so encrypting them at rest would protect nothing and would cost you everything if you lost the password. Encryption happens only when a backup *leaves* the machine — see [Offsite backups](#offsite-backups-remembrance-plugin) below.
+One design line worth knowing: **local backups are plaintext by default.** They sit on the same disk as the live data, so encrypting them at rest protects little and costs you everything if you lose the password. Anything that *leaves* the machine — a device's SD card, a folder on another box, the offsite vault — is always encrypted first. You can turn encryption on for local backups too; see [Encryption](#encryption) below.
 
 ## Using it
 
@@ -110,7 +110,19 @@ sapphire/
 
 For Docker installs, this maps to your `sapphire-backups/` volume.
 
+**Pick your own folder.** `BACKUPS_DIR` (Settings > Backup) moves the whole folder: an absolute path (a second disk, a NAS mount, a USB stick) or one relative to the Sapphire folder; `~` expands. A folder inside `user/` is refused (backups would back up backups), and one that can't be written falls back to the default — the health strip at the top of the page always names the folder really in use.
+
+**Open a backup without Sapphire.** Four small files sit beside the archives: `open-backup.sh` (Linux/macOS), `open-backup.bat` (Windows, double-click), `decrypt_backup.py` and a `README.txt`. Run the script, pick a backup, and it unpacks into a folder next to it — plain `.tar.gz` needs only `tar`; an encrypted `.sapphirebak` asks for your password and needs Python with `pip install cryptography`. Sapphire writes the same files onto every device and folder it backs up to, so a card pulled from a dead box restores on any PC.
+
 You can download any backup from the list in Settings > Backup (or `GET /api/backup/download/{filename}`). Keep a copy off-machine — or let the [Remembrance plugin](#offsite-backups-remembrance-plugin) do it for you.
+
+### Encryption
+
+One **backup password** covers everything Sapphire seals: backups sent to devices and folders ([Device backups](DEVICES.md)), the offsite vault, and — if you turn it on — local backups. Set it in **Settings > Backup > Encryption**. It is stored scrambled in `~/.config/sapphire/` (machine-bound), never inside a backup. **Write it down.** A sealed backup opens with this password and nothing else — not even us. On a new machine, restore-from-file asks for it.
+
+**Encrypt local backups too** (`BACKUPS_ENCRYPT_LOCAL`, off by default) seals every new local backup as a `.sapphirebak` and keeps no plain copy. Turning it on goes through an I-UNDERSTAND confirmation. The one rule it enforces: *if encryption is on and no password is set, no backup is made* — never a plain one in its place. The health strip says so loudly, and the scheduled run publishes a health alert. Backups already in the folder stay as they are.
+
+Everything that leaves the machine is encrypted whatever this switch says. There is no setting that sends plaintext to a device or the vault; only a folder on *this* machine (a USB stick) can opt out.
 
 ### Restoring — the one-click way
 
@@ -197,7 +209,7 @@ The **Remembrance** plugin (disabled by default) ships encrypted backups of `use
 
 1. Get a server URL, tenant ID, and API key from the vault owner.
 2. Enable the plugin, then open **Settings > Plugins > Remembrance**: enter the server details → **Save** → **Test**.
-3. Set your **encryption password** in the same panel. Nothing uploads without it.
+3. Set your **backup password** in **Settings > Backup > Encryption** (one password for the vault, devices and local backups). Nothing uploads without it.
 
 ### Three ways to back up
 
@@ -232,6 +244,8 @@ The plugin panel lists your vault backups, each with a restore (↻) button — 
 | `BACKUPS_KEEP_UPDATE` | `3` | Pre-update backups to keep | settings.json / API only |
 | `BACKUPS_EXCLUDE_PATTERNS` | (empty) | Glob patterns excluded from backups, one per line | Settings > Backup — "Exclude from backups" box |
 | `BACKUPS_MAX_SIZE_WARN_MB` | `2048` | Size estimate above this shows a warning | Settings > Backup |
+| `BACKUPS_DIR` | (empty) | Folder for local backups; empty = `user_backups/` | Settings > Backup |
+| `BACKUPS_ENCRYPT_LOCAL` | `false` | Seal local backups with the backup password | Settings > Backup — Encryption box (I-UNDERSTAND gate) |
 
 Any `KEEP` value set to `0` pauses that tier: nothing new is created, existing backups are kept.
 
@@ -258,12 +272,14 @@ Any `KEEP` value set to `0` pauses that tier: nothing new is created, existing b
 
 ## Reference for AI
 
-Local plain-tar backups of user/ with tiered rotation + offline-at-boot restore; offsite encryption via remembrance plugin. Settings tab: Backup.
+Local tar backups of user/ (plain by default, optionally sealed) with tiered rotation + offline-at-boot restore; one core gate seals everything that leaves (devices, folders, remembrance). Settings tab: Backup.
 
-SETTINGS KEYS (defaults): BACKUPS_ENABLED=true, BACKUPS_HOUR=3, BACKUPS_KEEP_DAILY=7, BACKUPS_KEEP_WEEKLY=4, BACKUPS_KEEP_MONTHLY=3, BACKUPS_KEEP_MANUAL=5, BACKUPS_KEEP_UPDATE=3 (no UI field), BACKUPS_EXCLUDE_PATTERNS=[] (UI textarea, auto-saves), BACKUPS_MAX_SIZE_WARN_MB=2048. KEEP<=0 = pause tier (no create, no purge).
+SETTINGS KEYS (defaults): BACKUPS_ENABLED=true, BACKUPS_HOUR=3, BACKUPS_KEEP_DAILY=7, BACKUPS_KEEP_WEEKLY=4, BACKUPS_KEEP_MONTHLY=3, BACKUPS_KEEP_MANUAL=5, BACKUPS_KEEP_UPDATE=3 (no UI field), BACKUPS_EXCLUDE_PATTERNS=[] (UI textarea, auto-saves), BACKUPS_MAX_SIZE_WARN_MB=2048, BACKUPS_DIR="" (empty=user_backups/; inside user/ refused → default + backup_dir_error), BACKUPS_ENCRYPT_LOCAL=false. KEEP<=0 = pause tier (no create, no purge).
+
+ENCRYPTION (core, 2026-10-06): one backup password (credentials.backup_password, machine-bound scramble; PUT /api/backup/password; status in GET /api/backup/health.password_status). backup_crypto.seal = encrypt + verify (not-a-tar + magic + non-empty) or raise. create_backup(encrypt=None→BACKUPS_ENCRYPT_LOCAL): seals the tar, unlinks plaintext, returns .sapphirebak; encrypt on + no password = NO backup + last_backup_error + health alert backup_password_missing (never plaintext). export_encrypted(type, dest_dir, extra_patterns, cap_mb) = the shipper gate (password → sentinel → cap → create(encrypt=True)); remembrance calls it. sealed(filename) = ship-ready copy of an existing local backup. backup_targets.ship(filename) seals once, one thread per target, Target.check refuses .tar.gz to any remote target and any .sapphirebak lacking the magic; rotation on targets = select_doomed(names, keep). Openers (README.txt, open-backup.sh/.bat, decrypt_backup.py) written beside local backups and onto every target.
 
 MECHANISM:
-- Archive = user/ → user_backups/sapphire_{YYYY-MM-DD}_{HHMMSS}_{type}.tar.gz; types daily/weekly/monthly/manual/pre_update (pre_update lists under "update" tier). LOCAL BACKUPS ARE PLAINTEXT BY DESIGN; encryption only on egress (remembrance). Legacy encrypted local .sapphirebak files still list (🔒) and restore.
+- Archive = user/ → {backup_dir}/sapphire_{YYYY-MM-DD}_{HHMMSS}_{type}.tar.gz (or .sapphirebak when BACKUPS_ENCRYPT_LOCAL); types daily/weekly/monthly/manual/pre_update (pre_update lists under "update" tier). Local backups plaintext BY DEFAULT; egress (devices, folders, remembrance) always sealed. Encrypted local .sapphirebak files list (🔒) and restore.
 - SQLite: live *.db NEVER tar'd — sqlite3 backup API snapshots each to staging, added at live arcnames; live db/-wal/-shm excluded from walk. Snapshot failure → DB OMITTED from that backup (log: "DB snapshot failed for X ... OMITTED"); retried next run. WAL checkpoint beforehand is best-effort trim only, no longer gates inclusion. Pre-update backup passes require_complete=True → refuses instead of shipping without a busy DB.
 - Always-excluded privacy floor (regardless of patterns): *_mcp_key.json, mcp_client.json, sapphire-health.token, *.tmp/.tmp.*, .bad-*, symlinks/hardlinks; user/models/ excluded as rebuildable cache. Credentials live outside user/ (~/.config/sapphire/) — never in archive.
 - Durability: write .partial → chmod 0600 → atomic rename; 0-files-after-exclusions refused; unreadable files skipped w/ warning; create+rotate serialized under one lock.
@@ -282,5 +298,5 @@ OFFSITE (plugins/remembrance, default_enabled=false):
 - Flow: core creates plain tar (plugin extra excludes + size cap offsite_max_mb=2048) → encrypt → verify-ciphertext-or-refuse (CRITICAL log) → upload. Download sha256-verified before decrypt.
 - Cron: hourly check, uploads at offsite_cron_hour (default BACKUPS_HOUR+1) when auto_enabled; cadence monthly (1st) / weekly (Sun) / daily. Failure surfaces to user; success silent.
 - Tool: remembrance_backup — no comment → vault status; comment → labeled manual backup (kept long-term).
-- Creds (server URL/tenant/API key/encryption password) scrambled in ~/.config/sapphire/, never in backups. Restore: panel ↻ → same staged-restart flow.
+- Creds (server URL/tenant/API key) scrambled in ~/.config/sapphire/, never in backups; the backup password is core's (Settings > Backup). Gate = core export_encrypted; plugin owns account + cadence + upload + restore download. Restore: panel ↻ → same staged-restart flow.
 - Standalone recovery: tools/decrypt_backup.py (needs only python + cryptography pkg + password) → .tar.gz → tar -xzf.

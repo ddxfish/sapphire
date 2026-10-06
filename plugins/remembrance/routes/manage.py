@@ -24,8 +24,8 @@ def get_config(**_):
 
 
 def put_password(body=None, **_):
-    """Set (or clear with empty) the offsite-encryption password. Stored scrambled
-    in ~/.config/sapphire — never inside user/, which gets backed up."""
+    """Alias of core's PUT /api/backup/password (the password's home is
+    Settings > Backup since 2026-10-06). Kept so older panels keep working."""
     from core.credentials_manager import credentials
     pw = (body or {}).get("password", "")
     if not isinstance(pw, str):

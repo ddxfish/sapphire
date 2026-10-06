@@ -64,6 +64,10 @@ async def create_backup(request: Request, _=Depends(require_login)):
         if filename:
             backup_manager.rotate_backups()
             return {"status": "success", "filename": filename}
+    # A refusal with a reason (encryption on, no password) beats a bare 500.
+    reason = backup_manager.last_backup_error
+    if reason:
+        raise HTTPException(status_code=400, detail=reason)
     # Explain the most common failure: nothing left after exclusions.
     try:
         if backup_manager.estimate_size().get("total_bytes", 1) == 0:
@@ -95,6 +99,22 @@ async def download_backup(filename: str, request: Request, _=Depends(require_log
         return FileResponse(filepath, filename=filename, media_type='application/gzip')
     else:
         raise HTTPException(status_code=404, detail="Backup not found")
+
+
+@router.put("/api/backup/password")
+async def set_backup_password(request: Request, _=Depends(require_login)):
+    """Set (or clear with '') THE backup password — one password for encrypted
+    local backups, device/path targets and the Remembrance vault. Stored
+    scrambled in ~/.config/sapphire (machine-bound), never inside user/.
+    Moved here from the Remembrance panel 2026-10-06 (one home, DRY)."""
+    from core.credentials_manager import credentials
+    data = await request.json() or {}
+    pw = data.get("password", "")
+    if not isinstance(pw, str):
+        raise HTTPException(status_code=400, detail="password must be a string")
+    if not credentials.set_backup_password(pw):
+        raise HTTPException(status_code=500, detail="Failed to store the password")
+    return {"ok": True, "status": credentials.backup_password_status()}
 
 
 @router.post("/api/backup/estimate")

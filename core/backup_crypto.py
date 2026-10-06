@@ -89,3 +89,49 @@ def is_encrypted_backup(path) -> bool:
             return f.read(len(MAGIC)) == MAGIC
     except OSError:
         return False
+
+
+def verify_ciphertext(path):
+    """Prove a blob is ciphertext BEFORE it leaves the machine. Three checks,
+    most direct first: (1) it must NOT open as a tar archive — if tar can read
+    it, plaintext was about to ship; (2) it must carry the SAPPHIREBAK magic;
+    (3) it must be non-empty. Returns an error string, or None. (Lived in the
+    Remembrance plugin until 2026-10-06; core-owned now so every shipper runs
+    the same verify.)"""
+    import tarfile
+    from pathlib import Path
+    path = Path(path)
+    try:
+        if path.stat().st_size == 0:
+            return "Encrypted blob is empty"
+    except OSError as e:
+        return f"Encrypted blob unreadable ({e})"
+    try:
+        with tarfile.open(path, "r:*"):
+            pass
+        return "Backup is readable as plaintext — encryption did not happen"
+    except (tarfile.TarError, OSError, EOFError):
+        pass   # unreadable as an archive — exactly what ciphertext looks like
+    if not is_encrypted_backup(path):
+        return "Encrypted blob failed verification (bad header)"
+    return None
+
+
+def seal(src_path, dst_path, password: str):
+    """encrypt_file + verify_ciphertext as ONE step (GATE 1). A failed verify
+    unlinks dst and raises ValueError, so no caller can hold an unverified
+    blob. Returns dst_path."""
+    from pathlib import Path
+    if not password:
+        raise ValueError("Backup password not set")
+    dst = Path(dst_path)
+    try:
+        encrypt_file(src_path, dst, password)
+        err = verify_ciphertext(dst)
+    except Exception as e:
+        dst.unlink(missing_ok=True)
+        raise ValueError(f"Encryption failed: {e}")
+    if err:
+        dst.unlink(missing_ok=True)
+        raise ValueError(err)
+    return dst

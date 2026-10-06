@@ -75,17 +75,11 @@ function render(c) {
             </div>`)}
 
         ${box(`<div style="font-weight:600;margin-bottom:8px">Encryption password</div>
-            <div style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:8px;line-height:1.6">
-                Backups are encrypted with this password before they leave this machine — the vault only ever stores ciphertext. Nothing uploads without it.
+            <div style="font-size:var(--font-xs);color:var(--text-muted);line-height:1.6">
+                Backups are sealed with your backup password before they leave this machine — the vault only ever stores ciphertext. Nothing uploads without it.<br>
+                The password lives in <strong>Settings &gt; Backup &gt; Encryption</strong> (one password for devices, the vault and local backups).
             </div>
-            <div style="background:rgba(224,108,108,0.12);border:1px solid var(--danger,#e06c6c);border-radius:6px;padding:9px 11px;font-size:var(--font-xs);line-height:1.6;margin-bottom:8px">
-                &#9888; <strong>Write your password down.</strong> If you lose it, your offsite backups are <strong>gone for good</strong> &mdash; there is no recovery. Not even us.
-            </div>
-            ${input('rmb-pw', '', 'Set the encryption password…', 'password')}
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <button class="btn-sm" id="rmb-save-pw">Save password</button>
-                <span id="rmb-pwmsg" style="font-size:var(--font-xs);color:var(--text-secondary)"></span>
-            </div>`)}
+            <div id="rmb-pwstate" style="font-size:var(--font-xs);margin-top:8px;color:var(--text-secondary)">—</div>`)}
 
         ${box(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <div style="font-weight:600">Storage</div>
@@ -133,17 +127,6 @@ function render(c) {
         try { const r = await api('POST', 'test'); $('rmb-conn').textContent = r.ok ? '✓ connected' : '✗ ' + (r.error || 'failed'); }
         catch (e) { $('rmb-conn').textContent = '✗ ' + e.message; }
     });
-    $('rmb-save-pw').addEventListener('click', async () => {
-        const pw = $('rmb-pw').value;
-        if (!pw) { $('rmb-pwmsg').textContent = 'Enter a password first'; return; }
-        try {
-            const r = await api('PUT', 'password', { password: pw });
-            if (!r.ok) throw new Error(r.error || 'failed');
-            $('rmb-pw').value = '';
-            $('rmb-pwmsg').textContent = '✓ saved — write it down!';
-            refresh(c);
-        } catch (e) { $('rmb-pwmsg').textContent = '✗ ' + e.message; }
-    });
     $('rmb-refresh').addEventListener('click', () => refresh(c));
     $('rmb-save-cfg').addEventListener('click', async () => {
         try {
@@ -182,9 +165,9 @@ async function refresh(c) {
         $('rmb-auto').checked = !!cfg.auto_enabled;
         // password warning
         const pw = cfg.backup_password_status;
-        $('rmb-pw').placeholder = pw === 'ok' ? 'Password saved — enter a new one to change it' : 'Set the encryption password…';
+        $('rmb-pwstate').textContent = pw === 'ok' ? '✓ password set' : (pw === 'missing' ? '✗ no password set yet' : '✗ the saved password can\'t be read on this machine');
         $('rmb-pwwarn').innerHTML = (pw && pw !== 'ok')
-            ? `<div style="background:rgba(224,108,108,0.15);border:1px solid var(--danger,#e06c6c);border-radius:6px;padding:9px 11px;margin-bottom:8px;font-size:var(--font-xs);line-height:1.5">⚠ Offsite backups require an encryption password. ${pw === 'missing' ? 'Set one' : 'The saved one can\'t be read — re-enter it'} in the <strong>Encryption password</strong> box below. Nothing uploads without it.</div>` : '';
+            ? `<div style="background:rgba(224,108,108,0.15);border:1px solid var(--danger,#e06c6c);border-radius:6px;padding:9px 11px;margin-bottom:8px;font-size:var(--font-xs);line-height:1.5">⚠ Offsite backups require a backup password. ${pw === 'missing' ? 'Set one' : 'The saved one can\'t be read — re-enter it'} in <strong>Settings &gt; Backup &gt; Encryption</strong>. Nothing uploads without it.</div>` : '';
         // last result
         const lr = cfg.last_result;
         $('rmb-result').innerHTML = lr ? `<div style="background:${lr.ok ? 'rgba(108,204,108,0.12)' : 'rgba(224,108,108,0.12)'};border:1px solid ${lr.ok ? 'rgba(108,204,108,0.5)' : 'var(--danger,#e06c6c)'};border-radius:6px;padding:8px 11px;margin-bottom:8px;font-size:var(--font-xs)">${lr.ok ? '✓' : '✗'} ${esc(lr.message)} <span style="color:var(--text-muted)">(${esc(lr.ts)})</span></div>` : '';

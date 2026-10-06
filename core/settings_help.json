@@ -72,6 +72,14 @@
     "short": "Warn when a backup grows past this size (MB)",
     "long": "If the estimated backup size (after exclusions) exceeds this many megabytes, the Backup page shows a warning so you can exclude large folders. Soft warning only — it does not block backups. Set 0 to disable."
   },
+  "BACKUPS_ENCRYPT_LOCAL": {
+    "short": "Encrypt local backups with your backup password (off by default)",
+    "long": "Off: local backups are plain .tar.gz files you can open anywhere. On: every local backup is sealed (.sapphirebak) with the backup password set on this page, and only that password opens it. Lose the password and these backups are gone for good. Backups that leave this machine (devices, offsite) are always encrypted, whatever this says. With this on and no password set, no backup is made and the health box says so."
+  },
+  "BACKUPS_DIR": {
+    "short": "Folder for local backups (blank = user_backups/ next to user/)",
+    "long": "Where scheduled and manual backups are written. Blank uses user_backups/ beside the user/ folder. Give an absolute path (a second disk, a NAS mount, a USB stick) or a path relative to the Sapphire folder; ~ expands. A folder inside user/ is refused (backups would back up backups) and an unwritable one falls back to the default - the health box shows which folder is really in use."
+  },
   "AUDIO_INPUT_DEVICE": {
     "short": "Input device index (null = auto-detect)",
     "long": "Specific audio input device to use by index number. Set to null for automatic detection which tries preferred devices first (pipewire, pulse on Linux). Use the Audio tab test feature to find your device index. Useful when you have multiple microphones."

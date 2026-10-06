@@ -2,6 +2,7 @@ import os
 import fnmatch
 import shutil
 import tarfile
+import tempfile
 import time
 import sqlite3
 import logging
@@ -9,9 +10,44 @@ import threading
 from datetime import datetime
 from pathlib import Path
 import config
+from core import backup_crypto
 from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
+
+TIER_RANK = {"monthly": 3, "weekly": 2, "daily": 1}
+
+
+class BackupRefused(Exception):
+    """A backup was refused for a reason the user should read (no password,
+    corruption sentinel, over the cap, nothing to back up)."""
+
+
+def tier_of(name: str):
+    """Tier encoded in a backup filename (`sapphire_<date>_<time>_<tier>.*`),
+    or None. `pre_update` parses to `update`, matching list_backups."""
+    parts = str(name).split('.')[0].split('_')
+    return parts[-1] if len(parts) >= 4 and parts[0] == 'sapphire' else None
+
+
+def select_doomed(names, keep):
+    """Pure tier rotation, shared by the local folder and every remote target
+    (2026-10-06): group `names` by tier, newest-first by name, return the
+    names past that tier's keep. keep <= 0 pauses the tier (nothing of it is
+    ever purged); unknown tiers and unparsable names are left alone."""
+    by_tier = {}
+    for n in names:
+        tier = tier_of(n)
+        if tier:
+            by_tier.setdefault(tier, []).append(str(n))
+    doomed = []
+    for tier, lst in by_tier.items():
+        limit = int(keep.get(tier, 0) or 0)
+        if limit <= 0:
+            continue
+        lst.sort(reverse=True)
+        doomed.extend(lst[limit:])
+    return doomed
 
 
 # Privacy floor — ALWAYS excluded from backups, regardless of user settings:
@@ -94,7 +130,8 @@ class Backup:
         self._stop_event = None
         self.base_dir = Path(getattr(config, 'BASE_DIR', Path(__file__).parent.parent))
         self.user_dir = self.base_dir / "user"
-        self.backup_dir = self.base_dir / "user_backups"
+        self._backup_dir_override = None
+        self.backup_dir_error = None
         self.backup_dir.mkdir(exist_ok=True)
         # Serializes create + rotate as a single critical section. Without
         # this, a manual backup triggered during the scheduled 3am run can
@@ -104,6 +141,67 @@ class Backup:
         # Witch-hunt 2026-04-21 finding R5.
         self._backup_op_lock = threading.Lock()
         logger.info(f"Backup initialized - base_dir: {self.base_dir}, backup_dir: {self.backup_dir}")
+
+    @property
+    def backup_dir(self):
+        """Where local backups live (2026-10-06): `BACKUPS_DIR`, read live.
+        Empty = `user_backups/` beside user/; relative = under base_dir;
+        `~` expands. A dir inside user/ (backups backing up backups, forever)
+        or one that can't be made/written falls back to the default with the
+        reason in `backup_dir_error` (health + the Backup page)."""
+        override = getattr(self, '_backup_dir_override', None)
+        if override is not None:
+            return override
+        default = self.base_dir / "user_backups"
+        raw = str(getattr(config, 'BACKUPS_DIR', '') or '').strip()
+        chosen, err = default, None
+        if raw:
+            p = Path(os.path.expanduser(raw))
+            if not p.is_absolute():
+                p = self.base_dir / p
+            try:
+                inside_user = p.resolve().is_relative_to(self.user_dir.resolve())
+            except OSError:
+                inside_user = False
+            if inside_user:
+                err = f"BACKUPS_DIR {raw!r} is inside user/ — using the default folder"
+            else:
+                try:
+                    p.mkdir(parents=True, exist_ok=True)
+                    if not os.access(p, os.W_OK):
+                        raise PermissionError("not writable")
+                    chosen = p
+                except OSError as e:
+                    err = f"BACKUPS_DIR {raw!r} unusable ({e}) — using the default folder"
+        if err and err != getattr(self, 'backup_dir_error', None):
+            logger.error(err)
+        self.backup_dir_error = err
+        try:
+            chosen.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Backup folder {chosen} cannot be created: {e}")
+        return chosen
+
+    @backup_dir.setter
+    def backup_dir(self, value):
+        self._backup_dir_override = Path(value) if value is not None else None
+
+    def _backup_password(self) -> str:
+        """The one backup password (Settings > Backup; stored machine-bound in
+        ~/.config/sapphire, never inside user/). '' when unset/unreadable."""
+        try:
+            from core.credentials_manager import credentials
+            return credentials.get_backup_password() or ''
+        except Exception as e:
+            logger.error(f"Backup password unreadable: {e}")
+            return ''
+
+    def _alert(self, kind, **data):
+        try:
+            from core.event_bus import publish
+            publish('sapphire_health_alert', {'type': kind, **data})
+        except Exception as e:
+            logger.debug(f"sapphire_health_alert publish failed: {e}")
 
     def run_scheduled(self):
         """Run scheduled backup check - called daily at 3am."""
@@ -130,20 +228,29 @@ class Backup:
         # still-writing file or count partials. R5 2026-04-21.
         with self._backup_op_lock:
             now = datetime.now()
-            ok_tiers, failed_tiers = [], []
+            ok_tiers, failed_tiers, made = [], [], []
+
+            def _tier(name):
+                fn = self.create_backup(name)
+                (ok_tiers if fn else failed_tiers).append(name)
+                if fn:
+                    made.append(fn)
 
             if getattr(config, 'BACKUPS_KEEP_DAILY', 7) > 0:
-                (ok_tiers if self.create_backup("daily") else failed_tiers).append("daily")
+                _tier("daily")
 
             if now.weekday() == 6 and getattr(config, 'BACKUPS_KEEP_WEEKLY', 4) > 0:
-                (ok_tiers if self.create_backup("weekly") else failed_tiers).append("weekly")
+                _tier("weekly")
 
             if now.day == 1 and getattr(config, 'BACKUPS_KEEP_MONTHLY', 3) > 0:
-                (ok_tiers if self.create_backup("monthly") else failed_tiers).append("monthly")
+                _tier("monthly")
 
             # Rotate INSIDE the lock — otherwise a manual trigger between
             # create and rotate can race.
             self.rotate_backups()
+            # What this run produced — the scheduler ships the newest tier of
+            # it to the backup targets (devices, paths) after the lock drops.
+            self.last_scheduled_files = made
         # Honest report (X1 F8, negspace 2026-08-31): the old path appended
         # every tier unconditionally and logged "complete" right after
         # create_backup's own ERROR — success printed over failure.
@@ -160,8 +267,9 @@ class Backup:
         return msg
 
     def create_backup(self, backup_type="manual", extra_patterns=None, dest_dir=None,
-                      require_complete=False):
-        """Create a plain .tar.gz backup of the user/ directory.
+                      require_complete=False, encrypt=None):
+        """Create a .tar.gz backup of the user/ directory (or a sealed
+        .sapphirebak of it when encrypting).
 
         Writes to `<filename>.partial` first, atomic-renames to final name on
         success. Without this, a disk-full / kill-mid-write leaves a truncated
@@ -169,11 +277,13 @@ class Backup:
         delete older valid backups in favor of the partial. Witch-hunt
         2026-04-21 finding H13.
 
-        Local backups are never encrypted — they sit on the same disk as the
-        live user/ data, so at-rest encryption here protected nothing and cost
-        users who lost the password. Encryption happens in the Remembrance
-        plugin, only when a backup leaves the machine. (Restore still decrypts
-        old .sapphirebak files — see core/routes/system.py.)
+        Encryption (2026-10-06): `encrypt=None` follows `BACKUPS_ENCRYPT_LOCAL`
+        (off by default — local backups sit beside the live data, so at-rest
+        encryption protects little and a lost password costs everything;
+        H13 2026-04-21). True = seal the tar (encrypt + verify, GATE 1) and
+        unlink the plaintext; the return is the `.sapphirebak` name. Encrypt
+        wanted + no password = NO backup (refused before the walk, health
+        alert) — never a plaintext one when encryption was supposed to be on.
 
         Optional (offsite path; defaults reproduce the local behavior exactly):
           extra_patterns — extra exclude globs merged with the page settings.
@@ -190,6 +300,16 @@ class Backup:
             logger.error(f"User directory not found: {self.user_dir}")
             return None
 
+        if encrypt is None:
+            encrypt = bool(getattr(config, 'BACKUPS_ENCRYPT_LOCAL', False))
+        password = self._backup_password() if encrypt else ''
+        if encrypt and not password:
+            self.last_backup_error = ("Encryption is on but no backup password is set "
+                                      "— no backup made. Set one in Settings > Backup.")
+            logger.error(f"Backup refused: {self.last_backup_error}")
+            self._alert('backup_password_missing', backup_type=backup_type)
+            return None
+
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         filename = f"sapphire_{timestamp}_{backup_type}.tar.gz"
         out_dir = Path(dest_dir) if dest_dir else self.backup_dir
@@ -197,6 +317,7 @@ class Backup:
         filepath = out_dir / filename
         partial = out_dir / (filename + ".partial")
         staging_dir = None
+        plain_done = None   # the finished plaintext tar, once renamed
 
         try:
             # Checkpoint SQLite WAL files before backup. DBs whose checkpoint
@@ -311,14 +432,33 @@ class Backup:
             except OSError as _e:
                 logger.warning(f"Could not chmod backup: {_e}")
             replace_with_retry(partial, filepath)   # atomic; list_backups skips .partial
+            plain_done = filepath
+
+            if encrypt:
+                sealed = out_dir / (filename.removesuffix(".tar.gz") + ".sapphirebak")
+                backup_crypto.seal(filepath, sealed, password)   # GATE 1: verify or raise
+                filepath.unlink()                                 # plaintext never outlives the verify
+                plain_done = None
+                try:
+                    os.chmod(sealed, 0o600)
+                except OSError:
+                    pass
+                filepath, filename = sealed, sealed.name
 
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info(f"Created backup: {filename} ({size_mb:.2f} MB)")
+            if dest_dir is None:
+                self.ensure_openers()
             return filename
         except Exception as e:
             logger.error(f"Backup failed: {e}")
+            self.last_backup_error = str(e)
             if staging_dir is not None:
                 shutil.rmtree(staging_dir, ignore_errors=True)
+            if encrypt and plain_done is not None:
+                # Sealing failed after the tar landed: a plaintext backup must
+                # not stand in for the encrypted one that was asked for.
+                plain_done.unlink(missing_ok=True)
             try:
                 partial.unlink()
             except FileNotFoundError:
@@ -629,8 +769,9 @@ class Backup:
             return False
 
     def rotate_backups(self):
-        """Rotate backups based on retention settings."""
-        backups = self.list_backups()
+        """Rotate backups based on retention settings (keep<=0 = pause that
+        tier: retain existing, never purge). The selection is the pure
+        `select_doomed`, shared with every remote target."""
         limits = {
             "daily": getattr(config, 'BACKUPS_KEEP_DAILY', 7),
             "weekly": getattr(config, 'BACKUPS_KEEP_WEEKLY', 4),
@@ -638,20 +779,26 @@ class Backup:
             "manual": getattr(config, 'BACKUPS_KEEP_MANUAL', 5),
             "update": getattr(config, 'BACKUPS_KEEP_UPDATE', 3)
         }
-
-        deleted = 0
-        for backup_type, backup_list in backups.items():
-            limit = limits.get(backup_type, 5)
-            if limit <= 0:
-                continue  # keep<=0 = "pause this tier": retain existing, never purge
-            if len(backup_list) > limit:
-                for backup in backup_list[limit:]:
-                    if self.delete_backup(backup["filename"]):
-                        deleted += 1
-
+        names = [b["filename"] for lst in self.list_backups().values() for b in lst]
+        deleted = sum(1 for n in select_doomed(names, limits) if self.delete_backup(n))
         if deleted:
             logger.info(f"Rotation complete: deleted {deleted} old backups")
+        self._sweep_stale_tmp()
         return deleted
+
+    def _sweep_stale_tmp(self, max_age_s=86400):
+        """Drop `ship_*` / `export_*` / `remembrance_*` temp dirs older than a
+        day (a shipper that died mid-flight leaves one; its blob is ciphertext,
+        but it's still disk)."""
+        now = time.time()
+        for pat in ("ship_*", "export_*", "remembrance_*"):
+            for d in self.backup_dir.glob(pat):
+                try:
+                    if d.is_dir() and now - d.stat().st_mtime > max_age_s:
+                        shutil.rmtree(d, ignore_errors=True)
+                        logger.info(f"Removed stale backup temp dir {d.name}")
+                except OSError:
+                    pass
 
     def get_backup_path(self, filename):
         """Get full path to a backup file (for downloads)."""
@@ -661,6 +808,85 @@ class Backup:
         if filepath.exists() and filename.startswith("sapphire_"):
             return filepath
         return None
+
+    # ------------------------------------------------------------------
+    # Off-box (2026-10-06): the gate every shipper runs — core-owned so no
+    # plugin or driver rebuilds encryption. Nothing plaintext survives these.
+    # ------------------------------------------------------------------
+
+    def export_encrypted(self, backup_type="offsite", dest_dir=None, extra_patterns=None,
+                         cap_mb=0, require_complete=False):
+        """Build a fresh SEALED backup for shipping: password → corruption
+        sentinel halt → size cap → tar into dest_dir → seal (encrypt + verify,
+        GATE 1) → unlink the plaintext. Returns the Path of the .sapphirebak
+        (the caller ships it and removes dest_dir). Raises BackupRefused with a
+        user-facing reason. Was Remembrance's gate; Remembrance calls this now."""
+        if dest_dir is None:
+            raise ValueError("export_encrypted needs dest_dir (the caller owns it)")
+        if not self._backup_password():
+            raise BackupRefused("Encryption requires a backup password — set one in Settings > Backup")
+        sentinels = self._active_corruption_sentinels()
+        if sentinels:
+            raise BackupRefused(f"Halted — active corruption sentinel(s): "
+                                f"{', '.join(sentinels)}. Clear them in Settings > Backup first.")
+        extra = [str(p).strip() for p in (extra_patterns or []) if str(p).strip()]
+        cap_mb = int(cap_mb or 0)
+        if cap_mb > 0:
+            # Runaway guard: refuse before building a giant blob (the 150 GB war story).
+            try:
+                est = self.estimate_size(extra_patterns=extra)
+            except Exception as e:
+                logger.warning(f"Backup size estimate failed (continuing): {e}")
+                est = {}
+            if est.get("total_bytes", 0) > cap_mb * 1024 * 1024:
+                raise BackupRefused(f"Backup is ~{est['total_bytes'] // (1024 * 1024)} MB "
+                                    f"(cap {cap_mb} MB) — add excludes or raise the cap")
+        fn = self.create_backup(backup_type=backup_type, extra_patterns=extra,
+                                dest_dir=dest_dir, require_complete=require_complete,
+                                encrypt=True)
+        if not fn:
+            raise BackupRefused(self.last_backup_error or
+                                "Backup produced no file (empty after excludes?)")
+        return Path(dest_dir) / fn
+
+    def sealed(self, filename):
+        """A sealed (.sapphirebak) version of an EXISTING local backup, for
+        shipping the 3am tar itself: the file when already encrypted, else a
+        sealed copy in a temp dir under backup_dir. Returns (path, cleanup);
+        call cleanup() once shipped. Raises BackupRefused."""
+        src = self.get_backup_path(filename)
+        if not src:
+            raise BackupRefused(f"Backup not found: {filename}")
+        if backup_crypto.is_encrypted_backup(src):
+            return src, (lambda: None)
+        password = self._backup_password()
+        if not password:
+            raise BackupRefused("Shipping requires a backup password — set one in Settings > Backup")
+        tmp = Path(tempfile.mkdtemp(prefix="ship_", dir=str(self.backup_dir)))
+        dst = tmp / (src.name.removesuffix(".tar.gz") + ".sapphirebak")
+        try:
+            backup_crypto.seal(src, dst, password)
+        except Exception as e:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise BackupRefused(str(e))
+        return dst, (lambda: shutil.rmtree(tmp, ignore_errors=True))
+
+    # ------------------------------------------------------------------
+    # Openers (2026-10-06): scripts beside the backups so "pop in and
+    # restore" works with no Sapphire — tar for plain, decrypt_backup.py +
+    # the password for sealed ones. Pure ASCII (Windows cmd is cp1252).
+    # ------------------------------------------------------------------
+
+    def ensure_openers(self, folder=None):
+        """Write open-backup.sh / open-backup.bat / decrypt_backup.py /
+        README.txt into `folder` (default backup_dir) when missing or stale.
+        Best effort; never raises."""
+        folder = Path(folder) if folder else self.backup_dir
+        try:
+            from core import backup_openers
+            backup_openers.write_all(folder, self.base_dir / "tools" / "decrypt_backup.py")
+        except Exception as e:
+            logger.warning(f"Could not write backup openers to {folder}: {e}")
 
 
     def _next_run_seconds(self, now=None):
@@ -710,6 +936,12 @@ class Backup:
             logger.warning(f"backup health: list failed: {e}")
         sentinels = self._active_corruption_sentinels()
         thread = getattr(self, '_scheduler_thread', None)
+        try:
+            from core.credentials_manager import credentials
+            password_status = credentials.backup_password_status()
+        except Exception:
+            password_status = 'unreadable'
+        folder = self.backup_dir
         return {
             'enabled': bool(getattr(config, 'BACKUPS_ENABLED', True)),
             'sentinels': sentinels,
@@ -718,6 +950,10 @@ class Backup:
             'newest': newest,
             'last_scheduled_result': getattr(self, 'last_scheduled_result', None),
             'last_backup_error': getattr(self, 'last_backup_error', None),
+            'backup_dir': str(folder),
+            'backup_dir_error': getattr(self, 'backup_dir_error', None),
+            'encrypt': bool(getattr(config, 'BACKUPS_ENCRYPT_LOCAL', False)),
+            'password_status': password_status,
         }
 
     def stop(self):
@@ -730,6 +966,7 @@ class Backup:
         import threading
         from datetime import timedelta
         self._stop_event = threading.Event()
+        self.ensure_openers()
 
         def _backup_loop():
             while not self._stop_event.is_set():
@@ -760,6 +997,16 @@ class Backup:
                     logger.info(f"Backup scheduler: {result}")
                 except Exception as e:
                     logger.error(f"Backup scheduler failed: {e}")
+
+                # Ship tonight's newest tier to the backup targets (devices,
+                # paths) — on its own thread, OUTSIDE _backup_op_lock, so a
+                # slow card (1-2 min per 70 MB) never blocks a manual backup
+                # or this loop. 2026-10-06.
+                try:
+                    from core import backup_targets
+                    backup_targets.ship_async(getattr(self, 'last_scheduled_files', None) or [])
+                except Exception as e:
+                    logger.warning(f"Backup targets ship failed to start: {e}")
 
                 # Metrics retention piggybacks — low-priority "housekeep at 3am"
                 # task, no reason for a separate scheduler.

@@ -1,5 +1,6 @@
 // settings-tabs/backup.js - Backup management
 import * as ui from '../../ui.js';
+import { showDangerConfirm } from '../../shared/danger-confirm.js';
 
 let backups = { daily: [], weekly: [], monthly: [], manual: [], update: [] };
 let expanded = {};
@@ -9,13 +10,33 @@ export default {
     name: 'Backup',
     icon: '\uD83D\uDCBE',
     description: 'Automatic and manual backups of user data',
-    keys: ['BACKUPS_ENABLED', 'BACKUPS_HOUR', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY', 'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL', 'BACKUPS_MAX_SIZE_WARN_MB'],
+    keys: ['BACKUPS_ENABLED', 'BACKUPS_HOUR', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY', 'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL', 'BACKUPS_MAX_SIZE_WARN_MB', 'BACKUPS_DIR'],
 
     render(ctx) {
         return `
             <div id="backup-restore-banner"></div>
             <div id="backup-health"></div>
             ${ctx.renderFields(this.keys)}
+
+            <div class="backup-section-divider" style="margin-top:12px">
+                <h4 style="margin:0 0 6px;font-size:var(--font-sm)">Encryption</h4>
+                <div style="font-size:var(--font-xs);color:var(--text-muted);margin-bottom:8px;line-height:1.7">
+                    One backup password for everything that gets sealed: backups sent to devices and the offsite vault (always), and local backups (only if you turn that on below).
+                    Stored scrambled in <code>~/.config/sapphire/</code>, never inside a backup.<br>
+                    <strong>Write it down.</strong> A sealed backup opens with this password and nothing else &mdash; not even us.
+                </div>
+                <div id="backup-pw-warn"></div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <input type="password" id="backup-pw" autocomplete="new-password" placeholder="Set the backup password…"
+                        style="flex:1;min-width:220px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box">
+                    <button class="btn-sm" id="backup-pw-save">Save password</button>
+                    <span id="backup-pw-msg" style="font-size:var(--font-xs);color:var(--text-secondary)"></span>
+                </div>
+                <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:var(--font-sm);cursor:pointer">
+                    <input type="checkbox" id="backup-encrypt">
+                    <span>Encrypt local backups too <span style="color:var(--text-muted);font-size:var(--font-xs)">(off by default &mdash; they sit beside the live data; lose the password, lose them)</span></span>
+                </label>
+            </div>
 
             <div class="backup-hero">
                 <button class="backup-now-btn" id="backup-now">Backup Now</button>
@@ -75,6 +96,61 @@ export default {
     async attachListeners(ctx, el) {
         await this.loadBackups(el);
         await this.loadRestoreResult(el);
+
+        // Encryption: THE backup password (moved here from Remembrance
+        // 2026-10-06) + the local-encrypt switch behind the I-UNDERSTAND gate.
+        const pwInput = el.querySelector('#backup-pw');
+        const pwMsg = el.querySelector('#backup-pw-msg');
+        el.querySelector('#backup-pw-save')?.addEventListener('click', async () => {
+            const pw = pwInput.value;
+            if (!pw) { pwMsg.textContent = 'Enter a password first'; return; }
+            try {
+                const r = await fetch('/api/backup/password', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+                    body: JSON.stringify({ password: pw })
+                });
+                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${r.status}`); }
+                pwInput.value = '';
+                pwMsg.textContent = '\u2713 saved \u2014 write it down!';
+                await this.loadHealth(el);
+            } catch (e) { pwMsg.textContent = '\u2717 ' + e.message; }
+        });
+        const encBox = el.querySelector('#backup-encrypt');
+        if (encBox) {
+            encBox.checked = !!ctx.getValue('BACKUPS_ENCRYPT_LOCAL');
+            encBox.addEventListener('change', async () => {
+                const enabling = encBox.checked;
+                if (enabling) {
+                    const ok = await showDangerConfirm({
+                        title: 'Encrypt local backups',
+                        warnings: [
+                            'Every new local backup is sealed with your backup password; the plain .tar.gz is not kept',
+                            'Lose the password and those backups cannot be opened by anyone, ever',
+                            'If no password is set, NO backup is made until you set one (never a plain one instead)',
+                            'Backups already in the folder stay as they are',
+                        ],
+                        detail: 'Backups that leave this machine are always encrypted, whatever you choose here.',
+                        buttonLabel: 'Encrypt local backups',
+                    });
+                    if (!ok) { encBox.checked = false; return; }
+                }
+                try {
+                    const r = await fetch('/api/settings/batch', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+                        body: JSON.stringify({ settings: { BACKUPS_ENCRYPT_LOCAL: enabling } })
+                    });
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    ctx.commit('BACKUPS_ENCRYPT_LOCAL', enabling);
+                    ui.showToast(enabling ? 'Local backups will be encrypted' : 'Local backups stay plain', 'success');
+                    await this.loadHealth(el);
+                } catch (e) {
+                    encBox.checked = !enabling;
+                    ui.showToast(`Could not save: ${e.message}`, 'error');
+                }
+            });
+        }
 
         // Exclude patterns — prefill from saved, AUTO-SAVE on blur + debounced
         // typing (no Save Changes needed; backups read it live).
@@ -217,9 +293,16 @@ export default {
         if (h.last_scheduled_result && /FAILED/.test(h.last_scheduled_result)) bad.push(`Last scheduled run: <code>${esc(h.last_scheduled_result)}</code>`);
         if (h.enabled && h.newest && h.newest.age_hours != null && h.newest.age_hours > 48) bad.push(`Newest backup is <strong>${Math.round(h.newest.age_hours / 24)} day(s) old</strong>.`);
         if (!h.newest && h.enabled) bad.push('<strong>No backups exist yet.</strong>');
+        if (h.backup_dir_error) bad.push(`<strong>Backup folder:</strong> ${esc(h.backup_dir_error)}`);
+        if (h.encrypt && h.password_status !== 'ok') bad.push(`<strong>Encryption is on but the backup password is ${h.password_status === 'missing' ? 'not set' : 'unreadable'}</strong> \u2014 no backups are being made. ${h.password_status === 'missing' ? 'Set one' : 'Re-enter it'} in the Encryption box below.`);
+        const pwWarn = el.querySelector('#backup-pw-warn');
+        const pwInput = el.querySelector('#backup-pw');
+        if (pwInput) pwInput.placeholder = h.password_status === 'ok' ? 'Password saved \u2014 enter a new one to change it' : 'Set the backup password\u2026';
+        if (pwWarn) pwWarn.innerHTML = h.password_status === 'ok' ? '' : `<div style="font-size:var(--font-xs);color:var(--text-secondary);margin-bottom:6px">${h.password_status === 'missing' ? 'No backup password yet. Devices and the offsite vault will not receive backups until one is set.' : '\u26A0 The saved password can\u2019t be read on this machine \u2014 re-enter it.'}</div>`;
+        const folder = h.backup_dir ? ` \u00b7 folder: <code>${esc(h.backup_dir)}</code>` : '';
         if (!bad.length) {
             const age = h.newest && h.newest.age_hours != null ? `${h.newest.age_hours}h ago` : 'n/a';
-            box.innerHTML = `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;font-size:var(--font-sm);background:rgba(108,204,108,0.10);border:1px solid rgba(108,204,108,0.4)">&#10003; Backups healthy — newest: ${esc(age)}${h.scheduler_alive ? ' · scheduler running' : ''}</div>`;
+            box.innerHTML = `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;font-size:var(--font-sm);background:rgba(108,204,108,0.10);border:1px solid rgba(108,204,108,0.4)">&#10003; Backups healthy — newest: ${esc(age)}${h.scheduler_alive ? ' · scheduler running' : ''}${h.encrypt ? ' · encrypted' : ''}${folder}</div>`;
             return;
         }
         box.innerHTML = `<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:var(--font-sm);line-height:1.6;background:rgba(224,108,108,0.12);border:1px solid var(--danger,#e06c6c)">${bad.map(b => `<div>&#9888; ${b}</div>`).join('')}</div>`;
