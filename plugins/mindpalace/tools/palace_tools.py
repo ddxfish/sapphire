@@ -1281,6 +1281,26 @@ def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
             cur = conn.cursor()
             cur.execute("INSERT OR IGNORE INTO mind_scopes (name, created) "
                         "VALUES (?, ?)", (scope, _now()))
+            if provider is not None or model is not None:
+                # The pair rule (2026-10-07): provider and model are ONE value
+                # — a provider change drops the model, and a model never lands
+                # beside a blank (auto) provider. Same rule as chat pins and
+                # tasks (core.chat.llm_providers.resolve); before this only
+                # the browser's change handler kept the row coherent.
+                from core.chat.llm_providers.resolve import normalize_pair_patch
+                row = cur.execute("SELECT provider, model FROM mind_scopes "
+                                  "WHERE name = ?", (scope,)).fetchone()
+                patch = {}
+                if provider is not None:
+                    patch['provider'] = str(provider).strip()
+                if model is not None:
+                    patch['model'] = str(model).strip()
+                patch = normalize_pair_patch(
+                    {'provider': row[0] if row else None,
+                     'model': row[1] if row else None},
+                    patch, key='provider', model_key='model')
+                provider = patch.get('provider', provider)
+                model = patch.get('model', model)
             sets, vals = [], []
             if prompt is not None:
                 sets.append('prompt = ?')

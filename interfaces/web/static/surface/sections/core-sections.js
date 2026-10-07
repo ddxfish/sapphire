@@ -18,6 +18,7 @@ import { updateSendButtonLLM } from '/static/features/scene.js';
 import {
     renderScopeDropdowns, fetchScopeData, populateScopeOptions, readScopeSettings,
 } from '/static/shared/scope-dropdowns.js';
+import { providerOptions, refreshModelControls } from '/static/shared/llm-picker.js';
 
 const esc = s => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -53,48 +54,22 @@ export const brainSection = {
             if (r.ok) { const d = await r.json(); providers = d.providers || []; metadata = d.metadata || {}; }
         } catch (e) { /* dropdown stays Auto-only */ }
 
+        // THE picker (shared/llm-picker.js) — this section was a line-for-line
+        // copy of the chat sidebar's; now both read the same module.
+        const data = { providers, metadata };
         const sel = el.querySelector('.gs-llm-primary');
-        const core = providers.filter(p => p.enabled && p.is_core);
-        const custom = providers.filter(p => p.enabled && !p.is_core);
-        let opts = '<option value="auto">Auto</option><option value="none">None</option>';
-        opts += core.map(p => `<option value="${esc(p.key)}">${esc(p.display_name)}${p.is_local ? ' \u{1F3E0}' : ' ☁️'}</option>`).join('');
-        if (custom.length) {
-            opts += '<option disabled>────────</option>';
-            opts += custom.map(p => {
-                const model = p.model ? ` (${esc(p.model.split('/').pop())})` : '';
-                return `<option value="${esc(p.key)}">${esc(p.display_name)}${model}${p.is_local ? ' \u{1F3E0}' : ' ☁️'}</option>`;
-            }).join('');
-        }
-        sel.innerHTML = opts;
+        sel.innerHTML = providerOptions(data, ctx.settings.llm_primary || 'auto');
         sel.value = ctx.settings.llm_primary || 'auto';
         if (sel.value !== (ctx.settings.llm_primary || 'auto')) sel.value = 'auto';
 
-        const modelGroup = el.querySelector('.gs-model-group');
-        const customGroup = el.querySelector('.gs-model-custom-group');
         const modelSel = el.querySelector('.gs-llm-model');
         const customInput = el.querySelector('.gs-llm-model-custom');
-
-        const refreshModel = (providerKey, currentModel) => {
-            modelGroup.style.display = 'none';
-            customGroup.style.display = 'none';
-            if (providerKey === 'auto' || providerKey === 'none' || !providerKey) return;
-            const meta = metadata[providerKey];
-            const conf = providers.find(p => p.key === providerKey);
-            if (meta?.model_options && Object.keys(meta.model_options).length > 0) {
-                const def = conf?.model || '';
-                const defLabel = def ? `Default (${esc(meta.model_options[def] || def)})` : 'Default';
-                modelSel.innerHTML = `<option value="">${defLabel}</option>` +
-                    Object.entries(meta.model_options).map(([k, v]) =>
-                        `<option value="${esc(k)}"${k === currentModel ? ' selected' : ''}>${esc(v)}</option>`).join('');
-                if (currentModel && !meta.model_options[currentModel]) {
-                    modelSel.innerHTML += `<option value="${esc(currentModel)}" selected>${esc(currentModel)}</option>`;
-                }
-                modelGroup.style.display = '';
-            } else {
-                customInput.value = currentModel || '';
-                customGroup.style.display = '';
-            }
+        const els = {
+            select: modelSel, group: el.querySelector('.gs-model-group'),
+            custom: customInput, customGroup: el.querySelector('.gs-model-custom-group'),
         };
+        const refreshModel = (providerKey, currentModel) =>
+            refreshModelControls(data, els, providerKey, currentModel);
         refreshModel(sel.value, ctx.settings.llm_model || '');
 
         // Same-view jump to Settings > LLM — chat's provider row has this

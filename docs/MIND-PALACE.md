@@ -54,7 +54,7 @@ Five passes, run per scope from the Admin cards. Each works a queue of untended 
 - **Sort** — the judgment pass, and the expensive one: per-item verdicts to mark, split, promote (minting new entities), or retire. Splits and promotions deliberately re-enter the dates/link queues; the nightly grazes them back down.
 - **Self** — three stages: *first tending* writes an empty sheet from everything sort promoted; *tend* is the sheet hour (compress and replace, not append); *verify* reads the finished sheet back to her for a final pass.
 
-During a pass she works with librarian verbs (`atomize_memory`, `merge_memories`, `promote_memory`, `prune_memory`, `set_links`, `set_event_dates`, `mark_processed`), and `run_librarian` lets her start a pass herself when she's awake.
+During a pass she works with librarian verbs (`atomize_memory`, `merge_memories`, `keep_separate`, `promote_memory`, `prune_memory`, `set_links`, `set_event_dates`, `mark_processed`), and `run_librarian` lets her start a pass herself when she's awake.
 
 **Run now** works one batch. **⚠ Run ALL** drains the queue — it shows a token estimate before you commit, your confirmation bypasses the daily pass cap, and it can be stopped between batches. Every verdict lands in the ledger.
 
@@ -91,7 +91,6 @@ Wipes and layer clears live in **Admin → Danger**, each gated by typing the sc
 | Setting | Where | What it does |
 |---|---|---|
 | Memory scope (per chat) | Chat sidebar → Mind | Which mind this chat reads and writes |
-| `librarian_model` | Settings → Plugins → Mind Palace | Default model for tending when the resident strip doesn't override it |
 | Resident (per scope) | Mind → Self → resident strip | Prompt/provider/model for nightly tending + per-pass nightly toggles (default off) |
 | `self_important_per_item` | Settings → Plugins → Mind Palace | Memories pulled per `(important)` sheet item at wake (0–10, 0 = off) |
 | Charters + standing note | Admin cards → ⚙ | Per-scope pass instructions (see Charters) |
@@ -123,7 +122,7 @@ TOOLS (palace surface):
 - list_entities(kind?, limit?) — read-only roster (name/kind/nicknames/fact count; with a kind, that kind's filled-in fields). Merge/delete stay UI-only.
 - read_self(section?, depth?) = wake-up call: sheet + wake tools + recent ledger; update_self edits sheet (edits archived); read_ledger
 - librarian_instructions(stage, instructions) — edit own per-scope charter awake; '' restores default; stages: dates, link, dedup, sort, self_first, self_tend, self_verify; NOT available during passes (instructions change between rituals, never mid-ritual)
-- Pass-time verbs (librarian toolset): atomize_memory, merge_memories, promote_memory, prune_memory, set_links, set_event_dates, mark_processed; run_librarian starts a pass
+- Pass-time verbs (librarian toolset): atomize_memory, merge_memories, keep_separate, promote_memory, prune_memory, set_links, set_event_dates, mark_processed; run_librarian starts a pass
 - Goals: create_goal / list_goals / update_goal / delete_goal (goals = graph chunks; permanence via importance)
 - Library: library / read_document / memory_save_image(source, topic, caption?, private_key?) — any image (img:<id>, doc:<N>, path, URL) into the library; memory_view_image(query, count?) = library pictures by pixels — the one match itself, a numbered sheet of several ([doc N] per line, tiles for the user), or 'none look like that' with the nearest listed; hits are relative (z-score against the scope's own scores for the query, text and pixels alike — no absolute cosine floor, 2026-10-03), document_id for one, or image_id=img:<id> for a picture from this chat; local_view_images(paths | folder, page?, count?) = files on this machine as a numbered sheet (folders paged); import: import_v2
 

@@ -446,6 +446,10 @@ class ContinuityScheduler:
             if total >= max_total:
                 raise ValueError(f"Maximum tasks reached ({max_total}) - raise Max Total Tasks in Settings > System > Advanced")
 
+        # The pair rule (2026-10-07): a model beside an auto provider is dead
+        # at resolve time — store the coherent pair, not what was posted.
+        from core.chat.llm_providers.resolve import normalize_pair
+        provider, model = normalize_pair(data.get("provider", "auto"), data.get("model", ""))
         task = {
             "id": str(uuid.uuid4()),
             "type": task_type,
@@ -454,8 +458,8 @@ class ContinuityScheduler:
             "schedule": data.get("schedule", "0 9 * * *"),
             "trigger_config": data.get("trigger_config", {}),
             "chance": data.get("chance", 100),
-            "provider": data.get("provider", "auto"),
-            "model": data.get("model", ""),
+            "provider": provider,
+            "model": model,
             "prompt": data.get("prompt", "default"),
             "toolset": data.get("toolset", "none"),
             "chat_target": data.get("chat_target", ""),
@@ -539,11 +543,11 @@ class ContinuityScheduler:
             self._check_llm_provider(data)
             if "device_action" in data:
                 data = {**data, "device_action": self._check_device_action(data)}
-            # The S6 rule for tasks: a provider change drops the old model
-            # unless the edit sets one (the editor kept it — V2, 2026-09-21).
-            if "provider" in data and "model" not in data \
-                    and str(data.get("provider") or "auto") != str(task.get("provider") or "auto"):
-                data = {**data, "model": ""}
+            # The pair rule for tasks (S6 2026-09-21; one rule 2026-10-07): a
+            # provider change drops the old model unless the edit sets one,
+            # and a model never lands beside an auto provider.
+            from core.chat.llm_providers.resolve import normalize_pair_patch
+            data = normalize_pair_patch(task, data, key="provider", model_key="model")
 
             # Validate cron if provided
             if "schedule" in data:

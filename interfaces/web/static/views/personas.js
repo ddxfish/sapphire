@@ -28,6 +28,7 @@ import {
     readScopeSettingsFromDom
 } from '../shared/scope-dropdowns.js';
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
+import { providerOptions, refreshModelControls, readModel } from '../shared/llm-picker.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 import { applyTrimColor } from '../features/chat-settings.js';
@@ -472,65 +473,31 @@ function renderVoiceOptions(current) {
     ).join('');
 }
 
+// THE picker (shared/llm-picker.js): the same list, model rule and read as
+// the chat sidebar — this editor used to carry a flat copy with no 🏠/☁️
+// marks and no custom-provider divider.
 function renderProviderOptions(current) {
-    let html = '<option value="auto">Auto</option><option value="none">None</option>';
-    html += llmProviders.filter(p => p.enabled).map(p =>
-        `<option value="${p.key}"${p.key === current ? ' selected' : ''}>${p.display_name}</option>`
-    ).join('');
-    return html;
+    return providerOptions({ providers: llmProviders, metadata: llmMetadata }, current || 'auto');
 }
 
 // renderScopeField deleted in Phase 2e — persona Mind Scopes are now rendered by
 // the shared scope-dropdowns.js module driven by /api/init scope_declarations.
 
+function _llmEls() {
+    return {
+        select: container.querySelector('#pa-s-llm_model'),
+        group: container.querySelector('#pa-model-group'),
+        custom: container.querySelector('#pa-s-llm_model_custom'),
+        customGroup: container.querySelector('#pa-model-custom-group'),
+    };
+}
+
 function updateModelSelector(providerKey, currentModel) {
-    const group = container.querySelector('#pa-model-group');
-    const customGroup = container.querySelector('#pa-model-custom-group');
-    const select = container.querySelector('#pa-s-llm_model');
-    const custom = container.querySelector('#pa-s-llm_model_custom');
-
-    if (group) group.style.display = 'none';
-    if (customGroup) customGroup.style.display = 'none';
-
-    if (providerKey === 'auto' || providerKey === 'none' || !providerKey) return;
-
-    const meta = llmMetadata[providerKey];
-    const conf = llmProviders.find(p => p.key === providerKey);
-
-    if (meta?.model_options && Object.keys(meta.model_options).length > 0) {
-        const defaultModel = conf?.model || '';
-        const defaultLabel = defaultModel ?
-            `Default (${meta.model_options[defaultModel] || defaultModel})` : 'Default';
-
-        select.innerHTML = `<option value="">${defaultLabel}</option>` +
-            Object.entries(meta.model_options).map(([k, v]) =>
-                `<option value="${k}" ${k === currentModel ? 'selected' : ''}>${v}</option>`
-            ).join('');
-
-        if (currentModel && !meta.model_options[currentModel]) {
-            select.innerHTML += `<option value="${currentModel}" selected>${currentModel}</option>`;
-        }
-        if (group) group.style.display = '';
-    } else {
-        if (custom) custom.value = currentModel || '';
-        if (customGroup) customGroup.style.display = '';
-    }
+    refreshModelControls({ providers: llmProviders, metadata: llmMetadata }, _llmEls(), providerKey, currentModel);
 }
 
 function getSelectedModel() {
-    const provider = container.querySelector('#pa-s-llm_primary')?.value;
-    if (provider === 'auto' || provider === 'none') return '';
-
-    const group = container.querySelector('#pa-model-group');
-    if (group && group.style.display !== 'none') {
-        return container.querySelector('#pa-s-llm_model')?.value || '';
-    }
-
-    const customGroup = container.querySelector('#pa-model-custom-group');
-    if (customGroup && customGroup.style.display !== 'none') {
-        return (container.querySelector('#pa-s-llm_model_custom')?.value || '').trim();
-    }
-    return '';
+    return readModel(_llmEls(), container.querySelector('#pa-s-llm_primary')?.value);
 }
 
 function bindEvents() {

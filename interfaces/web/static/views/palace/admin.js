@@ -59,15 +59,17 @@ const PASSES = [
       help: {
           about: 'Folds memories that record the same thing twice. Code finds the lookalikes first, by measuring how similar the stored memories are. She only answers one question per group: same thing, or actually different?',
           input: 'Groups of near-identical memories. Every pair in a group already passed the similarity bar before she sees it.',
-          processing: 'For each group she either merges it or leaves it alone. Code re-checks the math before any merge goes through. Favorites and core memories refuse to merge. By default her rewording is ignored — the longest original text survives word for word.',
-          output: 'Each merged group becomes one memory that keeps the earliest date. The originals are hidden, not deleted, and can be brought back. Everything scanned gets marked as checked, so it never recycles.',
-          tools: ['merge_memories(ids) — one call per group',
+          processing: 'For each group she makes one call: merge it, or keep it separate. Code re-checks the math before any merge goes through. Favorites and core memories refuse to merge. By default her rewording is ignored — the longest original text survives word for word. A group she never rules on stays in the queue — silence is not a verdict.',
+          output: 'Each merged group becomes one memory that keeps the earliest date. The originals are hidden, not deleted, and can be brought back. A group kept separate is marked as checked. Memories the scan found no lookalikes for are marked checked without her.',
+          tools: ['merge_memories(ids) — the same thing twice',
+                  'keep_separate(ids) — similar, not the same',
                   'Dry-run scan (button below) — the same finder, no AI, no marks'],
       },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'dedup' } },
           { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'dedup' } },
           { label: '🔍 Dry-run scan (no model)', preview: 'dedup' },
+          { label: 'Reopen dedup verdicts', maint: 'reopen_dedup' },
       ] },
     { key: 'sort', icon: '\u{1F9F9}', title: 'Sort',
       blurb: 'The review charter: mark, split, promote, retire — oldest first.',
@@ -170,6 +172,13 @@ const MAINT = {
         confirm: s => `Re-run the built-in date rules over scope '${s}'?\n\n` +
             'Every memory is re-dated against its own saved date. Dates the ' +
             'librarian resolved are kept. Memory content is never touched.',
+    },
+    reopen_dedup: {
+        confirm: s => `Reopen every dedup verdict in scope '${s}'?\n\n` +
+            'Every memory marked as duplicate-checked goes back into the dedup ' +
+            'queue, so the next pass rescans it all. Use after a pass ran under ' +
+            'the wrong model. Merges are not undone (Restore retired covers ' +
+            'those). Memory content is never touched.',
     },
     redate_model: {
         confirm: s => `Re-date scope '${s}' with the librarian model?\n\n` +
@@ -299,7 +308,6 @@ function capsLine(key) {
         bits.push(`≥${s.librarian_merge_threshold ?? 0.9}`);
         bits.push(`rewrite ${s.librarian_merge_rewrite ? 'on' : 'off'}`);
     }
-    if (s.librarian_model) bits.push(String(s.librarian_model));
     return bits.join(' · ');
 }
 
@@ -934,6 +942,7 @@ async function runAction(el, spec, action) {
         if ('stamped' in r) bits.push(`${r.stamped} stamped` + ('edges' in r ? ` · ${r.edges} links seeded` : ''));
         if ('kept' in r) bits.push(`${r.kept} librarian verdicts kept`);
         if ('requeued' in r) bits.push(`${r.requeued} verdicts reopened`);
+        if ('reopened' in r) bits.push(`${r.reopened} dedup verdicts reopened`);
         if (r.message) bits.push(r.message);
         if ('deleted_chunks' in r) bits.push(`${r.deleted_chunks} memories · ${r.deleted_entities} entities · ${r.deleted_edges} connections deleted`);
         if (r.library_docs_deleted) bits.push(`${r.library_docs_deleted} library docs deleted`);

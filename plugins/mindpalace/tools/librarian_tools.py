@@ -35,6 +35,7 @@ NEVER_FADES = 0.9
 AVAILABLE_FUNCTIONS = [
     'atomize_memory',
     'merge_memories',
+    'keep_separate',
     'promote_memory',
     'prune_memory',
     'set_links',
@@ -98,6 +99,31 @@ TOOLS = [
                                         f"longest original verbatim. Ignored unless "
                                         f"rewrite-on-merge is enabled in settings "
                                         f"(default off).")
+                    }
+                },
+                "required": ["memory_ids"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "hidden": True,
+        "function": {
+            "name": "keep_separate",
+            "description": (
+                "Dedup-pass verb: this group measures similar but the entries "
+                "are genuinely DIFFERENT memories — file the group as judged "
+                "and keep every one as it is. One call per group; nothing "
+                "changes but the verdict. Only works on memories in the "
+                "current pass."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_ids": {
+                        "type": "array", "items": {"type": "integer"},
+                        "description": "The [id]s of the group to keep apart."
                     }
                 },
                 "required": ["memory_ids"]
@@ -352,17 +378,17 @@ def get_tools():
 # everything else. One pass at a time — the librarian is a single groundskeeper.
 
 _pass_lock = threading.Lock()
-_open_pass = None   # {'scope', 'ids': set[int], 'done': set[int], 'kind'}
+_open_pass = None   # {'scope', 'ids': set[int], 'done': set[int], 'kind', 'attempts'}
 
 
 def open_pass(scope: str, chunk_ids, kind: str = 'sort') -> None:
     """kind: 'sort' (mark/atomize/promote/prune), 'dates' (set_event_dates),
-    'link' (set_links) or 'dedup' (merge_memories). Verbs check the kind —
-    a verb from another pass refuses, in code."""
+    'link' (set_links) or 'dedup' (merge_memories / keep_separate). Verbs
+    check the kind — a verb from another pass refuses, in code."""
     global _open_pass
     with _pass_lock:
         _open_pass = {'scope': scope, 'ids': set(int(i) for i in chunk_ids),
-                      'done': set(), 'ledger': [], 'kind': kind}
+                      'done': set(), 'ledger': [], 'kind': kind, 'attempts': 0}
     logger.info(f"[LIBRARIAN] Pass opened ({kind}): scope '{scope}', "
                 f"{len(_open_pass['ids'])} items")
 
@@ -438,6 +464,21 @@ def _mark_done(memory_id):
     with _pass_lock:
         if _open_pass:
             _open_pass['done'].add(int(memory_id))
+
+
+def _note_attempt():
+    """A pass verb was CALLED (accepted or refused). The engine reads this
+    per message: a message where the model talked but never reached for a
+    verb is not a completed message (2026-10-07 — a tool-incapable model's
+    prose used to read as 'ruled distinct' and drain the dedup queue)."""
+    with _pass_lock:
+        if _open_pass:
+            _open_pass['attempts'] += 1
+
+
+def pass_attempts() -> int:
+    with _pass_lock:
+        return _open_pass['attempts'] if _open_pass else 0
 
 
 def _meta_of(row):
@@ -671,6 +712,42 @@ def _merge(memory_ids, content=None):
     return (f"Merged {len(ids)} duplicates → [{new_id}] (earliest date kept). "
             f"Originals retired to the archive, recoverable."
             + rewrite_note), True
+
+
+def _keep_separate(memory_ids):
+    """The dedup pass's other verb (2026-10-07): the group measured similar
+    but is genuinely distinct. Stamps dedup_at on each id — the VERDICT
+    drains the queue, exactly like set_event_dates / set_links. Before this
+    the engine stamped a cluster whenever its message 'completed', so a
+    model that answered in prose and never called anything filed the whole
+    cluster as judged. Nothing else changes: no retire, no edit."""
+    pt = _pt()
+    try:
+        ids = sorted({int(i) for i in (memory_ids or [])})
+    except (TypeError, ValueError):
+        return "keep_separate needs a list of memory [id]s.", False
+    if not ids:
+        return "keep_separate needs at least one [id].", False
+    with pt._get_connection() as conn:
+        cursor = conn.cursor()
+        rows = []
+        for mid in ids:
+            row, err = _gate(cursor, mid, kinds=('dedup',))
+            if err:
+                return err, False
+            rows.append(row)
+        now = pt._now()
+        for r in rows:
+            meta = _meta_of(r)
+            meta['dedup_at'] = now
+            cursor.execute('UPDATE chunks SET meta = ? WHERE id = ?',
+                           (json.dumps(meta, ensure_ascii=False), r[0]))
+        conn.commit()
+    for mid in ids:
+        _mark_done(mid)
+    _log_pass('distinct', rows[0][1], ids[0],
+              f"kept {ids} separate — similar, not the same")
+    return f"Kept {ids} separate — filed as judged, nothing changed.", True
 
 
 def _promote(memory_id, layer, entity=None, content=None, kind=None):
@@ -1022,11 +1099,15 @@ def _mark(memory_id, importance=None, favorite=None):
 
 def execute(function_name, arguments, config):
     try:
+        if function_name != 'run_librarian':
+            _note_attempt()
         if function_name == 'atomize_memory':
             return _atomize(arguments.get('memory_id'), arguments.get('parts'))
         if function_name == 'merge_memories':
             return _merge(arguments.get('memory_ids'),
                           content=arguments.get('content'))
+        if function_name == 'keep_separate':
+            return _keep_separate(arguments.get('memory_ids'))
         if function_name == 'promote_memory':
             return _promote(arguments.get('memory_id'), arguments.get('layer'),
                             entity=arguments.get('entity'),

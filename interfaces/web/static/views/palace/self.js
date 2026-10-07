@@ -12,6 +12,7 @@ import { deferWhileEditing, snapScroll } from '../../shared/dom-guard.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { providerOptions, refreshModelControls } from '../../shared/llm-picker.js';
 
 const SCOPE_KEY = 'memory_scope';
 const MAX_CHARS = 2000;
@@ -143,7 +144,8 @@ async function renderSheet() {
 // style. Row 2: one labeled slide toggle per librarian pass — per-scope
 // nightly opt-ins, DEFAULT OFF, gated on top by the global Admin toggles.
 // Blank prompt/provider = the classic fallbacks (librarian chat persona /
-// auto provider / global librarian model).
+// auto provider). Provider + model are ONE value here (shared/llm-picker.js
+// renders them; the store keeps the pair coherent — no model rides auto).
 
 const RESIDENT_PASSES = [
     { key: 'dates', label: 'Dates', title: 'Resolve date mentions into calendar dates' },
@@ -157,13 +159,13 @@ async function renderResident(el) {
     const row = el.querySelector('#pal-resident');
     const passRow = el.querySelector('#pal-res-passes');
     if (!row || !passRow) return;
-    let res = {}, prompts = [], providers = [], metadata = {};
+    let res = {}, prompts = [], llm = { providers: [], metadata: {} };
     try {
         const [{ getPrompts }, { fetchLLMProviders }] = await Promise.all([
             import('../../shared/init-data.js'),
             import('../../shared/continuity-api.js'),
         ]);
-        const [r, p, llm] = await Promise.all([
+        const [r, p, l] = await Promise.all([
             palaceGet(`resident?scope=${encodeURIComponent(scope)}`),
             getPrompts().catch(() => null),
             fetchLLMProviders().catch(() => ({})),
@@ -172,8 +174,7 @@ async function renderResident(el) {
         prompts = ((p && p.list) || [])
             .map(x => typeof x === 'string' ? x : (x.name || ''))
             .filter(Boolean);
-        providers = (llm.providers || []).filter(x => x.enabled);
-        metadata = llm.metadata || {};
+        llm = { providers: l.providers || [], metadata: l.metadata || {} };
     } catch {
         row.querySelector('.palace-lib-status').textContent = 'unavailable';
         return;
@@ -196,48 +197,29 @@ async function renderResident(el) {
             <option value="">prompt: default</option>
             ${promptOpts.map(p => `<option value="${escAttr(p)}" ${p === res.prompt ? 'selected' : ''}>${escHtml(p)}</option>`).join('')}
         </select>
-        <select id="pal-res-provider" class="palace-select" title="Provider for this scope's librarian passes">
-            <option value="">provider: auto</option>
-            ${providers.map(pr => `<option value="${escAttr(pr.key)}" ${pr.key === res.provider ? 'selected' : ''}>${escHtml(pr.name || pr.key)}</option>`).join('')}
+        <select id="pal-res-provider" class="palace-select" title="Provider for this scope's librarian passes. Auto = the app's fallback order picks, and no model can be pinned.">
+            ${providerOptions(llm, res.provider || 'auto', { includeNone: false, autoLabel: 'provider: auto' })}
         </select>
-        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes"></select>`;
+        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes" style="display:none"></select>
+        <input id="pal-res-model-custom" class="palace-select" type="text" placeholder="model (blank = provider default)" title="Model for this scope's librarian passes — blank = the provider's own default" style="display:none">`;
 
+    // THE picker (shared/llm-picker.js): the same list and model rule as the
+    // chat sidebar — hidden on auto, a list for core providers, a free-text
+    // box for custom ones. The row stores '' for auto; the picker says 'auto'.
     const provSel = row.querySelector('#pal-res-provider');
     const modelSel = row.querySelector('#pal-res-model');
-    const updateModels = () => {
-        // Chat-sidebar pattern: core providers list model_options; custom
-        // providers have the model baked in; no provider = global default.
-        const key = provSel.value;
-        const pConfig = providers.find(x => x.key === key);
-        const opts = (metadata[key] || {}).model_options || {};
-        if (!key) {
-            modelSel.innerHTML = `<option value="">model: global default</option>`;
-            modelSel.disabled = true;
-            return;
-        }
-        if (pConfig && pConfig.is_core === false) {
-            modelSel.innerHTML = `<option value="">${escHtml(pConfig.model || '(provider model)')}</option>`;
-            modelSel.disabled = true;
-            return;
-        }
-        modelSel.disabled = false;
-        modelSel.innerHTML = `<option value="">provider default</option>`
-            + Object.entries(opts).map(([k, v]) =>
-                `<option value="${escAttr(k)}" ${k === res.model ? 'selected' : ''}>${escHtml(v)}</option>`).join('');
-        if (res.model && !opts[res.model]) {
-            modelSel.innerHTML += `<option value="${escAttr(res.model)}" selected>${escHtml(res.model)}</option>`;
-        }
-    };
-    updateModels();
+    const customInput = row.querySelector('#pal-res-model-custom');
+    const els = { select: modelSel, group: modelSel, custom: customInput, customGroup: customInput };
+    refreshModelControls(llm, els, provSel.value, res.model || '');
 
     row.querySelector('#pal-res-prompt').addEventListener('change',
         (e) => save({ prompt: e.target.value }));
     provSel.addEventListener('change', () => {
-        res.model = '';
-        updateModels();
-        save({ provider: provSel.value, model: '' });
+        refreshModelControls(llm, els, provSel.value, '');
+        save({ provider: provSel.value === 'auto' ? '' : provSel.value, model: '' });
     });
     modelSel.addEventListener('change', () => save({ model: modelSel.value }));
+    customInput.addEventListener('change', () => save({ model: customInput.value.trim() }));
 
     const passes = res.passes || {};
     passRow.innerHTML = `

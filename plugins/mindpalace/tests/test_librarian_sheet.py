@@ -102,9 +102,10 @@ def test_worker_self_two_stage_flow(palace, monkeypatch):
     SELF toolset, cap spent, clean finish."""
     ran = {}
 
-    def fake_run_messages(scope, groups, cfg, toolset, name, present):
+    def fake_run_messages(scope, groups, cfg, toolset, name, present, **kw):
         ran['groups'] = list(groups)
         ran['toolset'] = toolset
+        ran['verbs_required'] = kw.get('verbs_required', True)
         ran['msgs'] = [present(g, i + 1, len(groups))
                        for i, g in enumerate(groups)]
         return [True] * len(groups)
@@ -117,6 +118,9 @@ def test_worker_self_two_stage_flow(palace, monkeypatch):
                         ("THE SHEET", True))
     msg, ok = librarian.run_blocking('default', kind='self', chat='librarian-t')
     assert ok and 'Self pass complete' in msg
+    # A sheet that reads true needs no call — the self pass opts out of the
+    # zero-verb rule every queue pass runs under (2026-10-07).
+    assert ran['verbs_required'] is False
     assert ran['groups'] == ['tend', 'verify']
     assert ran['toolset'] == librarian.SELF_TOOLSET
     assert 'THE SHEET' in ran['msgs'][0] and 'update_self' in ran['msgs'][0]

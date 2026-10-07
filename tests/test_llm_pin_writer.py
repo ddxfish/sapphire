@@ -108,7 +108,9 @@ def test_scheduler_refuses_unknown_provider_and_clears_model_on_change(tmp_path)
         sched._check_llm_provider(ok)
     src = (ROOT / 'core/continuity/scheduler.py').read_text(encoding='utf-8')
     upd = src[src.index('def update_task('):]
-    assert 'self._check_llm_provider(data)' in upd[:1200] and 'data = {**data, "model": ""}' in upd[:1600]
+    # The S6 rule moved into the ONE pair rule (2026-10-07) — same semantics, one home.
+    assert 'self._check_llm_provider(data)' in upd[:1200] \
+        and 'normalize_pair_patch(task, data, key="provider", model_key="model")' in upd[:1600]
 
 
 def test_task_routes_map_value_errors_to_400():

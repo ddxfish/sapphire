@@ -826,11 +826,13 @@ def _resolve_chat(system, scope, caller, task):
             # Snappy provider read deadline for call turns — rides chat settings
             # into _select_provider. The driver's silent-regen retry pairs with it.
             patch["llm_request_timeout"] = _to
-        prov = (task or {}).get("provider")
-        if prov and prov != "auto":
-            patch["llm_primary"] = prov
-        if (task or {}).get("model"):
-            patch["llm_model"] = task["model"]
+        # The rule's brain rides as a PAIR (2026-10-07): a model only lands
+        # beside the provider it was picked for — never alone onto the
+        # account's or the chat's provider (the mixed-fields class).
+        from core.chat.llm_providers.resolve import normalize_pair
+        _tp, _tm = normalize_pair((task or {}).get("provider"), (task or {}).get("model"))
+        if _tp != "auto":
+            patch["llm_primary"], patch["llm_model"] = _tp, _tm
         if "llm_primary" not in patch:
             # No rule choice → the number's call-model default (Settings > Plugins).
             from core.credentials_manager import credentials

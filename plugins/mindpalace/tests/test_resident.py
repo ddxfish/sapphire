@@ -84,14 +84,16 @@ def test_task_runs_as_the_scopes_resident(palace, monkeypatch):
                           provider='fireworks', model='glm-9b')
     monkeypatch.setattr(librarian, "_persona_for_chat", lambda: 'sapphire')
     monkeypatch.setattr(librarian, "_session_snapshot", lambda c, s: '')
-    t = librarian._task('msg', 'anita', model='global-model')
+    t = librarian._task('msg', 'anita')
     assert t['prompt'] == 'anita-prompt'        # her mind, her voice
     assert t['model'] == 'glm-9b'
     assert t['provider'] == 'fireworks'
     # No residency set → classic fallbacks, single-resident installs unchanged.
-    t = librarian._task('msg', 'sapphire', model='global-model')
+    # (The global librarian_model is retired, 2026-10-07: a model beside an
+    # auto provider never ran — the resolver drops it. Pair lives on the strip.)
+    t = librarian._task('msg', 'sapphire')
     assert t['prompt'] == 'sapphire'
-    assert t['model'] == 'global-model'
+    assert t['model'] == ''
     assert t['provider'] == 'auto'
 
 

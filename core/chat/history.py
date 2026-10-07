@@ -1008,17 +1008,14 @@ def _db_watchdog_ensure():
 
 
 def normalize_llm_pin(current: dict, patch: dict) -> dict:
-    """The S6 rule, in the funnel (2026-09-21): a provider change clears the
-    per-provider model override unless the patch sets one. Until today the
-    rule lived in three browser files and one tool, and three writers (Twilio
-    in/out, game-room apply-room-model) never got it — a stale model rode to
-    the new provider and 400'd. Returns a NEW dict; `patch` is not mutated."""
-    if 'llm_primary' in patch and 'llm_model' not in patch:
-        new_key = str(patch.get('llm_primary') or 'auto').strip() or 'auto'
-        old_key = str((current or {}).get('llm_primary') or 'auto').strip() or 'auto'
-        if new_key != old_key:
-            return {**patch, 'llm_model': ''}
-    return patch
+    """The pair rule in the chat funnel (S6, 2026-09-21; widened 2026-10-07):
+    a provider change clears the per-provider model override unless the
+    patch sets one, and a model never lands beside an auto/none pin (the
+    resolver drops it anyway — storing it only lied to every picker). ONE
+    rule — core.chat.llm_providers.resolve.normalize_pair_patch — this is
+    its chat-settings door. Returns a NEW dict; `patch` is not mutated."""
+    from core.chat.llm_providers.resolve import normalize_pair_patch
+    return normalize_pair_patch(current, patch)
 
 
 class ChatSessionManager:
@@ -4817,10 +4814,9 @@ class ChatSessionManager:
         for any other, and publishes CHAT_SETTINGS_CHANGED with the real
         origin so every tab repaints once. Tools/plugins call this; the
         browser doors PUT through the route, which normalizes the same way."""
-        primary = str(primary or 'auto').strip() or 'auto'
-        model = str(model or '').strip()
+        from core.chat.llm_providers.resolve import normalize_pair, providers_config
+        primary, model = normalize_pair(primary, model)
         if validate and primary not in ('auto', 'none'):
-            from core.chat.llm_providers.resolve import providers_config
             if primary not in providers_config():
                 logger.warning(f"set_llm_pin refused: unknown provider '{primary}'")
                 return False
@@ -5067,7 +5063,12 @@ class ChatSessionManager:
                     if s is None:
                         continue
                     if s.get(setting_key) == deleted_scope:
-                        s[setting_key] = reset_to
+                        patch = {setting_key: reset_to}
+                        if setting_key == 'llm_primary':
+                            # A provider pin resets as a PAIR — the dead
+                            # key's model must not outlive it (2026-10-07).
+                            patch = normalize_llm_pin(s, patch)
+                        s.update(patch)
                         payload = json.dumps(s)
                         if row['vaulted']:
                             payload = self._enc_value(payload)

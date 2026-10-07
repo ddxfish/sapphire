@@ -437,10 +437,11 @@ def test_dedup_batch_clusters_and_mechanical_drain(palace):
     clusters = eng._build_clusters(batch, dups, {})
     assert len(clusters) == 1                       # a↔b union into ONE group
     assert {cid for cid, _cr, _c in clusters[0]} == {a, b}
-    # Presentation: whole groups, the merge verb, the leave-alone option.
+    # Presentation: whole groups, the merge verb, the keep-apart verb (one
+    # call per group either way — silence is not a verdict, 2026-10-07).
     text = eng._present_dedup(clusters, 'default', 1, 1)
     assert f"[{a}]" in text and f"[{b}]" in text and 'Group 1:' in text
-    assert 'merge_memories' in text and 'leave the group alone' in text
+    assert 'merge_memories' in text and 'keep_separate' in text
     # Mechanical drain: stamped chunks leave the next batch.
     assert eng._stamp_meta_at([a, b, solo], 'dedup_at') == 3
     with pt._get_connection() as conn:

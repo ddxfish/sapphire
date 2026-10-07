@@ -9,8 +9,15 @@ import {
     populateScopeOptions,
     readScopeSettingsFromDom
 } from '../scope-dropdowns.js';
+import { providerOptions, refreshModelControls, readModel } from '../llm-picker.js';
 
 let _ttsVoicesCache = null;
+
+// The task's model controls, for shared/llm-picker.js.
+const _modelEls = modal => ({
+    select: modal.querySelector('#ed-model'), group: modal.querySelector('#ed-model-field'),
+    custom: modal.querySelector('#ed-model-custom'), customGroup: modal.querySelector('#ed-model-custom-field'),
+});
 
 /**
  * Fetch all data needed for AI config fields.
@@ -75,23 +82,11 @@ export function renderAIConfig(t, data, opts = {}) {
             ? `<option value="${_esc(value)}" selected>${_esc(value)} (missing)</option>`
             : '';
 
-    const enabledProviders = providers.filter(p => p.enabled);
-    const coreProvs = enabledProviders.filter(p => p.is_core);
-    const customProvs = enabledProviders.filter(p => !p.is_core);
-    let providerOpts = coreProvs
-        .map(p => `<option value="${p.key}" ${t.provider === p.key ? 'selected' : ''}>${p.display_name}</option>`)
-        .join('');
-    if (customProvs.length && coreProvs.length) {
-        providerOpts += '<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option>';
-    }
-    providerOpts += customProvs
-        .map(p => {
-            const model = p.model ? ` (${p.model.split('/').pop()})` : '';
-            return `<option value="${p.key}" ${t.provider === p.key ? 'selected' : ''}>${p.display_name}${model}</option>`;
-        }).join('');
-    if (t.provider && t.provider !== 'auto' && !enabledProviders.some(p => p.key === t.provider)) {
-        providerOpts = `<option value="${_esc(t.provider)}" selected>${_esc(t.provider)} (missing)</option>` + providerOpts;
-    }
+    // THE picker (shared/llm-picker.js): the sidebar's list (\ud83c\udfe0/\u2601\ufe0f marks,
+    // custom-provider divider, a deleted key kept as "(missing)"). No "None"
+    // \u2014 a task that never answers is not a choice.
+    const providerOpts = providerOptions({ providers, metadata }, t.provider || 'auto',
+                                         { includeNone: false, autoLabel: 'Auto (default)' });
 
     let voiceOpts = voices.map(v =>
         `<option value="${v.voice_id}" ${t.voice === v.voice_id ? 'selected' : ''}>${v.name}${v.category ? ' (' + v.category + ')' : ''}</option>`
@@ -148,10 +143,7 @@ export function renderAIConfig(t, data, opts = {}) {
                 <div class="sched-field-row">
                     <div class="sched-field">
                         <label>Provider</label>
-                        <select id="ed-provider">
-                            <option value="auto" ${t.provider === 'auto' || !t.provider ? 'selected' : ''}>Auto (default)</option>
-                            ${providerOpts}
-                        </select>
+                        <select id="ed-provider">${providerOpts}</select>
                     </div>
                     <div class="sched-field" id="ed-model-field" style="display:none">
                         <label>Model</label>
@@ -362,9 +354,10 @@ export async function wireAIConfig(modal, t, data) {
             }
             if (s.inject_datetime != null) modal.querySelector('#ed-datetime').checked = !!s.inject_datetime;
             if (s.llm_primary) {
+                // The pair lands together — no timer (the old 50 ms set raced
+                // the dropdown fill and could miss the model).
                 set('#ed-provider', s.llm_primary);
-                updateModels();
-                if (s.llm_model) setTimeout(() => set('#ed-model', s.llm_model), 50);
+                updateModels(s.llm_model || '');
             }
             const aiPrev = modal.querySelector('#ed-ai-preview');
             if (aiPrev) aiPrev.textContent = s.prompt && s.prompt !== 'default' ? s.prompt : '';
@@ -378,40 +371,12 @@ export async function wireAIConfig(modal, t, data) {
 
     // Provider -> model logic
     const providerSel = modal.querySelector('#ed-provider');
-    const updateModels = () => {
-        const key = providerSel.value;
-        const modelField = modal.querySelector('#ed-model-field');
-        const modelCustomField = modal.querySelector('#ed-model-custom-field');
-        const modelSel = modal.querySelector('#ed-model');
-        modelField.style.display = 'none';
-        modelCustomField.style.display = 'none';
-        modelSel.disabled = false;
-        if (key === 'auto' || !key) return;
-        const meta = metadata[key];
-        const pConfig = providers.find(p => p.key === key);
-        const isCore = pConfig?.is_core;
-        if (isCore && meta?.model_options && Object.keys(meta.model_options).length > 0) {
-            // Core provider: show model dropdown with options
-            const defaultModel = pConfig?.model || '';
-            const defaultLabel = defaultModel ? `Provider default (${meta.model_options[defaultModel] || defaultModel})` : 'Provider default';
-            modelSel.innerHTML = `<option value="">${defaultLabel}</option>` +
-                Object.entries(meta.model_options)
-                    .map(([k, v]) => `<option value="${k}"${k === (t.model || '') ? ' selected' : ''}>${v}</option>`)
-                    .join('');
-            if (t.model && !meta.model_options[t.model]) {
-                modelSel.innerHTML += `<option value="${t.model}" selected>${t.model}</option>`;
-            }
-            modelField.style.display = '';
-        } else if (!isCore) {
-            // Custom provider: model is baked in, show as disabled
-            const model = pConfig?.model || '(default)';
-            modelSel.innerHTML = `<option value="${pConfig?.model || ''}">${model}</option>`;
-            modelSel.disabled = true;
-            modelField.style.display = '';
-        } else {
-            modelCustomField.style.display = '';
-        }
-    };
+    // THE picker's model rule (shared/llm-picker.js): core providers get the
+    // list, anything else a free-text box with '' = the provider's default.
+    // (Custom providers used to show a DISABLED select and save the baked
+    // model as a pin — a divergence from every other surface.)
+    const updateModels = (model = t.model || '') =>
+        refreshModelControls({ providers, metadata }, _modelEls(modal), providerSel.value, model);
     providerSel.addEventListener('change', () => {
         // A provider change never keeps the old model (V2, 2026-09-21): the
         // dropdown preselected t.model and the custom box kept it.
@@ -513,12 +478,7 @@ function _validateAIConfig(modal, data) {
  * @returns {Object} AI config fields for the task data
  */
 export function readAIConfig(modal) {
-    const modelField = modal.querySelector('#ed-model-field');
-    const modelSel = modal.querySelector('#ed-model');
-    const modelCustom = modal.querySelector('#ed-model-custom');
-    let modelValue = '';
-    if (modelField?.style.display !== 'none') modelValue = modelSel?.value || '';
-    else if (modal.querySelector('#ed-model-custom-field')?.style.display !== 'none') modelValue = modelCustom?.value?.trim() || '';
+    const modelValue = readModel(_modelEls(modal), modal.querySelector('#ed-provider')?.value);
 
     const pitchVal = modal.querySelector('#ed-pitch')?.value;
     const speedVal = modal.querySelector('#ed-speed')?.value;

@@ -90,11 +90,25 @@ def test_resolve_model_empty_returns_auto(kind):
     assert kind._resolve_model(None) == ('auto', '')
 
 
-def test_resolve_model_unknown_string_falls_back_to_auto(kind, monkeypatch):
+def test_resolve_model_unknown_string_falls_back_to_auto_with_no_model(kind, monkeypatch):
+    """The pair rule (2026-10-07): a model beside auto is dead at resolve time,
+    so the quiet floor is ('auto', '') — never ('auto', <string>)."""
     import config as cfg
     monkeypatch.setattr(cfg, 'LLM_PROVIDERS', {}, raising=False)
     monkeypatch.setattr(cfg, 'LLM_CUSTOM_PROVIDERS', {}, raising=False)
-    assert kind._resolve_model('mystery-model') == ('auto', 'mystery-model')
+    assert kind._resolve_model('mystery-model') == ('auto', '')
+
+
+def test_spawn_refuses_a_model_no_provider_matches(kind, monkeypatch):
+    """Loud at spawn: the engine hands this back to the caller instead of
+    running the agent on auto with a dead model override."""
+    import config as cfg
+    monkeypatch.setattr(cfg, 'LLM_PROVIDERS', {}, raising=False)
+    monkeypatch.setattr(cfg, 'LLM_CUSTOM_PROVIDERS', {}, raising=False)
+    from core.agents.engine import AgentError
+    with pytest.raises(AgentError, match="No provider matches"):
+        kind.Agent(_row(model='mystery-model'), _Engine())
+    kind.Agent(_row(), _Engine())                                 # no model asked → fine
 
 
 # --- the run's decisions -------------------------------------------------------------

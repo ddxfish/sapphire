@@ -46,8 +46,11 @@ def _resolve_model(model_str):
         display = providers_config[key].get('display_name', '').lower()
         if display and model_str.lower().startswith(display.split()[0].lower()):
             return key, model_str
-    logger.warning(f"[agents] Could not resolve '{model_str}' to a provider, using auto with model override")
-    return 'auto', model_str
+    # No provider matches: auto, with NO model — a model beside auto is dead
+    # at resolve time (the pair rule, 2026-10-07). Agent.__init__ refuses
+    # the spawn loudly before this can run; this is the quiet floor.
+    logger.warning(f"[agents] Could not resolve '{model_str}' to a provider — running on auto")
+    return 'auto', ''
 
 
 def _current_chat_persona(chat_name=None):
@@ -112,6 +115,13 @@ class Agent(BaseAgent):
                 resolved = f"{r['provider']}:{r.get('model', '')}" if r.get('model') else r['provider']
                 break
         self._model = resolved
+        if resolved and resolved != 'auto' and _resolve_model(resolved)[0] == 'auto':
+            # Loud, at spawn (the engine returns this to the caller): a model
+            # string no provider matches used to run silently on auto with a
+            # dead model override (the pair rule, 2026-10-07).
+            from core.agents.engine import AgentError
+            raise AgentError(f"No provider matches model '{model_arg}'. Use provider:model, "
+                             f"a provider key, or a roster name from the agents settings.")
         if o.get('context'):
             self.mission = f"{self.mission}\n\n---\n\nContext:\n{o['context']}"
 

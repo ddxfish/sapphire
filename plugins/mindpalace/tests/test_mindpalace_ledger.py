@@ -284,14 +284,21 @@ def test_wake_tool_noop_update_stays_silent(palace, monkeypatch):
 
 
 def test_put_resident_change_and_noop(palace):
-    browse.put_resident(body={'scope': 'w2', 'model': 'fireworks-glm',
-                              'prompt': 'sapph-first'})
+    # provider + model land as a PAIR (the pair rule, 2026-10-07): a model
+    # beside a blank provider is dropped by the store, so the ledger would
+    # (correctly) record no model change for it.
+    browse.put_resident(body={'scope': 'w2', 'provider': 'fireworks',
+                              'model': 'fireworks-glm', 'prompt': 'sapph-first'})
     browse.put_resident(body={'scope': 'w2'})              # no-op save
     rows = _rows('w2', layer='self', target='resident')
     assert len(rows) == 1
+    assert 'provider → fireworks' in rows[0]['summary']
     assert 'model → fireworks-glm' in rows[0]['summary']
     assert 'prompt → sapph-first' in rows[0]['summary']
     assert rows[0]['detail']['fields']['model'] == ['', 'fireworks-glm']
+    # The dead shape: a model with no provider saves nothing, ledgers nothing.
+    browse.put_resident(body={'scope': 'w3', 'model': 'orphan-model'})
+    assert _rows('w3', layer='self', target='resident') == []
     browse.put_resident(body={'scope': 'w2', 'passes': {'dedup': True}})
     rows = _rows('w2', layer='self', target='resident')
     assert len(rows) == 2 and 'passes → dedup' in rows[1]['summary']

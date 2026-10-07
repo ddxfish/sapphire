@@ -8865,6 +8865,9 @@ span[data-image-gone] {
     color: var(--text-primary, #eee); border: 1px solid var(--border, #333);
     border-radius: 6px; font-size: 0.8125rem; cursor: pointer; width: auto;
 }
+/* The Resident strip's free-text model box (custom providers) wears the
+   select's look — the sidebar's custom-model input, palace-styled. */
+input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 
 /* Layer + tier + entity chips on chunk cards. Base carries a neutral look so
    plugin layers (v1.1) get a styled chip for free; core layers override. */

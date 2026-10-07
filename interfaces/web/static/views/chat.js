@@ -22,6 +22,7 @@ import {
     readScopeSettings
 } from '../shared/scope-dropdowns.js';
 import { deferWhileEditing, editableFocused } from '../shared/dom-guard.js';
+import { providerOptions, refreshModelControls, readModel } from '../shared/llm-picker.js';
 
 let sidebarLoaded = false;
 let _saveInFlight = 0;
@@ -761,22 +762,9 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
             llmMetadata = llmData.metadata || {};
             const llmSel = container.querySelector('#sb-llm-primary');
             if (llmSel) {
-                const coreProv = llmProviders.filter(p => p.enabled && p.is_core);
-                const customProv = llmProviders.filter(p => p.enabled && !p.is_core);
-                let llmOpts = '<option value="auto">Auto</option><option value="none">None</option>';
-                if (coreProv.length) {
-                    llmOpts += coreProv.map(p =>
-                        `<option value="${p.key}">${p.display_name}${p.is_local ? ' \uD83C\uDFE0' : ' \u2601\uFE0F'}</option>`
-                    ).join('');
-                }
-                if (customProv.length) {
-                    llmOpts += '<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option>';
-                    llmOpts += customProv.map(p => {
-                        const model = p.model ? ` (${p.model.split('/').pop()})` : '';
-                        return `<option value="${p.key}">${p.display_name}${model}${p.is_local ? ' \uD83C\uDFE0' : ' \u2601\uFE0F'}</option>`;
-                    }).join('');
-                }
-                llmSel.innerHTML = llmOpts;
+                // THE picker (shared/llm-picker.js): one list, one model rule,
+                // every surface \u2014 the sidebar's behavior is the canon it keeps.
+                llmSel.innerHTML = providerOptions(llmData, settings.llm_primary || 'auto');
                 setSelect(llmSel, settings.llm_primary || 'auto');
                 updateModelSelector(container, settings.llm_primary || 'auto', settings.llm_model || '');
             }
@@ -1147,55 +1135,22 @@ function pickSettings(container, keys) {
     return out;
 }
 
+function _llmEls(container) {
+    return {
+        select: container.querySelector('#sb-llm-model'),
+        group: container.querySelector('#sb-model-group'),
+        custom: container.querySelector('#sb-llm-model-custom'),
+        customGroup: container.querySelector('#sb-model-custom-group'),
+    };
+}
+
 function updateModelSelector(container, providerKey, currentModel) {
-    const group = container.querySelector('#sb-model-group');
-    const customGroup = container.querySelector('#sb-model-custom-group');
-    const select = container.querySelector('#sb-llm-model');
-    const custom = container.querySelector('#sb-llm-model-custom');
-
-    if (group) group.style.display = 'none';
-    if (customGroup) customGroup.style.display = 'none';
-
-    if (providerKey === 'auto' || providerKey === 'none' || !providerKey) return;
-
-    const meta = llmMetadata[providerKey];
-    const conf = llmProviders.find(p => p.key === providerKey);
-
-    if (meta?.model_options && Object.keys(meta.model_options).length > 0) {
-        const defaultModel = conf?.model || '';
-        const defaultLabel = defaultModel ?
-            `Default (${meta.model_options[defaultModel] || defaultModel})` : 'Default';
-
-        select.innerHTML = `<option value="">${defaultLabel}</option>` +
-            Object.entries(meta.model_options).map(([k, v]) =>
-                `<option value="${k}" ${k === currentModel ? 'selected' : ''}>${v}</option>`
-            ).join('');
-
-        if (currentModel && !meta.model_options[currentModel]) {
-            select.innerHTML += `<option value="${currentModel}" selected>${currentModel}</option>`;
-        }
-        if (group) group.style.display = '';
-    } else {
-        // Custom/generic providers — free-text model input
-        if (custom) custom.value = currentModel || '';
-        if (customGroup) customGroup.style.display = '';
-    }
+    refreshModelControls({ providers: llmProviders, metadata: llmMetadata },
+                         _llmEls(container), providerKey, currentModel);
 }
 
 function getSelectedModel(container) {
-    const provider = getVal(container, '#sb-llm-primary');
-    if (provider === 'auto' || provider === 'none') return '';
-
-    const group = container.querySelector('#sb-model-group');
-    if (group && group.style.display !== 'none') {
-        return getVal(container, '#sb-llm-model') || '';
-    }
-
-    const customGroup = container.querySelector('#sb-model-custom-group');
-    if (customGroup && customGroup.style.display !== 'none') {
-        return (container.querySelector('#sb-llm-model-custom')?.value || '').trim();
-    }
-    return '';
+    return readModel(_llmEls(container), getVal(container, '#sb-llm-primary'));
 }
 
 // === Faces strip ===

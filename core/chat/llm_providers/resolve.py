@@ -137,6 +137,46 @@ class Selection:
         return (self.key, self.provider, self.model)
 
 
+# ─── The pair rule (2026-10-07) ──────────────────────────────────────────────
+# A provider key and its model override are ONE value. The auto path below
+# drops any model (an auto pick never asks the provider it chose for a model
+# pinned for another), so a model stored beside 'auto' is dead on arrival —
+# and every picker that reads it back shows a brain that will never run.
+# Seven stores could write that shape (chat pin, persona, task, resident,
+# agent spawn, Twilio rule) and the persona merge mixed one persona's model
+# onto another provider. Every writer routes through here now: normalize at
+# WRITE time, so storage never lies to the pickers.
+
+def normalize_pair(provider, model) -> tuple:
+    """(provider, model) → the coherent pair. Blank key = 'auto'; 'auto' and
+    'none' carry no model; any other key keeps its model (stripped). Pure."""
+    p = str(provider or 'auto').strip() or 'auto'
+    m = str(model or '').strip()
+    return (p, '') if p in ('auto', 'none') else (p, m)
+
+
+def normalize_pair_patch(current, patch, key='llm_primary', model_key='llm_model') -> dict:
+    """The pair rule over a PATCH onto a stored pair. Returns a NEW dict
+    (`patch` is never mutated):
+      - key in patch with a model: the pair rides, normalized.
+      - key in patch, no model: a key CHANGE drops the stored model; an
+        unchanged key keeps it — except auto/none, which clear a stale one.
+      - model in patch, no key: the STORED key decides — auto/none drop it.
+      - neither: untouched."""
+    cur = current or {}
+    out = dict(patch)
+    old_key = normalize_pair(cur.get(key), '')[0]
+    if key in out:
+        new_key = str(out.get(key) or 'auto').strip() or 'auto'
+        if model_key in out:
+            out[model_key] = normalize_pair(new_key, out.get(model_key))[1]
+        elif new_key != old_key or (new_key in ('auto', 'none') and cur.get(model_key)):
+            out[model_key] = ''
+    elif model_key in out:
+        out[model_key] = normalize_pair(old_key, out.get(model_key))[1]
+    return out
+
+
 def _prompt_gate(prompt_name, private: bool) -> None:
     try:
         from core import prompts as _prompts
@@ -257,5 +297,6 @@ def clear_health_cache(key: Optional[str] = None) -> None:
 
 
 __all__ = ['resolve', 'Selection', 'GLOBAL', 'providers_config', 'is_local', 'display_name',
-           'provider_sees', 'clear_health_cache', 'ProviderRefused', 'LLMDisabled',
+           'provider_sees', 'clear_health_cache', 'normalize_pair', 'normalize_pair_patch',
+           'ProviderRefused', 'LLMDisabled',
            'PrivacyRefused', 'ProviderUnavailable', 'NoProvidersAvailable']

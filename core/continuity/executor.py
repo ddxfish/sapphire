@@ -1147,10 +1147,10 @@ class ContinuityExecutor:
                 "voice": "voice",
                 "pitch": "pitch",
                 "speed": "speed",
-                "llm_primary": "provider",
-                "llm_model": "model",
                 "inject_datetime": "inject_datetime",
             }
+            # (llm_primary/llm_model are NOT in the map — the brain merges as
+            # a PAIR below, never field by field.)
             # Scope keys: persona key == task key (e.g. memory_scope → memory_scope)
             scope_keys = set(scope_setting_keys())
             for setting_key in scope_keys:
@@ -1176,6 +1176,22 @@ class ContinuityExecutor:
                 sentinels = _empty_sentinels_scope if task_key in scope_keys else _empty_sentinels
                 if task_val in sentinels:
                     resolved[task_key] = persona_val
+
+            # The brain is a PAIR (2026-10-07): provider and model merge
+            # together — a persona's model belongs to the persona's provider
+            # and must never ride onto the task's. The task defers (auto /
+            # none / blank) → the persona's whole pair; the task pins a
+            # provider → its own model stands, inheriting the persona's only
+            # when both name the same provider. A model beside auto drops.
+            from core.chat.llm_providers.resolve import normalize_pair
+            pp, pm = normalize_pair(ps.get("llm_primary"), ps.get("llm_model"))
+            tp, tm = normalize_pair(resolved.get("provider"), resolved.get("model"))
+            if tp in ("auto", "none"):
+                if pp != "auto":
+                    tp, tm = pp, pm
+            elif not tm and tp == pp:
+                tm = pm
+            resolved["provider"], resolved["model"] = tp, tm
 
             logger.info(f"[Continuity] Resolved persona '{persona_name}' into task settings")
             return resolved

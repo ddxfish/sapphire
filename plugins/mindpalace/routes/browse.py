@@ -1444,6 +1444,31 @@ def maintenance(body=None, **_):
         return {'success': True, 'stamped': stamped, 'cleared': cleared,
                 'recurring': recurred, 'kept': kept}
 
+    if action == 'reopen_dedup':
+        # Reopen every dedup verdict in the scope (dedup_at cleared) so the
+        # next dedup pass rescans everything — the recovery for a run that
+        # filed clusters under a bad model (2026-10-07). Merges are NOT
+        # undone (Restore retired covers those); nothing else changes.
+        reopened = 0
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            rows = cur.execute(
+                "SELECT id, meta FROM chunks WHERE scope = ? "
+                "AND json_extract(meta, '$.dedup_at') IS NOT NULL "
+                "AND json_extract(meta, '$.superseded_at') IS NULL", (scope,)).fetchall()
+            for cid, raw in rows:
+                meta = _parse_meta(raw) or {}
+                meta.pop('dedup_at', None)
+                cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
+                            (json.dumps(meta, ensure_ascii=False), cid))
+                reopened += 1
+            if reopened:
+                pt._ledger(scope, 'user', 'maintenance', cursor=cur,
+                           summary=f"reopened {reopened} dedup verdicts for the librarian")
+            conn.commit()
+        _publish('events', scope, 'update')
+        return {'success': True, 'reopened': reopened}
+
     if action == 'redate_model':
         # Requeue every date candidate for the librarian's temporal pass —
         # verdicts reopen (temporal_at + src cleared; existing dates stay as

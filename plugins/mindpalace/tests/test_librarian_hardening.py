@@ -122,9 +122,41 @@ def test_run_messages_flags_errors_and_degraded(palace, monkeypatch):
     monkeypatch.setattr(librarian, "_ensure_toolset_and_chat", lambda: None)
     monkeypatch.setattr(librarian, "_session_snapshot", lambda c, s: '')
     monkeypatch.setattr(librarian, "_persona_for_chat", lambda: 'sapphire')
-    oks = librarian._run_messages('default', ['a', 'b', 'c'], {'model': ''},
-                                  'librarian', 'Test pass', lambda g, p, t: g)
+    oks = librarian._run_messages('default', ['a', 'b', 'c'], {}, 'librarian', 'Test pass',
+                                  lambda g, p, t: g, verbs_required=False)
     assert oks == [True, False, False]
+
+
+def test_run_messages_counts_a_verbless_success_as_failed(palace, monkeypatch):
+    """The 2026-10-07 find: a model that replies but never calls a pass verb
+    is not a completed message — for dedup that silence used to read as
+    'ruled distinct' and drain the cluster. A verb ATTEMPT counts (a refused
+    one too: the model acted); the self pass opts out, since a sheet that
+    reads true needs no call."""
+    calls = []
+
+    class _Exec:
+        def run(self, task):
+            calls.append(task)
+            if len(calls) == 2:          # second message: the model acts — refused, still an attempt
+                lt.execute('keep_separate', {'memory_ids': [999]}, None)
+            return {'success': True, 'errors': []}
+
+    class _Sys:
+        class continuity_scheduler:
+            executor = _Exec()
+
+    import core.api_fastapi as api
+    monkeypatch.setattr(api, "get_system", lambda: _Sys)
+    monkeypatch.setattr(librarian, "_ensure_toolset_and_chat", lambda: None)
+    monkeypatch.setattr(librarian, "_session_snapshot", lambda c, s: '')
+    monkeypatch.setattr(librarian, "_persona_for_chat", lambda: 'sapphire')
+    lt.open_pass('default', [1], kind='dedup')
+    oks = librarian._run_messages('default', ['a', 'b'], {}, 'librarian-dedup', 'Dedup pass',
+                                  lambda g, p, t: g)
+    assert oks == [False, True]
+    assert librarian._run_messages('default', ['tend'], {}, 'librarian-self', 'Self pass',
+                                   lambda g, p, t: g, verbs_required=False) == [True]
 
 
 # ─── Dedup: no false drain ───────────────────────────────────────────────────
@@ -150,15 +182,97 @@ def test_dedup_failed_message_leaves_clusters_unstamped(palace, monkeypatch):
     assert _passes_today('dedup') == 0     # failed pass spends nothing
 
 
-def test_dedup_completed_message_stamps_and_records(palace, monkeypatch):
+def test_dedup_verbless_message_leaves_the_cluster_queued(palace, monkeypatch):
+    """A message that 'completed' but fired no verb is NOT a judgment (the
+    2026-10-07 find: a tool-incapable model's prose read as 'ruled distinct'
+    and stamped the whole cluster). Only a verb drains a cluster now; the
+    scan's clean ids still stamp mechanically."""
     a, b, c = _dedup_setup()
-    monkeypatch.setattr(librarian, "_run_messages",
-                        lambda *args, **kw: [True])
+    monkeypatch.setattr(librarian, "_run_messages", lambda *args, **kw: [True])
+    librarian.run_blocking('default', kind='dedup', chat='librarian-t')
+    assert 'dedup_at' not in _meta(a) and 'dedup_at' not in _meta(b)   # unjudged → requeue
+    assert 'dedup_at' in _meta(c)                                       # scanned clean → mechanical
+
+
+def test_dedup_prose_only_model_through_the_real_executor_contract(palace, monkeypatch):
+    """The exact shape of the incident, end to end through _run_messages: a
+    clean executor result (success, no errors, not degraded) and no tool
+    call. Before: cluster stamped, 'complete: 0 of 1 merged'. Now: the
+    message counts as failed, the cluster stays queued, no cap is spent."""
+    a, b, c = _dedup_setup()
+
+    class _Exec:
+        def run(self, task):
+            return {'success': True, 'errors': [],
+                    'responses': [{'output': 'Sure! Looking at these memories, they seem similar.'}]}
+
+    class _Sys:
+        class continuity_scheduler:
+            executor = _Exec()
+
+    import core.api_fastapi as api
+    monkeypatch.setattr(api, "get_system", lambda: _Sys)
+    monkeypatch.setattr(librarian, "_ensure_toolset_and_chat", lambda: None)
+    monkeypatch.setattr(librarian, "_session_snapshot", lambda c, s: '')
+    monkeypatch.setattr(librarian, "_persona_for_chat", lambda: 'sapphire')
+    msg, ok = librarian.run_blocking('default', kind='dedup', chat='librarian-t')
+    assert 'failed' in msg.lower() and 'rescan' in msg.lower()
+    assert 'dedup_at' not in _meta(a) and 'dedup_at' not in _meta(b)
+    assert 'dedup_at' in _meta(c)
+    assert _passes_today('dedup') == 0
+
+
+def test_dedup_keep_separate_is_the_distinct_verdict(palace, monkeypatch):
+    """keep_separate: the explicit 'similar, not the same' ruling — stamps
+    the group, files a 'distinct' ledger child, counts as handled, and the
+    next pass finds nothing left to judge."""
+    a, b, c = _dedup_setup()
+
+    def fake_run(scope, groups, cfg, toolset, name, present, **kw):
+        msg, ok = lt.execute('keep_separate', {'memory_ids': [a, b]}, None)
+        assert ok, msg
+        return [True]
+    monkeypatch.setattr(librarian, "_run_messages", fake_run)
     msg, ok = librarian.run_blocking('default', kind='dedup', chat='librarian-t')
     assert 'complete' in msg.lower()
     for cid in (a, b, c):
         assert 'dedup_at' in _meta(cid)
     assert _passes_today('dedup') == 1
+    with pt._get_connection() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM ledger WHERE actor='librarian' "
+                         "AND action='distinct'").fetchone()[0]
+    assert n == 1
+    msg, ok = librarian.run_blocking('default', kind='dedup', chat='librarian-t')
+    assert 'nothing awaiting' in msg.lower()
+
+
+def test_keep_separate_guards_like_every_verb(palace):
+    a, b, c = _dedup_setup()
+    msg, ok = lt.execute('keep_separate', {'memory_ids': [a, b]}, None)
+    assert not ok and 'No librarian pass is open' in msg
+    lt.open_pass('default', [a, b], kind='sort')
+    msg, ok = lt.execute('keep_separate', {'memory_ids': [a, b]}, None)
+    assert not ok and 'dedup' in msg                       # wrong pass kind
+    lt.open_pass('default', [a], kind='dedup')
+    msg, ok = lt.execute('keep_separate', {'memory_ids': [a, b]}, None)
+    assert not ok and 'not in the current pass' in msg     # blast shield
+    msg, ok = lt.execute('keep_separate', {'memory_ids': 'a'}, None)
+    assert not ok
+    assert 'dedup_at' not in _meta(a) and 'dedup_at' not in _meta(b)
+
+
+def test_reopen_dedup_puts_verdicts_back_in_the_queue(palace):
+    from plugins.mindpalace.routes import browse
+    a, b, c = _dedup_setup()
+    assert librarian._stamp_meta_at([a, b, c], 'dedup_at') == 3
+    assert librarian._queue_depth('default', 'dedup') == 0
+    out = browse.maintenance(body={'action': 'reopen_dedup', 'scope': 'default'})
+    assert out['success'] and out['reopened'] == 3
+    assert librarian._queue_depth('default', 'dedup') == 3
+    with pt._get_connection() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM ledger WHERE action='maintenance' "
+                         "AND summary LIKE 'reopened 3 dedup%'").fetchone()[0]
+    assert n == 1
 
 
 def test_sort_failed_pass_spends_nothing(palace, monkeypatch):

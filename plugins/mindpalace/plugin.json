@@ -2,7 +2,7 @@
   "name": "mindpalace",
   "short_display_name": "Mind",
   "short_name": "Mind Palace",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
   "author": "sapphire",
   "icon": "🏛️",
@@ -141,14 +141,6 @@
         "label": "Fresh chat per session",
         "default": true,
         "help": "Each librarian session gets its own chat (librarian-YYYYMMDD-HHMM): a per-session audit trail that keeps old pass transcripts out of new passes' context. Off: everything lands in the single shared 'librarian' chat.",
-        "hidden": true
-      },
-      {
-        "key": "librarian_model",
-        "type": "string",
-        "label": "Model override",
-        "default": "",
-        "help": "Model for librarian passes (empty = the app's normal selection). Passes read raw memory in bulk — a local model here is both a cost and a privacy lever, while a cloud model means memory text leaves the machine on every pass (key-gated private memories are excluded from tending and never ride). The dates pass wants a 9B-class model or better; below that, the built-in date resolver alone is more accurate.",
         "hidden": true
       },
       {

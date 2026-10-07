@@ -47,7 +47,10 @@ DATES_TOOLSET_FUNCTIONS = ['set_event_dates']
 LINK_TOOLSET = 'librarian-link'
 LINK_TOOLSET_FUNCTIONS = ['set_links']
 DEDUP_TOOLSET = 'librarian-dedup'
-DEDUP_TOOLSET_FUNCTIONS = ['merge_memories']
+# keep_separate (2026-10-07): the explicit "distinct" verdict — the drain
+# stamp rides a verb now, like every other pass, never the executor's
+# success bit (a prose-only model used to drain whole clusters unjudged).
+DEDUP_TOOLSET_FUNCTIONS = ['merge_memories', 'keep_separate']
 SELF_TOOLSET = 'librarian-self'
 # The sheet pass is judgment work, not annotation — she gets sort's READ
 # set (search a line's backing memories, orient, check the recent past)
@@ -176,11 +179,13 @@ def _settings():
             return max(1, int(s.get(key, default)))
         except (TypeError, ValueError):
             return default
+    # (librarian_model retired 2026-10-07: a bare model string with no
+    # provider beside it — the resolver drops a model on auto, so it never
+    # ran. The Resident strip holds the pair per scope.)
     return {'batch': n('librarian_batch_size', 20),
             'per_msg': n('librarian_items_per_message', 10),
             'per_day': n('librarian_max_passes_per_day', 3),
-            'drain_chat_batches': n('librarian_drain_batches_per_chat', 3),
-            'model': str(s.get('librarian_model') or '').strip()}
+            'drain_chat_batches': n('librarian_drain_batches_per_chat', 3)}
 
 
 def _test_override_active():
@@ -572,17 +577,17 @@ count — linking connects, it never creates.
 One set_links call for everything above, then one short line.""",
 
     'dedup': """These groups measure as near-duplicates (verified by similarity,
-not vibes). For each group, decide:
-- SAME thing recorded twice → ONE merge_memories call with that
-  group's ids{merge_style}. Earliest date kept,
-  originals retired, reversible.
-- genuinely different memories → leave the group alone; no call
-  needed.
+not vibes). For EACH group, make exactly one call:
+- SAME thing recorded twice → merge_memories with that group's
+  ids{merge_style}. Earliest date kept, originals retired,
+  reversible.
+- genuinely different memories → keep_separate with that group's
+  ids. Nothing changes; the group is filed as judged.
+A group with no call stays in the queue and comes back next time.
 
 {groups}
 
-Merge the true duplicates above (one call per group), then give one
-short line.""",
+One call per group above, then give one short line.""",
 
     'self_first': """Your self sheet is EMPTY. Tonight you write it, in your own
 words. Your memories are already here — you know who you are;
@@ -950,15 +955,15 @@ def _persona_for_chat():
         return 'sapphire'
 
 
-def _task(message, scope, model='', toolset=SORT_TOOLSET,
-          name='Librarian pass'):
+def _task(message, scope, toolset=SORT_TOOLSET, name='Librarian pass'):
     with _state_lock:
         chat = _state.get('chat') or LIBRARIAN_CHAT
-    # RESIDENCY (2026-07-19): the scope's own prompt/model tend its mind —
-    # before this, one global persona tended every scope (Sapphire reading
-    # Anita's memories as her own). Fallback chain keeps single-resident
-    # installs unchanged: scope prompt → librarian chat persona → 'sapphire';
-    # scope model → librarian_model setting.
+    # RESIDENCY (2026-07-19): the scope's own prompt/provider/model tend its
+    # mind — before this, one global persona tended every scope (Sapphire
+    # reading Anita's memories as her own). Fallback chain keeps single-
+    # resident installs unchanged: scope prompt → librarian chat persona →
+    # 'sapphire'; provider → auto. The brain is a PAIR from the Resident
+    # strip (the store keeps it coherent — a model never rides auto).
     try:
         res = _pt().scope_resident(scope)
     except Exception:
@@ -976,7 +981,7 @@ def _task(message, scope, model='', toolset=SORT_TOOLSET,
                              'github_scope', 'gcal_scope', 'telegram_scope',
                              'twilio_scope', 'wordpress_scope')},
         'prompt': res.get('prompt') or _persona_for_chat(),
-        'model': res.get('model') or model,
+        'model': res.get('model') or '',
         'toolset': toolset,
         'provider': res.get('provider') or 'auto',
         'initial_message': message,
@@ -1276,7 +1281,7 @@ def _drain_loop(scope, what, kind):
             _state['drain'] = None
 
 
-def _run_messages(scope, groups, cfg, toolset, name, present):
+def _run_messages(scope, groups, cfg, toolset, name, present, verbs_required=True):
     """Present the grouped batch message by message through the continuity
     executor. present(group, part, total) → message text.
 
@@ -1284,22 +1289,33 @@ def _run_messages(scope, groups, cfg, toolset, name, present):
     "LLM failed" and "LLM declined to act" are different events — errors
     AND degraded runs (tool exhaustion, empty reply, context overflow)
     count as failure, so callers can gate drain stamps and bookkeeping
-    on messages that really ran (scout sweep 2026-07-19)."""
+    on messages that really ran (scout sweep 2026-07-19). And a message
+    the model answered WITHOUT reaching for a single pass verb is not
+    complete either (2026-10-07): a tool-incapable model's prose read as a
+    clean success, and dedup filed every cluster it was shown as 'ruled
+    distinct'. The self pass opts out — a sheet that reads true needs no
+    call — every queue pass requires a verb attempt per message."""
     _ensure_toolset_and_chat()
     from core.api_fastapi import get_system
     executor = get_system().continuity_scheduler.executor
+    lt = _lt()
     with _state_lock:
         _state['messages_total'] = len(groups)
     oks = []
     for i, group in enumerate(groups):
         msg = present(group, i + 1, len(groups))
-        result = executor.run(_task(msg, scope, model=cfg.get('model', ''),
-                                    toolset=toolset, name=name))
+        before = lt.pass_attempts()
+        result = executor.run(_task(msg, scope, toolset=toolset, name=name))
         ok = (bool(result.get('success', True)) and not result.get('errors')
               and not result.get('degraded'))
         if not ok:
             logger.warning(f"[LIBRARIAN] {name} message {i + 1} degraded: "
                            f"{result.get('errors') or result.get('degraded')}")
+        elif verbs_required and lt.pass_attempts() == before:
+            ok = False
+            logger.warning(f"[LIBRARIAN] {name} message {i + 1}: the model "
+                           f"replied but called no pass verb — not counted "
+                           f"as done; its items requeue.")
         oks.append(ok)
         with _state_lock:
             _state['messages_done'] = i + 1
@@ -1320,8 +1336,8 @@ _runs = {}          # scope -> {'id', 'label', 'batches', 'presented',
 _runs_lock = threading.Lock()   # 'handled', 'verbs', 'extra'}
 
 _RUN_VERBS = {'promoted': 'promoted', 'retired': 'retired', 'split': 'split',
-              'merged': 'merged', 'linked': 'linked', 'dated': 'dated',
-              'edited': 'edited', 'saved': 'saved'}
+              'merged': 'merged', 'distinct': 'kept apart', 'linked': 'linked',
+              'dated': 'dated', 'edited': 'edited', 'saved': 'saved'}
 
 
 def run_begin(scope, label):
@@ -1500,7 +1516,8 @@ def _worker_self(scope):
         try:
             oks = _run_messages(scope, ['tend', 'verify'], cfg, SELF_TOOLSET,
                                 'Self pass',
-                                lambda g, p, t: _present_self(g, scope, p, t))
+                                lambda g, p, t: _present_self(g, scope, p, t),
+                                verbs_required=False)
         finally:
             stats = lt.close_pass()
 
@@ -1825,26 +1842,21 @@ def _worker_dedup(scope):
         finally:
             stats = lt.close_pass()
 
-        # Drain — but ONLY what was actually judged. "Unmerged = ruled
-        # distinct" is true when the model saw the cluster and declined;
-        # it is FALSE when the message degraded/errored — stamping those
-        # would permanently lock real duplicates out of every future scan
-        # (scout sweep 2026-07-19). Clean batch ids (no clusters found)
-        # are mechanical facts and always stamp; cluster members stamp
-        # per-message, only for messages that completed.
+        # Drain rides the VERBS (2026-10-07): merge_memories retires the
+        # originals, keep_separate stamps dedup_at — a cluster the model
+        # never ruled on stays in the queue. Before this, cluster members
+        # stamped whenever their message "completed", and a model that
+        # answered in prose with no tool call read as 'ruled distinct'
+        # (Krem's find: entries marked done under a bad model). Clean batch
+        # ids (no clusters found) are mechanical facts and still stamp here.
         clustered = {cid for cl in clusters for cid, _cr, _c in cl}
-        judged = set()
-        for g, ok in zip(groups, oks):
-            if ok:
-                judged |= {cid for cl in g for cid, _cr, _c in cl}
-        _stamp_meta_at(sorted((set(batch_ids) - clustered) | judged),
-                       'dedup_at')
+        _stamp_meta_at(sorted(set(batch_ids) - clustered), 'dedup_at')
         skipped_groups = oks.count(False)
 
         if not any(oks) and not stats['handled']:
             _finish(f"Dedup pass failed for '{scope}': the model produced no "
                     f"usable response ({len(groups)} message(s) degraded). "
-                    f"Clusters unstamped — they rescan next pass.", error=True)
+                    f"Clusters unjudged — they rescan next pass.", error=True)
             return
 
         merged = _ledger_count(stats, 'merged')

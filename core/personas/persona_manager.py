@@ -544,6 +544,11 @@ class PersonaManager:
                 f"[PERSONA] Preserved unknown scope keys not in current "
                 f"SCOPE_REGISTRY: {preserved_scope_keys}"
             )
+        if 'llm_model' in result:
+            # The pair rule (2026-10-07): a model beside an auto/none provider
+            # is dead at resolve time and lies to every picker — store ''.
+            from core.chat.llm_providers.resolve import normalize_pair
+            result['llm_model'] = normalize_pair(result.get('llm_primary'), result['llm_model'])[1]
         return result
 
 
