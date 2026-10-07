@@ -819,7 +819,7 @@ def test_the_routes_are_all_behind_login():
     and test_devices_text_lane.py prove that lock on them)."""
     from core.auth import require_login
     found = [r for r in routes.router.routes if r.path.startswith('/api/devices')]
-    assert len(found) == 16            # + provision, firmware index, firmware part (2026-10-07, all behind login)
+    assert len(found) == 17            # + provision, here, firmware index, firmware part (2026-10-07, all behind login)
     assert not [r.path for r in routes.router.routes if r.path.startswith('/api/body')]
     open_doors = []
     for r in found:

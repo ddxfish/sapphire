@@ -35,6 +35,15 @@ class Console {
 
     async open() {
         await this.port.open({ baudRate: 115200 });
+        // A UART-bridge board boots into its program or its ROM loader by how
+        // DTR and RTS sit when the port opens, and the browser picks them. So:
+        // the classic run-mode reset (EN low with IO0 high, then let go), the
+        // one esptool uses. A board with no such circuit ignores it.
+        try {
+            await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
+            await sleep(100);
+            await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        } catch { /* not every driver has the lines */ }
         this.reader = this.port.readable.getReader();
         this.writer = this.port.writable.getWriter();
         this.dec = new TextDecoder();
@@ -89,6 +98,11 @@ function webSerialLane(log) {
     // that reappears (native USB re-enumerates). Resolves when it is open.
     async function reopen(onWaiting) {
         if (con) { await con.close(); con = null; }
+        if (transport) {                              // still in the bootloader from connect(): let it run
+            await loader?.after('hard_reset').catch(() => {});
+            await transport.disconnect().catch(() => {});
+            loader = transport = null;
+        }
         const until = Date.now() + COME_BACK;
         let warned = false;
         for (;;) {
@@ -111,7 +125,7 @@ function webSerialLane(log) {
         name: 'this computer',
         available: () => !!navigator.serial,
 
-        async connect() {
+        async connect(onStatus) {
             tools ??= await import('../../vendor/esptool-js.bundle.js');
             try {
                 port = await navigator.serial.requestPort();
@@ -119,13 +133,15 @@ function webSerialLane(log) {
                 if (e.name === 'NotFoundError') return null;         // the picker was closed
                 throw e;
             }
+            onStatus?.('Looking for the board on that port: this takes a few seconds...');
             transport = new tools.Transport(port, false);
             loader = new tools.ESPLoader({
                 transport, baudrate: FLASH_BAUD, romBaudrate: 115200,
                 terminal: { clean() {}, writeLine: log, write: log },
             });
             try {
-                return await loader.main();                           // "ESP32", "ESP32-S3", ...
+                const text = await loader.main();                     // "ESP32-D0WD-V3 (revision 3)": the silicon
+                return { family: loader.chip?.CHIP_NAME || family(text), text };   // "ESP32", "ESP32-S3": what firmware fits
             } catch (e) {
                 await transport.disconnect().catch(() => {});
                 throw new Error(portProblem(e));
@@ -175,23 +191,60 @@ async function partBytes(board, p) {
     return { ...p, data: new Uint8Array(await r.arrayBuffer()) };
 }
 
-const chipOf = s => String(s || '').toUpperCase().replace(/\s+/g, '').replace(/^ESP32(?=[A-Z])/, 'ESP32-');   // "esp32s3" -> ESP32-S3
+// "esp32s3", "ESP32-S3", "ESP32-S3 (QFN56)" -> ESP32-S3; "ESP32-D0WD-V3 (revision 3)" -> ESP32
+const family = s => (String(s || '').toUpperCase().replace(/\s+/g, '').replace(/^ESP32(?=[SCH]\d)/, 'ESP32-')
+    .match(/^ESP32(-[SCH]\d+)?|^ESP8266/) || [''])[0];
 
 export function openFlash(onDone) {
     const modal = showModal('\u{1F4E1} New board (USB)', [{ type: 'html', value: '<div id="flash"></div>' }], null, { wide: true });
     const body = modal.element.querySelector('#flash');
     const footer = modal.element.querySelector('.modal-footer');
-    const log = s => { const el = body.querySelector('#flash-log'); if (el) { el.textContent += s.replace(/\r?\n?$/, '') + '\n'; el.scrollTop = el.scrollHeight; } };
+    const said = [];                              // the last lines from the flasher and the board, for an error
+    const log = s => {
+        const text = String(s).replace(/\r?\n?$/, '');
+        if (!text.trim()) return;
+        said.push(text); if (said.length > 60) said.shift();
+        const el = body.querySelector('#flash-log');
+        if (el) { el.textContent += text + '\n'; el.scrollTop = el.scrollHeight; }
+    };
+    const status = text => { const el = body.querySelector('#flash-status'); if (el) el.textContent = text; };
     const lane = webSerialLane(log);
-    let chip = '', board = null, given = null, button = null;
+    let chip = { family: '', text: '' }, board = null, given = null, button = null;
     // the modal has no close event: when it leaves the page, let the port go
-    const gone = new MutationObserver(() => { if (!modal.element.isConnected) { gone.disconnect(); lane.close(); } });
+    const gone = new MutationObserver(() => { if (!modal.element.isConnected) { gone.disconnect(); hold(false); lane.close(); } });
     gone.observe(document.body, { childList: true });
+
+    // While the board is being written or set up, nothing closes this: not
+    // the X, Esc, the backdrop, nor leaving the page (a slipped click left a
+    // board half written, 2026-10-07). The browser's own leave prompt is the
+    // only one it allows; its words are its own.
+    let busy = false;
+    const leaving = e => { e.preventDefault(); e.returnValue = ''; };
+    const keep = e => {
+        if (!busy) return;
+        if (e.type === 'keydown' && e.key !== 'Escape') return;
+        if (e.type !== 'keydown' && !(e.target === modal.element || e.target.closest('.modal-x, .modal-close, .modal-cancel'))) return;
+        e.stopImmediatePropagation();
+        if (e.type !== 'mousedown') showToast('Still working on the board. Wait for it to finish.', 'warning');
+    };
+    const hold = on => {
+        if (on === busy) return;
+        busy = on;
+        const way = on ? 'addEventListener' : 'removeEventListener';
+        window[way]('beforeunload', leaving);
+        document[way]('keydown', keep, true);
+        modal.element[way]('click', keep, true);
+        modal.element[way]('mousedown', keep, true);
+    };
 
     const screen = (title, html, foot) => {
         button?.remove(); button = null;
         body.innerHTML = `<b style="display:block;margin-bottom:10px">${title}</b>${html}
-            <pre id="flash-log" style="max-height:110px;overflow:auto;font-size:0.75em;opacity:0.7;margin:10px 0 0;white-space:pre-wrap"></pre>`;
+            <p class="setting-help" id="flash-status" style="margin-top:8px;min-height:1.2em"></p>
+            <details style="margin-top:6px"><summary class="setting-help" style="cursor:pointer">Details: what the flasher and the board said</summary>
+            <pre id="flash-log" style="max-height:140px;overflow:auto;font-size:0.75em;opacity:0.7;margin:6px 0 0;white-space:pre-wrap"></pre></details>`;
+        const pre = body.querySelector('#flash-log');
+        pre.textContent = said.slice(-20).join('\n') + (said.length ? '\n' : '');
         if (foot) {
             button = document.createElement('button');
             button.className = 'btn btn-primary';
@@ -199,7 +252,12 @@ export function openFlash(onDone) {
             footer.prepend(button);
             button.addEventListener('click', async () => {
                 button.disabled = true;
-                try { await foot.run(); } catch (e) { showToast(e.message, 'error'); button.disabled = false; }
+                try { await foot.run(); } catch (e) {
+                    hold(false);
+                    status(e.message);
+                    const d = body.querySelector('details'); if (d) d.open = true;      // the chatter explains an error
+                    showToast(e.message, 'error'); button.disabled = false;
+                }
             });
         }
         return body;
@@ -218,20 +276,21 @@ export function openFlash(onDone) {
         screen('Plug the board in',
             `<p class="setting-help">Plug the board into <b>this</b> computer with a data cable (many USB cables carry power only), then press Connect and pick its port.</p>`,
             { text: 'Connect', run: async () => {
-                chip = await lane.connect();
-                if (!chip) { button.disabled = false; return; }
+                status('Pick the port in the browser\'s window...');
+                chip = await lane.connect(status);
+                if (!chip) { status(''); button.disabled = false; return; }
                 await pick();
             } });
     };
 
     // 2. which board: only the ones this chip can run
     const pick = async () => {
-        screen(`Found an ${esc(chip)}`, '<p class="setting-help">Reading the firmware list...</p>');
+        screen(`Found an ${esc(chip.family)}`, '<p class="setting-help">Reading the firmware list...</p>');
         const fw = await call('GET', '/firmware');
-        const fit = fw.boards.filter(b => chipOf(b.chipFamily) === chipOf(chip));
+        const fit = fw.boards.filter(b => family(b.chipFamily) === chip.family);
         if (!fit.length) {
             // nothing to offer: say why, and let the source be fixed right here
-            screen(`Found an ${esc(chip)}`, `<p class="setting-help">${esc(fw.error || `No firmware for an ${chip} in the firmware source.`)}</p>
+            screen(`Found an ${esc(chip.family)}`, `<p class="setting-help">${esc(fw.error || `No firmware for an ${chip.family} (${chip.text}) in the firmware source.`)}</p>
                 <div class="settings-grid"><div class="setting-row"><div class="setting-label"><label>Firmware source</label>
                     <div class="setting-help">The firmware release URL, or a folder on Sapphire's computer with an index.json.</div></div>
                     <div class="setting-input"><input type="text" id="fl-source" value="${esc(fw.source || '')}" placeholder="https://.../index.json's folder"></div></div></div>`,
@@ -242,13 +301,23 @@ export function openFlash(onDone) {
                 } });
             return;
         }
-        screen(`Found an ${esc(chip)}`, `<p class="setting-help">Which board is it?</p>
+        screen(`Found an ${esc(chip.family)}`, `<p class="setting-help">${esc(chip.text)}. Which board is it?</p>
             <div class="ui-grid ui-grid-sm">${fit.map((b, i) => `
                 <button type="button" class="ui-card" data-board="${esc(b.id)}" style="text-align:left;font:inherit;cursor:pointer${i ? '' : ';outline:2px solid var(--primary)'}">
                     <div class="ui-card-title">${esc(b.name)}</div>
-                    <div class="ui-card-body">firmware ${esc(b.version)}</div></button>`).join('')}</div>`,
+                    <div class="ui-card-body">firmware ${esc(b.version)}</div></button>`).join('')}</div>
+            <p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`,
             { text: 'Install', run: () => install() });
         board = fit[0];
+        body.querySelector('#fl-settings-only').addEventListener('click', async e => {
+            e.preventDefault();
+            button.disabled = true;
+            try {
+                status('Starting the board...');
+                await lane.reopen(() => status('Unplug the board and plug it back in.'));
+                await setup();
+            } catch (err) { status(err.message); showToast(err.message, 'error'); button.disabled = false; }
+        });
         body.querySelectorAll('[data-board]').forEach(c => c.addEventListener('click', () => {
             board = fit.find(b => b.id === c.dataset.board);
             body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x === c ? '2px solid var(--primary)' : '');
@@ -257,9 +326,10 @@ export function openFlash(onDone) {
 
     // 3. write it
     const install = async () => {
+        hold(true);
         screen(`Installing ${esc(board.name)} ${esc(board.version)}`, `
             <div id="flash-bar" style="height:8px;background:var(--bg-tertiary,#333);border-radius:4px;overflow:hidden"><div style="height:100%;width:0;background:var(--primary)"></div></div>
-            <p class="setting-help" style="margin-top:6px">Getting the firmware...</p>`);
+            <p class="setting-help" style="margin-top:6px">Getting the firmware from Sapphire...</p>`);
         const parts = [];
         for (const p of board.parts) parts.push(await partBytes(board, p));
         const total = parts.reduce((n, p) => n + p.data.length, 0);
@@ -271,13 +341,16 @@ export function openFlash(onDone) {
         });
         bar(100, 'Written. Waiting for it to start...');
         await lane.reopen(() => bar(100, 'Unplug the board and plug it back in.'));
+        hold(false);
         await setup();
     };
 
     // 4. its name and WiFi
     const setup = async () => {
-        let nets = [];
-        try { nets = (await lane.ask('scan', 20000)).networks || []; } catch { /* an older firmware: typed */ }
+        status('Asking the board which networks it can see...');
+        let nets = [], here = { sapphire: '', addresses: [] };
+        try { nets = (await lane.ask('scan', 20000)).networks || []; } catch (e) { log(`(no network list: ${e.message})`); }
+        try { here = await call('GET', '/here'); } catch (e) { log(`(no address guess: ${e.message})`); }
         const names = [...new Set(nets.map(n => n.ssid || n).filter(Boolean))];
         screen('Name it and give it the WiFi', `
             <div class="settings-grid">
@@ -288,6 +361,10 @@ export function openFlash(onDone) {
                         <input type="text" id="fl-ssid" placeholder="network name" ${names.length ? 'style="display:none;margin-top:6px"' : ''}></div></div>
                 <div class="setting-row"><div class="setting-label"><label>Password</label></div>
                     <div class="setting-input"><input type="password" id="fl-pass" autocomplete="off"></div></div>
+                <div class="setting-row"><div class="setting-label"><label>Sapphire's address</label>
+                    <div class="setting-help">Where the board will find her: this computer, as the house sees it. With a VPN on, make sure this is the house address, not the tunnel's.</div></div>
+                    <div class="setting-input"><input type="text" id="fl-sapphire" value="${esc(here.sapphire)}" placeholder="https://192.168.1.2:8073">
+                        ${here.addresses.length > 1 ? `<div class="setting-help" style="margin-top:4px">also here: ${here.addresses.slice(1).map(esc).join(', ')}</div>` : ''}</div></div>
             </div>`,
             { text: 'Finish', run: () => finish() });
         const pickEl = body.querySelector('#fl-pick'), ssidEl = body.querySelector('#fl-ssid');
@@ -301,15 +378,18 @@ export function openFlash(onDone) {
         const pickEl = body.querySelector('#fl-pick');
         const ssid = (pickEl?.value || body.querySelector('#fl-ssid').value).trim();
         const pass = body.querySelector('#fl-pass').value;
+        const sapphire = body.querySelector('#fl-sapphire').value.trim();
         if (!name) fail('Give the board a name.');
         if (!ssid) fail('Which WiFi?');
-        given ??= await call('POST', '/provision', { label: name, driver: 'satellite' });
+        if (!sapphire) fail("Where is Sapphire? Her address is needed.");
+        hold(true);
+        given = await call('POST', '/provision', { label: name, driver: 'satellite', sapphire });
         const said = await lane.ask('setup ' + JSON.stringify({
             name: given.id, wifi_ssid: ssid, wifi_password: pass,
             key: given.token, voice_key: given.voice_key, sapphire: given.sapphire, cert: given.cert || '',
         }));
         if (!said.ok) fail(said.error || 'The board refused its settings.');
-        screen(`Joining ${esc(ssid)}`, `<p class="setting-help" id="fl-join">The board is restarting and joining the WiFi...</p>`);
+        screen(`Joining ${esc(ssid)}`, `<p class="setting-help" id="fl-join">The board has its settings and is restarting to join the WiFi...</p>`);
         await sleep(1500);
         await lane.reopen(() => { body.querySelector('#fl-join').textContent = 'Unplug the board and plug it back in.'; });
         const until = Date.now() + JOIN_WAIT;
@@ -317,6 +397,11 @@ export function openFlash(onDone) {
             let s = {};
             try { s = await lane.ask('show', 5000); } catch { /* still booting */ }
             if (s.ip) {
+                // its address, before it has called in: the device window can reach it now,
+                // and its status says whether it reaches Sapphire ("link to Sapphire")
+                try { await call('PUT', `/${given.id}`, { parts: { satellite: { url: `http://${s.ip}` } } }); }
+                catch (e) { log(`(could not store its address: ${e.message})`); }
+                hold(false);
                 showToast(`${given.id} is on the WiFi at ${s.ip}`, 'success');
                 modal.close();
                 onDone?.(given.id);
@@ -324,6 +409,7 @@ export function openFlash(onDone) {
             }
             await sleep(2000);
         }
+        hold(false);
         screen('It has not joined yet', `<p class="setting-help">No WiFi after ${JOIN_WAIT / 1000} seconds. A wrong password is the usual reason. Fix it and try again, or close this: the board keeps trying, and shows up in the list by itself when it gets on.</p>`,
             { text: 'Try again', run: () => setup() });
     };

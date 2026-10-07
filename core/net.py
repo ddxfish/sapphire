@@ -245,20 +245,63 @@ def delete(url: str, **kw) -> requests.Response:
     return request('DELETE', url, **kw)
 
 
-def local_ip() -> str:
-    """The address this machine has on its own network, as a device on
-    that network would reach it: the source address of a route out (a UDP
-    socket is 'connected', nothing is sent). '' when there is no route."""
+_VIRTUAL = ('lo', 'docker', 'br-', 'virbr', 'veth', 'wg', 'tun', 'tap', 'utun', 'tailscale',
+            'zt', 'vboxnet', 'vmnet', 'vmware', 'ham', 'nordlynx', 'proton', 'bridge')
+
+
+def local_ips():
+    """This machine's addresses on real networks, the likeliest first: what
+    a device in the house would reach it at. Tunnels (a /32 is never a
+    LAN), container and VM bridges and loopback are left out. The route to
+    the internet is NOT trusted on its own: with a VPN up it is the tunnel
+    (a board was told to find Sapphire at a WireGuard address, 2026-10-07)."""
+    import socket
+    found = []
+    try:
+        import psutil
+        for name, addrs in psutil.net_if_addrs().items():
+            low = name.lower()
+            if any(low.startswith(v) for v in _VIRTUAL):
+                continue
+            for a in addrs:
+                if a.family != socket.AF_INET or not a.address or a.netmask in ('255.255.255.255', None):
+                    continue
+                try:
+                    ip = ipaddress.ip_address(a.address)
+                except ValueError:
+                    continue
+                if ip.is_loopback or ip.is_link_local or not ip.is_private:
+                    continue
+                found.append(a.address)
+    except Exception:
+        pass
+    out = _route_out()                              # a tie-break, or a last resort
+    rank = lambda ip: (ip != out, not ip.startswith('192.168.'), not ip.startswith('10.'), ip)
+    found = sorted(set(found), key=rank)
+    if not found and out and ipaddress.ip_address(out).is_private:
+        found = [out]
+    return found
+
+
+def _route_out() -> str:
+    """The source address of a route to the internet (a UDP socket is
+    'connected', nothing is sent), or ''. With a VPN up this is the tunnel."""
     import socket
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            s.connect(('192.0.2.1', 9))          # TEST-NET-1: never answers, never sent to
+            s.connect(('192.0.2.1', 9))            # TEST-NET-1: never answers, never sent to
             return s.getsockname()[0]
         finally:
             s.close()
     except OSError:
         return ''
+
+
+def local_ip() -> str:
+    """The address a device in the house would reach this machine at, or ''."""
+    ips = local_ips()
+    return ips[0] if ips else ''
 
 
 def _invalidate():

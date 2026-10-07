@@ -114,24 +114,53 @@ def found_things(driver_id, device_id=''):
     return {"found": e.found(driver_id, config)}
 
 
+def sapphire_addresses():
+    """Where a board in the house can find Sapphire: her likeliest address
+    first, then the others this machine has. A guess the page shows and
+    lets the user correct (a VPN's tunnel address is not the house)."""
+    import config
+    from core import net
+    scheme = 'https' if getattr(config, 'WEB_UI_SSL_ADHOC', False) else 'http'
+    port = int(getattr(config, 'WEB_UI_PORT', 8073))
+    return [f"{scheme}://{ip}:{port}" for ip in net.local_ips()]
+
+
+def here():
+    found = sapphire_addresses()
+    return {"sapphire": found[0] if found else '', "addresses": found}
+
+
+def _sapphire_url(given):
+    """The address the user typed for Sapphire, or the guess. A board's key
+    rides it, so it has to be on the local network."""
+    from urllib.parse import urlsplit
+    from core import net
+    e = _engine()
+    given = str(given or '').strip().rstrip('/')
+    if not given:
+        found = sapphire_addresses()
+        if not found:
+            raise e.DeviceError("This machine has no network address yet. Connect it to the network first.")
+        return found[0]
+    parts = urlsplit(given if '://' in given else 'https://' + given)
+    if parts.scheme not in ('http', 'https') or not parts.hostname:
+        raise e.DeviceError(f"'{given}' is not a usable address for Sapphire. Example: https://192.168.1.2:8073")
+    if net.classify(parts.hostname) != 'lan':
+        raise e.DeviceError("Sapphire's address for a board has to be on your own network.")
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def provision_device(body):
     """A board being set up from the browser (the flasher in + Add Device):
     the device row with no address yet, its two fresh keys, and what the
     board needs to find Sapphire. The page carries it all to the board over
-    USB; the address is learned when the board calls in."""
-    import config
-    from core import net
+    USB; the board's own address is learned when it calls in."""
     from core.ssl_utils import cert_pem
     e = _engine()
+    sapphire = _sapphire_url(body.get("sapphire"))
     row, keys = e.provision(body.get("label"), body.get("driver") or "satellite",
                             location=body.get("location") or '')
-    host = net.local_ip()
-    if not host:
-        raise e.DeviceError("This machine has no network address yet. Connect it to the network first.")
-    scheme = 'https' if getattr(config, 'WEB_UI_SSL_ADHOC', False) else 'http'
-    return {"device": _view(row), "id": row["id"], **keys,
-            "sapphire": f"{scheme}://{host}:{int(getattr(config, 'WEB_UI_PORT', 8073))}",
-            "cert": cert_pem()}
+    return {"device": _view(row), "id": row["id"], **keys, "sapphire": sapphire, "cert": cert_pem()}
 
 
 def firmware_index():
@@ -216,6 +245,12 @@ async def devices_found(driver_id: str, request: Request, device: str = '', _=De
 async def devices_provision(request: Request, _=Depends(require_login)):
     _open(request, write=True)
     return await _do(provision_device, await _body(request))
+
+
+@router.get("/api/devices/here")
+async def devices_here(request: Request, _=Depends(require_login)):
+    _open(request)
+    return await _do(here)
 
 
 @router.get("/api/devices/firmware")

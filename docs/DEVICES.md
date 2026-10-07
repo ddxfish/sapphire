@@ -239,13 +239,22 @@ in Chrome or Edge: **+ Add Device > New board (USB)**. Plug the board into
 the computer the browser runs on with a data cable, press **Connect** and
 pick its port. The chip is read, so only the boards it can run are offered;
 **Install** writes the firmware over USB (a progress bar, under a minute).
-Then three things: a name, the WiFi (the networks the board can see, or
-one typed, for a hidden network or a board being set up away from home),
-and the password. Sapphire makes the board's two keys, hands it her address
-and certificate, and the board restarts and joins the WiFi. When it calls
-in, its address is learned from that call and the device goes online by
-itself. A board set up away from its WiFi stays "waiting for the board"
-until it gets home.
+Then a name, the WiFi (the networks the board can see, or one typed, for
+a hidden network or a board being set up away from home), the password,
+and **Sapphire's address** as the house sees this computer, prefilled from
+its network interfaces. Check that one when a VPN is on: the tunnel's
+address is not the house, and a board sent there never calls in. Sapphire
+makes the board's two keys, hands it her address and certificate, and the
+board restarts and joins the WiFi. The flasher writes the board's own
+address into the device as soon as the board reports it, so the device
+window can reach it at once; its status strip says whether the board
+reaches Sapphire ("link to Sapphire"). From then on the address is learned
+from the board's own calls, so a board that moves is followed. A board set
+up away from its WiFi stays "waiting for the board" until it gets home.
+
+A board already running Sapphire's firmware can have its name, WiFi or
+Sapphire's address changed the same way, without reinstalling: the link
+under the board cards.
 
 The firmware comes from the source named by `DEVICE_FIRMWARE_SOURCE`: the
 firmware release URL, or a folder on Sapphire's computer with an
