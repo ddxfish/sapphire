@@ -762,6 +762,7 @@ class SettingsManager:
             # Backup settings - read per-request by backup scheduler
             'BACKUPS_ENABLED', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY',
             'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL', 'BACKUPS_ENCRYPT_LOCAL', 'BACKUPS_DIR',
+            'DEVICE_FIRMWARE_SOURCE',           # read when the Devices page's flasher opens
             # Setup wizard progress
             'SETUP_WIZARD_STEP',
             # Conversation (true speech) mode tunables — read fresh on each activation

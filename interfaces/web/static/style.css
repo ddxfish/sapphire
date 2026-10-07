@@ -4433,6 +4433,57 @@ a.gallery-caption:hover {
     opacity: 0.75;
 }
 
+/* Question card (shared/ask-marker.js, 2026-10-07): the ask_user tool's card in
+   her bubble — tabs when several questions, options as buttons, type-your-own.
+   Locks (dims, no buttons) once the user has spoken after it. */
+.ask-card {
+    margin: 10px 0;
+    max-width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--trim);
+    border-radius: var(--radius-md);
+}
+
+.ask-card.locked { opacity: .6; }
+.ask-card.locked .ask-opt:not(.picked) { opacity: .55; }
+
+.ask-card .ask-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.ask-card .ask-tab {
+    padding: 3px 10px; border-radius: var(--radius-md);
+    border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+    font-size: var(--font-sm); cursor: pointer;
+}
+.ask-card .ask-tab.active { border-color: var(--trim); color: var(--text); }
+.ask-card .ask-tab.done { color: var(--text); }
+
+.ask-card .ask-q { margin: 0 0 8px 2px; font-weight: 600; white-space: pre-wrap; }
+
+.ask-card .ask-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ask-card .ask-opt {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+    max-width: 100%; padding: 6px 12px; border-radius: var(--radius-md);
+    border: 1px solid var(--text-secondary); background: var(--bg-tertiary); color: var(--text);
+    font-size: var(--font-sm); text-align: left; cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.ask-card .ask-opt:hover:not(:disabled) { border-color: var(--trim); }
+.ask-card .ask-opt.picked { border-color: var(--trim); background: var(--trim-soft, var(--bg-secondary)); }
+.ask-card .ask-opt-desc { font-size: 11px; color: var(--text-secondary); }
+
+.ask-card .ask-foot { display: flex; gap: 6px; }
+.ask-card .ask-other {
+    flex: 1; min-width: 0; padding: 6px 10px; border-radius: var(--radius-md);
+    border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); font-size: var(--font-sm);
+}
+.ask-card .ask-send {
+    padding: 6px 14px; border-radius: var(--radius-md);
+    border: 1px solid var(--trim); background: var(--trim); color: var(--bg); font-weight: 600;
+    font-size: var(--font-sm); cursor: pointer;
+}
+.ask-card .ask-send:disabled { opacity: .45; cursor: default; }
+
 /* Gallery row (shared/gallery-marker.js v3, 2026-09-10): one titled strip per
    tool call — tiles numbered like her contact sheet, fixed height, scrolls
    sideways inside the bubble. The masonry .image-gallery above stays for runs

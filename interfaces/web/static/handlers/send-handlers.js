@@ -504,12 +504,11 @@ export async function handleStop() {
     }
 }
 
+// A dictated turn, or a question card's answer. Since the inbox (2026-10-06)
+// handleSend no longer blocks while a turn is live — the text queues with a
+// pulsing bubble — so the old "already processing, ignoring" early-out here
+// only dropped spoken turns (and would have eaten card clicks). Gone 2026-10-07.
 export async function triggerSendWithText(text) {
-    if (getIsProc()) {
-        console.log('Already processing, ignoring transcribed text');
-        return false;
-    }
-
     const { input } = getElements();
     input.value = text;
     input.dispatchEvent(new Event('input'));

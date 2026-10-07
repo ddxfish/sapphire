@@ -37,9 +37,15 @@ SPEC = {
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
                      'sensors'],
+    # it calls Sapphire with its own key (wake, voice, text, events): the
+    # address it calls from becomes its url, so a board set up from the
+    # browser needs none typed, and a new DHCP lease is followed
+    'learns_address': True,
     'config_schema': [
         {'key': 'url', 'type': 'string', 'label': 'Address', 'tab': 'Status', 'setup': True,
-         'placeholder': 'http://192.168.1.100:8090'},
+         'placeholder': 'http://192.168.1.100:8090',
+         'help': "Where Sapphire reaches it. Leave it empty and it is learned the first time "
+                 "the satellite calls in; it follows the satellite when its address changes."},
         {'key': 'token', 'type': 'string', 'widget': 'password', 'secret': True, 'tab': 'Status', 'setup': True,
          'label': 'Key Sapphire sends',
          'help': "The satellite's own key (SAPPH_BODY_TOKEN on a Pi body). Stored scrambled."},
@@ -86,6 +92,8 @@ INBOUND = ('keyboard',)       # the board sends, Sapphire asks nothing of it: co
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 _SECONDS = re.compile(r'^seconds=(\d{1,4})$', re.I)
 
+WAITING = ("Waiting for the satellite to call in: its address is learned from that. "
+           "Or type its address in Settings > Devices.")
 QUICK = 8                     # seconds for a plain request
 ABOUT_FRESH = 60              # seconds what a satellite said about itself is taken as true
 SPEAK_WAIT = 150              # the satellite answers only when it has finished playing
@@ -120,17 +128,17 @@ class Missing(Problem):
 
 def validate(config):
     url = str(config.get('url') or '').strip().rstrip('/')
-    if not url:
-        return config, "The satellite's address is needed."
-    if '://' not in url:
-        url = 'http://' + url
-    parts = urlsplit(url)
-    if parts.scheme not in ('http', 'https') or not parts.hostname:
-        return config, f"'{url}' is not a usable address. Example: http://192.168.1.100:8090"
-    if net.classify(parts.hostname) != 'lan':
-        return config, ("A satellite has to be on your own network. Its key travels "
-                        "without encryption, so an internet address is refused.")
-    config['url'] = f"{parts.scheme}://{parts.netloc}"
+    if url:
+        if '://' not in url:
+            url = 'http://' + url
+        parts = urlsplit(url)
+        if parts.scheme not in ('http', 'https') or not parts.hostname:
+            return config, f"'{url}' is not a usable address. Example: http://192.168.1.100:8090"
+        if net.classify(parts.hostname) != 'lan':
+            return config, ("A satellite has to be on your own network. Its key travels "
+                            "without encryption, so an internet address is refused.")
+        url = f"{parts.scheme}://{parts.netloc}"
+    config['url'] = url                       # '' = learned when it calls in (engine.learned)
     config['chat'] = str(config.get('chat') or '').strip()[:64]
     for name in LOOKS:
         text = str(config.get(f'look_{name}') or '').strip()
@@ -174,6 +182,8 @@ def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
     if not key:
         raise Problem("No key is stored for this satellite. Enter it in Settings > Devices.")
     base = str(config.get('url') or '')
+    if not base:
+        raise Problem(WAITING)
     where = urlsplit(base).netloc or base
     try:
         r = net.request(method, base + path, timeout=timeout,

@@ -61,7 +61,7 @@ word. A fork question waits ten minutes; unanswered, the agent takes the safe de
 ```
 [Agent Spark (claude_code) — reports (6m02s in); not typed by the user]
 Rewrote the test against /api/agents/… 3 passed.
-(cost so far $0.41 · session 7f3a1c90)
+(session 7f3a1c90)
 ```
 
 > The chat's **toolset must include the four agent tools** for her to answer and steer. Toolsets
@@ -117,8 +117,14 @@ approve is denied with a reason. Only `AskUserQuestion` forks reach her. (Settin
 Claude Code lets you switch to bypass.)
 
 A session stays alive between turns: `agent_action('Spark', 'say', '…')` sends the next one.
-Idle past the timeout it rests; the next `say` wakes it with `--resume` — history intact. Costs
-are cumulative per session and shown on every report.
+Idle past the timeout it rests; the next `say` wakes it with `--resume` — history intact.
+
+**Billing.** Sessions run on *your Claude Code login* (Pro / Max): any `ANTHROPIC_API_KEY` in
+Sapphire's environment is blanked for the session, and the CLI reports `apiKeySource: none`. No
+dollar figure appears on reports in that case — the CLI's `total_cost_usd` is an estimate at API
+list price that it computes whether or not anyone is billed. If a key *is* being billed (the login
+is missing, or a key helper is configured), reports carry `cost so far $… (<source>)` and the
+agent's transcript notes it.
 
 Core mode can see what you can see: it runs at the Sapphire root with your Claude Code login and
 settings. Project and plugin modes load only the workspace's own CLAUDE.md, no user-level settings

@@ -3,6 +3,7 @@
 import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
+import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
 import { openImageModal } from './ui-images.js';
 import { nextThinkCloser, nextThinkOpener, isSeedThink } from './shared/think.js';
 
@@ -524,7 +525,9 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     // Tiles ride a UI marker; the accordion shows the text without it.
     const { entries: galleryEntries, title: galleryTitle, text: galleryStripped } = parseGalleryMarker(result);
     // Players / download buttons ride their own marker (shared/files-marker.js).
-    const { groups: fileGroups, text: shownResult } = parseFilesMarker(galleryStripped);
+    const { groups: fileGroups, text: filesStripped } = parseFilesMarker(galleryStripped);
+    // A question card (ask_user) rides its own (shared/ask-marker.js).
+    const { cards: askCards, text: shownResult } = parseAskMarker(filesStripped);
 
     if (!toolData) {
         // Fallback: create accordion now
@@ -569,6 +572,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         }
         let anchor = gallery || toolData.acc;
         buildFilesRows(fileGroups).forEach(row => { anchor.after(row); anchor = row; });
+        buildAskCards(askCards).forEach(card => { anchor.after(card); anchor = card; });
     }
 
     if (scrollCallback) scrollCallback();

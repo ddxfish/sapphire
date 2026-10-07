@@ -334,8 +334,7 @@ def _replay_images(msgs, refs, window, loader):
     return out
 
 
-_UI_MARKER_RE = re.compile(r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
-                           r'|<!--FILES:\{[^\n]*\}-->\s*')
+from core.ui_markers import UI_MARKER_RE as _UI_MARKER_RE, has_marker as _has_ui_marker
 _LIVE_IMAGE_RE = re.compile(
     r'<<IMG::tool:([^>]+)>>|\bimg:([A-Za-z0-9][\w-]*(?:\.[A-Za-z0-9]+)*)')
 
@@ -656,9 +655,10 @@ class ConversationHistory:
             # tool cycle strips them from its wire copy, but history replay
             # didn't — every later turn re-sent them to the LLM as literal
             # text (2026-08-09 for <<>>; the gallery JSON rode along unnoticed
-            # until 2026-09-10). Same pattern as strip_ui_markers.
+            # until 2026-09-10). The list is core/ui_markers.py, shared with
+            # strip_ui_markers.
             c = llm_msg.get("content")
-            if isinstance(c, str) and ('<<' in c or '<!--GALLERY:' in c or '<!--FILES:' in c):
+            if _has_ui_marker(c):
                 llm_msg["content"] = _UI_MARKER_RE.sub('', c).strip()
 
             msgs.append(llm_msg)

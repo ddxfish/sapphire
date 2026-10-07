@@ -72,9 +72,13 @@ def test_strip_leaves_other_text_alone():
 
 
 def test_history_replay_checks_for_the_marker():
-    """The replay strip is gated on a cheap `in` check; FILES must be in it."""
+    """The replay strip is gated on a cheap check, then strips through the one
+    marker list (core/ui_markers.py, 2026-10-07); FILES must be in both."""
+    from core import ui_markers
     src = (ROOT / 'core' / 'chat' / 'history.py').read_text(encoding='utf-8')
-    assert "'<!--FILES:' in c" in src
+    assert '_has_ui_marker(c)' in src and 'from core.ui_markers import' in src
+    assert ui_markers.has_marker('x <!--FILES:{"items":[]}-->')
+    assert ui_markers.UI_MARKER_RE.sub('', 'x <!--FILES:{"items":[]}-->').strip() == 'x'
 
 
 def test_live_turn_wire_copy_drops_the_marker():

@@ -1,0 +1,5 @@
+esptool-js 0.7.0 - https://github.com/espressif/esptool-js
+Copyright 2022-2025 Espressif Systems (Shanghai) CO LTD
+Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+Vendored as bundle.js (ES module, pako inlined: MIT/Zlib) for the Devices
+page's flasher (views/settings-tabs/device-flash.js). Unmodified.

@@ -232,11 +232,41 @@ each sensor also shows as a reading in the status strip. A name ends in its
 unit, like `temp_c` or `humidity_pct`; a bare light sensor sends its raw
 number until it is calibrated.
 
+### A new board from the browser
+
+An ESP32 board that has never been set up is done entirely from this page,
+in Chrome or Edge: **+ Add Device > New board (USB)**. Plug the board into
+the computer the browser runs on with a data cable, press **Connect** and
+pick its port. The chip is read, so only the boards it can run are offered;
+**Install** writes the firmware over USB (a progress bar, under a minute).
+Then three things: a name, the WiFi (the networks the board can see, or
+one typed, for a hidden network or a board being set up away from home),
+and the password. Sapphire makes the board's two keys, hands it her address
+and certificate, and the board restarts and joins the WiFi. When it calls
+in, its address is learned from that call and the device goes online by
+itself. A board set up away from its WiFi stays "waiting for the board"
+until it gets home.
+
+The firmware comes from the source named by `DEVICE_FIRMWARE_SOURCE`: the
+firmware release URL, or a folder on Sapphire's computer with an
+`index.json` (`tools/firmware_manifest.py` makes one from an ESP-IDF
+build). Sapphire fetches it, never the page, and keeps each board's parts
+under `user/firmware_cache` so a board can be flashed again offline. With
+nothing to offer, the flasher shows the source and lets you set it there.
+
+On Linux the browser opens the port as you, so you need to be in the
+`dialout` group once. A board with native USB (an ESP32-S3) vanishes from
+the port list while it restarts; if it does not come back on its own, the
+flasher asks you to unplug it and plug it back in. If no bootloader answers
+at all, hold the BOOT button while plugging the board in.
+
+### Adding one by hand
+
 Add one with **+ Add Device**, type **Satellite**:
 
 | Field | What to enter |
 |---|---|
-| Address | Where the satellite listens, like `http://192.168.1.100:8090` |
+| Address | Where the satellite listens, like `http://192.168.1.100:8090`. Empty = learned the first time it calls in; it follows the satellite when its address changes |
 | Key Sapphire sends | The satellite's own key |
 | Has a camera | Turn off for a satellite with no camera. Sapphire is then not offered one |
 | Talks in chat | The chat its questions land in. Empty means the last chat used. A name means always that chat |

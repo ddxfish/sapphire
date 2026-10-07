@@ -87,6 +87,7 @@ class Agent(BaseAgent):
         self._loop = None
         self._client = None
         self._cost = 0.0
+        self._api_key = None            # apiKeySource when a key is billed; None = the login
         self.workspace = None
 
     # --- the thread -----------------------------------------------------------
@@ -138,8 +139,10 @@ class Agent(BaseAgent):
         async for msg in self._client.receive_response():
             if isinstance(msg, sdk.SystemMessage) and msg.subtype == 'init':
                 self.resume_token = msg.data.get('session_id') or self.resume_token
-                if msg.data.get('apiKeySource') not in (None, 'none'):
-                    self.event('note', f"billing an API key ({msg.data.get('apiKeySource')}), not the login")
+                src = msg.data.get('apiKeySource')
+                if src not in (None, 'none'):
+                    self._api_key = src
+                    self.event('note', f"billing an API key ({src}), not the login")
             elif isinstance(msg, sdk.AssistantMessage):
                 for b in msg.content:
                     if isinstance(b, sdk.TextBlock) and b.text:
@@ -162,7 +165,11 @@ class Agent(BaseAgent):
                     why = '; '.join(msg.errors or []) or (msg.result or msg.subtype or 'error')
                     self.report((body + '\n\n' if body else '') + f"[ended: {msg.subtype} — {_head(why, 300)}]")
                 else:
-                    tail = f"\n\n(cost so far ${self._cost:.2f} · session {str(self.resume_token or '')[:8]})"
+                    # total_cost_usd is the CLI's estimate at API list price, computed
+                    # whether or not anyone is billed. On the login (Pro/Max) it is
+                    # not a bill, so it only shows when a key is (verified 2026-10-07).
+                    cost = f"cost so far ${self._cost:.2f} ({self._api_key}) · " if self._api_key else ''
+                    tail = f"\n\n({cost}session {str(self.resume_token or '')[:8]})"
                     denied = _denials(msg)
                     if denied:
                         # auto mode's classifier said no to these; the director was not

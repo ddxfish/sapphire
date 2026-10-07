@@ -109,6 +109,12 @@ export function bindAllEvents() {
     // Document-level events
     document.addEventListener('visibilitychange', () => handleVisibilityChange(triggerSendWithText));
 
+    // A question card's answer (shared/ask-marker.js) is the user's next message:
+    // it rides the normal send path, so it queues in the inbox like typed text.
+    document.addEventListener('sapphire:ask_answer', e => {
+        const text = e.detail?.text;
+        if (text) triggerSendWithText(text);
+    });
 }
 
 // Image ready handler (for inline cloning) — bound at MODULE LOAD, not in

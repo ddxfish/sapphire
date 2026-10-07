@@ -245,6 +245,22 @@ def delete(url: str, **kw) -> requests.Response:
     return request('DELETE', url, **kw)
 
 
+def local_ip() -> str:
+    """The address this machine has on its own network, as a device on
+    that network would reach it: the source address of a route out (a UDP
+    socket is 'connected', nothing is sent). '' when there is no route."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('192.0.2.1', 9))          # TEST-NET-1: never answers, never sent to
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return ''
+
+
 def _invalidate():
     """Drop pooled sessions on any proxy-config change (registered on the
     socks_proxy invalidator chokepoint — same lifecycle as httpx pools)."""

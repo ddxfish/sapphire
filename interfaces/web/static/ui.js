@@ -5,6 +5,7 @@ import * as Parsing from './ui-parsing.js';
 import * as Streaming from './ui-streaming.js';
 import * as api from './api.js';
 import { dismissLater } from './shared/toast.js';
+import { lockAnsweredAskCards } from './shared/ask-marker.js';
 
 // DOM references. The chat surface is JS-rendered at boot (surface/surface.js)
 // so #chat-container / #chatbg-overlay don't exist at module-eval time —
@@ -457,6 +458,7 @@ export const addUserMessage = (txt, images = null, files = null) => {
 
     const { clone } = createMessage(msgData, cnt, cnt + 1, false);
     chat.appendChild(clone);
+    lockAnsweredAskCards(chat);     // the user spoke: any open question card is moot
     scrollToBottomIfSticky(true);
 };
 
@@ -507,6 +509,7 @@ export const renderHistory = (hist) => {
         if (el) el.dataset.key = key;
         chat.appendChild(clone);
     }
+    lockAnsweredAskCards(chat);     // only a card nothing was said after stays live
 
     updateToolbars();   // re-derives index / Continue / trash counts on the kept rows too
 

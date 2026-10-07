@@ -149,6 +149,18 @@ def _is_cert_expired():
         return True  # Regenerate if we can't read it
 
 
+def cert_pem():
+    """The certificate as PEM text, for a device that pins it. '' when
+    SSL is off or there is no certificate yet."""
+    import config
+    if not getattr(config, 'WEB_UI_SSL_ADHOC', False):
+        return ''
+    try:
+        return CERT_FILE.read_text(encoding='utf-8')
+    except OSError:
+        return ''
+
+
 def get_cert_info():
     """Get info about the current certificate for display."""
     from cryptography import x509

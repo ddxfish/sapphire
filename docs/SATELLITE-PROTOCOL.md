@@ -131,6 +131,25 @@ firmware keep this order, and both state `plays`.
 Sapphire's address is HTTPS with her own certificate, for example
 `https://192.168.1.101:8073`.
 
+**Its own address is learned.** Every call below carries the board's key,
+so the address it calls from is where it lives: Sapphire writes that into
+the device's `url` when the device has none (a board set up from the
+browser) or when the host changed (a new DHCP lease), keeping the scheme and
+port it had. Only an address on the local network is believed. A board
+therefore never needs its address typed, and a board that moves is
+followed. Drivers opt in with `learns_address` in their SPEC.
+
+**Setting a board up.** Sapphire's own firmware takes its settings over
+its USB console, one line in and one `>> {json}` line back: `setup {json}`
+with `name`, `wifi_ssid`, `wifi_password`, `key` (the key Sapphire sends),
+`voice_key` (the key the board sends), `sapphire` (her address) and `cert`
+(her certificate, PEM); a field left out keeps its old value, and the board
+saves and restarts. `show` answers what it has (`ready`, `ip`, `firmware`,
+the names of what is set). `scan` answers `{"networks": [{"ssid", "rssi"}]}`
+so a flasher can offer the WiFi as a list. The Devices page's flasher
+speaks this over Web Serial after writing the firmware; `setup_board.py`
+speaks it from a terminal.
+
 ### Its wake word fired
 
 Two boards in one room hear the same wake word, and so does Sapphire's own
@@ -247,6 +266,7 @@ the stream ends, open it again. A board only ever hears about its own turns.
 - Driver: `core/devices/drivers/satellite.py`. It asks `/health` on every status, and at most once a minute before it speaks (`ABOUT_FRESH`).
 - `has` is kept by the engine on the device row (`parts[].has`, `engine.capabilities`). `status()` of any driver may answer it.
 - Conversion: `core/devices/voice.py` `fit(audio, kind, plays)`, checked by `wanted(plays)`. The only place her voice is converted for a device.
+- A board from the browser: `interfaces/web/static/views/settings-tabs/device-flash.js` (esptool-js over Web Serial, then the console line), `POST /api/devices/provision` (`engine.provision`: the row with no url, two keys, her address from `net.local_ip`, `ssl_utils.cert_pem`), `GET /api/devices/firmware[/{board}/{part}]` (`core/devices/firmware.py`, index + ESP Web Tools manifests, cached). The address: `engine.learned`, called by `_device_key` on every device door.
 - Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`; typed words `devices_text` (POST) and `devices_text_read` (GET), which ride `voice.typed`, `voice.Reply` and `voice.reply_text`.
 - Backups onto a board: `core/devices/storage.py` makes a `SatelliteTarget` (in the driver) for every device whose `has` says `storage`; `core/backup_targets.ship` seals once, PUTs, rotates by the device's keep fields, drops the openers. Never plaintext: `Target.check` (Sapphire) + the board's own magic check.
 - `tests/test_docs_satellite_protocol.py` runs this page's health example through the real driver and checks every address in the table.

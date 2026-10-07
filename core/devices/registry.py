@@ -110,6 +110,9 @@ def register_driver(driver_id, spec, plugin_name, builtin=False):
                 'config_schema': schema,
                 'locked_by_default': locked,
                 'presence': spec.get('presence') is True,
+                # its device calls Sapphire with its own key: the address it
+                # calls from becomes its `url` (engine.learned)
+                'learns_address': spec.get('learns_address') is True,
                 # tools of OTHER plugins this driver may run. Core's own
                 # drivers only: a plugin's driver runs its own tools.
                 'uses_tools': [str(t) for t in (spec.get('uses_tools') or [])][:8] if builtin else [],

@@ -11,7 +11,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 
 from core.auth import require_login, check_endpoint_rate, get_client_ip
 
@@ -114,6 +114,39 @@ def found_things(driver_id, device_id=''):
     return {"found": e.found(driver_id, config)}
 
 
+def provision_device(body):
+    """A board being set up from the browser (the flasher in + Add Device):
+    the device row with no address yet, its two fresh keys, and what the
+    board needs to find Sapphire. The page carries it all to the board over
+    USB; the address is learned when the board calls in."""
+    import config
+    from core import net
+    from core.ssl_utils import cert_pem
+    e = _engine()
+    row, keys = e.provision(body.get("label"), body.get("driver") or "satellite",
+                            location=body.get("location") or '')
+    host = net.local_ip()
+    if not host:
+        raise e.DeviceError("This machine has no network address yet. Connect it to the network first.")
+    scheme = 'https' if getattr(config, 'WEB_UI_SSL_ADHOC', False) else 'http'
+    return {"device": _view(row), "id": row["id"], **keys,
+            "sapphire": f"{scheme}://{host}:{int(getattr(config, 'WEB_UI_PORT', 8073))}",
+            "cert": cert_pem()}
+
+
+def firmware_index():
+    from core.devices import firmware
+    return firmware.index()
+
+
+def firmware_part(board_id, path):
+    from core.devices import firmware
+    try:
+        return firmware.part(board_id, path)
+    except firmware.FirmwareError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 def run_action(device_id, body):
     e = _engine()
     result, ok = e.run(device_id, body.get("capability"), body.get("action"), body.get("value"),
@@ -179,6 +212,25 @@ async def devices_found(driver_id: str, request: Request, device: str = '', _=De
     return await _do(found_things, driver_id, device)
 
 
+@router.post("/api/devices/provision")
+async def devices_provision(request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    return await _do(provision_device, await _body(request))
+
+
+@router.get("/api/devices/firmware")
+async def devices_firmware(request: Request, _=Depends(require_login)):
+    _open(request)
+    return await _do(firmware_index)
+
+
+@router.get("/api/devices/firmware/{board_id}/{path:path}")
+async def devices_firmware_part(board_id: str, path: str, request: Request, _=Depends(require_login)):
+    _open(request)
+    where = await _do(firmware_part, board_id, path)
+    return FileResponse(str(where), media_type="application/octet-stream", filename=where.name)
+
+
 @router.get("/api/devices/{device_id}")
 async def devices_get(device_id: str, request: Request, _=Depends(require_login)):
     _open(request)
@@ -227,7 +279,9 @@ async def _device_key(device_id, request, door, per_min=VOICE_PER_MIN):
     if not await asyncio.to_thread(voice.key_ok, device_id, key):
         raise HTTPException(status_code=401, detail="unknown device or wrong key")
     from core.devices import health
-    health.seen(device_id.strip().lower())     # it spoke with its own key: it is online
+    device_id = device_id.strip().lower()
+    health.seen(device_id)                     # it spoke with its own key: it is online
+    await asyncio.to_thread(_engine().learned, device_id, get_client_ip(request))   # and that is where it lives
     return key
 
 

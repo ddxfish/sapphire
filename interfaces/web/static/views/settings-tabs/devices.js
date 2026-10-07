@@ -17,6 +17,7 @@ import { showModal, escapeHtml as esc } from '../../shared/modal.js';
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
+import { openFlash } from './device-flash.js';
 
 const API = '/api/devices';
 const ICON = String.fromCodePoint(0x1F39B, 0xFE0F);
@@ -165,6 +166,17 @@ function typeCard(d) {
     </button>`;
 }
 
+// a board written over USB from this browser, then set up: device-flash.js
+function boardCard() {
+    if (!drivers.some(d => d.driver === 'satellite' && d.available)) return '';
+    return `<button type="button" class="ui-card" id="dev-new-board" style="cursor:pointer;text-align:left;font:inherit">
+        <div style="font-size:1.6em;line-height:1.2">\u{1F50C}</div>
+        <div class="ui-card-title" style="padding-right:0">New board (USB)</div>
+        <div class="ui-card-body" style="margin-top:2px">plug an ESP32 board in: it is written and set up from here</div>
+    </button>`;
+}
+
+
 function openAdd() {
     const modal = showModal(`${ICON} Add a device`,
         [{ type: 'html', value: '<div id="dev-add"></div>' }], null, { wide: true });
@@ -177,12 +189,16 @@ function openAdd() {
         addBtn?.remove(); addBtn = null;
         body.innerHTML = drivers.length
             ? `<div class="setting-help" style="margin-bottom:10px">What are you adding?</div>
-               <div class="ui-grid ui-grid-sm">${drivers.map(typeCard).join('')}</div>`
+               <div class="ui-grid ui-grid-sm">${boardCard()}${drivers.map(typeCard).join('')}</div>`
             : '<p class="text-muted" style="font-size:0.9em">No device types yet. Enable a plugin that provides one, such as SSH.</p>';
         body.querySelectorAll('[data-driver]').forEach(c => c.addEventListener('click', () => {
             const d = drivers.find(x => x.driver === c.dataset.driver && x.available);
             if (d) setup(d);
         }));
+        body.querySelector('#dev-new-board')?.addEventListener('click', () => {
+            modal.close();
+            openFlash(async id => { await loadList(); openDevice(id, undefined, { test: true }); });
+        });
     };
 
     // step 2: only what this type needs

@@ -57,6 +57,7 @@ Wikipedia research
 Web image view
 Notepad
 Net checks
+ask_user question card
 schedule_task
 set_scene set_motion
 set_voice

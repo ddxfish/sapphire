@@ -90,6 +90,7 @@ def test_spec_registers_as_a_core_driver():
     assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))
     assert spec['locked_by_default'] == []                    # she may restart a satellite
     assert [f['key'] for f in spec['config_schema'] if f.get('secret')] == ['token', 'voice_key']
+    assert spec['learns_address'] is True                     # it calls in: its address is learned
     importlib.reload(reg)
 
 
@@ -97,7 +98,7 @@ def test_validate():
     ok = lambda url: sat.validate({'url': url})
     assert ok('192.168.1.100:8090/')[0]['url'] == 'http://192.168.1.100:8090'
     assert ok('http://sapphire-pi:8090')[1] == '' and ok('https://pi.local:8090')[1] == ''
-    assert 'needed' in ok('')[1]
+    assert ok('')[1] == '' and ok('')[0]['url'] == ''        # learned when it calls in (engine.learned)
     assert 'own network' in ok('http://8.8.8.8:8090')[1]
     assert 'own network' in ok('http://pi.example.com')[1]
     assert 'not a usable address' in ok('ftp://192.168.0.2')[1]

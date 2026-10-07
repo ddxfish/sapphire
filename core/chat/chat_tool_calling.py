@@ -42,24 +42,18 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     if not content:
         return content
 
-    # Pattern to match <<TYPE::data>> markers. The GALLERY marker (tile list a
-    # tool appends for the browser — see shared/gallery-marker.js) is UI-only
-    # too: the model already has the numbered URL list above it. It rides the
-    # keep_img rule for the same reason IMG does. 2026-09-09.
-    # The FILES marker (core/attachments.py: a player / download row) rides
-    # the same two rules. 2026-09-26.
-    if keep_img:
-        marker_pattern = r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*'
-    else:
-        marker_pattern = (r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
-                          r'|<!--FILES:\{[^\n]*\}-->\s*')
+    # The one list of browser-only markers (GALLERY tile strip, FILES row, ASK
+    # card, <<X::id>>) lives in core/ui_markers.py; keep_img keeps the ones a
+    # history-less lane must persist for the browser.
+    from core.ui_markers import UI_MARKER_RE, UI_MARKER_KEEP_IMG_RE
+    marker_pattern = UI_MARKER_KEEP_IMG_RE if keep_img else UI_MARKER_RE
 
     # Remove all markers
-    clean = re.sub(marker_pattern, '', content)
-    
+    clean = marker_pattern.sub('', content)
+
     # Log if we stripped anything
     if clean != content:
-        markers_found = re.findall(marker_pattern, content)
+        markers_found = marker_pattern.findall(content)
         logger.info(f"[CLEANUP] Stripped {len(markers_found)} UI markers from tool result for LLM context")
         for marker in markers_found:
             logger.debug(f"   - {marker.strip()[:120]}")

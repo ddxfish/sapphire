@@ -3,6 +3,7 @@
 import * as Images from './ui-images.js';
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
+import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
 import { thinkSegments, stripThink, isSeedThink } from './shared/think.js';
 
 let globalThinkCounter = 0;
@@ -721,7 +722,9 @@ const renderToolResult = (el, part) => {
     // Tiles ride a UI marker (shared/gallery-marker.js); the accordion text drops it.
     const { entries: galleryEntries, title: galleryTitle, text: galleryStripped } =
         parseGalleryMarker(part.content || part.result || '');
-    const { groups: fileGroups, text: fullResult } = parseFilesMarker(galleryStripped);
+    const { groups: fileGroups, text: filesStripped } = parseFilesMarker(galleryStripped);
+    // A question card (ask_user) rides its own marker (shared/ask-marker.js).
+    const { cards: askCards, text: fullResult } = parseAskMarker(filesStripped);
 
     // Get truncation limit based on tool
     const maxLen = toolName === 'web_search' ? 1000 :
@@ -774,6 +777,7 @@ const renderToolResult = (el, part) => {
         if (galleryEntries.length) acc.dataset.gallery = '1';
         appendGallery(el, galleryEntries, galleryTitle);
         appendFiles(el, fileGroups);
+        appendAskCards(el, askCards);
         return;
     }
 
@@ -803,11 +807,18 @@ const renderToolResult = (el, part) => {
 
     appendGallery(el, galleryEntries, galleryTitle);
     appendFiles(el, fileGroups);
+    appendAskCards(el, askCards);
 };
 
 // Players + download buttons — the ONE renderer (shared/files-marker.js).
 const appendFiles = (el, groups) => {
     buildFilesRows(groups).forEach(row => el.appendChild(row));
+};
+
+// Question cards — the ONE renderer (shared/ask-marker.js). Live cards here
+// are locked afterwards by ui.js when a user message follows them.
+const appendAskCards = (el, cards) => {
+    buildAskCards(cards).forEach(card => el.appendChild(card));
 };
 
 // Tiles under a tool result — the ONE renderer (history + live stream share it).

@@ -3,6 +3,7 @@
   "limited_web": {
     "emoji": "🌐",
     "functions": [
+      "ask_user",
       "web_search",
       "get_website",
       "web_view_images",
@@ -27,6 +28,7 @@
   "default": {
     "emoji": "\uD83E\uDDF0",
     "functions": [
+      "ask_user",
       "web_search",
       "get_website",
       "get_wikipedia",
@@ -51,6 +53,7 @@
   "work": {
     "emoji": "\uD83D\uDCBC",
     "functions": [
+      "ask_user",
       "web_search",
       "get_website",
       "get_wikipedia",
@@ -73,6 +76,7 @@
   "smarthome": {
     "emoji": "\uD83C\uDFE0",
     "functions": [
+      "ask_user",
       "ha_list_scenes_and_scripts",
       "ha_activate",
       "ha_list_areas",
@@ -93,6 +97,7 @@
   "personality": {
     "emoji": "\uD83C\uDFAD",
     "functions": [
+      "ask_user",
       "prompt_view",
       "prompt_switch",
       "reset_chat",

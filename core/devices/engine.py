@@ -51,7 +51,7 @@ PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
 LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage')    # these carry a "Sapphire may use this" switch
 MAX_FOUND = 64           # things one driver may report as found
 ALL = 'all'              # the composite device: her voice on every device that can speak
-RESERVED = ('found', ALL)   # names a device may not have: the routes and `all` use them
+RESERVED = ('found', ALL, 'firmware', 'provision')   # names a device may not have: the routes and `all` use them
 CLEAR = '__CLEAR__'
 KEPT = 'set'            # what public() shows for a stored secret; sent back, it means "as it is"
 PAGE = 'Settings > Devices'
@@ -158,6 +158,11 @@ def retell():
 
 def _slug(name):
     return str(name or '').strip().lower()
+
+
+def _name_from(label):
+    """A device id from what the user called it: 'Kitchen Pocket' -> 'kitchen-pocket'."""
+    return re.sub(r'[^a-z0-9_-]+', '-', _slug(label)).strip('-_')[:33]
 
 
 def _place(text):
@@ -620,6 +625,7 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     failed = []
     for driver_id, ops in pending:
         failed += _apply_secrets(target, driver_id, ops)
+    _seen_from.pop(device_id, None)               # a typed address, or a new name: learn afresh
     if target != device_id:
         _health().rename(device_id, target)
     else:
@@ -628,10 +634,94 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     return row, failed
 
 
+def provision(label, driver_id, location=''):
+    """A board about to be set up from the browser (the Devices page's
+    flasher): its name and the two keys it will carry. A new name is a new
+    row with NO address: that is learned when the board calls in. A name in
+    use is that device with fresh keys: the board is being flashed again.
+    Returns (row, {'token', 'voice_key'})."""
+    import secrets as rand
+    driver_id = _slug(driver_id)
+    device_id = _name_from(label)
+    if not ID_RE.fullmatch(device_id) or device_id in RESERVED:
+        raise DeviceError("Give the board a name: letters and digits, up to 33 characters.")
+    keys = {'token': rand.token_urlsafe(24), 'voice_key': rand.token_urlsafe(24)}
+    if device_id in rows():
+        if not _part(get(device_id), driver_id):
+            raise DeviceError(f"'{device_id}' is a different kind of device. Pick another name.")
+        row, failed = update(device_id, parts={driver_id: keys})
+    else:
+        row, failed = add(device_id, label, driver_id, dict(keys, url=''), location=location)
+    if failed:
+        raise DeviceError("The board's keys could not be stored: " + ", ".join(failed) + ".")
+    return row, keys
+
+
+def learned(device_id, host):
+    """The device just called in from `host` with its own key: that is
+    where it lives. Each part whose driver `learns_address` takes it as its
+    url - one it never had (a board set up from the browser), or one whose
+    host changed (a new DHCP lease). The scheme and port it had are kept.
+    Only an address on this network is believed. Never raises."""
+    from urllib.parse import urlsplit
+    from core import net
+    try:
+        host = str(host or '').strip()
+        device_id = _slug(device_id)
+        if not host or _seen_from.get(device_id) == host:     # a screen pulls many times a second
+            return
+        if net.classify(host) != 'lan':
+            return
+        _seen_from[device_id] = host
+        if ':' in host and not host.startswith('['):
+            host = f'[{host}]'                    # an IPv6 literal in a URL
+        row = rows().get(device_id)
+        if not row:
+            return
+        changes = {}
+        for part in row.get('parts', []):
+            spec = _registry().get_driver(part.get('driver')) or {}
+            if not spec.get('learns_address'):
+                continue
+            old = str((part.get('config') or {}).get('url') or '')
+            p = urlsplit(old) if old else None
+            new = f"{p.scheme if p and p.scheme else 'http'}://{host}" + (f":{p.port}" if p and p.port else '')
+            if new != old:
+                changes[part['driver']] = new
+        if not changes:
+            return
+
+        def step(table):
+            for driver_id, url in changes.items():
+                mine = _part(table.get(row['id']) or {}, driver_id)
+                if mine is not None:
+                    mine.setdefault('config', {})['url'] = url
+        _write(step)
+        for driver_id, url in changes.items():
+            logger.info(f"[DEVICES] {row['id']}: address learned, {url} ({driver_id})")
+        _health().poke(row['id'])
+        # it can take its settings now that it can be reached; off this thread,
+        # which is the device's own request
+        threading.Timer(2.0, _tell_later, (row['id'],)).start()
+    except Exception as e:
+        logger.warning(f"[DEVICES] learned({device_id}) failed: {e}")
+
+
+_seen_from = {}                # device id -> the host it last called from
+
+
+def _tell_later(device_id):
+    try:
+        tell(get(device_id))
+    except DeviceError:
+        pass                                      # removed in the meantime
+
+
 def remove(device_id):
     row = get(device_id)
     _write(lambda t: t.pop(row['id'], None))
     _secrets().delete(row['id'])
+    _seen_from.pop(row['id'], None)
     _health().forget(row['id'])
     _changed()
     return row
