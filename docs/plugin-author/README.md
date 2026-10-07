@@ -47,6 +47,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Widgets](widgets.md) | Dashboard panels — manifest, render contract, settings schema, sample plugin |
 | [Games](games.md) | Game Room games — engine contract, sealed seat, board modules, sessions-are-chats |
 | [Devices](devices.md) | Device drivers - teach Sapphire a machine or gadget: manifest declaration, the three driver functions, secrets, the tool door |
+| [Agents](agents.md) | Agent kinds - a background worker she spawns: the Agent class, ask/event/report, privacy flags, the four core tools |
 | [Stories](stories.md) | Story packs — rooms, referee, dice, sealed blanks, identity modes, backdrops |
 | [Apps](APPS.md) | Full-page plugin UIs in the Apps nav — render/cleanup contract, navrail + flyout promotion |
 | [Settings](settings.md) | Manifest-declared settings, custom web UI, settings API, danger confirms |

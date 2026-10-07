@@ -366,9 +366,13 @@ class ContinuityExecutor:
                 return self._run_background(task, result, progress_callback, response_callback,
                                             cancel_event=cancel_event)
 
-            # Named chat_target = foreground: switches to that chat, runs, restores
-            return self._run_foreground(task, result, progress_callback, response_callback,
-                                        cancel_event=cancel_event)
+            # Named chat_target = foreground: runs in that chat, waiting its turn
+            # in the chat's inbox (core/chat/inbox.py, wave I-3 2026-10-06). An
+            # event from a person on another surface (Discord, Telegram, email)
+            # stands with people; cron and webhooks stand with machines.
+            return self._run_foreground_queued(task, result, progress_callback, response_callback,
+                                               cancel_event=cancel_event,
+                                               lane='now' if event_data else 'later')
         finally:
             # Reset the event ContextVar. Harmless on today's fresh-thread-per-task
             # scheduler; load-bearing the day any pooled thread calls run() —
@@ -605,9 +609,84 @@ class ContinuityExecutor:
                 logger.warning(f"[EVENT-IMG] Failed to persist event image: {e}")
         return ("\n" + "\n".join(markers)) if markers else ""
 
+    def _resolve_target_chat(self, task: Dict[str, Any]) -> str:
+        """The chat a foreground task runs in, as kept - found by its normalized
+        name or created. Raises ValueError when the name cannot be a chat or
+        the chat cannot be made (a name sealed in the locked vault: fail LOUDLY,
+        never a plaintext twin)."""
+        session_manager = self.system.llm_chat.session_manager
+        target_chat = task.get("chat_target", "").strip()
+        # Normalize the same way create_chat sanitizes: keep alnum/space/dash/underscore
+        normalized = "".join(c for c in target_chat if c.isalnum() or c in (' ', '-', '_')).strip()
+        normalized = normalized.replace(' ', '_').lower()
+        # Guard: all-non-alnum chat_target (e.g. "!!!") normalizes to empty.
+        # Proceeding would create/write to a blank-named chat file — bad
+        # on-disk state and session_manager behavior for "" is undefined.
+        # Fail the task loudly instead. Chaos scout #15 — 2026-04-20.
+        if not normalized:
+            raise ValueError(
+                f"chat_target {target_chat!r} normalizes to empty — "
+                "refusing to create/write blank-named chat."
+            )
+        existing_chats = {c["name"]: c["name"] for c in session_manager.list_chat_files()}
+        match = existing_chats.get(normalized)
+        if match:
+            return match
+        logger.info(f"[Continuity] Creating new chat: {target_chat}")
+        # create_chat now publishes CHAT_CREATED itself (the creation
+        # chokepoint), so no explicit publish here.
+        if not session_manager.create_chat(target_chat):
+            # Vaulted chats Phase 1 (Krem's ruling: fail LOUDLY): the
+            # name may belong to a chat sealed in a locked vault — the
+            # list above can't see it, but the row exists. Falling
+            # through would create a plaintext twin and write into it
+            # in the clear, the one unforgivable outcome. Any create
+            # failure kills the task.
+            raise ValueError(
+                f"chat_target '{target_chat}' could not be created "
+                f"(name already taken — possibly by a chat sealed in "
+                f"the locked vault) — task refused.")
+        return normalized
+
+    def _run_foreground_queued(self, task, result, progress_cb=None, response_cb=None,
+                               cancel_event=None, lane='later') -> Dict[str, Any]:
+        """A foreground task waits its turn in its chat's inbox and HOLDS the
+        chat while it runs (an exclusive stream registration, so a typed turn
+        cannot start on top of it). Before this (scout B, 2026-10-06) the task
+        ran beside a live turn and its transcript append waited 60 s, then
+        dropped - the tool effects already done, the chat missing the exchange."""
+        from core.chat import inbox
+        try:
+            target_chat = self._resolve_target_chat(task)
+        except Exception as e:
+            error_msg = f"Persistent chat task failed: {e}"
+            logger.error(f"[Continuity] {error_msg}", exc_info=True)
+            result["errors"].append(error_msg)
+            publish(Events.CONTINUITY_TASK_ERROR, {"task": task.get("name", "Unknown"), "error": str(e)})
+            result["completed_at"] = datetime.now().isoformat()
+            return result
+
+        def _body():
+            return self._run_foreground(task, result, progress_cb, response_cb,
+                                        cancel_event=cancel_event, target_chat=target_chat, hold=True)
+        try:
+            return inbox.turn(target_chat, _body, source=f"continuity:{task.get('name', '?')}", lane=lane)
+        except inbox.InboxRefused as e:
+            error_msg = f"Persistent chat task refused: {e}"
+            logger.warning(f"[Continuity] {error_msg}")
+            result["errors"].append(error_msg)
+            result["completed_at"] = datetime.now().isoformat()
+            return result
+
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any],
-                        progress_cb=None, response_cb=None, cancel_event=None) -> Dict[str, Any]:
+                        progress_cb=None, response_cb=None, cancel_event=None,
+                        target_chat=None, hold=False) -> Dict[str, Any]:
         """Run task with persistent chat history — no UI switching.
+
+        target_chat: the resolved chat name (see _resolve_target_chat); None
+        resolves it here. hold=True registers an exclusive stream on the chat
+        for the run's duration - ChatBusy propagates to the inbox, which tries
+        again when the chat frees up (never caught below).
 
         Voice-lock discipline: the lock is held for the ENTIRE duration of
         the task (snapshot → apply → LLM → TTS → restore). Before 2026-04-19
@@ -621,6 +700,32 @@ class ContinuityExecutor:
         from core.continuity.execution_context import ExecutionContext
 
         session_manager = self.system.llm_chat.session_manager
+        hold_sid = hold_name = None
+        if hold and target_chat:
+            # The chat is ours for the run. ChatBusy is NOT caught here: the
+            # inbox's drainer requeues this task at the head and tries again.
+            # Anything else (a test double without a stream registry) runs unheld.
+            from core.chat.chat import ChatBusy
+            try:
+                _held = self.system.llm_chat.begin_stream(chat_name=target_chat, exclusive=True)
+                if isinstance(_held, tuple) and len(_held) == 3:
+                    hold_sid, hold_name = _held[1], _held[2]
+            except ChatBusy:
+                raise
+            except Exception as e:
+                logger.debug(f"[Continuity] chat hold not taken for '{target_chat}': {e}")
+        try:
+            return self._run_foreground_held(task, result, progress_cb, response_cb, cancel_event,
+                                             target_chat, session_manager, ExecutionContext)
+        finally:
+            if hold_sid is not None:
+                try:
+                    self.system.llm_chat.end_stream(hold_sid, hold_name)
+                except Exception as e:
+                    logger.debug(f"[Continuity] chat hold release failed: {e}")
+
+    def _run_foreground_held(self, task, result, progress_cb, response_cb, cancel_event,
+                             target_chat, session_manager, ExecutionContext) -> Dict[str, Any]:
         original_voice: Dict[str, Any] = {}
         self._voice_lock.acquire()
         try:
@@ -632,44 +737,11 @@ class ContinuityExecutor:
             except Exception: pass
             self._voice_lock.release()
             raise
-        target_chat = task.get("chat_target", "").strip()
 
         try:
+            if not target_chat:
+                target_chat = self._resolve_target_chat(task)
             logger.info(f"[Continuity] Running '{task.get('name')}' with chat persistence, chat='{target_chat}'")
-
-            # Find existing chat or create new one
-            # Normalize the same way create_chat sanitizes: keep alnum/space/dash/underscore
-            normalized = "".join(c for c in target_chat if c.isalnum() or c in (' ', '-', '_')).strip()
-            normalized = normalized.replace(' ', '_').lower()
-            # Guard: all-non-alnum chat_target (e.g. "!!!") normalizes to empty.
-            # Proceeding would create/write to a blank-named chat file — bad
-            # on-disk state and session_manager behavior for "" is undefined.
-            # Fail the task loudly instead. Chaos scout #15 — 2026-04-20.
-            if not normalized:
-                raise ValueError(
-                    f"chat_target {target_chat!r} normalizes to empty — "
-                    "refusing to create/write blank-named chat."
-                )
-            existing_chats = {c["name"]: c["name"] for c in session_manager.list_chat_files()}
-            match = existing_chats.get(normalized)
-            if match:
-                target_chat = match
-            else:
-                logger.info(f"[Continuity] Creating new chat: {target_chat}")
-                # create_chat now publishes CHAT_CREATED itself (the creation
-                # chokepoint), so no explicit publish here.
-                if not session_manager.create_chat(target_chat):
-                    # Vaulted chats Phase 1 (Krem's ruling: fail LOUDLY): the
-                    # name may belong to a chat sealed in a locked vault — the
-                    # list above can't see it, but the row exists. Falling
-                    # through would create a plaintext twin and write into it
-                    # in the clear, the one unforgivable outcome. Any create
-                    # failure kills the task.
-                    raise ValueError(
-                        f"chat_target '{target_chat}' could not be created "
-                        f"(name already taken — possibly by a chat sealed in "
-                        f"the locked vault) — task refused.")
-                target_chat = normalized
 
             # Build ExecutionContext — isolated, no singleton mutation.
             # "Webhook specifies chat name" (trigger_config.chat_from_payload): the

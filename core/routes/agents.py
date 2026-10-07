@@ -33,7 +33,9 @@ def _validate_workspace(project):
     """Resolve and validate a project workspace. Returns path or raises."""
     base = Path(_get_workspace_base()).resolve()
     ws = (base / project).resolve()
-    if not str(ws).startswith(str(base)) or not ws.is_dir():
+    # is_relative_to, not startswith: '/w/proj-evil' starts with '/w/proj'
+    # (the sibling-prefix class fixed in api_fastapi.py; scout E 2026-10-06)
+    if not ws.is_relative_to(base) or ws == base or not ws.is_dir():
         raise HTTPException(404, "Workspace not found")
     return str(ws)
 
@@ -83,6 +85,163 @@ async def dismiss_agent(agent_id: str, _=Depends(require_login)):
     if 'error' in result:
         raise HTTPException(404, result['error'])
     return result
+
+
+# --- Agents v2 (tmp/agents-v2.md §3.7): kinds, spawn, and the per-agent doors.
+# Every agent door is CHAT-LOCAL: the body names the chat, the engine resolves
+# the agent only among that chat's agents, and a hidden chat is a 404 like a
+# missing one (scout C H3). No route returns another chat's content.
+
+def _mgr():
+    system = get_system()
+    mgr = getattr(system, 'agent_manager', None)
+    if mgr is None:
+        raise HTTPException(404, "Agent system not available")
+    return mgr
+
+
+def _chat_or_404(system, chat):
+    chat = str(chat or '').strip()
+    sm = system.llm_chat.session_manager
+    if not chat or sm.is_chat_hidden(chat) or sm.read_chat_settings(chat) is None:
+        raise HTTPException(404, "Chat not found")
+    return chat
+
+
+class AgentBody(BaseModel):
+    chat: str
+    value: str = ''
+
+
+class SpawnBody(BaseModel):
+    chat: str
+    kind: str
+    mission: str
+    options: dict = {}
+
+
+@router.get("/api/agents/kinds")
+async def agent_kinds(_=Depends(require_login)):
+    return {"kinds": _mgr().kinds()}
+
+
+@router.get("/api/agents/chats")
+async def agent_chats(_=Depends(require_login)):
+    """Chats that have agents - live, resting or recently finished - for the
+    Agents page's sidebar. Hidden (sealed) chats are left out."""
+    system = get_system()
+    mgr = _mgr()
+    sm = system.llm_chat.session_manager
+    names = {}
+    for a in mgr.check_all():
+        names.setdefault(a['chat_name'], {'live': 0, 'rows': 0})['live'] += 1
+    for r in mgr._load_rows():
+        names.setdefault(r.get('chat', ''), {'live': 0, 'rows': 0})['rows'] += 1
+    out = []
+    for name, n in names.items():
+        if not name:
+            continue
+        try:
+            if sm.is_chat_hidden(name) is True or sm.read_chat_settings(name) is None:
+                continue
+        except Exception:
+            continue
+        out.append({'chat': name, **n})
+    out.sort(key=lambda x: (-x['live'], x['chat']))
+    return {"chats": out}
+
+
+@router.get("/api/agents/list")
+async def agent_list(chat: str = Query(''), _=Depends(require_login)):
+    """One chat's agents for the Agents page: live ones in full (status,
+    progress, pending question, transcript tail) and the chat's rows (resting,
+    done, failed, lost) with their report heads. Chat-local; a hidden chat is a 404."""
+    system = get_system()
+    mgr = _mgr()
+    chat = _chat_or_404(system, chat)
+    live = []
+    for a in mgr._live_in(chat):
+        d = a.to_dict()
+        d['progress'] = a.progress()
+        d['events'] = a.transcript(40)
+        d['report_head'] = (a.result or '')[:400]
+        live.append(d)
+    live_ids = {a['id'] for a in live}
+    rows = []
+    for r in mgr._rows_in(chat):
+        if r['id'] in live_ids:
+            continue
+        content = mgr._content_get(chat, r['id'])
+        rows.append({**{k: r.get(k) for k in ('id', 'name', 'kind', 'status', 'started', 'ended', 'privacy')},
+                     'mission': (content.get('mission') or '')[:300],
+                     'report_head': (content.get('last_report') or '')[:400],
+                     'resumable': bool(r.get('resume_token'))})
+    rows.sort(key=lambda r: r.get('ended') or r.get('started') or 0, reverse=True)
+    from core.chat import inbox
+    return {"chat": chat, "agents": live, "rows": rows[:30], "inbox": inbox.peek(chat)}
+
+
+@router.post("/api/agents/spawn")
+async def agent_spawn(req: SpawnBody, _=Depends(require_login)):
+    system = get_system()
+    mgr = _mgr()
+    chat = _chat_or_404(system, req.chat)
+    # the route thread has no turn context: the engine's privacy check ORs in
+    # the chat's own stored settings, so a private chat still refuses a cloud kind
+    text, ok = mgr.spawn_text(chat, req.kind, req.mission, req.options or {})
+    if not ok:
+        raise HTTPException(400, text)
+    return {"message": text}
+
+
+@router.get("/api/agents/{agent_id}/transcript")
+async def agent_transcript(agent_id: str, chat: str = Query(''), last: int = Query(60), _=Depends(require_login)):
+    system = get_system()
+    mgr = _mgr()
+    chat = _chat_or_404(system, chat)
+    from core.agents.engine import AgentError
+    try:
+        agent, row = mgr._resolve(chat, agent_id)
+    except AgentError:
+        raise HTTPException(404, "Agent not found")
+    if agent is None:
+        return {"id": row['id'], "name": row['name'], "status": row.get('status'), "events": [], "pending_question": None}
+    return {"id": agent.id, "name": agent.name, "status": agent.status,
+            "progress": agent.progress(), "pending_question": agent.pending_question,
+            "events": agent.transcript(max(1, min(400, last)))}
+
+
+@router.post("/api/agents/{agent_id}/answer")
+async def agent_answer(agent_id: str, req: AgentBody, _=Depends(require_login)):
+    system = get_system()
+    mgr = _mgr()
+    chat = _chat_or_404(system, req.chat)
+    text, ok = mgr.action_text(chat, agent_id, 'answer', req.value)
+    if not ok:
+        raise HTTPException(400, text)
+    return {"message": text}
+
+
+@router.post("/api/agents/{agent_id}/say")
+async def agent_say(agent_id: str, req: AgentBody, _=Depends(require_login)):
+    system = get_system()
+    mgr = _mgr()
+    chat = _chat_or_404(system, req.chat)
+    text, ok = mgr.action_text(chat, agent_id, 'say', req.value)
+    if not ok:
+        raise HTTPException(400, text)
+    return {"message": text}
+
+
+@router.post("/api/agents/{agent_id}/stop")
+async def agent_stop(agent_id: str, req: AgentBody, _=Depends(require_login)):
+    system = get_system()
+    mgr = _mgr()
+    chat = _chat_or_404(system, req.chat)
+    text, ok = mgr.action_text(chat, agent_id, 'stop', '')
+    if not ok:
+        raise HTTPException(400, text)
+    return {"message": text}
 
 
 # --- Workspace runner routes ---

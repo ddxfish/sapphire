@@ -413,6 +413,15 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/agents/status` | List agents (?chat=name to filter) |
+| GET | `/api/agents/kinds` | the agent kinds plugins declared (available, cloud, conversational, spawn_schema) |
+| GET | `/api/agents/chats` | chats with agents (live / kept) — hidden chats left out |
+| GET | `/api/agents/list?chat=` | one chat's agents: live (progress, pending question, transcript tail) + rows; chat-local, hidden = 404 |
+| POST | `/api/agents/spawn` | `{chat, kind, mission, options}` — the privacy gate reads the chat's own settings |
+| GET | `/api/agents/{id}/transcript?chat=` | an agent's transcript ring (chat-local) |
+| POST | `/api/agents/{id}/answer` · `/say` · `/stop` | `{chat, value}` — resolve its question · a follow-up turn · end it |
+| GET | `/api/chat/queue?chat=` | what waits in a chat's inbox (ids, sources, lanes, ages — never text) |
+| POST | `/api/chat/queue/drop` | `{ticket, chat?}` — take a waiting typed turn out of the inbox |
+| — | `POST /api/chat/stream` on a busy chat | no longer 409: the body opens with `{"type":"queued","ticket","position"}` and streams the turn when it is its turn; `merged` when folded into the turn ahead; `queued_dropped` when taken out |
 | GET | `/api/agents/providers` | List available LLM providers for agents |
 | POST | `/api/agents/{id}/dismiss` | Dismiss an agent |
 

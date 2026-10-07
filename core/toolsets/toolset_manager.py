@@ -129,26 +129,46 @@ class ToolsetManager:
         "create_piece": "prompt_pieces",
         "list_pieces": "prompt_pieces",
         "set_tts_voice": "set_voice",
+        # Agents v2 (2026-10-06): the five agent tools, trinity_* and code_session
+        # became four core tools. Any ONE of the old names grants all four - a
+        # toolset that could only spawn must also be able to peek and answer, or
+        # it could never resolve an agent's question.
+        "agent_options": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "spawn_agent": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "check_agents": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "recall_agent": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "dismiss_agent": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "code_session": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "trinity_open": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "trinity_read": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "trinity_write": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "trinity_list": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
+        "trinity_close": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
     }
 
     def _migrate_renamed_tools(self):
         """Rewrite renamed tool references in every user toolset, order-preserving
-        and deduped (the *_piece collapse can produce repeats). Names not in the
-        map are left untouched, so custom user tools are never disturbed. Returns
+        and deduped (the *_piece collapse can produce repeats). A map value may
+        be a list: one old name grants several new ones. Names not in the map
+        are left untouched, so custom user tools are never disturbed. Returns
         True if anything changed (caller persists)."""
         changed = False
-        for ts in self._toolsets.values():
+        for name, ts in self._toolsets.items():
             funcs = ts.get("functions")
             if not isinstance(funcs, list):
                 continue
             new_funcs, seen = [], set()
             for fn in funcs:
                 mapped = self._TOOL_RENAMES.get(fn, fn)
-                if mapped in seen:
-                    continue
-                seen.add(mapped)
-                new_funcs.append(mapped)
+                for one in (mapped if isinstance(mapped, list) else [mapped]):
+                    if one in seen:
+                        continue
+                    seen.add(one)
+                    new_funcs.append(one)
             if new_funcs != funcs:
+                logger.info(f"Toolset '{name}': renamed tools migrated "
+                            f"({', '.join(f for f in funcs if f not in new_funcs)} -> "
+                            f"{', '.join(f for f in new_funcs if f not in funcs)})")
                 ts["functions"] = new_funcs
                 changed = True
         return changed

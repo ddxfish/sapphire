@@ -114,14 +114,18 @@ def test_poke_deposits_the_note_and_pokes(world):
 
 
 def test_session_end_disarms_and_runs_the_summary(world, monkeypatch):
-    ran = []
-    monkeypatch.setattr(play.threading if hasattr(play, 'threading') else __import__('threading'), 'Thread',
-                        lambda target, daemon, name: types.SimpleNamespace(start=lambda: target()))
+    # the summary waits its turn in the session chat's inbox (core/chat/inbox.py,
+    # 2026-10-06) instead of being dropped when the chat is mid-turn
+    from core.chat import inbox
+    told = []
+    monkeypatch.setattr(inbox, 'tell', lambda chat, text, source, coalesce=True, **kw:
+                        told.append((chat, text, source, kw.get('speak'), coalesce)) or 'tkt')
     out = play.session_end(body={'session': 'tbl'})
     assert out == {'status': 'ok', 'summary': True}
     kinds = [c[0] for c in world.calls]
-    assert 'disarm' in kinds and world.calls[-1][0] == 'fire_once'
-    assert world.calls[-1][4] == 'session_end' and world.calls[-1][3] == 'browser'
+    assert 'disarm' in kinds
+    assert told and told[-1][0] == 'tbl' and told[-1][2] == 'session_end' and told[-1][3] == 'browser'
+    assert told[-1][4] is False                    # a summary runs alone, never folded
     # summary off → disarm only
     world.chats['tbl']['game_room']['session_end_summary'] = False
     world.calls.clear()

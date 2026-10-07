@@ -1,340 +1,210 @@
-"""Surface 5 P1 — LLMWorker + agent plugin registration guards.
+"""The `llm` agent kind (plugins/agents/agent_kind.py) - the LLMWorker's startup
+decisions, moved behavior for behavior into agents v2 (tmp/agents-v2.md §18).
 
-Covers:
-  5.22 register_type idempotent at runtime
-  5.27 agent persona inline fallback when 'agent' persona missing
-  5.28 persona.prompt field resolves prompt file (NOT persona name) — Phase 5
-  5.29 resolve_model colon syntax splits provider:model
-  5.32 prompt='self' path (covered indirectly via persona_manager integration)
-
-These guard the LLMWorker's startup decisions. A regression here means a
-spawned agent runs with the wrong persona / scopes / model silently.
-
-See tmp/coverage-test-plan.md Surface 5 P1.
-"""
-import importlib.util
-import sys
-from pathlib import Path
+Each test pins a past fix: the inline lean 'agent' persona, persona -> prompt
+file resolution, 'self' = identity only, toolset/model resolution, the privacy
+carry, and the safety caps."""
+import importlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 
-def _load_agent_tools():
-    """Load plugins/agents/tools/agent_tools.py by file path.
-
-    The directory is fine for import (no hyphens), but loading by file path
-    keeps the test self-contained and avoids coupling to plugin-loader state.
-    """
-    if 'agent_tools_test' in sys.modules:
-        return sys.modules['agent_tools_test']
-    project_root = Path(__file__).resolve().parent.parent
-    module_path = project_root / 'plugins' / 'agents' / 'tools' / 'agent_tools.py'
-    spec = importlib.util.spec_from_file_location('agent_tools_test', module_path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules['agent_tools_test'] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
 @pytest.fixture
-def at():
-    """The agent_tools module."""
-    return _load_agent_tools()
+def kind():
+    return importlib.import_module('plugins.agents.agent_kind')
 
 
-# ─── 5.29 _resolve_model colon syntax ────────────────────────────────────────
+class _Engine:
+    """What the base Agent needs from the engine, recorded."""
 
-def test_resolve_model_colon_syntax(at):
-    """[PROACTIVE] 'provider:model' string → (provider, model_override).
-    Lets users force a specific model regardless of provider config."""
-    provider, model = at._resolve_model('anthropic:claude-opus-4-6')
-    assert provider == 'anthropic'
-    assert model == 'claude-opus-4-6'
+    def __init__(self):
+        self.reports, self.events = [], []
 
-    # Empty after colon is still a valid split (empty override)
-    provider, model = at._resolve_model('openai:')
-    assert provider == 'openai'
-    assert model == ''
+    def install_carrier(self, agent):
+        return None
 
+    def release_carrier(self, token):
+        pass
 
-def test_resolve_model_empty_returns_auto(at):
-    """Empty/None model → 'auto' provider, empty override."""
-    provider, model = at._resolve_model('')
-    assert provider == 'auto'
-    assert model == ''
+    def finished(self, agent):
+        pass
 
+    def report_out(self, agent, text):
+        self.reports.append(text)
 
-def test_resolve_model_unknown_string_falls_back_to_auto(at):
-    """An unresolvable model name → 'auto' provider, string passed as override."""
-    provider, model = at._resolve_model('some-unknown-model-xyz')
-    assert provider == 'auto'
-    # Exact content of model is implementation detail; assert it's non-empty
-    # so the provider still has SOMETHING to try
-    assert model  # Non-empty fallback
+    def event_out(self, agent, kind):
+        self.events.append(kind)
+
+    def question_out(self, agent, q):
+        pass
 
 
-# ─── 5.27 Agent persona inline fallback when 'agent' persona missing ─────────
+def _row(**opts):
+    return {'id': 't1', 'name': 'Alpha', 'kind': 'llm', 'chat': 'trinity', 'mission': 'test',
+            'options': opts, 'privacy': opts.pop('_privacy', False)}
 
-def test_llm_worker_inline_fallback_when_agent_persona_missing(at, monkeypatch):
-    """[REGRESSION_GUARD] If persona_manager.get('agent') returns nothing
-    (user/personas.json predates the 'agent' built-in), the worker MUST
-    use inline lean defaults (memory=default, goal=none, etc).
 
-    Without the fallback, scope settings are empty → all scopes stay at
-    defaults → the 'lean background worker' intent is violated. This was
-    the Phase 5 day-ruiner scout finding.
-    """
+def _capture(monkeypatch, persona):
+    """Stub persona_manager, get_system and ExecutionContext; return the
+    dict ExecutionContext was built with."""
     from core import personas
-    LLMWorker = at._create_llm_worker()
-
-    # Mock persona_manager to return None for 'agent'
     fake_mgr = MagicMock()
-    fake_mgr.get.return_value = None
+    fake_mgr.get.return_value = persona
     monkeypatch.setattr(personas, 'persona_manager', fake_mgr)
-
-    # Stub get_system + ExecutionContext so run() exits early after persona resolution
     import core.api_fastapi as apifa
     sys_mock = MagicMock()
-    sys_mock.llm_chat.function_manager = MagicMock()
-    sys_mock.llm_chat.tool_engine = MagicMock()
     monkeypatch.setattr(apifa, '_system', sys_mock, raising=False)
-
-    captured_settings = {}
-    from core.continuity import execution_context as exec_ctx_mod
-
-    class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
-            captured_settings.update(settings)
-            self.tool_log = []
-        def run(self, mission):
-            return ''
-
-    monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _CapturingCtx)
-
-    worker = LLMWorker(
-        agent_id='t1', name='Alpha', mission='test',
-        chat_name='trinity', prompt='agent',
-    )
-    worker.run()
-
-    # Inline fallback kicked in with lean defaults. 2026-04-19: every scope
-    # flipped to 'none' — agents shouldn't read from or write to the user's
-    # personal memory/knowledge/people/goals by default. See agent_tools.py
-    # for the rationale comment.
-    assert captured_settings.get('memory_scope') == 'none'
-    assert captured_settings.get('goal_scope') == 'none'
-    assert captured_settings.get('knowledge_scope') == 'none'
-    assert captured_settings.get('people_scope') == 'none'
-    assert captured_settings.get('email_scope') == 'none'
-    assert captured_settings.get('bitcoin_scope') == 'none'
-
-
-def test_llm_worker_no_inline_fallback_for_non_agent_persona(at, monkeypatch):
-    """Inverse: fallback is ONLY for prompt='agent'. Any other persona that
-    resolves to empty settings gets empty settings — we don't invent scope
-    defaults for user-named personas (that would silently override user
-    intent)."""
-    from core import personas
-    LLMWorker = at._create_llm_worker()
-
-    fake_mgr = MagicMock()
-    fake_mgr.get.return_value = None
-    monkeypatch.setattr(personas, 'persona_manager', fake_mgr)
-
-    import core.api_fastapi as apifa
-    sys_mock = MagicMock()
-    sys_mock.llm_chat.function_manager = MagicMock()
-    sys_mock.llm_chat.tool_engine = MagicMock()
-    monkeypatch.setattr(apifa, '_system', sys_mock, raising=False)
-
-    captured_settings = {}
-    from core.continuity import execution_context as exec_ctx_mod
-
-    class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
-            captured_settings.update(settings)
-            self.tool_log = []
-        def run(self, mission):
-            return ''
-
-    monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _CapturingCtx)
-
-    worker = LLMWorker(
-        agent_id='t1', name='Alpha', mission='test',
-        chat_name='trinity', prompt='user_custom_persona',
-    )
-    worker.run()
-
-    # For non-'agent' prompts, no scope keys should be injected from inline defaults
-    scope_keys = [k for k in captured_settings if k.endswith('_scope')]
-    assert not scope_keys, \
-        f"inline fallback wrongly fired for non-agent persona: {scope_keys}"
-
-
-# ─── 5.28 persona.prompt field resolves to prompt FILE name (Phase 5) ────────
-
-def test_llm_worker_persona_prompt_field_resolves_to_prompt_file_not_persona_name(
-    at, monkeypatch,
-):
-    """[REGRESSION_GUARD] A persona's `settings.prompt` field is the PROMPT
-    FILE name, not the persona name. If a user has persona='quirk_bot' whose
-    settings are {'prompt': 'sapphire', ...}, the worker should load the
-    'sapphire' prompt file, NOT a 'quirk_bot' one (which may not exist).
-
-    Before the Phase 5 fix, the worker passed persona name as prompt name,
-    silently falling back to 'You are a helpful assistant'.
-    """
-    from core import personas
-    LLMWorker = at._create_llm_worker()
-
-    fake_mgr = MagicMock()
-    fake_mgr.get.return_value = {
-        'settings': {
-            'prompt': 'sapphire',  # <-- the actual prompt file name
-            'memory_scope': 'custom',
-        },
-    }
-    monkeypatch.setattr(personas, 'persona_manager', fake_mgr)
-
-    import core.api_fastapi as apifa
-    sys_mock = MagicMock()
-    sys_mock.llm_chat.function_manager = MagicMock()
-    sys_mock.llm_chat.tool_engine = MagicMock()
-    monkeypatch.setattr(apifa, '_system', sys_mock, raising=False)
-
-    captured_settings = {}
-    from core.continuity import execution_context as exec_ctx_mod
-
-    class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
-            captured_settings.update(settings)
-            self.tool_log = []
-        def run(self, mission):
-            return ''
-
-    monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _CapturingCtx)
-
-    worker = LLMWorker(
-        agent_id='t1', name='Alpha', mission='test',
-        chat_name='trinity', prompt='quirk_bot',  # persona name
-    )
-    worker.run()
-
-    # prompt should be the FILE name from settings, not the persona name
-    assert captured_settings.get('prompt') == 'sapphire', \
-        f"prompt field not resolved correctly: got {captured_settings.get('prompt')!r}"
-    # Scope from persona also carries through
-    assert captured_settings.get('memory_scope') == 'custom'
-
-
-def test_llm_worker_persona_without_prompt_field_falls_back_to_persona_name(
-    at, monkeypatch,
-):
-    """If persona.settings doesn't set 'prompt', fall back to the persona name
-    (prompt file name == persona name, the common case)."""
-    from core import personas
-    LLMWorker = at._create_llm_worker()
-
-    fake_mgr = MagicMock()
-    fake_mgr.get.return_value = {
-        'settings': {
-            # No 'prompt' field
-            'memory_scope': 'personal',
-        },
-    }
-    monkeypatch.setattr(personas, 'persona_manager', fake_mgr)
-
-    import core.api_fastapi as apifa
-    sys_mock = MagicMock()
-    sys_mock.llm_chat.function_manager = MagicMock()
-    sys_mock.llm_chat.tool_engine = MagicMock()
-    monkeypatch.setattr(apifa, '_system', sys_mock, raising=False)
-
     captured = {}
     from core.continuity import execution_context as exec_ctx_mod
 
     class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
+        def __init__(self, fm, te, settings, session_manager=None, **kw):
             captured.update(settings)
+            captured['_kw'] = kw
             self.tool_log = []
+            self.degraded_reason = None
+
         def run(self, mission):
-            return ''
+            captured['_mission'] = mission
+            return 'done'
 
     monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _CapturingCtx)
+    monkeypatch.setattr(kind_mod(), '_settings', lambda: {})
+    return captured
 
-    worker = LLMWorker(
-        agent_id='t1', name='Alpha', mission='test',
-        chat_name='trinity', prompt='sapphire',
-    )
-    worker.run()
 
+def kind_mod():
+    return importlib.import_module('plugins.agents.agent_kind')
+
+
+# --- _resolve_model -----------------------------------------------------------------
+
+def test_resolve_model_colon_syntax(kind):
+    assert kind._resolve_model('anthropic:claude-haiku-4-5') == ('anthropic', 'claude-haiku-4-5')
+
+
+def test_resolve_model_empty_returns_auto(kind):
+    assert kind._resolve_model('') == ('auto', '')
+    assert kind._resolve_model(None) == ('auto', '')
+
+
+def test_resolve_model_unknown_string_falls_back_to_auto(kind, monkeypatch):
+    import config as cfg
+    monkeypatch.setattr(cfg, 'LLM_PROVIDERS', {}, raising=False)
+    monkeypatch.setattr(cfg, 'LLM_CUSTOM_PROVIDERS', {}, raising=False)
+    assert kind._resolve_model('mystery-model') == ('auto', 'mystery-model')
+
+
+# --- the run's decisions -------------------------------------------------------------
+
+def test_inline_lean_fallback_when_agent_persona_missing(kind, monkeypatch):
+    """persona_manager.get('agent') returns nothing (user/personas.json predates
+    the built-in): every scope must be 'none' - agents are headless workers
+    that must not read or write the user's memory (2026-04-19)."""
+    captured = _capture(monkeypatch, None)
+    kind.Agent(_row(prompt='agent'), _Engine()).run('test')
+    for k in ('memory_scope', 'goal_scope', 'knowledge_scope', 'people_scope', 'email_scope', 'bitcoin_scope'):
+        assert captured.get(k) == 'none'
+
+
+def test_no_inline_fallback_for_a_user_named_persona(kind, monkeypatch):
+    """The fallback is ONLY for prompt='agent'; a user persona that resolves to
+    nothing gets nothing - we never invent scope defaults over user intent."""
+    captured = _capture(monkeypatch, None)
+    kind.Agent(_row(prompt='user_custom_persona'), _Engine()).run('test')
+    assert not [k for k in captured if k.endswith('_scope')]
+
+
+def test_persona_prompt_field_resolves_to_the_prompt_file_not_the_persona_name(kind, monkeypatch):
+    """Persona names and prompt-file names are two namespaces: 'quirk_bot' may
+    use the 'sapphire' prompt file. Loading by persona name fell back to
+    "helpful assistant" - silent voice loss."""
+    captured = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'custom', 'voice': 'x'}})
+    kind.Agent(_row(prompt='quirk_bot'), _Engine()).run('test')
     assert captured.get('prompt') == 'sapphire'
-    assert captured.get('memory_scope') == 'personal'
+    assert captured.get('memory_scope') == 'custom'
+    assert 'voice' not in captured                                   # only *_scope keys ride
 
 
-# ─── 5.22 register_llm_type is idempotent ────────────────────────────────────
-
-def test_register_llm_type_idempotent(at):
-    """[PROACTIVE] Calling _register_llm_type twice on the same manager must
-    not raise or double-register. Plugin reload cycles re-run the module
-    bottom, which calls _register_llm_type — idempotence required.
-    """
-    from core.agents.manager import AgentManager
-    mgr = AgentManager(max_concurrent=3)
-    at._register_llm_type(mgr)
-    assert 'llm' in mgr.get_types()
-
-    # Second call must be a no-op
-    at._register_llm_type(mgr)
-    types = mgr.get_types()
-    # Still exactly one 'llm' entry, manager is intact
-    assert 'llm' in types
-    assert types['llm']['display_name'] == 'LLM Agent'
+def test_persona_without_prompt_field_falls_back_to_its_name(kind, monkeypatch):
+    captured = _capture(monkeypatch, {'settings': {'memory_scope': 'personal'}})
+    kind.Agent(_row(prompt='sapphire'), _Engine()).run('test')
+    assert captured.get('prompt') == 'sapphire' and captured.get('memory_scope') == 'personal'
 
 
-# ─── Bonus: LLMWorker preserves task_settings toolset + provider resolution ──
+def test_toolset_and_resolved_model_reach_the_context_with_the_safety_caps(kind, monkeypatch):
+    captured = _capture(monkeypatch, {'settings': {'prompt': 'sapphire'}})
+    kind.Agent(_row(prompt='quirk_bot', toolset='research', model='anthropic:claude-haiku-4-5'), _Engine()).run('test')
+    assert captured['toolset'] == 'research'
+    assert captured['provider'] == 'anthropic' and captured['model'] == 'claude-haiku-4-5'
+    assert captured['max_tool_rounds'] == 10 and captured['max_parallel_tools'] == 3
+    assert captured['inject_datetime'] is True
+    assert callable(captured['_kw'].get('cancel_check')) and callable(captured['_kw'].get('on_tool'))
 
-def test_llm_worker_passes_toolset_and_resolved_model(at, monkeypatch):
-    """Task settings passed to ExecutionContext must include the worker's
-    toolset and the resolved provider/model tuple. Regression here = agent
-    runs with wrong tools or wrong model silently."""
+
+def test_self_means_identity_only_scopes_stripped(kind, monkeypatch):
+    """H1 2026-04-22: prompt='self' inherits the chat's persona IDENTITY but
+    not its data scopes - 'self' used to bring the whole bundle silently."""
+    captured = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'personal', 'goal_scope': 'mine'}})
+    monkeypatch.setattr(kind, '_current_chat_persona', lambda chat=None: 'sapphire')
+    a = kind.Agent(_row(prompt='self'), _Engine())
+    assert a._prompt == 'sapphire' and a._inherit_scopes is False
+    a.run('test')
+    assert captured.get('prompt') == 'sapphire'
+    assert not [k for k in captured if k.endswith('_scope')]
+    # an explicit persona name keeps full inherit
+    captured2 = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'personal'}})
+    kind.Agent(_row(prompt='sapphire'), _Engine()).run('test')
+    assert captured2.get('memory_scope') == 'personal'
+
+
+def test_empty_prompt_and_toolset_fall_to_the_defaults(kind, monkeypatch):
+    """`or`, not default=: prompt='' used to bypass the 'self' check and land
+    with no persona; toolset='' resolved to zero tools."""
+    captured = _capture(monkeypatch, None)
+    a = kind.Agent(_row(prompt='', toolset=''), _Engine())
+    assert a._prompt == 'agent' and a._toolset == 'default'
+    a.run('test')
+    assert captured.get('memory_scope') == 'none'
+
+
+def test_a_private_spawn_carries_privacy_required(kind, monkeypatch):
+    """F4: the worker thread can't read the caller's ContextVar; the row carries
+    the snapshot and ExecutionContext gates the provider off it."""
+    captured = _capture(monkeypatch, None)
+    kind.Agent(_row(prompt='agent', _privacy=True), _Engine()).run('test')
+    assert captured.get('privacy_required') is True
+    captured2 = _capture(monkeypatch, None)
+    kind.Agent(_row(prompt='agent'), _Engine()).run('test')
+    assert 'privacy_required' not in captured2
+
+
+def test_roster_name_resolves_case_insensitively_and_context_is_appended(kind, monkeypatch):
+    monkeypatch.setattr(kind, '_settings', lambda: {'roster': [{'name': 'Big Brain', 'provider': 'anthropic', 'model': 'opus'}]})
+    a = kind.Agent(_row(model='big brain', context='the API docs'), _Engine())
+    assert a._model == 'anthropic:opus'
+    assert a.mission.endswith('Context:\nthe API docs')
+
+
+def test_the_result_is_reported_stripped_and_degradation_becomes_a_warning(kind, monkeypatch):
     from core import personas
-    LLMWorker = at._create_llm_worker()
-
-    fake_mgr = MagicMock()
-    fake_mgr.get.return_value = {'settings': {'prompt': 'sapphire'}}
-    monkeypatch.setattr(personas, 'persona_manager', fake_mgr)
-
+    monkeypatch.setattr(personas, 'persona_manager', MagicMock(get=MagicMock(return_value=None)))
     import core.api_fastapi as apifa
-    sys_mock = MagicMock()
-    sys_mock.llm_chat.function_manager = MagicMock()
-    sys_mock.llm_chat.tool_engine = MagicMock()
-    monkeypatch.setattr(apifa, '_system', sys_mock, raising=False)
-
-    captured = {}
+    monkeypatch.setattr(apifa, '_system', MagicMock(), raising=False)
     from core.continuity import execution_context as exec_ctx_mod
 
-    class _CapturingCtx:
-        def __init__(self, fm, te, settings, session_manager=None, **_kw):   # _kw: cancel_check (E2#4)
-            captured.update(settings)
+    class _Ctx:
+        def __init__(self, *a, **kw):
             self.tool_log = []
+            self.degraded_reason = 'tool loop exhausted'
+
         def run(self, mission):
-            return ''
-
-    monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _CapturingCtx)
-
-    worker = LLMWorker(
-        agent_id='t1', name='Alpha', mission='test',
-        chat_name='trinity', prompt='quirk_bot',
-        toolset='research',
-        model='anthropic:claude-haiku-4-5',
-    )
-    worker.run()
-
-    assert captured['toolset'] == 'research'
-    assert captured['provider'] == 'anthropic'
-    assert captured['model'] == 'claude-haiku-4-5'
-    # Safety defaults always present
-    assert captured['max_tool_rounds'] == 10
-    assert captured['max_parallel_tools'] == 3
+            return '<think>hmm</think>the answer'
+    monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _Ctx)
+    monkeypatch.setattr(kind, '_settings', lambda: {})
+    eng = _Engine()
+    a = kind.Agent(_row(prompt='agent'), eng)
+    a.run('test')
+    assert eng.reports == ['the answer'] and a.warning == 'tool loop exhausted'

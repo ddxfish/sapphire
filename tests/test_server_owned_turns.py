@@ -417,7 +417,7 @@ def test_client_treats_a_dead_feed_as_lost_not_finished():
     assert "handlers.lastSeq = data.seq" in api
     sh = _src('handlers/send-handlers.js')
     assert "from '../features/viewer.js'" in sh and 'e.feedLost && !viewer' in sh
-    assert 'if (!viewer) setProc(false)' in sh
+    assert 'if (armed && !viewer) setProc(false)' in sh
     chat = _src('chat.js')
     assert "document.getElementById('streaming-message')" in chat   # refresh hold
     assert chat.count('e.feedLost') == 2                             # regen + continue lanes

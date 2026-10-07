@@ -1,13 +1,51 @@
 {
     "name": "agents",
     "short_display_name": "Agents",
-    "version": "2.0.0",
-    "description": "Spawn Agents \u2014 background AI workers that report back when done",
+    "version": "3.0.0",
+    "description": "Agents — the `llm` agent kind (an isolated LLM + tool loop in the background) and the roster of models agents may use. The four agent tools are core.",
     "author": "sapphire",
-    "icon": "\ud83d\udd2d",
+    "icon": "🔭",
     "priority": 50,
     "capabilities": {
-        "tools": ["tools/agent_tools.py"],
-        "web": true
+        "agents": [
+            {
+                "kind": "llm",
+                "label": "LLM agent",
+                "icon": "🔭",
+                "description": "a background LLM with tools that works a mission and reports back",
+                "module": "agent_kind.py",
+                "cloud": false,
+                "conversational": false,
+                "spawn_schema": [
+                    {
+                        "key": "toolset",
+                        "type": "string",
+                        "label": "Toolset",
+                        "help": "toolset name (default: the plugin's Default Toolset)"
+                    },
+                    {
+                        "key": "prompt",
+                        "type": "string",
+                        "label": "Persona",
+                        "default": "agent",
+                        "help": "'agent' = lean worker with no data scopes · 'self' = this chat's persona identity only · a persona name = that persona in full"
+                    }
+                ],
+                "names": [
+                    "Alpha",
+                    "Bravo",
+                    "Charlie",
+                    "Delta",
+                    "Echo"
+                ]
+            }
+        ],
+        "web": true,
+        "app": {
+            "label": "Agents",
+            "icon": "🔭",
+            "description": "Your agents by chat: progress, questions to answer, follow-ups, transcripts, and a form to spawn more",
+            "nav": false
+        }
     }
 }

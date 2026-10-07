@@ -79,16 +79,27 @@ def test_unregister_reply_handler():
 _PROBE = contextvars.ContextVar('hunt2130_probe', default=None)
 
 
-def test_base_worker_thread_inherits_context():
-    from core.agents.base_worker import BaseWorker
+def test_agent_thread_inherits_context():
+    """An agent's thread starts in a COPY of the spawning turn's context (row 53:
+    a bare thread saw an empty event and the Discord reach rule read that as
+    operator chat)."""
+    from core.agents.base import Agent
     seen = []
 
-    class W(BaseWorker):
-        def _run_wrapper(self):
+    class _E:
+        def install_carrier(self, a): return None
+        def release_carrier(self, t): pass
+        def finished(self, a): pass
+        def report_out(self, a, t): pass
+        def event_out(self, a, k): pass
+        def question_out(self, a, q): pass
+
+    class W(Agent):
+        def run(self, mission):
             seen.append(_PROBE.get())
 
     _PROBE.set('from-caller')
-    w = W('id', 'probe', 'mission')
+    w = W({'id': 'id', 'name': 'probe', 'kind': 'k', 'chat': 'c', 'mission': 'mission', 'options': {}}, _E())
     w.start()
     w._thread.join(timeout=5)
     assert seen == ['from-caller']

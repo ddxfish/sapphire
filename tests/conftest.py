@@ -109,6 +109,46 @@ def _no_real_vault_seal(monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _fresh_inbox(monkeypatch):
+    """The per-chat inbox (core/chat/inbox.py, 2026-10-06) is module state
+    with drainer threads: every test starts with it empty and leaves nothing
+    waiting for the next one, and its clocks are short so a requeue costs
+    milliseconds, not seconds."""
+    try:
+        from core.chat import inbox
+    except Exception:
+        yield
+        return
+    for name in list(inbox._chats):
+        inbox.drop_chat(name, 'test start')
+    inbox._chats.clear()
+    monkeypatch.setattr(inbox, 'SWEEP_S', 0.05)
+    monkeypatch.setattr(inbox, 'BACKOFF_MIN', 0.005)
+    monkeypatch.setattr(inbox, 'BACKOFF_MAX', 0.05)
+    yield
+    for name in list(inbox._chats):
+        inbox.drop_chat(name, 'test over')
+    inbox._chats.clear()
+
+
+@pytest.fixture(autouse=True)
+def _agents_store_in_memory(monkeypatch):
+    """The agent engine's rows live in user/plugin_state/agents.json. A test
+    that builds a bare AgentManager must never write there (one did, 2026-10-06,
+    and wiped the real rows). Every test gets a dict-backed store instead."""
+    try:
+        from core.agents import engine
+    except Exception:
+        yield
+        return
+    from types import SimpleNamespace
+    store = {}
+    monkeypatch.setattr(engine, '_store', lambda: SimpleNamespace(
+        get=lambda k, d=None: store.get(k, d), save=lambda k, v: store.__setitem__(k, v)))
+    yield
+
+
 # ─── Thread leak guard ────────────────────────────────────────────────────────
 # Default every threading.Thread created during tests to daemon=True. Some
 # concurrency tests (SQLite write stress in test_220_regression, scope-bleed
@@ -430,7 +470,7 @@ def event_bus_capture(monkeypatch):
     # reference to the original function; patching event_bus.publish alone
     # doesn't affect them. Patch their local bindings too.
     _MODULE_LEVEL_PUBLISH_IMPORTERS = (
-        'core.agents.manager',
+        'core.agents.engine',
         'core.stt.recorder',
         'core.tts.tts_client',
         'core.api_fastapi',
@@ -523,33 +563,35 @@ def fake_popen(monkeypatch):
 
 
 @pytest.fixture
-def blocking_worker_cls():
-    """BaseWorker subclass with a threading.Event gate. Deterministic concurrency tests.
-
-    Usage:
-        def test_x(blocking_worker_cls):
-            w = blocking_worker_cls(agent_id='a', name='Test', mission='m')
-            w.start()
-            # worker is blocked on its gate
-            w.finish_with_result('done')
-            # worker unblocks, completes with that result
-    """
-    from core.agents.base_worker import BaseWorker
+def blocking_agent_cls():
+    """core.agents.base.Agent subclass with a threading.Event gate, for
+    deterministic engine tests. finish_with_result / finish_with_error /
+    finish release it. Needs an engine; agent_world provides one."""
+    from core.agents.base import Agent
     import threading
 
-    class _BlockingWorker(BaseWorker):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
+    class _BlockingAgent(Agent):
+        def __init__(self, row, engine):
+            super().__init__(row, engine)
             self._gate = threading.Event()
             self._queued_result = None
             self._queued_raise = None
+            self.said = []
 
-        def run(self):
+        def run(self, mission):
+            ask = self.options.get('ask')
+            if ask:
+                got = self.ask(ask, timeout=float(self.options.get('ask_timeout', 5)))
+                self.event('note', f'answer={got!r}')
             self._gate.wait(timeout=5)
             if self._queued_raise:
                 raise self._queued_raise
-            if self._queued_result is not None:
-                self.result = self._queued_result
+            if self._queued_result is not None and not self.cancelled:
+                self.report(self._queued_result)
+
+        def say(self, text):
+            self.said.append(text)
+            return f'{self.name} took it', True
 
         def finish_with_result(self, result):
             self._queued_result = result
@@ -562,4 +604,80 @@ def blocking_worker_cls():
         def finish(self):
             self._gate.set()
 
-    return _BlockingWorker
+        def stop(self):
+            super().stop()
+            self._gate.set()               # a stopped agent does not sit out its gate
+
+    return _BlockingAgent
+
+
+@pytest.fixture
+def agent_world(monkeypatch, blocking_agent_cls):
+    """A fresh AgentManager with three fake kinds - `probe` (local, blocking
+    agent), `cloudy` (cloud: true) and `flagless` (no cloud key = cloud) -
+    a dict store, a fake session manager with a public 'desk' chat and a
+    private 'vault' chat, the inbox recorded instead of run, and events
+    recorded. Returns a namespace: mgr, store, content, chats, tells, events."""
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from core.agents import registry, engine
+    from core.chat import inbox
+
+    registry._kinds.clear()
+    registry._generation += 1
+    base = {'module': 'probe.py', 'label': 'Probe', 'description': 'a test agent',
+            'spawn_schema': [{'key': 'ask', 'type': 'string'}, {'key': 'ask_timeout', 'type': 'number'}],
+            'names': ['Spark', 'Alpha']}
+    registry.register_kind('probe', dict(base, cloud=False), 'probe-plugin')
+    registry.register_kind('cloudy', dict(base, cloud=True, conversational=True), 'probe-plugin')
+    registry.register_kind('flagless', {k: v for k, v in base.items()}, 'probe-plugin')
+    registry.register_kind('talker', dict(base, cloud=False, conversational=True), 'probe-plugin')
+
+    mod = SimpleNamespace(Agent=blocking_agent_cls)
+    mgr = engine.AgentManager()
+    monkeypatch.setattr(mgr, '_module', lambda spec: mod)
+    store = {}
+    monkeypatch.setattr(engine, '_store', lambda: SimpleNamespace(
+        get=lambda k, d=None: store.get(k, d), save=lambda k, v: store.__setitem__(k, v)))
+    chats = {'desk': {'private_chat': False}, 'other': {'private_chat': False}, 'vault': {'private_chat': True}}
+    content = {}
+    sm = SimpleNamespace(
+        get_settings_for=lambda c: chats.get(c),
+        read_chat_settings=lambda c: chats.get(c),
+        is_chat_hidden=lambda c: False,
+        plugin_data_get=lambda plugin, chat, key, default=None: content.get((chat, key), default),
+        plugin_data_put=lambda plugin, chat, key, value: content.__setitem__((chat, key), value),
+        make_agent_override=lambda chat, privacy_required=False: {'chat': chat, 'privacy_required': privacy_required},
+        make_ephemeral_override=lambda task_settings=None, privacy_required=False: {'chat': None, 'privacy_required': privacy_required},
+        _effective_chat_name=lambda: 'desk',
+    )
+    monkeypatch.setattr(engine, '_sm', lambda: sm)
+    monkeypatch.setattr(engine, '_system', lambda: SimpleNamespace(
+        llm_chat=SimpleNamespace(session_manager=sm, function_manager=MagicMock()), agent_manager=mgr))
+    monkeypatch.setattr(engine, '_settings', lambda: {'max_concurrent': 3})
+    monkeypatch.setattr(engine, '_plugin_info', lambda name: {'enabled': True, 'loaded': True})
+    tells = []
+
+    def _tell(chat, text, source, header_line='', coalesce=True, **kw):
+        tells.append({'chat': chat, 'text': text, 'source': source, 'header': header_line, 'coalesce': coalesce})
+        return 'ticket'
+    monkeypatch.setattr(inbox, 'tell', _tell)
+    events = []
+    monkeypatch.setattr(engine, 'publish', lambda t, d=None, ephemeral=False: events.append((t, d or {}, ephemeral)))
+    from core.chat import stream_brain
+    monkeypatch.setattr(stream_brain, 'set_override', lambda ov: ov)
+    monkeypatch.setattr(stream_brain, 'reset_override', lambda tok: None)
+
+    def wait_for(pred, timeout=3.0):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if pred():
+                return True
+            time.sleep(0.01)
+        return pred()
+    import time
+    yield SimpleNamespace(mgr=mgr, store=store, content=content, chats=chats, tells=tells, events=events,
+                          wait_for=wait_for, sm=sm)
+    mgr.shutdown(timeout=2)
+    registry._kinds.clear()

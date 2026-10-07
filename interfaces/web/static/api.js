@@ -180,6 +180,23 @@ export const setChatArchived = (name, archived) => fetchWithTimeout(`/api/chats/
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
     const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLlmDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
+
+    // Inbox (2026-10-06): a typed turn sent while she was mid-message waits in
+    // the chat's inbox. The server says so first, then streams the turn when
+    // it is its turn; or says the item was dropped (× on the bubble).
+    if (data.type === 'queued') {
+        if (handlers.onQueued) handlers.onQueued(data.ticket, data.position);
+        return {};
+    }
+    if (data.type === 'queued_dropped') {
+        if (handlers.onQueuedDropped) handlers.onQueuedDropped(data.reason || 'dropped');
+        return { shouldReturn: true };
+    }
+    if (data.type === 'merged') {
+        // folded into the typed turn ahead of it: THAT response streams the reply
+        if (handlers.onMerged) handlers.onMerged();
+        return { shouldReturn: true };
+    }
     
     if (data.type === 'stream_started') {
         if (onStreamStarted) onStreamStarted();
@@ -383,7 +400,8 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
 
 const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
                                    onToolStart = null, onToolEnd = null,
-                                   onStreamStarted = null, onIterationStart = null }) => {
+                                   onStreamStarted = null, onIterationStart = null,
+                                   onQueued = null, onQueuedDropped = null, onMerged = null }) => {
     onChunk = _wrapChunkWithAvatarScan(onChunk);
     let res;
     try {
@@ -411,6 +429,9 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
         onToolEnd,
         onStreamStarted,
         onIterationStart,
+        onQueued,
+        onQueuedDropped,
+        onMerged,
         onReload: () => setTimeout(() => window.location.reload(), 500),
         onLegacyChunk: onChunk
     };
@@ -559,15 +580,24 @@ function _wrapChunkWithAvatarScan(onChunk) {
     };
 }
 
-export const streamChat = (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
+export const streamChat = (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null, queueHooks = null) => {
     const body = { text };
     if (prefill) body.prefill = prefill;
     if (images && images.length > 0) body.images = images;
     if (files && files.length > 0) body.files = files;
     const bound = getBoundChat();
     if (bound) body.chat = bound;   // F1: a bound rail's turn names its session
-    return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
+    return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart,
+                               onQueued: queueHooks?.onQueued || null, onQueuedDropped: queueHooks?.onQueuedDropped || null,
+                               onMerged: queueHooks?.onMerged || null });
 };
+
+// Take a waiting typed turn out of the chat's inbox (the × on a queued bubble).
+export const dropQueued = (ticket) => fetchWithTimeout('/api/chat/queue/drop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticket, chat: getBoundChat() || undefined })
+}, 5000);
 
 export const fetchAudio = async (text, signal = null, opts = null) => {
     try {

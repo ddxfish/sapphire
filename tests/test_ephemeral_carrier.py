@@ -304,14 +304,14 @@ class TestFalsySentinelSeams:
 
     def _mgr(self):
         import threading
-        from core.agents.manager import AgentManager
+        from core.agents.engine import AgentManager
         m = AgentManager.__new__(AgentManager)
         m._lock = threading.RLock()
         a1 = MagicMock()
-        a1.chat_name = "pub"
+        a1.chat = "pub"
         a1.to_dict.return_value = {"chat_name": "pub"}
         a2 = MagicMock()
-        a2.chat_name = ""
+        a2.chat = ""
         a2.to_dict.return_value = {"chat_name": ""}
         m._agents = {"1": a1, "2": a2}
         return m

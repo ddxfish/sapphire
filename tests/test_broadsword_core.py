@@ -23,7 +23,8 @@ _CLOUD_TOOLS = {
     "plugins/email/tools/email_tool.py": ["get_inbox", "read_email", "archive_emails", "delete_emails",
                                           "search_emails", "forward_email", "get_recipients", "send_email"],
     "plugins/twilio-voice/tools/phone_tool.py": ["phone_call"],
-    "plugins/claude-code/tools/claude_code_tools.py": ["code_session"],
+    # claude-code: code_session died with agents v2 (2026-10-06). Claude Code is an agent KIND now,
+    # gated by the engine (cloud: true refused from a private chat) - see test_agents_engine.py.
     "plugins/sapphire-store/tools/store_tools.py": ["store_browse", "store_install"],
     "plugins/bitcoin/tools/bitcoin_tool.py": ["get_wallet", "send_bitcoin", "get_transactions"],
 }

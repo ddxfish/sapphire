@@ -26,11 +26,11 @@ import {
 // composer after it pops the phone keyboard on every voice turn (D2#4).
 // Wired as a click listener too: an Event has no `refocus` → default true.
 export async function handleSend({ refocus = true } = {}) {
-    // One turn per chat (2026-08-29): Send is hidden behind Stop while a
-    // turn is live, but Enter never checked. Silent — Stop showing IS the
-    // message; the text stays in the box. Same guard as triggerSendWithText
-    // / handleRegen / handleContinue.
-    if (getIsProc()) { console.log('Send blocked: a turn is already live'); return; }
+    // Inbox (2026-10-06, wave I-2): a send while a turn is live is no longer
+    // blocked — it waits its turn in the chat's inbox, server-side, in order
+    // with everything else. The bubble pulses until the turn starts; the
+    // live turn keeps Stop, the status line and the abort slot until then.
+    const queuedSend = getIsProc();
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
     if (!txt && !Images.hasPendingUploadImages() && !Images.hasPendingFiles()) return;
@@ -45,13 +45,14 @@ export async function handleSend({ refocus = true } = {}) {
     dispatch(Events.USER_SENT, { text: txt });
 
     const abortController = new AbortController();
-    setAbortController(abortController);
-    setIsCancelling(false);
-
-    setProc(true);
+    if (!queuedSend) {
+        setAbortController(abortController);
+        setIsCancelling(false);
+        setProc(true);
+        sendBtn.disabled = true;
+        setSendLabel('busy');
+    }
     input.value = '';
-    sendBtn.disabled = true;
-    setSendLabel('busy');
     input.dispatchEvent(new Event('input'));
     
     // Get pending images and files, then clear them
@@ -64,9 +65,76 @@ export async function handleSend({ refocus = true } = {}) {
     Images.clearPendingUploadImages();
     Images.clearPendingFiles();
     updateImagePreviewArea();
-    
-    ui.showStatus();
-    ui.updateStatus('Connecting...');
+
+    // A queued send's bubble pulses, carries its place in line, and a × that
+    // takes it back out of the inbox (the text returns to the box).
+    const bubbles = document.querySelectorAll('#chat-container .message.user');
+    const myBubble = queuedSend ? bubbles[bubbles.length - 1] : null;
+    let myTicket = null;
+    let armed = !queuedSend;          // false until this turn's first event arrives
+    if (myBubble) {
+        myBubble.classList.add('queued');
+        myBubble.title = 'Waiting for Sapphire to finish…';
+        const x = document.createElement('button');
+        x.className = 'queued-x';
+        x.type = 'button';
+        x.title = 'Take it back out of the queue';
+        x.textContent = '\u00d7';
+        x.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!myTicket) return;
+            try { await api.dropQueued(myTicket); } catch (err) { console.warn('[QUEUE] drop failed:', err); }
+        });
+        myBubble.appendChild(x);
+    }
+    const armLive = () => {
+        // our turn started: take the status line, Stop and the abort slot
+        if (armed) return;
+        armed = true;
+        if (myBubble) {
+            myBubble.classList.remove('queued');
+            myBubble.title = '';
+            myBubble.querySelector('.queued-x')?.remove();
+        }
+        setAbortController(abortController);
+        setIsCancelling(false);
+        setProc(true);
+        sendBtn.disabled = true;
+        setSendLabel('busy');
+        ui.showStatus();
+        ui.updateStatus('Generating...');
+    };
+    const queueHooks = {
+        onQueued: (ticket, position) => {
+            myTicket = ticket;
+            if (myBubble) {
+                myBubble.dataset.ticket = ticket;
+                myBubble.title = position > 1 ? `Waiting — ${position} in line` : 'Waiting for Sapphire to finish…';
+            }
+        },
+        onQueuedDropped: (reason) => {
+            myBubble?.remove();
+            if (!input.value) {
+                input.value = txt;
+                input.dispatchEvent(new Event('input'));
+            }
+            ui.showToast(`Not sent: ${reason}`, 'warning');
+        },
+        onMerged: () => {
+            // folded into the queued turn ahead of it: one turn, one reply,
+            // streamed by that send. This bubble just goes solid.
+            if (myBubble) {
+                myBubble.classList.remove('queued');
+                myBubble.title = '';
+                myBubble.querySelector('.queued-x')?.remove();
+            }
+        },
+    };
+
+    if (!queuedSend) {
+        ui.showStatus();
+        ui.updateStatus('Connecting...');
+    }
     let viewer = false;   // lost our feed; the server keeps the turn, we reattach (features/viewer.js)
     
     try {
@@ -84,6 +152,7 @@ export async function handleSend({ refocus = true } = {}) {
         // Handlers are named once so the SAME set rides a reattach after a
         // lost feed (features/viewer.js) — the bubble keeps filling in place.
         const onChunk = chunk => {
+            armLive();
             if (!streamOk) {
                 ui.updateStatus('Generating...');
                 ui.startStreaming();
@@ -133,6 +202,7 @@ export async function handleSend({ refocus = true } = {}) {
             }
         };
         const onToolStart = (id, name, args) => {
+            armLive();
             if (!streamOk) {
                 ui.updateStatus('Generating...');
                 ui.startStreaming();
@@ -146,7 +216,7 @@ export async function handleSend({ refocus = true } = {}) {
             if (!streamStillMine()) return;
             ui.endTool(id, name, result, error);
         };
-        const onStreamStarted = () => { ui.updateStatus('Processing...'); };
+        const onStreamStarted = () => { armLive(); ui.updateStatus('Processing...'); };
         const onIterationStart = (iteration) => {
             if (iteration > 1) {
                 ui.showStatus();
@@ -196,7 +266,8 @@ export async function handleSend({ refocus = true } = {}) {
             null,  // prefill
             onToolStart, onToolEnd, onStreamStarted, onIterationStart,
             hasImages ? pendingImages : null,
-            hasFiles ? pendingFilesForApi : null
+            hasFiles ? pendingFilesForApi : null,
+            queueHooks
         );
         
         if (streamOk) return null;
@@ -207,16 +278,20 @@ export async function handleSend({ refocus = true } = {}) {
         }
         return null;
     } finally {
-        if (!viewer) ui.hideStatus();
-        sendBtn.disabled = false;
-        setSendLabel('send');
+        // a queued send that never got to run (dropped) owns none of this:
+        // the live turn's handler does
+        if (armed) {
+            if (!viewer) ui.hideStatus();
+            sendBtn.disabled = false;
+            setSendLabel('send');
+        }
         // Not unconditional: the user may have moved into a sidebar textarea
         // while she replied — yanking the cursor back was the seeded case of
         // the DOM-refresh hunt, 2026-09-08. Dictated turns skip it entirely
         // (nothing editable holds focus after a mic tap, so the guard alone
         // couldn't stop the keyboard pop).
         if (refocus) focusUnlessEditing(input);
-        if (!viewer) setProc(false);   // a viewer's button belongs to the typing mirror now
+        if (armed && !viewer) setProc(false);   // a viewer's button belongs to the typing mirror now
     }
 }
 

@@ -1,48 +1,100 @@
 {
   "name": "claude-code",
   "short_display_name": "Claude Code",
-  "version": "1.0.0",
-  "description": "Claude Code",
+  "version": "2.0.0",
+  "description": "Claude Code as an agent kind: a coding session Sapphire spawns, talks to, and answers — on the Claude Agent SDK. Replaces the headless workers and the Trinity tmux plugin.",
   "author": "Sapphire",
   "emoji": "⚡",
   "priority": 50,
   "capabilities": {
     "tools": ["tools/claude_code_tools.py"],
+    "agents": [
+      {
+        "kind": "claude_code",
+        "label": "Claude Code",
+        "icon": "⚡",
+        "description": "a Claude Code coding session; asks here at a fork, takes follow-up turns with say",
+        "module": "agent_kind.py",
+        "cloud": true,
+        "conversational": true,
+        "spawn_schema": [
+          {"key": "mode", "type": "string", "widget": "select", "label": "Mode", "default": "project",
+           "options": [
+             {"label": "Project — a workspace of its own", "value": "project"},
+             {"label": "Plugin — build a Sapphire plugin under user/plugins/<name>", "value": "plugin"},
+             {"label": "Core — Sapphire's own codebase", "value": "core"}
+           ],
+           "help": "project: a fresh dir under Workspace Directory named by `name` · plugin: user/plugins/<name> with the plugin-author docs · core: the Sapphire root"},
+          {"key": "capabilities", "type": "string", "label": "Plugin capabilities",
+           "help": "plugin mode only: comma-separated capabilities to inject docs for (tools, hooks, daemon, routes, settings, providers, schedule)"},
+          {"key": "effort", "type": "string", "label": "Effort",
+           "help": "low | medium | high | xhigh | max (empty = the model's default)"}
+        ],
+        "names": ["Forge", "Anvil", "Crucible", "Hammer", "Spark"]
+      }
+    ],
     "settings": [
       {
-        "key": "mode",
+        "key": "permission_mode",
         "type": "string",
-        "label": "Execution Mode",
-        "default": "standard",
+        "label": "Permissions",
+        "default": "auto",
         "widget": "select",
         "options": [
-          {"label": "Strict (file ops only, no shell)", "value": "strict"},
-          {"label": "Standard (code + run + test)", "value": "standard"},
-          {"label": "System Killer (unrestricted — danger)", "value": "system_killer", "confirm": "System Killer mode gives Claude Code FULL unrestricted access including shell, package installs, and system commands. Are you sure?"}
+          {"label": "Auto — a classifier approves or denies each tool call", "value": "auto"},
+          {"label": "Bypass — every tool call allowed", "value": "bypassPermissions", "confirm": "Bypass lets a session run anything, shell included, without a classifier in the loop. Sapphire is never asked either way. Are you sure?"}
         ],
-        "help": "Controls what Claude Code is allowed to do"
+        "help": "Sapphire is never asked to approve a command (that would be a question per tool call). Only AskUserQuestion forks reach her."
       },
       {
         "key": "workspace_dir",
         "type": "string",
         "label": "Workspace Directory",
         "default": "~/claude-workspaces",
-        "help": "Where Claude Code creates project directories (outside Sapphire)"
+        "help": "Where project-mode sessions get their directories (outside Sapphire)"
       },
       {
-        "key": "max_turns",
+        "key": "model",
+        "type": "string",
+        "label": "Model",
+        "default": "",
+        "help": "fable, opus, sonnet, haiku, or a full model id. Empty = the account default. A spawn may override with options.model."
+      },
+      {
+        "key": "effort",
+        "type": "string",
+        "label": "Effort",
+        "default": "",
+        "help": "low | medium | high | xhigh | max. Empty = the model's default."
+      },
+      {
+        "key": "max_budget_usd",
         "type": "number",
-        "label": "Max Turns Per Session",
-        "default": 50,
-        "help": "Limits how many iterations Claude Code can take per session"
+        "label": "Budget Cap (USD)",
+        "default": 20,
+        "help": "Maximum dollars per session before it ends on its own. Prevents runaway costs."
+      },
+      {
+        "key": "idle_timeout_min",
+        "type": "number",
+        "label": "Idle timeout (minutes)",
+        "default": 60,
+        "help": "A session idle this long rests. It keeps its id; the next say() wakes it with --resume."
+      },
+      {
+        "key": "claude_binary",
+        "type": "string",
+        "label": "Claude Code binary",
+        "default": "",
+        "help": "Empty = the one bundled with the SDK. A path or a command name uses your installed Claude Code instead."
       },
       {
         "key": "coder_instructions",
         "type": "string",
         "widget": "textarea",
-        "label": "Base Instructions (all sessions)",
-        "default": "You are a code builder working for Sapphire AI.\n- Write clean, working code\n- Test your work by running it before reporting done\n- When possible, make unit tests or regression tests to verify your code\n- Keep it simple and minimal — no over-engineering\n- If you hit a problem you can't solve, describe it clearly in your final response\n- If you notice anything noteworthy, write it to NOTES.md\n- Sapphire is alive and running while you work. NEVER restart her, NEVER run systemctl, NEVER kill her process. She is not your test environment — she is who you are building for. Write the code and report back.",
-        "help": "Base layer — included in EVERY Claude Code session (project and plugin). Keep universal."
+        "label": "Base Instructions (all modes)",
+        "default": "You are a code builder working for Sapphire AI.\n- Write clean, working code\n- Test your work by running it before reporting done\n- When possible, make unit tests or regression tests to verify your code\n- Keep it simple and minimal — no over-engineering\n- If you hit a fork the user should decide, ask with AskUserQuestion: one short question, two to four one-line options. Keep it simple; if it needs a paragraph, ask a simpler question.\n- If you hit a problem you can't solve, describe it clearly in your final response\n- If you notice anything noteworthy, write it to NOTES.md\n- Sapphire is alive and running while you work. NEVER restart her, NEVER run systemctl, NEVER kill her process. She is not your test environment — she is who you are building for. Write the code and report back.",
+        "help": "Included in every session: CLAUDE.md for project and plugin mode, the system prompt for core mode."
       },
       {
         "key": "project_instructions",
@@ -50,29 +102,23 @@
         "widget": "textarea",
         "label": "Project Instructions",
         "default": "- Include a README.md with usage instructions\n- Keep dependencies minimal\n- For web apps: build as a self-contained index.html with inline JS/CSS (no build step, no npm)\n- Do not install system-wide packages",
-        "help": "Added to CLAUDE.md for general project builds (~/claude-workspaces/). Not included in plugin builds."
+        "help": "Added to CLAUDE.md for project-mode sessions."
       },
       {
         "key": "plugin_instructions",
         "type": "string",
         "widget": "textarea",
         "label": "Plugin Instructions",
-        "default": "- DO NOT ASK FOR CONFIRMATION — build the plugin immediately, do not plan and wait\n- NEVER restart Sapphire — do not run systemctl, do not run restart-sapphire.sh, do not kill processes. Your job is to write code only.\n- Build ALL files at the ROOT of this workspace directory\n- plugin.json goes at workspace root, tools/ folder at workspace root\n- Do NOT create user/plugins/ or any subdirectory structure — this workspace IS the plugin directory\n- capabilities.tools MUST be a JSON array: [\"tools/name_tools.py\"] — NOT a string\n- capabilities.hooks is a dict: {\"pre_chat\": \"hooks/handler.py\"}\n- Include 'author' field in plugin.json\n- No import restrictions — use whatever the plugin needs (subprocess, os, etc.)\n- Reference: docs/plugin-author/examples.md has working templates for every plugin type\n- Reference: plugins/elevenlabs/ is a real working TTS provider plugin\n- You have READ access to user/logs/sapphire.log — check it if told something failed at runtime",
-        "help": "Added to CLAUDE.md for plugin builds (user/plugins/). Not included in project builds."
+        "default": "- NEVER restart Sapphire — do not run systemctl, do not run restart-sapphire.sh, do not kill processes. Your job is to write code only.\n- Build ALL files at the ROOT of this workspace directory\n- plugin.json goes at workspace root, tools/ folder at workspace root\n- Do NOT create user/plugins/ or any subdirectory structure — this workspace IS the plugin directory\n- capabilities.tools MUST be a JSON array: [\"tools/name_tools.py\"] — NOT a string\n- capabilities.hooks is a dict: {\"pre_chat\": \"hooks/handler.py\"}\n- Include 'author' field in plugin.json\n- No import restrictions — use whatever the plugin needs (subprocess, os, etc.)\n- Reference: docs/plugin-author/examples.md has working templates for every plugin type\n- Reference: plugins/elevenlabs/ is a real working TTS provider plugin\n- You have READ access to user/logs/sapphire.log — check it if told something failed at runtime",
+        "help": "Added to CLAUDE.md for plugin-mode sessions."
       },
       {
-        "key": "plugin_build_model",
+        "key": "core_instructions",
         "type": "string",
-        "label": "Plugin Build Model",
-        "default": "",
-        "help": "Model for plugin builder sessions (e.g. 'sonnet', 'haiku'). Empty = use default model."
-      },
-      {
-        "key": "max_budget_usd",
-        "type": "number",
-        "label": "Budget Cap (USD)",
-        "default": 20,
-        "help": "Maximum dollar amount per Claude Code session. Prevents runaway costs on autonomous builds."
+        "widget": "textarea",
+        "label": "Core Instructions",
+        "default": "You're working on Sapphire AI's own codebase, spawned by Sapphire herself. Read SAPPHIRE.md before touching anything. Do not touch the user/ directory — that's the user's private data. Sapphire is alive and running — never restart her without being told to. Run the relevant tests after changes.",
+        "help": "Appended to the system prompt for core-mode sessions (the root's own CLAUDE.md still loads)."
       }
     ]
   }

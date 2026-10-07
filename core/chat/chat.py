@@ -328,7 +328,9 @@ class LLMChat:
         return stream, sid, chat_name
 
     def end_stream(self, stream_id, chat_name):
-        """Unregister a stream. Idempotent."""
+        """Unregister a stream. Idempotent. When the chat's last stream goes,
+        the inbox is told the chat may be free (core/chat/inbox.py)."""
+        freed = False
         with self._streams_lock:
             self._streams_by_id.pop(stream_id, None)
             ids = self._streams_by_chat.get(chat_name)
@@ -336,6 +338,13 @@ class LLMChat:
                 ids.discard(stream_id)
                 if not ids:
                     self._streams_by_chat.pop(chat_name, None)
+                    freed = True
+        if freed and chat_name:
+            try:
+                from core.chat import inbox
+                inbox.kick(chat_name)
+            except Exception as e:
+                logger.debug(f"inbox kick for '{chat_name}' failed: {e}")
 
     def _target_stream_ids(self, chat_name, exclude_chats):
         """Shared targeting for cancel/stop: one chat's streams, or all streams
@@ -738,8 +747,31 @@ class LLMChat:
         events). THE TURN PIPELINE EXISTS EXACTLY ONCE. A future
         non-streaming provider fakes chat_completion_stream in the provider
         layer (~15 lines) — it never gets a second pipeline here.
+
+        Inbox (2026-10-06): this door waits its turn. The active chat is the
+        queue; the turn itself runs on the inbox's drainer thread in this
+        caller's context, exclusive like a typed turn — before this it began a
+        NON-exclusive stream and could land on top of a live turn (interleaved
+        rows, a tool_use split from its result, a provider 400).
         """
-        stream, sid, chat_name = self.begin_stream(None)
+        from core.chat import inbox
+        try:
+            chat_name = self.session_manager.get_active_chat_name() or ''
+        except Exception:
+            chat_name = ''
+        if not chat_name:
+            return self._chat_turn(user_input, on_event)
+        try:
+            return inbox.turn(chat_name, lambda: self._chat_turn(user_input, on_event),
+                              source='voice', lane='now')
+        except inbox.InboxRefused as e:
+            logger.warning(f"chat: inbox refused the turn on '{chat_name}': {e}")
+            return self._chat_turn(user_input, on_event)
+
+    def _chat_turn(self, user_input, on_event=None):
+        """The blocking turn itself (see chat()). Raises ChatBusy when the
+        active chat already has a live turn - the inbox requeues on that."""
+        stream, sid, chat_name = self.begin_stream(None, exclusive=True)
         stream.suppress_tts = True   # the caller voices the blob; pump stays inert
         final_text = None
         fallback_parts = []

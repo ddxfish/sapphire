@@ -902,6 +902,21 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: device driver registration failed: {e}")
 
+        # Register agent kinds (declarations consumed by the agent engine,
+        # core/agents/engine.py; the kind's code stays in the plugin)
+        agent_defs = capabilities.get("agents", [])
+        if agent_defs:
+            try:
+                from core.agents.registry import register_kind
+                accepted = [kd.get("kind") for kd in agent_defs
+                            if isinstance(kd, dict) and register_kind(kd.get("kind"), kd, name)]
+                if accepted:
+                    info["registered_agent_kinds"] = accepted
+                    from core.agents import engine as _agent_engine
+                    _agent_engine.retell()     # the agent tools' descriptions name the kinds
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: agent kind registration failed: {e}")
+
         # Register prompt pack (mirror-only — merged into the prompt system
         # at read time, never written to user/prompts; user wins collisions)
         prompts_decl = capabilities.get("prompts", {})
@@ -1266,6 +1281,18 @@ class PluginLoader:
                 _unreg_drivers(name)
             except Exception as e:
                 logger.warning(f"[PLUGINS] {name}: failed to unregister device drivers: {e}")
+
+        # Unregister agent kinds (their agents' rows survive; a running agent
+        # keeps its already-imported class and finishes on its own - Krem's
+        # 2026-10-06 call: coding sessions are not killed by a plugin reload)
+        if info.get("registered_agent_kinds"):
+            try:
+                from core.agents.registry import unregister_plugin as _unreg_kinds
+                _unreg_kinds(name)
+                from core.agents import engine as _agent_engine
+                _agent_engine.retell()
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister agent kinds: {e}")
 
         # Unregister prompt pack (pack prompts go dark; if one was the active
         # prompt and no user entry shadows it, the registry hands off to

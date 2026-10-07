@@ -127,8 +127,12 @@ class ExecutionContext:
     """
 
     def __init__(self, function_manager, tool_engine, task_settings: Dict[str, Any],
-                 session_manager=None, cancel_check=None):
+                 session_manager=None, cancel_check=None, on_tool=None):
         self.fm = function_manager
+        # on_tool(name) fires as each tool call is recorded, so a watcher (an
+        # agent's transcript) sees progress while the run is still going -
+        # tool_log alone is only readable after run() returns. 2026-10-06.
+        self.on_tool = on_tool
         # Zero-arg callable polled by run(): True = stop. Checked at the top
         # of every tool round AND between the LLM's reply and its tool batch,
         # so a cancel never executes another tool. The LLM HTTP call itself
@@ -163,6 +167,15 @@ class ExecutionContext:
         # placeholder" so agent UI / status reports don't render a green
         # success for a no-op run. Scout #15 — 2026-04-20. None = clean run.
         self.degraded_reason: Optional[str] = None
+
+    def _tell_tool(self, names):
+        if self.on_tool is None:
+            return
+        for n in names:
+            try:
+                self.on_tool(n)
+            except Exception as e:
+                logger.debug(f"[ExecCtx] on_tool failed: {e}")
 
     def _is_cancelled(self) -> bool:
         if self.cancelled:
@@ -661,6 +674,7 @@ class ExecutionContext:
                     "thinking": _thinking,
                 })
                 self.tool_log.extend(tc.get('function', {}).get('name', '?') for tc in tool_calls)
+                self._tell_tool(tc.get('function', {}).get('name', '?') for tc in tool_calls)
                 # Cap at source: a runaway agent can append thousands. The
                 # poll-payload cap in BaseWorker.to_dict is a safety net; this
                 # is the actual bound. Keep the last 500. Scout longevity #3.
@@ -694,6 +708,7 @@ class ExecutionContext:
                 fn_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
                 if fn_data:
                     self.tool_log.append(fn_data.get('name', '?'))
+                    self._tell_tool([fn_data.get('name', '?')])
                     if len(self.tool_log) > 500:
                         del self.tool_log[:-500]
                     filtered = filter_to_thinking_only(response_msg.content)

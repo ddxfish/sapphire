@@ -324,50 +324,9 @@ class TestPromptImportValidation:
 # FIX #12: Agent batch completion TOCTOU (manager.py)
 # =============================================================================
 
-class TestAgentBatchAtomicity:
-    """Events were published outside the lock, allowing races."""
+# TestAgentBatchAtomicity retired 2026-10-06: the per-chat agent batch went with agents v2;
+# reports ride the inbox (core/chat/inbox.py) one by one. See tests/test_agents_engine.py.
 
-    def test_check_batch_complete_publishes_outside_lock(self):
-        """Verify batch completion events fire OUTSIDE lock to prevent deadlock with EventBus."""
-        from core.agents.manager import AgentManager
-        from core.agents.base_worker import BaseWorker
-
-        mgr = AgentManager()
-
-        class FakeAgent(BaseWorker):
-            def __init__(self, agent_id, name, chat_name):
-                super().__init__(agent_id, name, "test", chat_name)
-                self.status = 'done'
-                self.result = 'ok'
-                self._start_time = time.time() - 1
-                self._end_time = time.time()
-                self._agent_type = 'llm'
-
-            def run(self):
-                pass
-
-        mgr._agents = {
-            'a1': FakeAgent('a1', 'Alpha', 'test-chat'),
-            'a2': FakeAgent('a2', 'Bravo', 'test-chat'),
-        }
-
-        lock_held_during_publish = []
-
-        def tracking_publish(event, data):
-            # Check if the manager's lock is held (locked() returns True if acquired)
-            lock_held_during_publish.append(mgr._lock.locked())
-
-        with patch('core.agents.manager.publish', side_effect=tracking_publish):
-            mgr._check_batch_complete('a1', 'test-chat')
-
-        # Events must fire OUTSIDE lock to prevent deadlock with EventBus subscribers
-        assert len(lock_held_during_publish) > 0, "Should have published events"
-        assert not any(lock_held_during_publish), "Publish calls must be outside the lock (deadlock prevention)"
-
-
-# =============================================================================
-# FIX #13: Updater version parsing crash (updater.py)
-# =============================================================================
 
 class TestVersionParsing:
     """Version strings like '2.3.8-rc1' would crash with ValueError."""
@@ -473,40 +432,24 @@ class TestAgentShutdown:
     """Agent threads were daemon threads with no graceful shutdown."""
 
     def test_agent_manager_has_shutdown(self):
-        """AgentManager should have a shutdown() method."""
-        from core.agents.manager import AgentManager
+        from core.agents.engine import AgentManager
         mgr = AgentManager()
-        assert hasattr(mgr, 'shutdown')
-        assert callable(mgr.shutdown)
+        assert callable(getattr(mgr, 'shutdown', None))
 
-    def test_shutdown_cancels_running_agents(self):
-        """shutdown() should cancel all running agents."""
-        from core.agents.manager import AgentManager
-        from core.agents.base_worker import BaseWorker
-
-        mgr = AgentManager()
-
-        class SlowAgent(BaseWorker):
-            def run(self):
-                while not self._cancelled.wait(0.1):
-                    pass
-
-        agent = SlowAgent('a1', 'Alpha', 'test', 'chat1')
-        mgr._agents['a1'] = agent
-
-        with patch('core.event_bus.publish'):
-            agent.start()
-            assert agent.status == 'running'
-
-            mgr.shutdown(timeout=2)
-            assert agent._cancelled.is_set()
-            assert not agent._thread.is_alive()
+    def test_shutdown_cancels_running_agents(self, agent_world):
+        """shutdown() stops every live agent and joins its thread."""
+        w = agent_world
+        r = w.mgr.spawn('probe', 'test', chat='desk')
+        a = w.mgr._agents[r['id']]
+        assert a.status == 'running'
+        w.mgr.shutdown(timeout=2)
+        assert a.cancelled and not a._thread.is_alive()
 
     def test_shutdown_clears_agents(self):
-        """shutdown() should empty the agents dict."""
-        from core.agents.manager import AgentManager
+        from core.agents.engine import AgentManager
         mgr = AgentManager()
-        mgr._agents = {'a1': MagicMock(status='done', _thread=None, cancel=MagicMock)}
+        mgr._rows = []
+        mgr._agents = {'a1': MagicMock(status='done', _thread=None, stop=MagicMock(), resume_token=None)}
         mgr.shutdown()
         assert len(mgr._agents) == 0
 

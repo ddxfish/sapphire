@@ -127,40 +127,32 @@ def test_fake_popen_poll_before_and_after_communicate(fake_popen):
     assert proc.poll() == 0
 
 
-def test_blocking_worker_cls_deterministic_completion(blocking_worker_cls):
-    w = blocking_worker_cls(
-        agent_id='test-id', name='TestW', mission='m', chat_name='c'
-    )
-    w.start()
-    # Worker is blocked on its gate
-    assert w.status == 'running'
-    # Unblock with a result
-    w.finish_with_result('done')
-    # Wait for the daemon thread to finish
-    w._thread.join(timeout=3)
-    assert w.status == 'done'
-    assert w.result == 'done'
+def test_blocking_agent_cls_deterministic_completion(agent_world):
+    """The blocking agent waits on its gate until released, then reports."""
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    a = w.mgr._agents[r['id']]
+    assert a.status == 'running'
+    a.finish_with_result('done')
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    assert a.status == 'done' and a.result == 'done'
 
 
-def test_blocking_worker_cls_error_path(blocking_worker_cls):
-    w = blocking_worker_cls(
-        agent_id='err-id', name='ErrW', mission='m'
-    )
-    w.start()
-    w.finish_with_error(RuntimeError('boom'))
-    w._thread.join(timeout=3)
-    assert w.status == 'failed'
-    assert 'boom' in (w.error or '')
+def test_blocking_agent_cls_error_path(agent_world):
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.finish_with_error(RuntimeError('kaboom'))
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    assert a.status == 'failed' and 'kaboom' in a.error
 
 
-def test_blocking_worker_cls_cancel_during_run(blocking_worker_cls):
-    w = blocking_worker_cls(
-        agent_id='cancel-id', name='CancelW', mission='m'
-    )
-    w.start()
-    assert w.status == 'running'
-    w.cancel()
-    w.finish()  # release the gate so the thread can exit
-    w._thread.join(timeout=3)
-    assert w.status == 'cancelled'
-    assert w.result is None  # cancel voids result
+def test_blocking_agent_cls_cancel_during_run(agent_world):
+    """A stopped agent's result is voided even if run() finished with one."""
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a._queued_result = 'late result'
+    a.stop()
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    assert a.status == 'stopped' and a.result is None

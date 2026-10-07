@@ -41,6 +41,21 @@ def world(monkeypatch):
         yield SimpleNamespace(system=system, fm=fm, sm=sm, chats=chats)
 
 
+@pytest.fixture(autouse=True)
+def quick_inbox(monkeypatch):
+    """ask and tell ride the chat's inbox (core/chat/inbox.py): no system
+    singleton here, the organ counts as up, and the clocks are short."""
+    from core.chat import inbox
+    inbox._chats.clear()
+    monkeypatch.setattr(inbox, '_system', lambda: None)
+    monkeypatch.setattr(inbox, '_cadence_ready', lambda: True)
+    monkeypatch.setattr(inbox, 'SWEEP_S', 0.03)
+    monkeypatch.setattr(inbox, 'BACKOFF_MIN', 0.005)
+    monkeypatch.setattr(inbox, 'BACKOFF_MAX', 0.02)
+    yield
+    inbox._chats.clear()
+
+
 def rpc(method, ident=1, **params):
     return {'jsonrpc': '2.0', 'id': ident, 'method': method, 'params': params}
 
@@ -100,16 +115,27 @@ def test_ask_makes_the_chat_when_it_is_missing(world):
     assert made in world.chats and run_turn.call_args.args[0] == made
 
 
-def test_ask_waits_for_a_busy_chat_and_gives_up_in_time(world):
-    with patch('core.cadence.run_turn', side_effect=[ChatBusy('desk-sapph'), 'Now.']), \
-         patch.object(mcp.time, 'sleep'):
+def test_ask_waits_for_a_busy_chat_and_gives_up_in_time(world, monkeypatch):
+    # A busy chat is waited for (the inbox requeues on ChatBusy) and answers late...
+    with patch('core.cadence.run_turn', side_effect=[ChatBusy('desk-sapph'), 'Now.']):
         out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'desk-sapph'}))
     assert out['result']['content'][0]['text'] == 'Now.'
-    clock = iter([0, 0, 100, 100])
-    with patch('core.cadence.run_turn', side_effect=ChatBusy('desk-sapph')), \
-         patch.object(mcp.time, 'monotonic', side_effect=lambda: next(clock)), patch.object(mcp.time, 'sleep'):
+    # ...and an ask that never gets its turn within ASK_WAIT says so.
+    monkeypatch.setattr(mcp, 'ASK_WAIT', 0.2)
+    with patch('core.cadence.run_turn', side_effect=ChatBusy('desk-sapph')):
         out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'desk-sapph'}))
-    assert out['result']['isError'] is True and 'mid-turn' in out['result']['content'][0]['text']
+    assert out['result']['isError'] is True and 'did not get to this question' in out['result']['content'][0]['text']
+
+
+def test_ask_and_tell_refuse_a_private_chat(world):
+    # A private chat's words stay on this machine: nothing in, no reply out (Krem 2026-10-06).
+    world.chats['vault-talk'] = {'private_chat': True}
+    with patch('core.cadence.run_turn') as run_turn:
+        out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'vault-talk'}))
+        assert out['result']['isError'] is True and 'private' in out['result']['content'][0]['text']
+        out = mcp.handle(world.system, rpc('tools/call', name='tell', arguments={'text': 'hi', 'chat': 'vault-talk'}))
+        assert out['result']['isError'] is True and 'private' in out['result']['content'][0]['text']
+    run_turn.assert_not_called()
 
 
 def test_ask_refuses_what_it_should(world):

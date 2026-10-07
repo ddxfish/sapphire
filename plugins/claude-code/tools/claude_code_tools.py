@@ -1,50 +1,30 @@
 # plugins/claude-code/tools/claude_code_tools.py
-# Single blocking tool + registers claude_code agent type with AgentManager
+# The activate_plugin tool and the helpers the `claude_code` agent kind
+# (plugins/claude-code/agent_kind.py) shares: plugin validation, CLAUDE.md
+# composition, doc injection, the conda-scrubbed env, and the binary resolver.
+# The headless `code_session` tool and the CodeWorker/PluginWorker went with
+# agents v2 (2026-10-06, tmp/agents-v2.md §5): a coding session is an agent now.
+import json
 import logging
 import os
+import re
 import shutil
 import sys
-import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\u26a1'
-AVAILABLE_FUNCTIONS = ['code_session', 'activate_plugin']
+AVAILABLE_FUNCTIONS = ['activate_plugin']
 
 TOOLS = [
-    {
-        "type": "function",
-        "is_local": False,
-        "function": {
-            "name": "code_session",
-            "description": "Run a BLOCKING Claude Code session — you wait for it to finish. Call with no arguments to list recent projects/sessions. Call with a mission to start or resume. For anything that takes more than a few seconds, prefer spawn_agent via the agents plugin. Two agent types available: 'claude_code' for general projects (~/claude-workspaces/), 'claude_code_plugin' for building Sapphire plugins (user/plugins/). For plugins, use spawn_agent(agent_type='claude_code_plugin', plugin_name='name') — it auto-injects plugin docs and validates the result.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mission": {
-                        "type": "string",
-                        "description": "What to build or do. Omit to list recent sessions instead."
-                    },
-                    "project_name": {
-                        "type": "string",
-                        "description": "Workspace directory name. Auto-generated from mission if not provided."
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Resume a previous session by ID (from listing). Continues with full context preserved."
-                    }
-                },
-                "required": []
-            }
-        }
-    },
     {
         "type": "function",
         "is_local": True,
         "function": {
             "name": "activate_plugin",
-            "description": "Activate a plugin after it's been built by a claude_code_plugin agent. Runs AST validation, checks the manifest, rescans plugins, and enables the new plugin. Use check_agents first to confirm the build agent completed, then call this with the plugin name.",
+            "description": "Activate a plugin after a claude_code agent built it in plugin mode. Runs structural validation, rescans plugins, and enables the new plugin. Call it with the plugin's directory name once the agent reports done.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -59,293 +39,17 @@ TOOLS = [
     },
 ]
 
+# .absolute() not .resolve() — .resolve() follows symlinks/junctions,
+# misroots SAPPHIRE_ROOT on Windows dev installs. herring #24.
+_SAPPHIRE_ROOT = str(Path(__file__).absolute().parent.parent.parent.parent)
+_IS_WINDOWS = sys.platform == 'win32'
 
-# --- Claude Code Worker (inlined for agent registration) ---
-
-def _create_code_worker():
-    """Create a CodeWorker class for the agent registry."""
-    from core.agents.base_worker import BaseWorker
-
-    class CodeWorker(BaseWorker):
-        """Runs a Claude Code session in a background thread."""
-
-        def __init__(self, agent_id, name, mission, chat_name='', on_complete=None,
-                     project_name='', session_id='', **kwargs):
-            super().__init__(agent_id, name, mission, chat_name, on_complete)
-            # Sanitize project_name — prevents path traversal via LLM-supplied arg
-            self.project_name = _safe_dir_name(project_name) if project_name else _slugify(mission)
-            self._session_id = session_id
-            self._proc = None  # populated by _run_claude; cancel() kills it
-            # tool_log populated by _run_claude once the subprocess actually
-            # starts — init empty so a cancel-at-start agent doesn't report
-            # 'Tools called: claude-code' for work that never happened.
-            self.tool_log = []
-            self._tool_label = 'claude-code'
-
-        def cancel(self):
-            super().cancel()
-            _kill_proc(self._proc)
-
-        def run(self):
-            settings = _get_settings()
-
-            # Resume: resolve workspace from saved session
-            if self._session_id:
-                workspace = _resolve_session_workspace(self._session_id, settings)
-                if not workspace:
-                    self.error = f"Session {self._session_id} not found or workspace gone."
-                    self.status = 'failed'
-                    return
-            else:
-                workspace, err = _resolve_workspace(settings, self.project_name)
-                if err:
-                    self.error = err
-                    self.status = 'failed'
-                    return
-
-            safety_err = _sanity_check(workspace)
-            if safety_err:
-                self.error = safety_err
-                self.status = 'failed'
-                return
-
-            base = settings.get('coder_instructions', '')
-            mode = settings.get('project_instructions', '')
-            _write_claude_md(workspace, base, mode, self.project_name)
-
-            if self._cancelled.is_set():
-                self.status = 'cancelled'
-                return
-
-            args = _build_claude_args(self.mission, settings, session_id=self._session_id)
-            if _claude_supports_name():
-                args.extend(['--name', self.project_name])
-
-            data, err = _run_claude(args, workspace, worker=self)
-            if err:
-                self.error = err
-                self.status = 'failed' if not self._cancelled.is_set() else 'cancelled'
-                return
-
-            session_id = data.get('session_id', '')
-
-            # Track session — only advertise as resumable if save actually succeeded
-            session_saved = False
-            if session_id:
-                session_saved = _save_session(session_id, self.project_name, workspace, self.mission)
-
-            result_text = data.get('result', str(data))
-            file_listing = _list_workspace_files(workspace)
-
-            lines = [
-                f"**Code Agent {self.name} \u2014 Complete**",
-                f"- Project: `{self.project_name}`",
-                f"- Workspace: `{workspace}`",
-            ]
-            if session_saved:
-                lines.append(f"- Session ID: `{session_id}` (resumable)")
-            elif session_id:
-                lines.append(f"- Session ID: `{session_id}` (not saved — resume may fail)")
-            if os.path.isfile(os.path.join(workspace, 'index.html')):
-                lines.append(f"- **[Open App](/workspace/{self.project_name}/index.html)**")
-            lines.append(f"\n**Files:**\n{file_listing}")
-            lines.append(f"\n**Result:**\n{result_text}")
-
-            if session_saved:
-                lines.append(f"\n**If there are bugs:** Use `spawn_agent(agent_type='claude_code', "
-                             f"project_name='{self.project_name}', session_id='{session_id}')` to resume. "
-                             f"Describe the error so Claude Code can fix it. "
-                             f"Do NOT troubleshoot manually with run_command.")
-
-            self.result = '\n'.join(lines)
-
-            # Notify frontend about runnable project
-            _publish_workspace_ready(self.project_name, workspace)
-
-    return CodeWorker
-
-
-# --- Plugin builder worker ---
-
-def _create_plugin_worker():
-    """Create a PluginWorker class for autonomous plugin building."""
-    from core.agents.base_worker import BaseWorker
-
-    class PluginWorker(BaseWorker):
-        """Builds a Sapphire plugin via Claude Code in headless mode."""
-
-        def __init__(self, agent_id, name, mission, chat_name='', on_complete=None,
-                     plugin_name='', capabilities=None, context=None, session_id='', **kwargs):
-            super().__init__(agent_id, name, mission, chat_name, on_complete)
-            # Sanitize plugin_name — prevents path traversal via LLM-supplied arg
-            self.plugin_name = _safe_dir_name(plugin_name) if plugin_name else _slugify(mission)
-            self._proc = None  # populated by _run_claude; cancel() kills it
-            # Coerce capabilities — LLMs send "providers, settings" as string not list
-            if isinstance(capabilities, str):
-                self._capabilities = [c.strip() for c in capabilities.split(',') if c.strip()]
-            else:
-                self._capabilities = capabilities or ['tools']
-            self._context = context
-            self._session_id = session_id
-            # tool_log populated by _run_claude once the subprocess actually
-            # starts — init empty so cancel-at-start doesn't claim tools ran.
-            self.tool_log = []
-            self._tool_label = 'claude-code-plugin'
-
-        def cancel(self):
-            super().cancel()
-            _kill_proc(self._proc)
-
-        def run(self):
-            settings = _get_settings()
-            # Defense-in-depth: resolve + assert under user/plugins base (plugin_name
-            # is already sanitized in __init__, this catches any future regression)
-            plugins_base = Path(_SAPPHIRE_ROOT) / 'user' / 'plugins'
-            workspace_path = (plugins_base / self.plugin_name).resolve()
-            try:
-                workspace_path.relative_to(plugins_base.resolve())
-            except ValueError:
-                self.error = f"Invalid plugin_name (path escape rejected): {self.plugin_name!r}"
-                self.status = 'failed'
-                return
-            workspace = str(workspace_path)
-
-            # Resume: resolve workspace from saved session
-            if self._session_id:
-                saved_ws = _resolve_session_workspace(self._session_id, settings)
-                if saved_ws:
-                    workspace = saved_ws
-
-            # Chaos #5: refuse silent overwrites of existing plugins when we're
-            # not resuming a known session. Without this, the LLM can build
-            # a plugin that shares a name with an existing one and stomp files.
-            if not self._session_id and os.path.isdir(workspace) and os.listdir(workspace):
-                self.error = (
-                    f"Plugin directory '{self.plugin_name}' already exists with contents. "
-                    f"Pick a unique name, or pass session_id to resume an existing build."
-                )
-                self.status = 'failed'
-                return
-
-            # Chaos #2: same sanity gate CodeWorker uses. Catches missing
-            # `claude` CLI up front with an install hint instead of later
-            # FileNotFoundError buried inside _run_claude.
-            safety_err = _sanity_check(workspace)
-            if safety_err:
-                self.error = safety_err
-                self.status = 'failed'
-                return
-
-            try:
-                os.makedirs(workspace, exist_ok=True)
-            except OSError as e:
-                self.error = f"Cannot create plugin dir: {e}"
-                self.status = 'failed'
-                return
-
-            # Build three-layer CLAUDE.md: base + plugin mode + plugin addendum
-            base = settings.get('coder_instructions', '')
-            mode = settings.get('plugin_instructions', '')
-            addendum = _build_plugin_addendum(
-                self.plugin_name, self.mission,
-                self._capabilities, self._context
-            )
-            _write_claude_md(workspace, base, mode, self.plugin_name, addendum=addendum)
-
-            if self._cancelled.is_set():
-                self.status = 'cancelled'
-                return
-
-            args = _build_claude_args(self.mission, settings, session_id=self._session_id)
-            if _claude_supports_name():
-                args.extend(['--name', f'plugin-{self.plugin_name}'])
-
-            data, err = _run_claude(args, workspace, worker=self)
-            if err:
-                self.error = err
-                self.status = 'failed' if not self._cancelled.is_set() else 'cancelled'
-                return
-
-            session_id = data.get('session_id', '')
-            session_saved = False
-            if session_id:
-                session_saved = _save_session(session_id, self.plugin_name, workspace, self.mission)
-
-            result_text = data.get('result', str(data))
-            file_listing = _list_workspace_files(workspace)
-
-            # Run validation chain
-            validation = _validate_plugin(workspace)
-            _public_checks = {k: v for k, v in validation.items() if not k.startswith('_')}
-            _all_passed_early = all(_public_checks.values())
-
-            # Header reflects build state so downstream reports (which use
-            # `result or error`) show FAILED when validation doesn't pass,
-            # instead of a success-shaped heading with a ✗ icon elsewhere.
-            header = (f"**Plugin Builder {self.name} — Complete**"
-                      if _all_passed_early
-                      else f"**Plugin Builder {self.name} — FAILED (validation)**")
-            lines = [
-                header,
-                f"- Plugin: `{self.plugin_name}`",
-                f"- Workspace: `{workspace}`",
-            ]
-            if session_saved:
-                lines.append(f"- Session ID: `{session_id}` (resumable)")
-            elif session_id:
-                lines.append(f"- Session ID: `{session_id}` (not saved — resume may fail)")
-            lines.append(f"\n**Validation:**")
-            for check, passed in validation.items():
-                icon = '\u2713' if passed else '\u2717'
-                lines.append(f"  {icon} {check}")
-            lines.append(f"\n**Files:**\n{file_listing}")
-            lines.append(f"\n**Result:**\n{result_text}")
-
-            # Read NOTES.md if Claude Code left one
-            notes_path = os.path.join(workspace, 'NOTES.md')
-            if os.path.isfile(notes_path):
-                try:
-                    notes = Path(notes_path).read_text(encoding='utf-8').strip()
-                    if notes:
-                        lines.append(f"\n**Notes from Claude Code:**\n{notes}")
-                except Exception:
-                    pass
-
-            # Add guidance so Sapphire knows what to do next. We skip the
-            # private '_missing_files' key (it's used to format a specific
-            # error hint below, not shown as a standalone pass/fail row).
-            public_checks = {k: v for k, v in validation.items() if not k.startswith('_')}
-            all_passed = all(public_checks.values())
-            if all_passed:
-                lines.append(f"\n**Next step:** Call `activate_plugin(name='{self.plugin_name}')` to enable it.")
-            else:
-                failed = [k for k, v in public_checks.items() if not v]
-                lines.append(f"\n**Issues found:** {', '.join(failed)}")
-                # Chaos #10: surface WHICH files are missing so the follow-up
-                # agent doesn't rediscover what the validator already knew.
-                missing = validation.get('_missing_files') or []
-                if missing:
-                    lines.append(f"**Missing files:** {', '.join(missing)}")
-                lines.append(f"**To fix:** Use `spawn_agent(agent_type='claude_code_plugin', "
-                             f"plugin_name='{self.plugin_name}')` to resume. "
-                             f"Describe the specific error so Claude Code can fix it.")
-                lines.append(f"Do NOT troubleshoot manually with run_command — Claude Code has "
-                             f"the full project context and can fix it faster.")
-
-            self.result = '\n'.join(lines)
-            self._validation = validation
-            self._all_passed = all_passed
-            # If validation failed, mark the agent failed so the batch report's
-            # ✓/✗ icon honestly reflects build state. The result body already
-            # describes which checks failed; this just stops Sapphire's LLM from
-            # glancing at ✓ and missing the "Issues found" text.
-            if not all_passed:
-                self.status = 'failed'
-                self.error = 'plugin validation failed: ' + ', '.join(
-                    k for k, v in validation.items() if not v
-                )
-
-    return PluginWorker
+_DEFAULT_CODER_INSTRUCTIONS = """You are a code builder. Write clean, working code.
+- Test your work by running it before reporting done
+- Include a README.md with usage instructions
+- Keep it simple and minimal — no over-engineering
+- If you hit a problem you can't solve, describe it clearly in your final response
+- If you notice anything noteworthy that isn't part of your task, write it to NOTES.md"""
 
 
 def _validate_plugin(workspace):
@@ -421,6 +125,13 @@ def _validate_plugin(workspace):
         or bool(caps.get('settings'))
         or bool(caps.get('app'))
         or bool(caps.get('schedule'))
+        or bool(caps.get('agents'))
+        or bool(caps.get('devices'))
+        or bool(caps.get('games'))
+        or bool(caps.get('memory_layers'))
+        or bool(caps.get('prompts'))
+        or bool(caps.get('widgets'))
+        or bool(caps.get('web'))
     )
     results['has_capability'] = has_capability
 
@@ -439,117 +150,6 @@ def _validate_plugin(workspace):
 
 
 # --- Agent type registration ---
-
-def _register_code_type(mgr):
-    """Register claude_code agent type with the given AgentManager."""
-    if 'claude_code' in mgr.get_types():
-        return
-
-    CodeWorker = _create_code_worker()
-
-    def code_factory(agent_id, name, mission, chat_name='', on_complete=None, **kwargs):
-        return CodeWorker(agent_id, name, mission, chat_name=chat_name, on_complete=on_complete, **kwargs)
-
-    mgr.register_type(
-        type_key='claude_code',
-        display_name='Code (Claude Code)',
-        factory=code_factory,
-        spawn_args={
-            'project_name': {'type': 'string', 'description': 'Workspace directory name for the project.'},
-            'session_id': {'type': 'string', 'description': 'Resume a previous session by ID (from code_session listing).'},
-        },
-        names=['Forge', 'Anvil', 'Crucible', 'Hammer', 'Spark'],
-    )
-
-
-def _register_plugin_type(mgr):
-    """Register claude_code_plugin agent type for autonomous plugin building."""
-    if 'claude_code_plugin' in mgr.get_types():
-        return
-
-    PluginWorker = _create_plugin_worker()
-
-    def plugin_factory(agent_id, name, mission, chat_name='', on_complete=None, **kwargs):
-        return PluginWorker(agent_id, name, mission, chat_name=chat_name, on_complete=on_complete, **kwargs)
-
-    mgr.register_type(
-        type_key='claude_code_plugin',
-        display_name='Plugin Builder (Claude Code)',
-        factory=plugin_factory,
-        spawn_args={
-            'plugin_name': {'type': 'string', 'description': 'Plugin directory name (in user/plugins/).'},
-            'capabilities': {'type': 'array', 'description': 'Plugin capabilities: tools, hooks, daemon, routes, settings, providers.'},
-            'context': {'type': 'string', 'description': 'Additional context (API docs, format specs, etc.).'},
-            'session_id': {'type': 'string', 'description': 'Resume a previous session by ID.'},
-        },
-        names=['Blueprint', 'Architect', 'Mason', 'Maker', 'Weaver'],
-    )
-
-
-# Register at load time via module singleton
-try:
-    from core.agents import agent_manager as _mgr
-    if _mgr is not None:
-        _register_code_type(_mgr)
-        _register_plugin_type(_mgr)
-    else:
-        # Silent failure here was a scout finding. If boot order ever regresses
-        # and plugin scan runs before AgentManager is constructed, agents won't
-        # register and spawn_agent(type='claude_code') will return "Unknown agent
-        # type". Loud warning makes the regression visible.
-        logger.warning(
-            "[claude-code] agent_manager is None at plugin load — claude_code + "
-            "claude_code_plugin agent types NOT registered. Plugin loaded before "
-            "AgentManager was constructed; check boot order in sapphire.py."
-        )
-except Exception as e:
-    logger.warning(f"Failed to register claude_code agent types at load: {e}")
-
-
-# --- Claude runner functions (self-contained) ---
-
-from pathlib import Path
-import json
-import re
-import subprocess
-
-# .absolute() not .resolve() — .resolve() follows symlinks/junctions,
-# misroots SAPPHIRE_ROOT on Windows dev installs. herring #24.
-_SAPPHIRE_ROOT = str(Path(__file__).absolute().parent.parent.parent.parent)
-
-_HAS_NAME_FLAG_CACHE = None
-_HAS_NAME_FLAG_CACHE_TIME = 0
-
-def _claude_supports_name():
-    """Check if installed claude CLI supports --name (added ~2.1.76).
-    Cached for 60s — repeat checks cheap, CLI upgrades mid-session still picked up."""
-    global _HAS_NAME_FLAG_CACHE, _HAS_NAME_FLAG_CACHE_TIME
-    now = time.time()
-    if _HAS_NAME_FLAG_CACHE is not None and (now - _HAS_NAME_FLAG_CACHE_TIME) < 60:
-        return _HAS_NAME_FLAG_CACHE
-    try:
-        # Resolve absolute path so Windows CreateProcessW finds claude.cmd
-        # (PATHEXT not honored with bare command + shell=False). 2026-05-14.
-        env = _clean_env()
-        resolved, _err = _resolve_claude_executable(env)
-        cmd = [resolved or 'claude', '--help']
-        out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=5, env=env,
-            encoding='utf-8', errors='replace',
-        )
-        _HAS_NAME_FLAG_CACHE = '--name' in out.stdout
-    except Exception as e:
-        logger.debug(f"[claude-code] _claude_supports_name probe failed: {e}")
-        _HAS_NAME_FLAG_CACHE = False
-    _HAS_NAME_FLAG_CACHE_TIME = now
-    return _HAS_NAME_FLAG_CACHE
-
-_DEFAULT_CODER_INSTRUCTIONS = """You are a code builder. Write clean, working code.
-- Test your work by running it before reporting done
-- Include a README.md with usage instructions
-- Keep it simple and minimal — no over-engineering
-- If you hit a problem you can't solve, describe it clearly in your final response
-- If you notice anything noteworthy that isn't part of your task, write it to NOTES.md"""
 
 
 def _build_claude_md(project_name, base_instructions=None, mode_instructions=None, addendum=None):
@@ -744,21 +344,6 @@ def _resolve_claude_executable(env):
     return None, diag
 
 
-def _sanity_check(workspace_path):
-    ws = str(Path(workspace_path).resolve())
-    user_plugins = os.path.join(_SAPPHIRE_ROOT, 'user', 'plugins')
-    if ws.startswith(_SAPPHIRE_ROOT) and not ws.startswith(user_plugins):
-        return f"SAFETY: Workspace '{ws}' is inside Sapphire's project directory. Use an external directory."
-    for marker in ['/envs/', '/conda', '/.venv/', '/virtualenvs/']:
-        if marker in ws.lower():
-            return f"SAFETY: Workspace '{ws}' appears to be inside a Python environment."
-    clean = _clean_env()
-    resolved, err = _resolve_claude_executable(clean)
-    if err:
-        return err
-    return None
-
-
 def _slugify(text, max_len=40):
     words = re.sub(r'[^a-zA-Z0-9\s]', '', text).split()[:6]
     slug = '-'.join(w.lower() for w in words)
@@ -814,159 +399,6 @@ def _write_claude_md(workspace, base_instructions=None, mode_instructions=None,
         logger.warning(f"[claude-code] Could not write CLAUDE.md: {e}")
 
 
-def _build_claude_args(mission, settings, session_id=None, model_override=None):
-    mode = settings.get('mode', 'standard')
-    max_turns = int(settings.get('max_turns', 50))
-    args = ['claude', '-p', mission, '--output-format', 'json']
-    if session_id:
-        args.extend(['--resume', session_id])
-    args.extend(['--max-turns', str(max_turns)])
-
-    # Model override (plugin builds can use cheaper models)
-    model = model_override or settings.get('plugin_build_model', '')
-    if model:
-        args.extend(['--model', model])
-
-    # Budget cap
-    budget = settings.get('max_budget_usd')
-    if budget and float(budget) > 0:
-        args.extend(['--max-budget-usd', str(float(budget))])
-
-    if mode == 'strict':
-        args.extend(['--allowedTools', 'Read,Edit,Write,Glob,Grep'])
-    elif mode == 'system_killer':
-        args.extend(['--allowedTools', 'Read,Edit,Write,Glob,Grep,Bash,NotebookEdit,WebFetch,WebSearch'])
-    else:
-        args.extend(['--allowedTools', 'Read,Edit,Write,Glob,Grep,Bash,NotebookEdit'])
-
-    # Give Claude Code read access to plugin docs, reference plugins, and logs
-    docs_dir = os.path.join(_SAPPHIRE_ROOT, 'docs')
-    if os.path.isdir(docs_dir):
-        args.extend(['--add-dir', docs_dir])
-    # Reference plugin — a real working TTS provider Claude Code can study
-    ref_plugin = os.path.join(_SAPPHIRE_ROOT, 'plugins', 'elevenlabs')
-    if os.path.isdir(ref_plugin):
-        args.extend(['--add-dir', ref_plugin])
-    # Sapphire logs — so Claude Code can diagnose runtime errors
-    logs_dir = os.path.join(_SAPPHIRE_ROOT, 'user', 'logs')
-    if os.path.isdir(logs_dir):
-        args.extend(['--add-dir', logs_dir])
-
-    return args
-
-
-_IS_WINDOWS = sys.platform == 'win32'
-
-
-def _kill_proc(proc):
-    """Best-effort kill of a running claude subprocess (and its process group on POSIX)."""
-    if proc is None or proc.poll() is not None:
-        return
-    try:
-        if not _IS_WINDOWS:
-            import signal
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    except Exception:
-        pass
-
-
-def _run_claude(args, workspace, timeout_minutes=30, worker=None):
-    env = _clean_env()
-    timeout_sec = timeout_minutes * 60
-    # Resolve `claude` to its absolute path BEFORE Popen. On Windows,
-    # subprocess.Popen with a list of args and shell=False uses
-    # CreateProcessW which doesn't honor PATHEXT — `claude.cmd` from
-    # `npm install -g @anthropic-ai/claude-code` is invisible. The
-    # resolver helper logs the resolution (or a detailed diagnostic on
-    # failure). 2026-05-14.
-    resolved, resolve_err = _resolve_claude_executable(env)
-    if resolve_err:
-        return None, resolve_err
-    args = [resolved] + list(args[1:])  # replace bare 'claude' with full path
-    logger.info(f"[claude-code] Running: {' '.join(args[:6])}... in {workspace}")
-    try:
-        popen_kwargs = dict(
-            cwd=workspace, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, text=True,
-            encoding='utf-8', errors='replace',
-        )
-        if not _IS_WINDOWS:
-            popen_kwargs['start_new_session'] = True
-        proc = subprocess.Popen(args, **popen_kwargs)
-        # Expose proc to worker so cancel()/shutdown can kill it instead of
-        # orphaning the claude subprocess when Sapphire is asked to stop.
-        # Also record tool_log now that the subprocess actually started —
-        # init was empty so cancel-at-start doesn't falsely claim work ran.
-        if worker is not None:
-            worker._proc = proc
-            label = getattr(worker, '_tool_label', 'claude-code')
-            if label and label not in worker.tool_log:
-                worker.tool_log.append(label)
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            if not _IS_WINDOWS:
-                import signal
-                try:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            proc.wait(timeout=5)
-            return None, f"Claude Code session timed out after {timeout_minutes} minutes."
-        result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
-    except FileNotFoundError:
-        return None, "Claude Code command not found. Install globally: npm install -g @anthropic-ai/claude-code"
-    except Exception as e:
-        return None, f"Failed to run Claude Code: {e}"
-
-    if result.returncode != 0:
-        # Chaos #6: non-zero exit = error, regardless of whether stdout has
-        # parseable JSON. Previously we let returncode!=0 slide when stdout
-        # was non-empty, but that swallowed budget-cap-mid-gen and similar
-        # partial-success cases where claude produced SOME output but didn't
-        # finish the task. Caller retries are cheap; swallowed failures aren't.
-        stderr_tail = (result.stderr or '')[-500:]
-        stdout_tail = (result.stdout or '').strip()[-300:]
-        return None, (
-            f"Claude Code exited with error (code {result.returncode}). "
-            f"stderr: {stderr_tail!r} stdout_tail: {stdout_tail!r}"
-        )
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        for line in result.stdout.strip().split('\n'):
-            line = line.strip()
-            if line.startswith('{'):
-                try:
-                    data = json.loads(line)
-                    break
-                except json.JSONDecodeError:
-                    continue
-        else:
-            # No parseable JSON anywhere in stdout — treat as failure rather
-            # than silently presenting raw text as a "successful" structured
-            # result. Caller relies on err=None meaning "claude returned
-            # well-formed output"; honoring that contract avoids downstream
-            # validation chains accepting garbage.
-            tail = (result.stdout or '').strip()[-500:]
-            return None, f"Claude Code returned no parseable JSON output (last 500 chars: {tail!r})"
-    return data, None
-
-
 def _list_workspace_files(workspace, max_files=20):
     try:
         files = []
@@ -992,158 +424,10 @@ def _list_workspace_files(workspace, max_files=20):
 
 # --- Helpers ---
 
+
 def _get_settings():
     from core.plugin_loader import plugin_loader
     return plugin_loader.get_plugin_settings("claude-code") or {}
-
-
-def _get_sessions():
-    """Get saved sessions dict from plugin state."""
-    try:
-        from core.plugin_loader import plugin_loader
-        state = plugin_loader.get_plugin_state("claude-code")
-        return state.get('sessions', {}), state
-    except Exception:
-        return {}, None
-
-
-def _save_session(session_id, project_name, workspace, mission):
-    """Save or update a session in plugin state. Returns True on success, False on failure
-    (so callers don't falsely advertise the session as 'resumable')."""
-    try:
-        sessions, state = _get_sessions()
-        if not state:
-            logger.warning(f"[claude-code] No plugin state available — session {session_id} not persisted")
-            return False
-        existing = sessions.get(session_id)
-        if existing:
-            existing['last_used'] = time.strftime('%Y-%m-%dT%H:%M:%S')
-            existing['turns'] = existing.get('turns', 0) + 1
-        else:
-            sessions[session_id] = {
-                'project': project_name,
-                'workspace': workspace,
-                'mission': mission[:200],
-                'created': time.strftime('%Y-%m-%dT%H:%M:%S'),
-                'last_used': time.strftime('%Y-%m-%dT%H:%M:%S'),
-                'turns': 1,
-            }
-        if len(sessions) > 20:
-            sorted_ids = sorted(sessions, key=lambda k: sessions[k].get('last_used', ''))
-            for old_id in sorted_ids[:-20]:
-                del sessions[old_id]
-        state.save('sessions', sessions)
-        return True
-    except Exception as e:
-        logger.warning(f"[claude-code] Could not save session: {e}")
-        return False
-
-
-def _resolve_session_workspace(session_id, settings):
-    """Look up workspace for a saved session. Returns path or None."""
-    sessions, _ = _get_sessions()
-    info = sessions.get(session_id)
-    if info and info.get('workspace') and os.path.isdir(info['workspace']):
-        return info['workspace']
-    # Fallback: try base workspace dir
-    base = os.path.expanduser(settings.get('workspace_dir', '~/claude-workspaces'))
-    if os.path.isdir(base):
-        return base
-    return None
-
-
-def _list_sessions():
-    """List recent sessions for the AI."""
-    sessions, _ = _get_sessions()
-    if not sessions:
-        return "No Claude Code sessions yet. Call with a mission to start one.", True
-
-    lines = ["**Recent Claude Code Sessions:**\n"]
-    sorted_sessions = sorted(sessions.items(), key=lambda x: x[1].get('last_used', ''), reverse=True)
-
-    for sid, info in sorted_sessions[:10]:
-        workspace_exists = os.path.isdir(info.get('workspace', ''))
-        status = '\u2713' if workspace_exists else '\u2717 (workspace gone)'
-        lines.append(
-            f"- **{info.get('project', '?')}** {status}\n"
-            f"  ID: `{sid}` | Turns: {info.get('turns', 0)} | "
-            f"Last: {info.get('last_used', '?')}\n"
-            f"  Mission: {info.get('mission', '?')[:100]}"
-        )
-
-    lines.append("\nUse `session_id` to resume any session.")
-    return '\n'.join(lines), True
-
-
-# --- Blocking tool ---
-
-def _code_session(arguments):
-    mission = arguments.get('mission', '').strip()
-    session_id = arguments.get('session_id', '').strip()
-
-    # No mission = list sessions
-    if not mission:
-        return _list_sessions()
-
-    project_name = arguments.get('project_name', '').strip()
-    if not project_name:
-        project_name = _slugify(mission)
-
-    settings = _get_settings()
-
-    # Resume: resolve workspace from saved session
-    if session_id:
-        workspace = _resolve_session_workspace(session_id, settings)
-        if not workspace:
-            return f"Session {session_id} not found or workspace gone.", False
-    else:
-        workspace, err = _resolve_workspace(settings, project_name)
-        if err:
-            return err, False
-
-    safety_err = _sanity_check(workspace)
-    if safety_err:
-        return safety_err, False
-
-    base = settings.get('coder_instructions', '')
-    mode = settings.get('project_instructions', '')
-    _write_claude_md(workspace, base, mode, project_name)
-
-    args = _build_claude_args(mission, settings, session_id=session_id)
-    if _claude_supports_name():
-        args.extend(['--name', project_name])
-
-    data, err = _run_claude(args, workspace)
-    if err:
-        return f"Claude Code error: {err}", False
-
-    new_session_id = data.get('session_id', '')
-    result_text = data.get('result', str(data))
-
-    new_session_saved = False
-    if new_session_id:
-        new_session_saved = _save_session(new_session_id, project_name, workspace, mission)
-
-    mode = settings.get('mode', 'standard')
-    file_listing = _list_workspace_files(workspace)
-    lines = [
-        f"**Claude Code Session Complete**",
-        f"- Project: `{project_name}`",
-        f"- Workspace: `{workspace}`",
-        f"- Mode: {mode}",
-    ]
-    if new_session_saved:
-        lines.append(f"- Session ID: `{new_session_id}` (resumable)")
-    elif new_session_id:
-        lines.append(f"- Session ID: `{new_session_id}` (not saved — resume may fail)")
-    if os.path.isfile(os.path.join(workspace, 'index.html')):
-        lines.append(f"- **[Open App](/workspace/{project_name}/index.html)**")
-    lines.append(f"\n**Files in workspace:**\n{file_listing}")
-    lines.append(f"\n**Result:**\n{result_text}")
-
-    _publish_workspace_ready(project_name, workspace)
-
-    return '\n'.join(lines), True
 
 
 def _publish_workspace_ready(project_name, workspace):
@@ -1169,6 +453,7 @@ def _publish_workspace_ready(project_name, workspace):
 
 
 # --- Main dispatch ---
+
 
 def _activate_plugin(arguments):
     """Validate and activate a built plugin."""
@@ -1197,8 +482,8 @@ def _activate_plugin(arguments):
         missing = validation.get('_missing_files') or []
         if missing:
             lines.append(f"**Missing files:** {', '.join(missing)}")
-        lines.append(f"**To fix:** Use `spawn_agent(agent_type='claude_code_plugin', "
-                     f"plugin_name='{name}')` with the error details in the mission. "
+        lines.append(f"**To fix:** agent_action('<the agent>', 'say', '<these errors>') on the agent that "
+                     f"built it, or agent_spawn('claude_code', '<fix these errors>', {{'mode': 'plugin', 'name': '{name}'}}). "
                      f"Do NOT troubleshoot with run_command.")
         return '\n'.join(lines), False
 
@@ -1274,9 +559,9 @@ def _activate_plugin(arguments):
                          f"A Sapphire restart is needed for the provider to appear in settings. "
                          f"Tell the user: 'The plugin is ready — restart Sapphire to activate the provider.'")
 
-        lines.append(f"\nIf there are runtime bugs after activation, use "
-                     f"`spawn_agent(agent_type='claude_code_plugin', plugin_name='{name}')` "
-                     f"to fix them. Do NOT troubleshoot with run_command.")
+        lines.append(f"\nIf there are runtime bugs after activation, say so to the agent that built it "
+                     f"(agent_action(..., 'say', ...)) or agent_spawn('claude_code', '<the bug>', "
+                     f"{{'mode': 'plugin', 'name': '{name}'}}). Do NOT troubleshoot with run_command.")
 
         return '\n'.join(lines), True
     except Exception as e:
@@ -1284,14 +569,31 @@ def _activate_plugin(arguments):
         return '\n'.join(lines), False
 
 
+def _sanity_check(workspace_path, mode='project', root=None):
+    """Mode-aware (agents v2): a project workspace must sit OUTSIDE Sapphire's
+    tree and outside any Python environment; plugin mode lives in
+    user/plugins; core mode IS the Sapphire root (`root` overrides the
+    module's own, for a caller that knows better)."""
+    ws = str(Path(workspace_path).resolve())
+    root = str(Path(root or _SAPPHIRE_ROOT).resolve())
+    user_plugins = os.path.join(root, 'user', 'plugins')
+    if mode == 'project' and ws.startswith(root):
+        return f"SAFETY: Workspace '{ws}' is inside Sapphire's project directory. Use an external directory."
+    if mode == 'plugin' and not ws.startswith(user_plugins):
+        return f"SAFETY: a plugin workspace must live under user/plugins, not '{ws}'."
+    if mode == 'core' and ws != root:
+        return f"SAFETY: core mode runs at the Sapphire root, not '{ws}'."
+    for marker in ['/envs/', '/conda', '/.venv/', '/virtualenvs/']:
+        if mode == 'project' and marker in ws.lower():
+            return f"SAFETY: Workspace '{ws}' appears to be inside a Python environment."
+    return None
+
+
 def execute(function_name, arguments, config):
     try:
-        if function_name == 'code_session':
-            return _code_session(arguments)
-        elif function_name == 'activate_plugin':
+        if function_name == 'activate_plugin':
             return _activate_plugin(arguments)
-        else:
-            return f"Unknown function: {function_name}", False
+        return f"Unknown function: {function_name}", False
     except Exception as e:
         logger.error(f"[claude-code] {function_name} failed: {e}", exc_info=True)
         return f"Claude Code error: {e}", False

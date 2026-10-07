@@ -351,5 +351,6 @@ class Events:
     AGENT_SPAWNED = "agent_spawned"
     AGENT_COMPLETED = "agent_completed"
     AGENT_DISMISSED = "agent_dismissed"
-    AGENT_BATCH_COMPLETE = "agent_batch_complete"
+    AGENT_WAITING = "agent_waiting"        # an agent asked the director something (ids only)
+    AGENT_EVENT = "agent_event"            # a transcript line landed (ids and counts only; ephemeral)
     WORKSPACE_READY = "workspace_ready"

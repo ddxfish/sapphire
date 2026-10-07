@@ -250,44 +250,56 @@ class ConversationDriver:
             publish(Events.VOICE_TURN_START, {"message_id": message_id, "user_text": text,
                                               "chat": self._chat_name, "foreign": _foreign})
 
-            stream, sid, chat = self.system.llm_chat.begin_stream(self._chat_name)
-            if self._tts_split:
-                # Phone surface: force the sentence-split pump so the first
-                # sentence synthesizes while the rest still generates. Inert
-                # when TTS streaming is globally off (pump stays disabled).
-                stream.tts_split_override = self._tts_split
-            if self._llm_timeout > 0:
-                # One silent regen if the provider never sends a first token
-                # before the read timeout — the caller only hears the tick.
-                stream.timeout_retry = 1
-                stream.on_timeout_retry = self._retry_cue
-            try:
-                armed = False    # barge-in stays blocked until AUDIO actually flows
-                for event in stream.chat_stream(text):
-                    et = event.get("type") if isinstance(event, dict) else None
-                    # D1: arm only on tts_chunk (real audio), NOT "content". Thinking
-                    # is streamed as <think>-wrapped content events with no audio, so
-                    # arming on content let a caller's talk-pause-talk cadence cancel a
-                    # reasoning model's turn during its silent thinking phase.
-                    if not armed and et == "tts_chunk":
-                        pulse_stop.set()          # her voice takes over from the pulse
-                        self.engine.arm_barge()   # she's speaking now — interruptible
-                        armed = True
-                    if et == "content":
-                        publish(Events.VOICE_TURN_CHUNK,
-                                {"message_id": message_id, "text": event.get("text", ""),
-                                 "chat": self._chat_name, "foreign": _foreign})
-                    elif et == "tts_chunk":
-                        sink.feed_chunk(event)
-                    elif et == "error":
-                        # chat_stream signals some faults as yielded events, not
-                        # raises (e.g. private-prompt block). Surface them like
-                        # any other turn failure instead of ending in silence.
-                        raise RuntimeError(event.get("text") or "stream error event")
-                    if getattr(stream, "cancel_flag", False):
-                        break
-            finally:
-                self.system.llm_chat.end_stream(sid, chat)
+            def _body():
+                # Inbox (2026-10-06): this runs when it is the chat's turn, on
+                # the inbox's drainer thread in this caller's context, and
+                # exclusive — it used to begin a NON-exclusive stream that
+                # could land on top of a live turn in the same chat.
+                stream, sid, chat = self.system.llm_chat.begin_stream(self._chat_name, exclusive=True)
+                if self._tts_split:
+                    # Phone surface: force the sentence-split pump so the first
+                    # sentence synthesizes while the rest still generates. Inert
+                    # when TTS streaming is globally off (pump stays disabled).
+                    stream.tts_split_override = self._tts_split
+                if self._llm_timeout > 0:
+                    # One silent regen if the provider never sends a first token
+                    # before the read timeout — the caller only hears the tick.
+                    stream.timeout_retry = 1
+                    stream.on_timeout_retry = self._retry_cue
+                try:
+                    armed = False    # barge-in stays blocked until AUDIO actually flows
+                    for event in stream.chat_stream(text):
+                        et = event.get("type") if isinstance(event, dict) else None
+                        # D1: arm only on tts_chunk (real audio), NOT "content". Thinking
+                        # is streamed as <think>-wrapped content events with no audio, so
+                        # arming on content let a caller's talk-pause-talk cadence cancel a
+                        # reasoning model's turn during its silent thinking phase.
+                        if not armed and et == "tts_chunk":
+                            pulse_stop.set()          # her voice takes over from the pulse
+                            self.engine.arm_barge()   # she's speaking now — interruptible
+                            armed = True
+                        if et == "content":
+                            publish(Events.VOICE_TURN_CHUNK,
+                                    {"message_id": message_id, "text": event.get("text", ""),
+                                     "chat": self._chat_name, "foreign": _foreign})
+                        elif et == "tts_chunk":
+                            sink.feed_chunk(event)
+                        elif et == "error":
+                            # chat_stream signals some faults as yielded events, not
+                            # raises (e.g. private-prompt block). Surface them like
+                            # any other turn failure instead of ending in silence.
+                            raise RuntimeError(event.get("text") or "stream error event")
+                        if getattr(stream, "cancel_flag", False):
+                            break
+                finally:
+                    self.system.llm_chat.end_stream(sid, chat)
+
+            from core.chat import inbox
+            _queue_chat = self._chat_name or _active or ''
+            if _queue_chat:
+                inbox.turn(_queue_chat, _body, source='conversation', lane='now')
+            else:
+                _body()
         except Exception as e:
             logger.error(f"[CONV] streaming turn failed: {e}")
             # Spoken failure cue: a dead provider must not read as a hung line.

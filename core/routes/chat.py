@@ -167,62 +167,88 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
         if _sm.read_chat_settings(chat) is None:
             return JSONResponse({"error": f"Chat '{chat}' not found."}, status_code=404)
 
-    # Per-request StreamingChat instance. Each /api/chat call gets its own
-    # — no more singleton stomping between tabs. H4 2026-04-22.
-    # exclusive: one operator turn per chat (2026-08-29) — a second send
-    # while a turn is live (Enter past the Stop button, another tab)
-    # interleaved into the live turn's history. {"error"} shape: the
-    # frontend's !res.ok path reads err.error for the toast.
+    # Inbox (2026-10-06, wave I-2): a typed turn WAITS ITS TURN instead of
+    # being refused. The response opens at once; if the chat is busy its first
+    # event is `queued` (ticket, position) and the turn's events follow when
+    # the chat's inbox reaches it - typed, satellite, agent and MCP turns all
+    # stand in the same line (core/chat/inbox.py). The turn itself is
+    # server-owned (Turn, record tmp/server-owned-turns-plan.md), started by
+    # the inbox's drainer under THIS request's context, exclusive like any
+    # typed turn: a second send no longer interleaves rows into a live turn
+    # (2026-08-29) and no longer bounces with a 409 either.
+    from core.chat import inbox
+    from core.chat.turn import Turn
     from core.chat.chat import ChatBusy
-    try:
+    import concurrent.futures as _cf
+    import threading as _threading
+    started = _cf.Future()
+    chat_key = chat or (system.llm_chat.session_manager.get_active_chat_name() or '')
+    text_in, prefill_in, skip_in = data['text'], prefill, skip_user_message
+    images_in, files_in, cont_in = images, files, continue_from
+    payload = {'text': text_in, 'images': images or [], 'files': files or [], 'started': started}
+
+    def _body(others=()):
+        # `others`: typed turns that stood in line behind this one and fold
+        # into it - three thoughts typed while she talked become ONE turn, one
+        # user row, one reply (Krem 2026-10-06). Their responses hear `merged`.
+        # ChatBusy here means a turn won the race: the inbox puts us back at
+        # the head and tries again when the chat frees up.
+        texts = [text_in] + [str((o.payload or {}).get('text') or '') for o in others]
+        text_all = '\n\n'.join(t for t in texts if t.strip()) or text_in
+        images_all = list(images_in or [])
+        files_all = list(files_in or [])
+        for o in others:
+            images_all += list((o.payload or {}).get('images') or [])
+            files_all += list((o.payload or {}).get('files') or [])
         if chat:
             stream, sid, active_chat = system.llm_chat.begin_stream(
                 chat_name=chat, exclusive=True, operator=True)
         else:
             stream, sid, active_chat = system.llm_chat.begin_stream(exclusive=True)
-    except ChatBusy as _busy:
-        logger.info(f"[CHAT-STREAM] 409 — turn already live on "
-                    f"'{getattr(_busy, 'chat_name', None) or chat or 'the active chat'}'")
-        return JSONResponse(
-            {"error": "Sapphire is still replying in this chat — wait for her to finish or press Stop."},
-            status_code=409)
-    stream.operator_lane = True   # a human typed this (talk-stamp + vault touch ride)
-    system.web_active_inc()
+        stream.operator_lane = True   # a human typed this (talk-stamp + vault touch ride)
+        system.web_active_inc()
 
-    # Release exactly once (end_stream is idempotent; web_active_dec is a
-    # counter). Fires from the runner thread when the TURN ends — never when a
-    # viewer leaves. Server-owned turns, 2026-09-15.
-    import threading as _threading
-    _rel_lock = _threading.Lock()
-    _released = [False]
+        # Release exactly once (end_stream is idempotent; web_active_dec is a
+        # counter). Fires from the runner thread when the TURN ends — never when
+        # a viewer leaves. Server-owned turns, 2026-09-15.
+        _rel_lock = _threading.Lock()
+        _released = [False]
 
-    def _release():
-        with _rel_lock:
-            if _released[0]:
-                return
-            _released[0] = True
-        system.llm_chat.end_stream(sid, active_chat)
-        system.web_active_dec()
+        def _release():
+            with _rel_lock:
+                if _released[0]:
+                    return
+                _released[0] = True
+            system.llm_chat.end_stream(sid, active_chat)
+            system.web_active_dec()
 
-    # SERVER-OWNED TURN (record tmp/server-owned-turns-plan.md). The engine
-    # runs on its own thread inside ONE Context from here on; this response is
-    # a VIEWER of it. The phone locking, the tab closing, a proxy timing out —
-    # a viewer leaving never touches the engine. Before this, Starlette drove
-    # the generator through the HTTP body: Brave dropping the socket on screen
-    # lock closed the engine mid-turn and its finally wrote "[Cancelled during
-    # tool execution]" with nobody pressing Stop. Stop is /api/cancel; a tab
-    # that lost its feed reattaches via /api/chat/attach `since` its last seq.
-    from core.chat.turn import Turn
+        try:
+            gen = stream.chat_stream(text_all, prefill=prefill_in, skip_user_message=skip_in,
+                                     images=images_all or None, files=files_all or None, continue_from=cont_in)
+            turn = Turn(stream, gen, on_end=_release, label=f"web:{active_chat}")
+            viewer = turn.attach(audio=True)   # BEFORE start: a fast engine must not outrun its first viewer
+            turn.start()
+        except Exception as e:
+            _release()
+            started.set_exception(e)
+            for o in others:
+                (o.payload or {}).get('started', _cf.Future()).set_exception(e)
+            raise
+        started.set_result((turn, viewer))
+        for o in others:
+            (o.payload or {}).get('started', _cf.Future()).set_result(('merged', turn))
+        turn.done.wait()          # the inbox's one-runner rule: hold the lane until this turn ends
+        return None
+
     try:
-        gen = stream.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message,
-                                 images=images, files=files, continue_from=continue_from)
-        turn = Turn(stream, gen, on_end=_release, label=f"web:{active_chat}")
-        viewer = turn.attach(audio=True)   # BEFORE start: a fast engine must not outrun its first viewer
-        turn.start()
-    except Exception:
-        _release()
-        raise
-    return _viewer_response(turn, viewer)
+        # fold_key 'web': typed turns standing together fold (people with people,
+        # never with a satellite's question or a machine's report)
+        item = inbox.put(chat_key, inbox.Item(run=_body, run_folded=_body, fold_key='web' if not (cont_in or prefill_in or skip_in) else '',
+                                              source='web', lane='now', payload=payload))
+    except inbox.InboxRefused as e:
+        logger.info(f"[CHAT-STREAM] inbox refused a typed turn on '{chat_key}': {e}")
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return _queued_viewer_response(item, started, chat_key)
 
 
 def _sse_line(event):
@@ -261,6 +287,97 @@ def _sse_line(event):
     if event.get("seq") is not None:
         out["seq"] = event["seq"]
     return f"data: {json.dumps(out)}\n\n"
+
+
+def _queued_viewer_response(item, started, chat_key):
+    """SSE body for a typed turn that may be waiting in the chat's inbox: a
+    `queued` event first when it does not start within a breath (ticket +
+    position, so the bubble can pulse and carry a ×), keepalive comments while
+    it waits, then the turn's events over its viewer. A dropped item (× on the
+    bubble, the chat deleted) ends the body with `queued_dropped`."""
+    from core.chat import inbox
+    KEEPALIVE_S = 15.0
+
+    def generate():
+        turn = viewer = None
+        try:
+            deadline = time.monotonic() + 0.25
+            while not started.done() and not item.reply.done() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not started.done() and not item.reply.done():
+                yield f"data: {json.dumps({'type': 'queued', 'ticket': item.ticket, 'position': inbox.position(chat_key, item.ticket)})}\n\n"
+                last = time.monotonic()
+                while not started.done() and not item.reply.done():
+                    time.sleep(0.1)
+                    if time.monotonic() - last > KEEPALIVE_S:
+                        last = time.monotonic()
+                        yield ": keepalive\n\n"
+            if not started.done():
+                # dropped before it ran: say why, and the browser puts the text back
+                why = 'dropped'
+                try:
+                    item.reply.result(timeout=0)
+                except Exception as e:
+                    why = str(e)
+                yield f"data: {json.dumps({'type': 'queued_dropped', 'reason': why})}\n\n"
+                return
+            try:
+                turn, viewer = started.result()
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e) or type(e).__name__})}\n\n"
+                return
+            if turn == 'merged':
+                # folded into the turn ahead of it: that response streams the reply
+                yield f"data: {json.dumps({'type': 'merged'})}\n\n"
+                turn = viewer = None
+                return
+            for event in viewer:
+                line = _sse_line(event)
+                if line:
+                    yield line
+            if viewer.dropped:
+                logger.warning(f"[CHAT-STREAM] viewer of {turn.label} dropped (too far behind) — the browser reattaches")
+        finally:
+            if turn is not None and viewer is not None:
+                turn.detach(viewer)
+
+    return StreamingResponse(
+        generate(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@router.get("/api/chat/queue")
+async def handle_queue_peek(chat: str = None, _=Depends(require_login), system=Depends(get_system)):
+    """What waits in a chat's inbox: ids, sources, lanes, ages - never text
+    (the chip by the input). A hidden chat answers like an empty one."""
+    from core.chat import inbox
+    sm = system.llm_chat.session_manager
+    name = str(chat or '').strip() or (sm.get_active_chat_name() or '')
+    try:
+        if not name or sm.is_chat_hidden(name) is True:
+            return {"chat": name, "items": []}
+    except Exception:
+        return {"chat": name, "items": []}
+    return {"chat": name, "items": inbox.peek(name)}
+
+
+@router.post("/api/chat/queue/drop")
+async def handle_queue_drop(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Take a waiting typed turn out of the chat's inbox (the × on a queued
+    bubble). {ticket, chat?}. The turn that is already live is Stop's job."""
+    from core.chat import inbox
+    data = await request.json() or {}
+    ticket = str(data.get('ticket') or '').strip()
+    chat = str(data.get('chat') or '').strip() or (system.llm_chat.session_manager.get_active_chat_name() or '')
+    if not ticket:
+        raise HTTPException(status_code=400, detail="ticket required")
+    return {"dropped": inbox.drop(chat, ticket, 'removed from the queue')}
 
 
 def _viewer_response(turn, viewer):
@@ -1040,11 +1157,19 @@ def _delete_one_chat(system, chat_name: str, origin=None):
         knowledge.delete_scope(f"__rag__:{chat_name}")
     except Exception:
         pass
-    # Dismiss any agents spawned for this chat
+    # Dismiss any agents spawned for this chat, and forget their rows
     try:
         if hasattr(system, 'agent_manager') and system.agent_manager:
             for agent in system.agent_manager.check_all(chat_name=chat_name):
                 system.agent_manager.dismiss(agent['id'])
+            if hasattr(system.agent_manager, 'chat_deleted'):
+                system.agent_manager.chat_deleted(chat_name)
+    except Exception:
+        pass
+    # Whatever was waiting in its inbox goes with it
+    try:
+        from core.chat import inbox
+        inbox.drop_chat(chat_name, 'chat deleted')
     except Exception:
         pass
     _fire_chat_hook("chat_deleted", {"name": chat_name})
@@ -1214,6 +1339,17 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
     try:
         from plugins.memory.tools import knowledge_tools as knowledge
         knowledge.rename_scope(f"__rag__:{chat_name}", f"__rag__:{result}")
+    except Exception:
+        pass
+    # ...and its inbox, and its agents' rows
+    try:
+        from core.chat import inbox
+        inbox.rename_chat(chat_name, result)
+    except Exception:
+        pass
+    try:
+        if hasattr(system, 'agent_manager') and hasattr(system.agent_manager, 'chat_renamed'):
+            system.agent_manager.chat_renamed(chat_name, result)
     except Exception:
         pass
     origin = request.headers.get('X-Session-ID')

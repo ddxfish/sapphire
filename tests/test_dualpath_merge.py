@@ -55,7 +55,8 @@ def _consumer(stream):
     obj.pending_notices = []
     obj.session_manager = MagicMock()
     end_calls = []
-    obj.begin_stream = lambda chat_name: (stream, "sid1", "chat1")
+    obj.begin_stream = lambda chat_name, exclusive=False, operator=False: (stream, "sid1", "chat1")
+    obj.session_manager.get_active_chat_name.return_value = "chat1"
     obj.end_stream = lambda sid, chat: end_calls.append((sid, chat))
     return obj, end_calls
 

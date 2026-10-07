@@ -728,27 +728,25 @@ def _report_back(system, origin_chat, report):
             logger.info(f"[TWILIO] origin chat '{origin_chat}' hosts a live call — "
                         "plain report write instead of a turn")
             return _fallback()
-        executor = getattr(getattr(system, "continuity_scheduler", None), "executor", None)
-        if executor is None:
-            return _fallback()
-        task = {
-            "name": "phone-call report", "source": "twilio-voice",
-            "chat_target": origin_chat, "initial_message": report,
-            "tts_enabled": False, "browser_tts": False,
-            "trigger_config": {"chat_from_payload": True},
-        }
-        def _run():
-            # A raise INSIDE executor.run() would otherwise die in this thread
-            # with the transcript unwritten (the executor persists the turn only
-            # on success) — the "durable record" would silently evaporate on any
-            # LLM hiccup. Fall back to the plain write so the outcome survives.
+        # The report waits its turn in the origin chat's inbox (core/chat/
+        # inbox.py, 2026-10-06): a real turn under that chat's own persona,
+        # toolset and scopes, run when the chat is free - it used to run on the
+        # continuity executor beside a live turn and could lose its transcript.
+        from core.chat import inbox
+        item = inbox.put(origin_chat, inbox.Item(
+            text=report, source='twilio', lane='later', coalesce=False,
+            on_drop=lambda why: (logger.warning(f"[TWILIO] report-back dropped ({why}); "
+                                                "writing plain record instead"), _fallback())))
+
+        def _watch():
+            # A turn that fails (provider hiccup) still leaves the record.
             try:
-                executor.run(task)
+                item.reply.result()
             except Exception as e:
-                logger.warning(f"[TWILIO] report-back turn errored ({e}); "
-                               "writing plain record instead")
-                _fallback()
-        threading.Thread(target=_run, daemon=True, name="twilio-report").start()
+                if 'dropped' not in str(e):
+                    logger.warning(f"[TWILIO] report-back turn errored ({e}); writing plain record instead")
+                    _fallback()
+        threading.Thread(target=_watch, daemon=True, name="twilio-report").start()
     except Exception as e:
         logger.warning(f"[TWILIO] report-back turn failed ({e}); falling back to plain write")
         _fallback()

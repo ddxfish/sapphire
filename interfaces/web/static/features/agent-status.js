@@ -1,4 +1,8 @@
 // features/agent-status.js — Agent pill bar + workspace runner
+//
+// Agents v2 (2026-10-06): reports and questions reach Sapphire through the
+// server-side inbox (core/chat/inbox.py) — the browser no longer drains them
+// into the chat box. Pills show status; a waiting pill pulses.
 import * as eventBus from '../core/event-bus.js';
 import { fetchWithTimeout } from '../shared/fetch.js';
 
@@ -6,19 +10,24 @@ let bar = null;
 let pollTimer = null;
 let initialized = false;
 let agents = new Map(); // id -> {name, status, mission, chat_name}
-// pendingReports keyed by chat_name so concurrent batches in different chats
-// don't clobber each other. Each chat's report stays queued independently
-// until that chat is the active one and Sapphire is idle (drainAgentReport).
-const pendingReports = new Map();   // chat_name -> report text
-let draining = false;
 let workspaces = new Map(); // project -> {type, url, running}
+let inboxDepth = new Map(); // chat_name -> items waiting (inbox_changed)
+let openCard = null;       // the one popover open: a waiting agent's question, or the inbox list
+
+const LIVE = new Set(['pending', 'running', 'waiting', 'idle']);
+const PILL_LINGER_MS = 8000;   // a finished pill stays this long, then goes
 
 const STATUS_COLORS = {
     running: '#f0ad4e',
     pending: '#f0ad4e',
+    waiting: '#b07cff',    // asked the director something — pulses
+    idle: '#5bc0de',       // a conversational agent between turns
+    resting: '#7a8fa6',
     done: '#5cb85c',
     degraded: '#e6c229',   // amber — technically completed but output is a placeholder
     failed: '#d9534f',
+    stopped: '#888',
+    lost: '#a66',
     cancelled: '#888',
 };
 
@@ -47,15 +56,17 @@ function renderPills() {
         if (agent.chat_name === chat) visible.set(id, agent);
     }
 
-    // Check if we have anything to show (agents or workspaces)
-    if (visible.size === 0 && workspaces.size === 0) {
+    const queued = inboxDepth.get(chat) || 0;
+    // Check if we have anything to show (agents, workspaces, or a queue)
+    if (visible.size === 0 && workspaces.size === 0 && !queued) {
         bar.style.display = 'none';
-        const anyRunning = [...agents.values()].some(a => a.status === 'running');
-        if (!anyRunning) stopPolling();
+        const anyLive = [...agents.values()].some(a => LIVE.has(a.status));
+        if (!anyLive) stopPolling();
         return;
     }
+    renderInboxChip(queued, chat);
     bar.style.display = 'flex';
-    if (visible.size > 0) startPolling();
+    if ([...agents.values()].some(a => LIVE.has(a.status))) startPolling();
 
     // --- Agent pills ---
     const existing = new Set();
@@ -81,6 +92,12 @@ function renderPills() {
                 pill.remove();
                 renderPills();
             });
+            // a waiting pill opens its question: lettered buttons, or your own words
+            pill.addEventListener('click', (e) => {
+                if (e.target.classList.contains('agent-x')) return;
+                const a = agents.get(id);
+                if (a && a.status === 'waiting') openQuestionCard(pill, a);
+            });
 
             bar.appendChild(pill);
         }
@@ -92,8 +109,11 @@ function renderPills() {
             ? 'degraded' : agent.status;
         pill.dataset.status = effectiveStatus;
         pill.style.borderColor = STATUS_COLORS[effectiveStatus] || '#888';
+        pill.style.animation = effectiveStatus === 'waiting' ? 'agent-pulse 1.6s ease-in-out infinite' : '';
         const warnTip = agent.warning ? `\nWarning: ${agent.warning}` : '';
-        pill.title = `${agent.name}: ${agent.mission || ''}\nStatus: ${effectiveStatus}${warnTip}`;
+        const askTip = effectiveStatus === 'waiting' ? '\nAsking Sapphire something — see the chat' : '';
+        const progTip = agent.last_event ? `\n${agent.tool_count || 0} tool calls · last: ${agent.last_event}` : '';
+        pill.title = `${agent.name} (${agent.kind || agent.agent_type || ''}): ${agent.mission || ''}\nStatus: ${effectiveStatus}${progTip}${askTip}${warnTip}`;
     }
 
     for (const pill of bar.querySelectorAll('.agent-pill')) {
@@ -197,6 +217,90 @@ function renderWorkspacePills() {
     }
 }
 
+function closeCard() {
+    if (openCard) { openCard.remove(); openCard = null; }
+}
+
+function csrfHeaders() {
+    return { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' };
+}
+
+function cardAt(anchor) {
+    closeCard();
+    const card = document.createElement('div');
+    card.className = 'agent-card-pop';
+    const r = anchor.getBoundingClientRect();
+    card.style.left = `${Math.max(8, r.left)}px`;
+    card.style.bottom = `${window.innerHeight - r.top + 6}px`;
+    document.body.appendChild(card);
+    openCard = card;
+    setTimeout(() => document.addEventListener('click', function onDoc(ev) {
+        if (!card.contains(ev.target)) { closeCard(); document.removeEventListener('click', onDoc); }
+    }), 0);
+    return card;
+}
+
+async function openQuestionCard(pill, agent) {
+    const chat = agent.chat_name || getActiveChat();
+    let q = null;
+    try {
+        const t = await fetchWithTimeout(`/api/agents/${encodeURIComponent(agent.id)}/transcript?chat=${encodeURIComponent(chat)}&last=1`, {}, 5000);
+        q = t?.pending_question;
+    } catch (err) { console.warn('[Agents] question fetch failed:', err); }
+    const card = cardAt(pill);
+    if (!q) { card.innerHTML = `<div class="acp-title">${esc(agent.name)} is not asking anything right now.</div>`; return; }
+    const qs = q.questions || [{ question: q.text, options: [] }];
+    card.innerHTML = `<div class="acp-title">${esc(agent.name)} asks</div>` + qs.map(x => `
+        <div class="acp-q">${esc(x.header ? x.header + ': ' : '')}${esc(x.question || '')}</div>
+        <div class="acp-opts">${(x.options || []).map((o, i) =>
+            `<button data-ans="${esc(o.label)}" title="${esc(o.description || '')}">(${String.fromCharCode(97 + i)}) ${esc(o.label)}</button>`).join('')}</div>`).join('')
+      + `<div class="acp-row"><input placeholder="…or in your own words"><button data-ans-text>Answer</button></div>`;
+    const answer = async (value) => {
+        if (!value?.trim()) return;
+        try {
+            await fetchWithTimeout(`/api/agents/${encodeURIComponent(agent.id)}/answer`, {
+                method: 'POST', headers: csrfHeaders(), body: JSON.stringify({ chat, value }) }, 8000);
+            agent.status = 'running';
+            renderPills();
+        } catch (err) { console.warn('[Agents] answer failed:', err); }
+        closeCard();
+    };
+    card.querySelectorAll('[data-ans]').forEach(b => b.addEventListener('click', () => answer(b.dataset.ans)));
+    card.querySelector('[data-ans-text]').addEventListener('click', () => answer(card.querySelector('input').value));
+    card.querySelector('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') answer(e.target.value); });
+}
+
+function renderInboxChip(queued, chat) {
+    let chip = bar.querySelector('.inbox-chip');
+    if (!queued) { chip?.remove(); return; }
+    if (!chip) {
+        chip = document.createElement('span');
+        chip.className = 'agent-pill inbox-chip';
+        chip.style.borderColor = '#9aa7b8';
+        chip.title = 'Waiting in this chat\'s inbox — click to see';
+        bar.insertBefore(chip, bar.firstChild);
+        chip.addEventListener('click', () => openInboxCard(chip, chat));
+    }
+    chip.innerHTML = `<span class="agent-name">\u29d6 ${queued} queued</span>`;
+}
+
+async function openInboxCard(chip, chat) {
+    let items = [];
+    try { items = (await fetchWithTimeout(`/api/chat/queue?chat=${encodeURIComponent(chat)}`, {}, 5000))?.items || []; }
+    catch (err) { console.warn('[Inbox] peek failed:', err); }
+    const card = cardAt(chip);
+    card.innerHTML = `<div class="acp-title">Waiting for a turn</div>` + (items.length ? items.map(i =>
+        `<div class="acp-item"><span>${esc(i.source)} <em>${esc(i.lane)}</em> · ${Math.round(i.age)}s</span><button data-drop="${esc(i.ticket)}" title="Take it out">\u00d7</button></div>`).join('')
+        : '<div class="acp-q">nothing</div>');
+    card.querySelectorAll('[data-drop]').forEach(b => b.addEventListener('click', async () => {
+        try {
+            await fetchWithTimeout('/api/chat/queue/drop', { method: 'POST', headers: csrfHeaders(),
+                body: JSON.stringify({ ticket: b.dataset.drop, chat }) }, 5000);
+        } catch (err) { console.warn('[Inbox] drop failed:', err); }
+        openInboxCard(chip, chat);
+    }));
+}
+
 async function poll() {
     try {
         const chat = getActiveChat();
@@ -229,56 +333,6 @@ function stopPolling() {
     }
 }
 
-async function drainAgentReport() {
-    if (pendingReports.size === 0 || draining) return;
-    draining = true;
-    try {
-        const activeChat = getActiveChat();
-        if (!pendingReports.has(activeChat)) {
-            // No report queued for the chat we're currently in. Reports for
-            // other chats stay queued until those chats are activated.
-            return;
-        }
-        const { getIsProc } = await import('../core/state.js');
-        if (getIsProc()) {
-            console.log('[Agents] Still processing, will retry on ai_typing_end');
-            return;
-        }
-        if (!pendingReports.has(activeChat)) return; // re-check after awaits
-        const report = pendingReports.get(activeChat);
-        console.log('[Agents] Sending auto-return report to chat', activeChat);
-
-        // Preserve user's in-progress typing
-        const { getElements } = await import('../core/state.js');
-        const { input } = getElements();
-        const savedText = input?.value || '';
-
-        const { triggerSendWithText } = await import('../handlers/send-handlers.js');
-        const sent = await triggerSendWithText(report);
-        if (!sent) {
-            // triggerSendWithText silently no-ops when a stream started during
-            // our await chain. Don't clear pending — let ai_typing_end / safety
-            // net / chat-switch handlers retry the drain.
-            console.log('[Agents] triggerSendWithText no-oped (Sapphire streaming) — keeping report queued for retry');
-            return;
-        }
-
-        // Only clear THIS chat's entry — other chats' reports stay queued
-        pendingReports.delete(activeChat);
-
-        // Restore what the user was typing
-        if (savedText && input) {
-            input.value = savedText;
-            input.dispatchEvent(new Event('input'));
-        }
-    } catch (err) {
-        console.error('[Agents] Auto-return failed:', err);
-        // Don't clear pendingReports — will retry on next trigger
-    } finally {
-        draining = false;
-    }
-}
-
 function esc(s) {
     return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -299,20 +353,44 @@ export function initAgentStatus() {
         chatSelect.addEventListener('chat-activated', () => {
             poll();
             renderPills();
-            if (pendingReports.size > 0) setTimeout(() => drainAgentReport(), 500);
         });
     }
 
     eventBus.on('agent_spawned', (data) => {
+        // ids and names only ride the event (a mission may be private); the
+        // next poll fills the rest in from /api/agents/status for this chat
         agents.set(data.id, {
             id: data.id,
             name: data.name,
+            kind: data.agent_type || '',
             status: 'running',
-            mission: data.mission || '',
+            mission: '',
             chat_name: data.chat_name || '',
         });
         ensureBar();
         renderPills();
+        poll();
+    });
+
+    eventBus.on('inbox_changed', (data) => {
+        if (!data?.chat) return;
+        inboxDepth.set(data.chat, data.depth || 0);
+        ensureBar();
+        renderPills();
+    });
+
+    eventBus.on('agent_waiting', (data) => {
+        const agent = agents.get(data.id);
+        if (agent) { agent.status = 'waiting'; renderPills(); }
+    });
+
+    eventBus.on('agent_event', (data) => {
+        const agent = agents.get(data.id);
+        if (agent && typeof data.tool_count === 'number') {
+            agent.tool_count = data.tool_count;
+            if (agent.status === 'waiting' && data.kind === 'answer') agent.status = 'running';
+            renderPills();
+        }
     });
 
     eventBus.on('agent_completed', (data) => {
@@ -323,21 +401,22 @@ export function initAgentStatus() {
             // empty LLM). Stored so the pill can render amber instead of green.
             agent.warning = data.warning || null;
             renderPills();
+            if (!LIVE.has(agent.status)) {
+                // the report itself arrives in the chat through the inbox;
+                // the pill lingers so the colour is seen, then goes
+                setTimeout(() => {
+                    if (agents.get(data.id) === agent && !LIVE.has(agent.status)) {
+                        agents.delete(data.id);
+                        renderPills();
+                    }
+                }, PILL_LINGER_MS);
+            }
         }
     });
 
     eventBus.on('agent_dismissed', (data) => {
         agents.delete(data.id);
         renderPills();
-    });
-
-    eventBus.on('agent_batch_complete', (data) => {
-        console.log('[Agents] Batch complete event received:', data.chat_name, 'agents:', data.agent_count);
-        if (data.chat_name) {
-            // Keyed by chat — concurrent batches in different chats coexist.
-            pendingReports.set(data.chat_name, data.report);
-            setTimeout(() => drainAgentReport(), 1500);
-        }
     });
 
     // Workspace ready — show run/open button
@@ -352,17 +431,8 @@ export function initAgentStatus() {
         renderPills();
     });
 
-    eventBus.on('ai_typing_end', () => {
-        if (pendingReports.size === 0) return;
-        console.log('[Agents] ai_typing_end — draining queued report');
-        setTimeout(() => drainAgentReport(), 800);
-    });
-
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
         renderPills();
-        if (pendingReports.size === 0) return;
-        console.log('[Agents] Chat switched — checking if report can drain');
-        setTimeout(() => drainAgentReport(), 500);
     });
 
     // Server restart — wipe stale pills, re-poll for actual state
@@ -372,12 +442,6 @@ export function initAgentStatus() {
         renderPills();
         poll();
     });
-
-    // Safety net: periodically retry stuck reports (e.g. user never returns to agent's chat)
-    setInterval(() => {
-        if (pendingReports.size === 0) return;
-        drainAgentReport();
-    }, 15000);
 
     poll();
 }

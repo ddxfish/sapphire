@@ -12,8 +12,6 @@
 # Tools only: no resources, no prompts. The route is core/routes/mcp.py; this
 # file is the protocol and the tools, so a test needs no HTTP.
 import logging
-import threading
-import time
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -22,7 +20,7 @@ import config
 logger = logging.getLogger(__name__)
 
 PROTOCOL = '2025-06-18'        # the version this door speaks; a client's older date is answered with ours
-BUSY_WAIT = 20                 # seconds an ask waits for a chat that is mid-turn
+ASK_WAIT = 300                 # seconds an ask waits in the chat's inbox for its turn and her answer
 TEXT_MAX = 8000                # characters of one ask or tell
 OWN = ('ask', 'tell')          # this door's own tools, always offered
 
@@ -164,44 +162,61 @@ def _line(who, where):
             + ". Answer in your message; no tool is needed to reply.]")
 
 
-def _turn(system, chat, text, who, where):
-    """One turn in `chat`, on this thread, under the answering flag. Returns
-    her reply. Raises on a chat that stays busy or a turn that fails."""
-    from core import cadence
-    from core.chat.chat import ChatBusy
-    name = _chat_ready(system, chat)
-    body = f"{_line(who, where)}\n{str(text)[:TEXT_MAX]}"
-    give_up = time.monotonic() + BUSY_WAIT
-    token = answering.set(True)
+def _private(system, name):
+    """True when `name` is a private chat (or unreadable - fail closed). A
+    private chat's words stay on this machine: an ask's reply would leave over
+    the network to whoever holds the token (Krem's ruling 2026-10-06)."""
     try:
-        while True:
-            try:
-                return name, cadence.run_turn(name, body, source=f"mcp:{where or 'client'}")
-            except ChatBusy:
-                if time.monotonic() >= give_up:
-                    raise RuntimeError(f"The chat '{name}' stayed mid-turn for {BUSY_WAIT}s.")
-                time.sleep(1)
-    finally:
-        answering.reset(token)
+        s = system.llm_chat.session_manager.get_settings_for(name)
+    except Exception:
+        return True
+    return s is None or bool(s.get('private_chat'))
+
+
+def _item(system, chat, text, who, where):
+    """(chat name, the text she is told). ValueError for a name that cannot
+    be a chat, and for a private chat."""
+    name = _chat_ready(system, chat)
+    if _private(system, name):
+        raise ValueError(f"The chat '{name}' is private; it does not take messages over MCP.")
+    return name, f"{_line(who, where)}\n{str(text)[:TEXT_MAX]}"
 
 
 def ask(system, args, where='', persona=None):
+    """Her answer, waited for. The turn waits its turn in the chat's inbox
+    (core/chat/inbox.py) and runs under the `answering` flag - the inbox runs
+    an item in the context it was put from, so the loop-breaker holds on the
+    drainer thread. A busy chat answers late instead of erroring."""
+    from core.chat import inbox
     # who is asking: what the client says, else the persona its key speaks as
-    name, reply = _turn(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
+    name, body = _item(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
+    token = answering.set(True)
+    try:
+        try:
+            reply = inbox.ask(name, body, source=f"mcp:{where or 'client'}", timeout=ASK_WAIT)
+        except inbox.InboxRefused as e:
+            raise ValueError(str(e))
+        except TimeoutError:
+            raise RuntimeError(f"The chat '{name}' did not get to this question in {ASK_WAIT}s.")
+    finally:
+        answering.reset(token)
     logger.info(f"[MCP] ask in '{name}' from {where or 'a client'}: {len(reply or '')} chars back")
     return reply or '(she said nothing)', True
 
 
 def tell(system, args, where='', persona=None):
-    name = _chat_ready(system, args.get('chat'))
-    text, who = args.get('text'), args.get('from') or persona
-
-    def go():
-        try:
-            _turn(system, name, text, who, where)
-        except Exception as e:
-            logger.warning(f"[MCP] tell in '{name}' failed: {e}")
-    threading.Thread(target=go, daemon=True, name='mcp-tell').start()
+    """Said to her, not waited for: the item joins the chat's inbox and runs
+    when the chat is free. Not foldable with other items - it carries the
+    `answering` flag in its context."""
+    from core.chat import inbox
+    name, body = _item(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
+    token = answering.set(True)
+    try:
+        inbox.tell(name, body, source=f"mcp:{where or 'client'}", coalesce=False)
+    except inbox.InboxRefused as e:
+        raise ValueError(str(e))
+    finally:
+        answering.reset(token)
     return f"Told her, in the chat '{name}'.", True
 
 

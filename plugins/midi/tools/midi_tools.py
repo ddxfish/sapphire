@@ -29,7 +29,6 @@ AVAILABLE_FUNCTIONS = ['midi_play', 'midi_listen', 'midi_sound', 'midi_stop', 's
 FIRST_WAIT = 60      # seconds she waits for the first key
 QUIET_END = 5        # seconds of quiet that end a take
 MAX_LISTEN = 300
-DELIVER_WAIT = 180   # how long a finished take waits for the chat to be free
 
 _lock = threading.Lock()
 _listen = None       # {'thread', 'cancel', 'chat'}: one take at a time
@@ -237,24 +236,17 @@ def _calling_chat():
 
 
 def _deliver(chat, text, speak):
-    """Hand the take to her as a new turn on `chat`. A chat that is mid-turn
-    is waited for; anything else is logged and dropped."""
-    from core import cadence
-    from core.chat.chat import ChatBusy
-    deadline = time.monotonic() + DELIVER_WAIT
-    while True:
-        try:
-            cadence.fire_once(chat, text, speak=speak, source='midi')
-            logger.info(f"[midi] take delivered to '{chat}'")
-            return True
-        except ChatBusy:
-            if time.monotonic() > deadline:
-                logger.warning(f"[midi] '{chat}' stayed busy for {DELIVER_WAIT}s; take dropped")
-                return False
-            time.sleep(2)
-        except Exception as e:
-            logger.warning(f"[midi] delivering the take to '{chat}' failed: {e}")
-            return False
+    """Hand the take to her through the chat's inbox (core/chat/inbox.py): it
+    runs now if she is free, waits its turn if not. Before this a chat busy for
+    three minutes dropped the take."""
+    from core.chat import inbox
+    try:
+        inbox.tell(chat, text, source='midi', coalesce=False, speak=speak)   # a take is one event: its own reply
+        logger.info(f"[midi] take handed to the inbox of '{chat}'")
+        return True
+    except Exception as e:
+        logger.warning(f"[midi] delivering the take to '{chat}' failed: {e}")
+        return False
 
 
 def _keep_take(played, bpm, private):

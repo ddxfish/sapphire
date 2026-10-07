@@ -160,108 +160,34 @@ def test_validate_plugin_reports_missing_files_with_specific_names(cct, tmp_path
 
 # ─── 5.38 run_claude: nonzero exit is an error even with stdout JSON ─────────
 
-def test_run_claude_nonzero_exit_treated_as_error_despite_stdout_json(cct, fake_popen):
-    """[REGRESSION_GUARD] Chaos #6: previously, returncode != 0 was ignored
-    when stdout contained parseable JSON. That swallowed budget-cap-mid-gen
-    and similar partial-success cases. Now: non-zero exit ALWAYS → error,
-    regardless of stdout content.
-    """
-    fake_popen.returncode = 1
-    fake_popen.stdout = '{"result": "some partial output", "session_id": "x"}'
-    fake_popen.stderr = 'budget cap exceeded'
 
-    data, err = cct._run_claude(['claude', 'run'], workspace='/tmp/ws')
-    assert data is None
-    assert err is not None
-    assert 'exited with error' in err.lower() or 'code 1' in err.lower()
-    assert 'budget' in err, f"stderr not surfaced in error: {err}"
+# ─── the kind reports validation after a plugin-mode turn ─────────────────────────────
 
+def test_plugin_mode_report_names_failed_checks_never_a_green_success(cct, tmp_path):
+    """A plugin that fails validation is reported as failing, with the missing
+    files named and the next step (say the failures back to the agent) - never
+    a success-shaped report."""
+    import importlib
+    k = importlib.import_module('plugins.claude-code.agent_kind')
+    ws = tmp_path / 'user' / 'plugins' / 'broken'
+    ws.mkdir(parents=True)
+    (ws / 'plugin.json').write_text('{"name": "broken", "capabilities": {"tools": ["tools/x.py"]}}')
 
-def test_run_claude_success_returns_parsed_json(cct, fake_popen):
-    """Inverse: exit 0 + JSON stdout → parsed data, no error."""
-    fake_popen.returncode = 0
-    fake_popen.stdout = '{"result": "built the thing", "session_id": "abc"}'
-    data, err = cct._run_claude(['claude', 'run'], workspace='/tmp/ws')
-    assert err is None
-    assert data is not None
-    assert data['result'] == 'built the thing'
-    assert data['session_id'] == 'abc'
+    class _E:
+        def install_carrier(self, a): return None
+        def release_carrier(self, t): pass
+        def finished(self, a): pass
+        def report_out(self, a, t): pass
+        def event_out(self, a, k): pass
+        def question_out(self, a, q): pass
+    a = k.Agent({'id': 'x', 'name': 'Forge', 'kind': 'claude_code', 'chat': 'c', 'mission': 'm',
+                 'options': {'mode': 'plugin', 'name': 'broken'}, 'privacy': False}, _E())
+    a.workspace = str(ws)
+    text = a._plugin_check()
+    assert '✗ files_exist' in text and 'tools/x.py' in text
+    assert 'activate_plugin' not in text and "agent_action('Forge', 'say'" in text
+    (ws / 'tools').mkdir()
+    (ws / 'tools' / 'x.py').write_text('x = 1\n')
+    text = a._plugin_check()
+    assert '✗' not in text and "activate_plugin('broken')" in text
 
-
-# ─── 5.39 run_claude handles unparseable stdout ──────────────────────────────
-
-def test_run_claude_unparseable_stdout_falls_through(cct, fake_popen):
-    """If stdout is not JSON, the function tries line-by-line parsing. If
-    THAT fails too, it should either raise or return an error marker —
-    never return garbage as `data`."""
-    fake_popen.returncode = 0
-    fake_popen.stdout = 'Total garbage not JSON at all\nmore text'
-    fake_popen.stderr = ''
-
-    data, err = cct._run_claude(['claude', 'run'], workspace='/tmp/ws')
-    # Either err is set or data is None — the guarantee is the caller won't
-    # see a bogus data dict
-    assert data is None or 'result' not in data, \
-        f"unparseable stdout returned garbage data: {data!r}"
-
-
-# ─── 5.40 plugin_worker fails when validation fails despite claude success ───
-
-def test_plugin_worker_fails_when_validation_fails_despite_claude_success(
-    cct, tmp_path, monkeypatch, fake_popen,
-):
-    """[REGRESSION_GUARD] Claude Code can exit 0 with a 'done' result but
-    produce a ghost plugin (empty capabilities, missing files, syntax errors).
-    The PluginWorker MUST fail in that case — never advertise a broken plugin
-    as a successful build.
-    """
-    monkeypatch.setattr(cct, '_SAPPHIRE_ROOT', str(tmp_path))
-    plugin_base = tmp_path / 'user' / 'plugins'
-    plugin_base.mkdir(parents=True)
-
-    # Claude "succeeds" but the plugin is a ghost
-    fake_popen.returncode = 0
-    fake_popen.stdout = json.dumps({
-        'result': 'plugin built',
-        'session_id': 'sess-1',
-    })
-
-    # Stub _sanity_check so the worker proceeds through the body
-    monkeypatch.setattr(cct, '_sanity_check', lambda ws: None)
-    # Stub _publish_workspace_ready so we don't need the full SSE plumbing
-    monkeypatch.setattr(cct, '_publish_workspace_ready', lambda *a, **kw: None)
-
-    # Write a minimum "ghost plugin" file structure — manifest exists but
-    # has no capabilities, so _validate_plugin flags has_capability=False
-    PluginWorker = cct._create_plugin_worker()
-    worker = PluginWorker(
-        agent_id='t1', name='Forge', mission='build thing',
-        chat_name='trinity', plugin_name='ghost_build',
-    )
-    worker._status = 'pending'
-    import time
-    worker._start_time = time.time()
-
-    # We need to put a ghost manifest in place BEFORE validate runs. The
-    # worker creates the dir via _run_claude, but our fake_popen doesn't do
-    # that — we pre-create it with a ghost manifest.
-    ghost_dir = plugin_base / 'ghost_build'
-    ghost_dir.mkdir(parents=True)
-    (ghost_dir / 'plugin.json').write_text(json.dumps({
-        'name': 'ghost_build', 'version': '0.1.0', 'description': 'empty',
-    }))
-
-    worker.run()
-
-    # Worker must either fail, OR its result must note the validation failure
-    # (the exact state depends on the worker's flow — assert one of them)
-    if worker.status == 'failed':
-        assert worker.error is not None
-    else:
-        # If status is done, the result MUST mention validation concerns
-        assert worker.result is not None
-        assert ('capabil' in worker.result.lower()
-                or 'validation' in worker.result.lower()
-                or 'ghost' in worker.result.lower()
-                or 'missing' in worker.result.lower()), \
-            f"validation failure not surfaced in result: {worker.result[:300]}"

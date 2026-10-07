@@ -16,6 +16,7 @@ keeps working. The chat() consumer and the phone driver stay non-exclusive.
 import threading
 from unittest.mock import MagicMock, patch
 
+import json
 import pytest
 
 from core.chat.chat import LLMChat, ChatBusy
@@ -109,15 +110,47 @@ def test_simultaneous_exclusive_sends_exactly_one_wins(llm):
 
 # ─── route-level ────────────────────────────────────────────────────────────
 
-def test_stream_route_returns_409_error_json_when_busy(client, mock_system):
+def test_stream_route_queues_when_busy_then_streams(client, mock_system, monkeypatch):
+    """Inbox (2026-10-06, wave I-2): a typed turn on a busy chat is no longer
+    bounced with a 409 - it waits its turn. The body opens with a `queued`
+    event (ticket, position) and carries the turn's events once begin_stream
+    lets it in."""
+    from core.chat import inbox
+    monkeypatch.setattr(inbox, 'BACKOFF_MIN', 0.2)     # the wait must outlast the route's 0.25 s grace
+    monkeypatch.setattr(inbox, 'BACKOFF_MAX', 0.2)
     c, csrf = client
-    mock_system.llm_chat.begin_stream.side_effect = ChatBusy('trinity')
-    r = c.post('/api/chat/stream', json={'text': 'hi'},
-               headers={'X-CSRF-Token': csrf})
+    stream = MagicMock()
+    stream.cancel_flag = False
+    stream.ephemeral = False
+    stream.chat_stream.return_value = iter([
+        {"type": "content", "text": "later"},
+        {"type": "final", "text": "later", "cancelled": False, "error": False},
+    ])
+    # a live turn wins the race three times, then the chat is free
+    mock_system.llm_chat.begin_stream.side_effect = [ChatBusy('trinity'), ChatBusy('trinity'),
+                                                     ChatBusy('trinity'), (stream, 'sid1', 'trinity')]
+    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
+    mock_system.llm_chat.session_manager.is_chat_hidden.return_value = False
+    r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200
+    lines = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ')]
+    assert lines[0]['type'] == 'queued' and lines[0]['ticket'] and lines[0]['position'] == 1
+    assert any(l.get('type') == 'content' and l.get('text') == 'later' for l in lines)
+    assert lines[-1].get('done') is True
+    assert mock_system.llm_chat.begin_stream.call_count == 4
+
+
+def test_stream_route_returns_409_error_json_when_the_inbox_refuses(client, mock_system, monkeypatch):
+    """The 409 lane survives for a chat that cannot take the turn at all
+    (sealed, full inbox): {"error"} shape, the frontend toast reads err.error."""
+    from core.chat import inbox
+    c, csrf = client
+    monkeypatch.setattr(inbox, 'DEPTH_MAX', 0)
+    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
+    mock_system.llm_chat.session_manager.is_chat_hidden.return_value = False
+    r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 409
-    body = r.json()
-    assert 'error' in body, "frontend toast reads err.error, not detail"
-    assert 'Stop' in body['error']
+    assert 'full' in r.json()['error']
     mock_system.web_active_inc.assert_not_called()
     mock_system.llm_chat.end_stream.assert_not_called()
 

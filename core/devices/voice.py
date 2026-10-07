@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 MAX_AUDIO = 20 * 1024 * 1024
 MAX_WAITING = 3            # questions one device may have waiting or running
-BUSY_WAIT = 20             # seconds a question waits for a chat that is mid-turn
 MAX_LISTENERS = 4          # light streams one device may hold open
 RATES = (8000, 48000)      # the sample rates a device may ask for, lowest and highest
 QUIET = 0.01               # below this a sample is silence, for the trim
@@ -644,29 +643,33 @@ def _turn(row, chat, heard, reply=None):
     the reply lane. With a Reply (a typed question) nothing is spoken: her
     text goes to the device's screen as she writes it. The light ends on
     idle, or on error when the person got no answer."""
-    device_id, failed, speech = row['id'], False, None
+    device_id, failed, speech, box = row['id'], False, None, {}
     lane = f"device:{device_id}"
     try:
         from core import cadence
-        from core.chat.chat import ChatBusy
+        from core.chat import inbox
         cue(device_id, 'thinking')
         text = f"{typed_line(row) if reply else origin_line(row)}\n{heard}"
-        give_up = time.monotonic() + BUSY_WAIT
-        _spoke.ok = None
-        speech = Speech(device_id) if reply is None else None
-        while True:
+
+        def _body():
+            # Runs when it is the chat's turn (core/chat/inbox.py, 'now' lane:
+            # a person is waiting - it never drops, Krem 2026-10-06; before,
+            # a chat busy for BUSY_WAIT dropped the question). Speech is made
+            # HERE so its door is fresh after a wait, and _spoke - a
+            # threading.local set by voice.say inside run_turn - is read on
+            # this same thread before returning.
+            _spoke.ok = None
+            sp = Speech(device_id) if reply is None else None
+            box['speech'] = sp
             try:
-                said = cadence.run_turn(chat, text, speak=lane if speech else None, source=lane,
-                                        on_event=lambda ev: _follow(device_id, ev, speech, reply),
-                                        stream_speech=bool(speech and speech.ready))
-                break
-            except ChatBusy:
-                if time.monotonic() >= give_up:
-                    logger.warning(f"[DEVICES] {device_id}: chat '{chat}' stayed mid-turn for "
-                                   f"{BUSY_WAIT}s, the question was dropped")
-                    failed = True
-                    return
-                time.sleep(1)
+                return cadence.run_turn(chat, text, speak=lane if sp else None, source=lane,
+                                        on_event=lambda ev: _follow(device_id, ev, sp, reply),
+                                        stream_speech=bool(sp and sp.ready))
+            finally:
+                box['spoke_ok'] = getattr(_spoke, 'ok', None)
+
+        said = inbox.turn(chat, _body, source=lane, lane='now')
+        speech = box.get('speech')
         if reply is not None:
             reply.finish(said)
             failed = not said
@@ -675,7 +678,7 @@ def _turn(row, chat, heard, reply=None):
             return
         speech.finish()
         speech.wait()
-        if said and (_spoke.ok is False or (speech.problem and not speech.spoken)):
+        if said and (box.get('spoke_ok') is False or (speech.problem and not speech.spoken)):
             failed = True                # she answered, and the device could not say it
         logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}', {len(said or '')} chars"
                     + (f', {speech.spoken} sentence(s) as made' if speech.spoken else '')
@@ -683,12 +686,14 @@ def _turn(row, chat, heard, reply=None):
                     + (', NOT spoken' if failed else ''))
     except Exception as e:
         failed = True
+        speech = speech or box.get('speech')     # the body made it before the turn broke off
         if speech is not None:
             speech.stopped = True        # a reply that broke off is not read out to the end
         if reply is not None:
             reply.finish(reply.text)     # what came through stays; the device learns it is over
         logger.error(f"[DEVICES] {device_id}: the turn failed: {e}", exc_info=True)
     finally:
+        speech = speech or box.get('speech')
         if speech is not None:
             speech.finish()              # the worker goes home whatever happened
         _free_slot(device_id)

@@ -462,9 +462,22 @@ def test_run_turn_shows_its_own_events_to_the_hook():
         assert cadence.run_turn('c', 'cue', on_event=broken) == 'Done.'     # the turn still stands
 
 
-def test_device_lane_fails_closed_and_quietly():
+def test_an_unreachable_chat_is_refused_before_anything_is_published():
+    # A missing, sealed or unreadable chat (settings None) used to get its
+    # text published as VOICE_TURN_START and only then be refused inside the
+    # engine (scout C, 2026-10-06). Now it is refused first, quietly.
     sysobj, stream, llm = _system([{'type': 'final', 'text': 'Hi', 'cancelled': False}])
     llm.session_manager.get_settings_for.return_value = None       # a sealed chat
+    cadence._system = sysobj
+    with patch('core.cadence.publish') as pub, pytest.raises(RuntimeError, match="isn't reachable"):
+        cadence.run_turn('c', 'cue', speak='device:pi')
+    pub.assert_not_called()
+    llm.begin_stream.assert_not_called()
+
+
+def test_device_lane_fails_closed_and_quietly():
+    sysobj, stream, llm = _system([{'type': 'final', 'text': 'Hi', 'cancelled': False}])
+    llm.session_manager.get_settings_for.return_value = {'private_chat': True}   # a private chat
     cadence._system = sysobj
     with patch('core.cadence.publish'), \
          patch('core.devices.voice.say', side_effect=RuntimeError('satellite fell over')) as say:

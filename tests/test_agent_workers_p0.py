@@ -89,161 +89,85 @@ def test_safe_dir_name_max_length_64_chars(cct):
 
 # ─── 5.12 PluginWorker.run rejects path escape in plugin_name ────────────────
 
-def test_plugin_worker_rejects_path_traversal_in_plugin_name(cct):
-    """[REGRESSION_GUARD] Even if _safe_dir_name is bypassed somehow, the
-    run() method asserts the resolved workspace is under user/plugins/.
-    Guards against a future regression in _safe_dir_name from letting an
-    LLM write outside its sandbox.
-    """
-    PluginWorker = cct._create_plugin_worker()
-    worker = PluginWorker(
-        agent_id='t1', name='Forge', mission='build evil',
-        chat_name='trinity',
-    )
-    # Forcibly bypass the __init__-time sanitization — simulate a bypass bug
-    worker.plugin_name = '../../../tmp/escape_attempt'
-    worker._status = 'pending'
-    worker._start_time = time.time()
 
-    # Run the body manually (not via thread — faster)
-    worker.run()
+# ─── the claude_code kind's workspace guards ─────────────────────────────────
 
-    assert worker.status == 'failed', "run() should fail on path escape"
-    assert 'escape' in (worker.error or '').lower() or \
-           'invalid' in (worker.error or '').lower(), \
-           f"expected path-escape error, got: {worker.error!r}"
+class _Engine:
+    def install_carrier(self, a): return None
+    def release_carrier(self, t): pass
+    def finished(self, a): pass
+    def report_out(self, a, t): pass
+    def event_out(self, a, k): pass
+    def question_out(self, a, q): pass
 
 
-# ─── 5.16 _save_session returns False when plugin state is unavailable ───────
-
-def test_save_session_returns_false_when_state_unavailable(cct):
-    """[REGRESSION_GUARD] If plugin_loader.get_plugin_state fails or returns
-    nothing, _save_session must return False — so callers can advertise the
-    session as NOT resumable (rather than promise a resume that'll fail).
-    """
-    # Patch the tools module's plugin_loader lookup to return no state
-    import core.plugin_loader
-    mock_loader = MagicMock()
-    mock_loader.get_plugin_state.return_value = None
-    with patch.object(core.plugin_loader, 'plugin_loader', mock_loader):
-        ok = cct._save_session('sess-123', 'proj', '/tmp/ws', 'mission text')
-    assert ok is False
+def _kind():
+    import importlib
+    return importlib.import_module('plugins.claude-code.agent_kind')
 
 
-def test_save_session_returns_true_when_state_available(cct):
-    """Inverse: when plugin state is available, save returns True."""
-    import core.plugin_loader
-    fake_state = MagicMock()
-    fake_state.get.return_value = {}  # empty sessions
-    fake_state.save = MagicMock(return_value=True)
-
-    mock_loader = MagicMock()
-    mock_loader.get_plugin_state.return_value = fake_state
-    with patch.object(core.plugin_loader, 'plugin_loader', mock_loader):
-        ok = cct._save_session('sess-123', 'proj', '/tmp/ws', 'mission')
-    assert ok is True
-    # Saved the session back to state
-    fake_state.save.assert_called()
+def _agent(**opts):
+    row = {'id': 't1', 'name': 'Forge', 'kind': 'claude_code', 'chat': 'trinity',
+           'mission': opts.pop('mission', 'build evil'), 'options': opts, 'privacy': False,
+           'resume_token': opts.pop('resume_token', None)}
+    return _kind().Agent(row, _Engine())
 
 
-# ─── 5.17 Result advertises "not saved" when save returned False ─────────────
-
-def test_code_worker_result_advertises_not_saved_when_session_save_failed(cct):
-    """[REGRESSION_GUARD] CodeWorker.run builds a result string that tells the
-    AI whether a session was saved. If _save_session returned False but the
-    result still says 'resumable', the AI will call resume on a missing
-    session and fail. The result MUST include "not saved" marker.
-    """
-    CodeWorker = cct._create_code_worker()
-    worker = CodeWorker(
-        agent_id='t1', name='Forge', mission='test mission',
-        chat_name='trinity', project_name='proj_x',
-    )
-    # Seed a fake run-result without actually executing claude — we assert on
-    # the string-builder branches. We drive the code path by calling the
-    # portion that builds the result string directly is impractical (run()
-    # is one large method), so we assert via patching _save_session + stub
-    # the subprocess side. Easier: use the building blocks.
-    #
-    # Pragmatic: assert that the code path has both branches by reading the
-    # source (module-level check — guards against refactor that drops one).
-    import inspect
-    source = inspect.getsource(CodeWorker.run)
-    assert 'not saved' in source, \
-        "CodeWorker.run must distinguish 'saved'/'not saved' in result"
-    assert 'resumable' in source.lower()
+def test_plugin_mode_rejects_path_traversal_in_the_name(cct, tmp_path, monkeypatch):
+    """Even if _safe_dir_name were bypassed, _workspace() asserts the resolved
+    dir is under user/plugins/ (defense in depth)."""
+    monkeypatch.setattr(_kind(), '_ROOT', str(tmp_path))
+    a = _agent(mode='plugin', name='x')
+    a.wsname = '../../../tmp/escape_attempt'
+    with pytest.raises(RuntimeError, match='escape'):
+        a._workspace({})
 
 
-# ─── 5.18 PluginWorker refuses overwrite of existing plugin dir ──────────────
-
-def test_plugin_worker_refuses_overwrite_of_nonempty_existing_dir(cct, tmp_path, monkeypatch):
-    """[REGRESSION_GUARD] If `user/plugins/{name}/` already exists with
-    contents AND the worker isn't resuming a session, run() must refuse —
-    otherwise the LLM can stomp an existing plugin's files. Chaos #5 guard."""
-    # Redirect _SAPPHIRE_ROOT to tmp_path so user/plugins resolves there
-    monkeypatch.setattr(cct, '_SAPPHIRE_ROOT', str(tmp_path))
+def test_plugin_mode_refuses_overwrite_of_a_nonempty_existing_dir(cct, tmp_path, monkeypatch):
+    """Chaos #5: user/plugins/<name> exists with contents and this is not a
+    resume -> refuse, files untouched."""
+    monkeypatch.setattr(_kind(), '_ROOT', str(tmp_path))
     existing = tmp_path / 'user' / 'plugins' / 'target_plugin'
     existing.mkdir(parents=True)
     (existing / 'manifest.json').write_text('{"name": "target_plugin"}')
-    (existing / 'tools.py').write_text('def x(): pass')
-
-    PluginWorker = cct._create_plugin_worker()
-    worker = PluginWorker(
-        agent_id='t1', name='Forge', mission='build a new thing',
-        chat_name='trinity', plugin_name='target_plugin',
-    )
-    worker._status = 'pending'
-    worker._start_time = time.time()
-
-    worker.run()
-
-    assert worker.status == 'failed'
-    assert 'already exists' in (worker.error or '').lower()
-    # Existing files untouched
+    a = _agent(mode='plugin', name='target_plugin')
+    with pytest.raises(RuntimeError, match='already exists'):
+        a._workspace({})
     assert (existing / 'manifest.json').exists()
-    assert (existing / 'tools.py').exists()
+    # a resume of the agent that built it is allowed back in
+    b = _agent(mode='plugin', name='target_plugin', resume_token='sess-1')
+    assert b._workspace({}) == str(existing.resolve())
 
 
-def test_plugin_worker_allows_existing_dir_if_empty(cct, tmp_path, monkeypatch):
-    """Inverse: empty existing dir → worker proceeds (no overwrite concern).
-    We stop it at the sanity-check step so we don't actually spawn claude."""
-    monkeypatch.setattr(cct, '_SAPPHIRE_ROOT', str(tmp_path))
-    empty = tmp_path / 'user' / 'plugins' / 'empty_target'
-    empty.mkdir(parents=True)
-    # empty listdir, so the overwrite guard passes
-
-    PluginWorker = cct._create_plugin_worker()
-    worker = PluginWorker(
-        agent_id='t2', name='Anvil', mission='fresh plugin',
-        chat_name='trinity', plugin_name='empty_target',
-    )
-    worker._status = 'pending'
-    worker._start_time = time.time()
-
-    # Stub _sanity_check to fail AFTER the overwrite guard so we know the
-    # code reached that step (i.e. didn't return on the overwrite guard)
-    sentinel = "sanity_check_reached"
-    monkeypatch.setattr(cct, '_sanity_check', lambda ws: sentinel)
-
-    worker.run()
-
-    assert worker.status == 'failed'
-    assert worker.error == sentinel, \
-        f"worker didn't reach sanity_check — overwrite guard fired on empty dir: {worker.error}"
+def test_plugin_mode_allows_an_empty_existing_dir(cct, tmp_path, monkeypatch):
+    monkeypatch.setattr(_kind(), '_ROOT', str(tmp_path))
+    (tmp_path / 'user' / 'plugins' / 'empty_target').mkdir(parents=True)
+    a = _agent(mode='plugin', name='empty_target')
+    assert a._workspace({}).endswith('empty_target')
 
 
-# ─── Bonus: plugin_name fallback from mission on empty input ─────────────────
-
-def test_plugin_worker_falls_back_to_mission_slug_when_plugin_name_empty(cct):
-    """When plugin_name='' the worker slugifies the mission to build one.
-    Guards against the init path blowing up on empty plugin_name (no
-    KeyError / empty-string paths)."""
-    PluginWorker = cct._create_plugin_worker()
-    worker = PluginWorker(
-        agent_id='t1', name='Forge', mission='Build a cool widget dashboard',
-        chat_name='trinity', plugin_name='',
-    )
-    assert worker.plugin_name, "empty plugin_name should fall back to mission slug"
+def test_workspace_name_falls_back_to_the_mission_slug(cct):
     import re
-    assert re.fullmatch(r'[a-z0-9_-]+', worker.plugin_name), \
-        f"slug unsafe: {worker.plugin_name!r}"
+    a = _agent(mode='project', mission='Build a cool widget dashboard')
+    assert a.wsname and re.fullmatch(r'[a-z0-9_-]+', a.wsname)
+
+
+def test_core_mode_is_the_root_and_project_mode_stays_outside_it(cct, tmp_path, monkeypatch):
+    k = _kind()
+    monkeypatch.setattr(k, '_ROOT', str(tmp_path / 'sapphire'))
+    (tmp_path / 'sapphire').mkdir()
+    assert _agent(mode='core')._workspace({}) == str(tmp_path / 'sapphire')
+    ws = _agent(mode='project', name='proj')._workspace({'workspace_dir': str(tmp_path / 'work')})
+    assert ws == str((tmp_path / 'work' / 'proj').resolve())
+    # a project workspace inside Sapphire's tree is refused
+    with pytest.raises(RuntimeError, match='inside'):
+        _agent(mode='project', name='inside')._workspace({'workspace_dir': str(tmp_path / 'sapphire')})
+
+
+def test_sanity_check_is_mode_aware(cct, tmp_path, monkeypatch):
+    monkeypatch.setattr(cct, '_SAPPHIRE_ROOT', str(tmp_path))
+    assert cct._sanity_check(str(tmp_path), mode='core') is None
+    assert 'SAFETY' in cct._sanity_check(str(tmp_path / 'sub'), mode='core')
+    assert 'SAFETY' in cct._sanity_check(str(tmp_path), mode='project')
+    assert cct._sanity_check(str(tmp_path / 'user' / 'plugins' / 'x'), mode='plugin') is None
+    assert 'SAFETY' in cct._sanity_check(str(tmp_path / 'elsewhere'), mode='plugin')

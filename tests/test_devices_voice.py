@@ -192,19 +192,23 @@ def test_a_private_chat_never_sends_audio_to_the_speech_engine(home):
 
 def test_a_busy_chat_is_waited_for(home):
     """The chat is mid-turn: the question waits its turn, then is answered."""
+    # A busy chat is waited for in its inbox (core/chat/inbox.py) - the
+    # question is never dropped (Krem 2026-10-06). ChatBusy twice, then it runs.
     watch, seen = _cues()
     with patch('core.cadence.run_turn', side_effect=[ChatBusy('open-chat'), ChatBusy('open-chat'),
-                                                       'It is noon.']) as run_turn, \
-         patch.object(voice.time, 'sleep') as nap, watch:
+                                                       'It is noon.']) as run_turn, watch:
         assert voice.hear('pi2', b'RIFFaudio') == ACCEPTED
-    assert run_turn.call_count == 3 and nap.call_count == 2
+    assert run_turn.call_count == 3
     assert seen == [('pi2', 'thinking'), ('pi2', 'idle')]
 
 
-def test_a_chat_that_stays_busy_ends_on_the_error_light(home):
+def test_an_unreachable_chat_ends_on_the_error_light(home):
+    # A chat that cannot take a turn (sealed, gone) is not retried: the inbox
+    # drops the question and the device shows the error light.
     watch, seen = _cues()
-    with patch('core.cadence.run_turn', side_effect=ChatBusy('open-chat')) as run_turn, \
-         patch.object(voice, 'BUSY_WAIT', 0), patch.object(voice.time, 'sleep'), watch:
+    with patch('core.cadence.run_turn',
+               side_effect=RuntimeError("chat 'open-chat' isn't reachable (missing, sealed or unreadable)")) as run_turn, \
+         watch:
         assert voice.hear('pi2', b'RIFFaudio') == ACCEPTED
     assert run_turn.call_count == 1
     assert seen == [('pi2', 'thinking'), ('pi2', 'error')]

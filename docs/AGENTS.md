@@ -1,158 +1,174 @@
 # Agents
 
-Sapphire can spawn background AI agents that work independently while you keep chatting. They run their own missions, use their own tools, and report back when done.
+Sapphire can spawn background agents that work while you keep talking. An agent runs its own
+mission with its own tools, **asks her a question when it hits a fork**, and **reports back into
+the chat by itself** when it is done — with or without a browser open.
 
-## What Are Agents?
+## What an agent is
 
-Think of agents as AI workers you dispatch on tasks. While you're talking to Sapphire about your day, an agent can be researching something, writing code, or analyzing data in the background.
+A *kind* is a sort of agent a plugin teaches her — today two ship:
 
-When all agents from a chat finish, their results are delivered back to that chat automatically.
+| kind | plugin | what it is | cloud? | follow-up turns? |
+|---|---|---|---|---|
+| `llm` | Agents | an isolated LLM + tool loop in the background | no (local-capable) | no |
+| `claude_code` | Claude Code | a Claude Code coding session on the Claude Agent SDK | yes | yes — `say` continues it |
 
-## Spawning an Agent
+An *agent* is one running (or resting) instance of a kind, bound to the chat it was spawned from.
+It has a name (Alpha, Spark, Forge…), a status, a transcript, and — when it asked something — a
+pending question.
 
-Just ask Sapphire to spawn one:
+## Spawning one
+
+Just ask Sapphire:
 
 - "Spawn an agent to research quantum computing"
-- "Send an agent to summarize my last 50 emails"
-- "Dispatch two agents — one for code review, one for documentation"
+- "Have Claude Code fix the viewer test" (a `claude_code` agent in core mode)
+- "Build me a plugin that…" (a `claude_code` agent in plugin mode)
 
-The AI uses these tools behind the scenes:
+Behind the scenes she has **four tools** — the same grammar as devices: list, look, start, do.
 
-| Tool | What it does |
-|------|--------------|
-| `agent_options` | Show available agent types, models, toolsets, prompts |
-| `spawn_agent` | Launch a background agent with a mission |
-| `check_agents` | See status of all active agents |
-| `recall_agent` | Get a completed agent's report |
-| `dismiss_agent` | Cancel or clean up an agent |
+| tool | what it does |
+|---|---|
+| `agent_list()` | her agents in this chat (running / waiting / resting), the kinds she can spawn, what waits in the chat's inbox |
+| `agent_peek(agent, what?)` | look in on one: status and progress, its pending question verbatim, the latest transcript lines, the last report (`what='report'` for all of it) |
+| `agent_spawn(kind, mission, options?)` | start one. `agent_spawn(kind)` alone shows that kind's options |
+| `agent_action(agent, action, value?)` | `answer` its pending question · `say` a follow-up turn · `stop` it |
 
-## Agent Types
+Common spawn options: `name` (a workspace or session *directory* name — not what the agent is
+called), `model`, `context` (extra material appended to the mission). Each kind adds its own —
+`llm`: `toolset`, `prompt`; `claude_code`: `mode` (project / plugin / core), `capabilities`, `effort`.
 
-### LLM Agent
+## How she hears from them: the inbox
 
-The default. Runs an LLM with tools in a background thread — same capabilities as a normal chat but isolated.
+Reports and questions land in the chat through the **inbox** — a per-chat queue in front of the
+turn engine. If she is mid-message, the item waits until her message truly ends (every tool round
+included) and then runs as its own turn. Several reports that arrive within three seconds fold
+into one message with a block each. Nothing is dropped and no browser needs to be open.
 
-- Has its own prompt, toolset, and model
-- Can use tools (memory, web search, etc.)
-- Up to 10 tool rounds per mission
-- Scopes set to 'none' by default (clean isolation)
+What you see in the chat:
 
-### Claude Code Agent
+```
+[Agent Spark (claude_code) — asks; not typed by the user]
+Fix: Delete the obsolete test, or rewrite it against the new route?
+  (a) delete — drop it
+  (b) rewrite — redo it against /api/agents
+Answer with agent_action('Spark', 'answer', '<a letter, a label, or your words>') — or leave it while you ask the user; it waits.
+```
 
-Spawns a Claude Code session for coding tasks. Requires `claude` CLI installed on your system.
+She answers with `agent_action('Spark', 'answer', 'b')` — or asks you first and relays your
+word. A fork question waits ten minutes; unanswered, the agent takes the safe default and goes on.
 
-- "Spawn a Claude Code agent to fix the login bug in my project"
-- Works in a configurable workspace directory
-- Three execution modes: strict (file ops only), standard (code + run), system_killer (unrestricted)
-- Sessions can be resumed
+```
+[Agent Spark (claude_code) — reports (6m02s in); not typed by the user]
+Rewrote the test against /api/agents/… 3 passed.
+(cost so far $0.41 · session 7f3a1c90)
+```
+
+> The chat's **toolset must include the four agent tools** for her to answer and steer. Toolsets
+> that had the old agent tools were migrated automatically; add `agent_list`, `agent_peek`,
+> `agent_spawn`, `agent_action` to any other toolset you want to run agents from.
+
+## The Agents page and the pill bar
+
+**Apps → Agents** is the page behind the pills: the chats that have agents down the side; for
+the chosen chat, a card per agent — status colour, a progress line (`running 4m · 12 tool
+calls · last: Edit core/x.py`), the pending question as lettered buttons (or your own words),
+a Say box while it is idle, Stop, and the transcript; below, the agents that finished earlier
+(a resting one wakes from its Say box); and a form to spawn a new agent of any loaded kind,
+with that kind's own options.
+
+Above the chat input, the **pill bar** shows the chat's agents: yellow running, **purple
+pulsing waiting** — click it and answer right there — teal idle, green done (amber if the run
+degraded), red failed. A finished pill lingers eight seconds. An **inbox chip** `⧗ N queued`
+appears when turns are waiting for her to finish (yours, an agent's, a satellite's); click it to
+see them, × takes one back out.
+
+## Typing while she talks
+
+Send while she is mid-message and the turn **waits its turn** — the bubble pulses until it
+runs, with a × to take it back. Several messages typed while she talks **fold into one turn**:
+one user message (your thoughts separated by blank lines), one reply, one set of tokens — they
+were continuations of one thought. Only *your* typed turns fold with each other: an agent's
+report, a satellite's question, a Discord message, a MIDI take each get her own reply.
+
+## Statuses
+
+`running` → `waiting` (a question is out) → `idle` (a conversational agent between turns) →
+`resting` (idle past its timeout; it keeps its session id and `say` wakes it) → `done` / `failed`
+/ `stopped` / `lost` (it was live when Sapphire restarted and could not be resumed).
+
+The pill bar above the chat input shows them: yellow running, **purple pulsing waiting**, teal
+idle, green done (amber if the run degraded to a placeholder), red failed. A finished pill
+lingers eight seconds and goes.
+
+## Claude Code
+
+`claude_code` agents are Claude Code sessions. Three modes:
+
+| mode | where it works | gets |
+|---|---|---|
+| `project` | `<Workspace Directory>/<name>` | a CLAUDE.md from the Base + Project instructions |
+| `plugin` | `user/plugins/<name>` | the plugin-author docs injected, a structural validation pass after each turn, `activate_plugin(name)` when it passes |
+| `core` | Sapphire's own root | the root's own CLAUDE.md plus the Core instructions |
+
+**Permissions are never routed to Sapphire** — she is not asked per command. Sessions run in the
+CLI's `auto` permission mode: a classifier approves or denies each tool call, and what it does not
+approve is denied with a reason. Only `AskUserQuestion` forks reach her. (Settings → Plugins →
+Claude Code lets you switch to bypass.)
+
+A session stays alive between turns: `agent_action('Spark', 'say', '…')` sends the next one.
+Idle past the timeout it rests; the next `say` wakes it with `--resume` — history intact. Costs
+are cumulative per session and shown on every report.
+
+Core mode can see what you can see: it runs at the Sapphire root with your Claude Code login and
+settings. Project and plugin modes load only the workspace's own CLAUDE.md, no user-level settings
+or MCP servers.
 
 ## Privacy
 
-Agents respect the spawning chat's privacy. From a **private chat**, Claude Code agents are refused entirely — they run through a cloud service. LLM agents can still be spawned, but they inherit the privacy requirement: local providers only.
+Every action that sends content — spawn, say, answer, waking a resting agent — re-checks privacy
+at that moment: the current turn, the agent's chat **now**, and the chat it was spawned from. A
+private turn refuses *cloud* kinds (`claude_code`); local kinds run with local providers and
+network tools blocked. A kind that does not say whether it is cloud counts as cloud.
 
-## Persona and Scopes
-
-An LLM agent's `prompt` decides both its identity and its data access:
-
-- **`agent`** (the default) — a lean background worker. All mind scopes are "none": clean isolation.
-- **`self`** — inherits the spawning chat's current persona **identity only** (prompt, voice, toolset). Its scopes are deliberately stripped — "same identity, no data access".
-- **A persona name** (e.g. a specific profile) — the agent gets that persona in full, **including its scopes**.
-
-So if you want an agent that can touch a persona's memory, name the persona explicitly; `self` is for extending the current voice into a task without handing over the data keys.
-
-## The Agent Bar
-
-Active agents show as colored pills above the chat input:
-
-- **Blue** — pending/starting
-- **Yellow** — running
-- **Green** — completed
-- **Red** — failed or cancelled
-
-Click a pill to see the agent's status and result.
-
-## How Returns Work
-
-1. You spawn one or more agents from a chat
-2. They work in the background
-3. When an agent finishes, it waits for the whole batch
-4. Once all agents from that chat are done, results are delivered as a message in that chat
-5. If you're mid-conversation when results arrive, they queue until there's a break
-
-This means you get a consolidated report, not a stream of interruptions.
+Agents are found only from the chat they belong to; another chat sees "no agent named X here".
+`agent_list` may mention agents that finished recently in *other public* chats — name, kind and
+status only, never from a private chat. Missions, questions and reports are stored under the
+agent's chat (encrypted with it when vaulted, gone when it is deleted); the agents file on disk
+holds metadata only.
 
 ## Settings
 
-Configure in Settings → Plugins → Agents:
+Settings → Plugins → **Agents**: Max Concurrent (1–5, running agents only; waiting and idle ones
+don't count), Default Toolset for `llm` agents, Roster (friendly model names → provider/model).
 
-| Setting | What it does |
-|---------|-------------|
-| **Max Concurrent** | How many agents can run at once (default 3, hard-clamped to 1–5) |
-| **Default Toolset** | Which toolset agents get by default |
-| **Roster** | Pre-configured agent profiles with name, provider, and model |
-
-## Concurrency
-
-Agents are limited by `max_concurrent`. If you try to spawn more than the limit, you'll be told to wait. Agents from different chats all share the same pool.
-
-## Example Commands
-
-- "Spawn an agent to research the best Python web frameworks in 2026"
-- "Send an agent to check all my SSH servers for disk usage"
-- "How are my agents doing?"
-- "What did the research agent find?"
-- "Cancel the documentation agent"
-- "Dispatch a Claude Code agent to write unit tests for the auth module"
+Settings → Plugins → **Claude Code**: Permissions (auto / bypass), Workspace Directory, Model,
+Effort, Budget Cap, Idle timeout, Claude Code binary (empty = the SDK's bundled one), and the four
+instruction textareas (Base, Project, Plugin, Core).
 
 ## Troubleshooting
 
-- **Agent stuck on pending** — Max concurrent limit reached. Wait for others to finish or dismiss one
-- **Agent failed** — Check the error in the agent's report (recall it). Common: bad toolset, model unavailable
-- **Results not showing** — They deliver to the chat the agent was spawned from. Check that chat
-- **Claude Code agent failed** — Make sure `claude` CLI is installed and accessible
+- **She says the agent tools aren't in her toolset** — add the four `agent_*` tools to the chat's toolset.
+- **A cloud kind is refused** — the chat (or the turn) is private. That is the design.
+- **`claude_code` refuses with "claude-agent-sdk is not installed"** — `python -m pip install claude-agent-sdk` in Sapphire's environment.
+- **An agent shows `lost`** — Sapphire restarted while it was live and it had no session to resume. Spawn again.
+- **"Agent limit reached"** — Max Concurrent counts running agents; stop one or raise the limit.
 
 ## Reference for AI
 
-Background agent system for parallel AI task execution.
+TOOLS (core, all chat-local):
+- agent_list() — this chat's agents + kinds + inbox depth; recently finished elsewhere (public chats only)
+- agent_peek(agent, what?) — status/progress, pending question verbatim, transcript tail, last report; what='report' | 'transcript'
+- agent_spawn(kind, mission, options?) — start; agent_spawn(kind) = that kind's screen. options: name (directory, not the agent's name), model, context + the kind's own
+- agent_action(agent, action?, value?) — answer <letter|label|text> · say <text> (idle/resting only) · stop; no action = what it takes now
 
-TOOLS:
-- agent_options() - list available types, models, toolsets, prompts
-- spawn_agent(mission, agent_type?, model?, toolset?, prompt?, project_name?, session_id?) - launch agent
-- check_agents() - status of all active agents
-- recall_agent(agent_id) - get completed agent's report
-- dismiss_agent(agent_id) - cancel/cleanup agent
+KINDS: llm (local-capable; options toolset, prompt: 'agent' lean default | 'self' identity only | a persona name) · claude_code (cloud, conversational; options mode project|plugin|core, capabilities, effort)
 
-AGENT TYPES:
-- llm: background LLM + tool loop. spawn_args: model, toolset, prompt
-  - prompt='agent' (default) = lean worker, no scopes, safe for automation
-  - prompt='self' = inherit current chat's persona IDENTITY only (prompt/voice/toolset) — scopes are STRIPPED, no data access
-  - prompt='<name>' = any persona name — full inherit, INCLUDING that persona's scopes
-- claude_code: Claude Code CLI coding session. spawn_args: project_name, session_id
-- claude_code_plugin: Claude Code CLI writing a Sapphire plugin. spawn_args: plugin_name, capabilities, context, session_id
+RULES:
+- A question arrives in chat as `[Agent X (kind) — asks; not typed by the user]` with lettered options. Answer it; or leave it pending while you ask the user — it waits 10 min.
+- Reports arrive as `[Agent X (kind) — done in …]` / `— reports (… in)`. You need not reply unless there is something to do.
+- say only works on an idle or resting agent; a running one says "still working".
+- Private turn → cloud kinds refused. Agents are only visible from their own chat.
+- Director rules: say WHAT to do, not how. Claude Code already has the docs, logs and reference plugins. If an agent returns with errors, say the errors back to it (agent_action say) instead of troubleshooting by hand.
 
-PRIVACY:
-- Private chat: claude_code / claude_code_plugin spawns are REFUSED (cloud service); llm agents spawn with privacy_required (local providers only)
-- Unreadable privacy state fails closed (treated as private)
-
-DIRECTOR RULES (caller-side, for spawn_agent):
-- Call agent_options() first to see current available types — don't assume
-- Don't default to 'llm' for coding work — check if claude_code / claude_code_plugin is available
-- For claude_code_plugin: YOU are the director, not the coder. Claude Code already has access to all plugin docs, examples, logs, reference plugins. Just describe WHAT to build (specific requirements, API details, constraints). Do NOT pre-search docs, read source, or run_command before spawning.
-- If an agent returns with errors, spawn it again with the error details. Do NOT troubleshoot manually.
-
-LIFECYCLE:
-- pending → running → done/failed/cancelled
-- Batch completion: all agents from same chat finish → consolidated report delivered
-- Auto-return to originating chat, queues if mid-stream
-
-LIMITS:
-- max_concurrent (default 3, hard-clamped to 1–5)
-- LLM agents: max 10 tool rounds per mission
-- Scopes default to 'none' for isolation
-
-EVENTS (SSE):
-- agent_spawned, agent_completed, agent_dismissed, agent_batch_complete
-
-UI:
-- Pill bar (#agent-bar) above chat input
-- Color-coded: blue=pending, yellow=running, green=done, red=failed
+EVENTS (SSE): agent_spawned, agent_waiting, agent_event, agent_completed, agent_dismissed (ids and status only — never content).

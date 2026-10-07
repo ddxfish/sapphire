@@ -4192,6 +4192,28 @@ div.hb-response-summary {
 }
 
 .message.user { margin-left: auto; flex-direction: row-reverse; }
+/* a typed turn waiting its turn in the chat's inbox (wave I-2, 2026-10-06) */
+.message.user.queued { opacity: 0.55; animation: queued-pulse 1.6s ease-in-out infinite; position: relative; }
+@keyframes queued-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.8; } }
+.message.user.queued .queued-x {
+    position: absolute; left: -22px; top: 50%; transform: translateY(-50%);
+    width: 18px; height: 18px; line-height: 16px; border-radius: 50%;
+    border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-muted);
+    font-size: 13px; cursor: pointer; padding: 0;
+}
+.message.user.queued .queued-x:hover { color: #d9534f; }
+/* the pill bar's popovers: a waiting agent's question, the inbox list (agents v2) */
+.agent-card-pop { position: fixed; z-index: 1200; min-width: 260px; max-width: 420px; padding: 10px 12px; border-radius: 8px;
+    background: var(--bg-secondary, var(--bg)); border: 1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,.25); color: var(--text); font-size: 13px; }
+.agent-card-pop .acp-title { font-weight: 600; margin-bottom: 6px; }
+.agent-card-pop .acp-q { margin: 6px 0 4px; white-space: pre-wrap; }
+.agent-card-pop .acp-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.agent-card-pop button { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); cursor: pointer; font-size: 13px; }
+.agent-card-pop button:hover { border-color: var(--trim); }
+.agent-card-pop .acp-row { display: flex; gap: 6px; margin-top: 4px; }
+.agent-card-pop .acp-row input { flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); }
+.agent-card-pop .acp-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 0; color: var(--text-muted); }
+.agent-card-pop .acp-item em { opacity: .8; font-style: normal; font-size: 11px; }
 
 .msg-avatar {
     width: var(--msg-avatar-size);

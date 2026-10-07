@@ -464,13 +464,13 @@ def session_end(body=None, query=None, **_):
     _cadence().disarm(session, owner='game-room')
     if not eff.get('session_end_summary'):
         return {'status': 'ok', 'summary': False}
-    import threading
-
-    def _run():
-        try:
-            _cadence().fire_once(session, gc.summary_prompt(session),
-                                 speak=eff.get('tts_route') or 'browser', source='session_end')
-        except Exception as e:
-            gc.logger.warning(f"game-room: session-end summary for {session!r} did not run: {e}")
-    threading.Thread(target=_run, daemon=True, name='gameroom-session-end').start()
+    # The summary waits its turn in the session chat's inbox (core/chat/inbox.py)
+    # instead of being dropped when the chat is mid-turn (ChatBusy, before 2026-10-06).
+    try:
+        from core.chat import inbox
+        inbox.tell(session, gc.summary_prompt(session), source='session_end', coalesce=False,
+                   speak=eff.get('tts_route') or 'browser')
+    except Exception as e:
+        gc.logger.warning(f"game-room: session-end summary for {session!r} did not run: {e}")
+        return {'status': 'ok', 'summary': False}
     return {'status': 'ok', 'summary': True}

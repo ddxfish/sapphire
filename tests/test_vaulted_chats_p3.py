@@ -429,40 +429,70 @@ class _FakeAgentMgr:
 
 
 class TestAgentPrivacyCarrier:
-    def _spawn(self, arguments, private):
+    """F4, in the agents v2 shape (2026-10-06): the privacy snapshot is taken at
+    spawn in ONE engine function; a cloud kind (cloud: true, or no flag) is
+    refused from a private turn, a local kind carries privacy on its row."""
+
+    def test_cloud_kind_refused_from_private_chat(self, agent_world):
         from core.chat.function_manager import scope_private
-        from plugins.agents.tools import agent_tools
-        mgr = _FakeAgentMgr()
-        token = scope_private.set(private)
+        token = scope_private.set(True)
         try:
-            msg, ok = agent_tools._spawn_agent(mgr, arguments, {})
+            r = agent_world.mgr.spawn('cloudy', 'research', chat='desk')
         finally:
             scope_private.reset(token)
-        return msg, ok, mgr
+        assert 'private' in r['error'] and agent_world.mgr.check_all() == []
 
-    def test_claude_code_refused_from_private_chat(self):
-        msg, ok, mgr = self._spawn(
-            {"mission": "research", "agent_type": "claude_code"}, private=True)
-        assert not ok and "private" in msg.lower()
-        assert mgr.calls == []
+    def test_llm_agent_inherits_privacy(self, agent_world):
+        from core.chat.function_manager import scope_private
+        token = scope_private.set(True)
+        try:
+            r = agent_world.mgr.spawn('probe', 'sort files', chat='desk')
+        finally:
+            scope_private.reset(token)
+        assert 'error' not in r
+        a = agent_world.mgr._agents[r['id']]
+        assert a.privacy is True
+        a.finish()
 
-    def test_llm_agent_inherits_privacy(self):
-        msg, ok, mgr = self._spawn({"mission": "sort files"}, private=True)
-        assert ok, msg
-        agent_type, kwargs = mgr.calls[0]
-        assert agent_type == "llm" and kwargs.get("_privacy_required") is True
+    def test_public_chat_carries_nothing(self, agent_world):
+        r = agent_world.mgr.spawn('probe', 'sort files', chat='desk')
+        a = agent_world.mgr._agents[r['id']]
+        assert a.privacy is False
+        a.finish()
 
-    def test_public_chat_carries_nothing(self):
-        msg, ok, mgr = self._spawn({"mission": "sort files"}, private=False)
-        assert ok, msg
-        _t, kwargs = mgr.calls[0]
-        assert "_privacy_required" not in kwargs
+    def test_the_kind_puts_the_flag_in_task_settings(self, monkeypatch):
+        """The llm kind passes privacy_required to ExecutionContext (the key, not just storage)."""
+        import importlib
+        from unittest.mock import MagicMock
+        from core import personas
+        kind = importlib.import_module('plugins.agents.agent_kind')
+        monkeypatch.setattr(personas, 'persona_manager', MagicMock(get=MagicMock(return_value=None)))
+        import core.api_fastapi as apifa
+        monkeypatch.setattr(apifa, '_system', MagicMock(), raising=False)
+        from core.continuity import execution_context as exec_ctx_mod
+        captured = {}
 
-    def test_worker_accepts_and_stores_the_flag(self):
-        from plugins.agents.tools.agent_tools import _create_llm_worker
-        W = _create_llm_worker()
-        w = W(agent_id="a", name="A", mission="m", _privacy_required=True)
-        assert w._privacy_required is True
+        class _Ctx:
+            def __init__(self, fm, te, settings, **kw):
+                captured.update(settings)
+                self.tool_log = []
+                self.degraded_reason = None
+
+            def run(self, m):
+                return ''
+        monkeypatch.setattr(exec_ctx_mod, 'ExecutionContext', _Ctx)
+        monkeypatch.setattr(kind, '_settings', lambda: {})
+
+        class _E:
+            def install_carrier(self, a): return None
+            def release_carrier(self, t): pass
+            def finished(self, a): pass
+            def report_out(self, a, t): pass
+            def event_out(self, a, k): pass
+            def question_out(self, a, q): pass
+        kind.Agent({'id': 'a', 'name': 'A', 'kind': 'llm', 'chat': 'c', 'mission': 'm',
+                    'options': {}, 'privacy': True}, _E()).run('m')
+        assert captured.get('privacy_required') is True
 
 
 # ── is_chat_hidden: the explicit plugin seam ────────────────────────────────

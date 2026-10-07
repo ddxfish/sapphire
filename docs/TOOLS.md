@@ -227,7 +227,7 @@ TOOL MODULES:
 - toolmaker.py: tool_save, tool_read, tool_load
 - homeassistant.py: ha_list_scenes_and_scripts, ha_activate, ha_list_areas, ha_area_light, ha_area_color, ha_get_thermostat, ha_set_thermostat, ha_list_lights_and_switches, ha_set_light, ha_set_switch, ha_notify, ha_house_status, ha_get_camera_image
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
-- agents plugin: agent_options, spawn_agent, check_agents, recall_agent, dismiss_agent
+- agents.py (core): agent_list, agent_peek, agent_spawn, agent_action — kinds come from plugins (`llm` from the agents plugin, `claude_code` from the claude-code plugin)
 - schedule_tool.py: schedule_task
 - email_tool.py: get_inbox, read_email, search_emails, archive_emails, delete_emails, forward_email, get_recipients, send_email
 - bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions

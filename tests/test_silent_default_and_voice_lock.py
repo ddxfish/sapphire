@@ -500,45 +500,30 @@ def test_execution_context_clean_run_has_no_degraded_reason():
     assert result == "A real reply."
 
 
-def test_base_worker_surfaces_warning_in_event_payload():
-    """AGENT_COMPLETED event payload must include `warning` so the frontend
-    can render amber when an agent's run degraded."""
-    from core.agents.base_worker import BaseWorker
-
-    class _TestWorker(BaseWorker):
-        def run(self):
-            self.result = "(No response — tool loop exhausted)"
-            self.warning = "Tool loop exhausted after 3 rounds"
-
-    captured = []
-
-    def _fake_publish(event, data):
-        captured.append((event, data))
-
-    with patch("core.event_bus.publish", _fake_publish):
-        w = _TestWorker("id-1", "TestBot", "mission")
-        w.start()
-        w._thread.join(timeout=2.0)
-
-    assert captured, "no events published"
-    # Find the AGENT_COMPLETED event
-    from core.event_bus import Events
-    comp = [d for e, d in captured if e == Events.AGENT_COMPLETED]
-    assert comp, f"no AGENT_COMPLETED event found; got: {[e for e,_ in captured]}"
-    assert "warning" in comp[0], "AGENT_COMPLETED payload missing 'warning' field"
-    assert comp[0]["warning"] == "Tool loop exhausted after 3 rounds"
+def test_agent_surfaces_warning_in_the_completed_event(agent_world):
+    """AGENT_COMPLETED must carry `warning` so the frontend renders amber when
+    an agent's run degraded (and never the result: ids and status only)."""
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.warning = 'Tool loop exhausted after 3 rounds'
+    a.finish_with_result('(No response — tool loop exhausted)')
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    comp = [d for t, d, _ in w.events if t == 'agent_completed' and d['id'] == r['id']]
+    assert comp and comp[0]['warning'] == 'Tool loop exhausted after 3 rounds'
+    assert 'result' not in comp[0]
 
 
-def test_base_worker_to_dict_includes_warning():
-    """GET /api/agents/status returns to_dict() for each worker. Frontend
-    polls this when it misses the event — needs warning present for amber
-    rendering on late-arriving status."""
-    from core.agents.base_worker import BaseWorker
-    w = BaseWorker("id-1", "TestBot", "mission")
-    w.warning = "some degradation"
-    d = w.to_dict()
-    assert "warning" in d, "to_dict() missing 'warning' key"
-    assert d["warning"] == "some degradation"
+def test_agent_to_dict_includes_warning(agent_world):
+    """GET /api/agents/status returns to_dict() for each agent; a late poll
+    needs `warning` for amber rendering."""
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.warning = 'some degradation'
+    d = a.to_dict()
+    assert d['warning'] == 'some degradation' and d['status'] == 'running'
+    a.finish()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

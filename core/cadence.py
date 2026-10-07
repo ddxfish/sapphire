@@ -247,33 +247,45 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         raise RuntimeError('cadence organ not started')
     llm = system.llm_chat
     sm = llm.session_manager
+    # Reachable first, before anything is published: a missing, sealed or
+    # unreadable chat used to get its text sent over SSE as VOICE_TURN_START
+    # and only THEN refused inside chat_stream (scout C, 2026-10-06).
+    if sm.get_settings_for(chat) is None:
+        raise RuntimeError(f"chat '{chat}' isn't reachable (missing, sealed or unreadable)")
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
     sentences = 0                         # tts_chunk events this turn made
-    if stream_speech and isinstance(speak, str) and speak.startswith('device:'):
-        # the pump runs for THIS chat whatever the browser's streaming
-        # setting says, split at sentences (first sound at the first
-        # sentence, as on a phone call), gated by this chat's own settings
-        stream.suppress_tts = False
-        stream.tts_split_override = 'sentence'
-        stream.tts_force = True
-        stream.tts_chat_settings = sm.get_settings_for(chat) or {'private_chat': True}
-    else:
-        stream.suppress_tts = True        # the pump stays inert; the lane below speaks
-    stream.images_ephemeral = True        # frames reach the model this turn only
-    try:
-        active = sm.get_active_chat_name()
-    except Exception:
-        active = None
-    foreign = bool(chat and chat != active)
-    mid = uuid.uuid4().hex
-    publish(Events.VOICE_TURN_START, {"message_id": mid, "user_text": text,
-                                      "chat": chat, "foreign": foreign, "source": source})
     parts, cancelled, errored, overthought = [], False, None, False
     blocks = []                    # the prose of each round that ended in a tool call: her message is all of them
     thinking_chars = 0             # provider-side thinking events (Claude-style)
     tools_ran = False              # a tool-only turn (a move, no words) is an answer
-    rows_before = _live_row_count(sm, chat)
+    final, dropped, rows_before = '', False, None
+    mid = uuid.uuid4().hex
+    foreign = False
+    # Everything from here to the end of the history work runs inside ONE try
+    # whose finally releases the registration: a raise in the setup below used
+    # to leak the stream (the gate refused the chat forever, only Stop cured
+    # it), and the drop-last-turn surgery used to run AFTER end_stream, where
+    # the next turn's fresh user row could be the one deleted (scout A).
     try:
+        if stream_speech and isinstance(speak, str) and speak.startswith('device:'):
+            # the pump runs for THIS chat whatever the browser's streaming
+            # setting says, split at sentences (first sound at the first
+            # sentence, as on a phone call), gated by this chat's own settings
+            stream.suppress_tts = False
+            stream.tts_split_override = 'sentence'
+            stream.tts_force = True
+            stream.tts_chat_settings = sm.get_settings_for(chat) or {'private_chat': True}
+        else:
+            stream.suppress_tts = True        # the pump stays inert; the lane below speaks
+        stream.images_ephemeral = True        # frames reach the model this turn only
+        try:
+            active = sm.get_active_chat_name()
+        except Exception:
+            active = None
+        foreign = bool(chat and chat != active)
+        publish(Events.VOICE_TURN_START, {"message_id": mid, "user_text": text,
+                                          "chat": chat, "foreign": foreign, "source": source})
+        rows_before = _live_row_count(sm, chat)
         for ev in stream.chat_stream(text, images=images or None):
             if not isinstance(ev, dict):
                 continue
@@ -329,16 +341,22 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         # error still surfaces: END carries it, then the raise below fires.
         errored = errored or f"{type(e).__name__}: {e}"
     finally:
+        # The history work happens HERE, while this turn still holds the chat:
+        # _drop_last_turn removes the last N live rows whoever wrote them, and
+        # after end_stream the next turn (the inbox drains the instant the chat
+        # frees up) may already have written its user row (scout A, 2026-10-06).
+        try:
+            rounds = [visible_text(b) for b in blocks + [''.join(parts)]]
+            final = '\n\n'.join(r for r in rounds if r) if not cancelled or overthought else ''
+            if overthought or (not final and not errored and not tools_ran):
+                # no answer (a think loop, an empty reply): nothing to show, speak, or keep
+                final = ''
+                rows_after = _live_row_count(sm, chat)
+                added = (rows_after - rows_before) if (rows_before is not None and rows_after is not None) else None
+                dropped = _drop_last_turn(chat, 'thinking never finished' if overthought else 'empty answer', added)
+        except Exception as e:
+            logger.warning(f"[CADENCE] '{chat}': end-of-turn history work failed: {e}")
         llm.end_stream(sid, chat_name)
-    rounds = [visible_text(b) for b in blocks + [''.join(parts)]]
-    final = '\n\n'.join(r for r in rounds if r) if not cancelled or overthought else ''
-    dropped = False
-    if overthought or (not final and not errored and not tools_ran):
-        # no answer (a think loop, an empty reply): nothing to show, speak, or keep
-        final = ''
-        rows_after = _live_row_count(sm, chat)
-        added = (rows_after - rows_before) if (rows_before is not None and rows_after is not None) else None
-        dropped = _drop_last_turn(chat, 'thinking never finished' if overthought else 'empty answer', added)
     publish(Events.VOICE_TURN_END, {"message_id": mid, "chat": chat, "foreign": foreign,
                                     "text": final,
                                     "speak": (speak if (final and not errored) else None),
@@ -371,8 +389,10 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
 
 
 def fire_once(chat, text, images=None, speak=None, source='cadence'):
-    """A single unprompted turn now (a session-end summary). Raises ChatBusy
-    if the chat is mid-turn."""
+    """A single unprompted turn now. Raises ChatBusy if the chat is mid-turn.
+    A caller that would rather wait its turn than fail uses the inbox
+    (core/chat/inbox.py tell/ask) - every machine door moved there 2026-10-06;
+    this stays for a caller that wants the refusal."""
     return run_turn(chat, text, images=images, speak=speak, source=source)
 
 

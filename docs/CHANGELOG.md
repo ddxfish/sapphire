@@ -1,3 +1,8 @@
+# 2.14.0 - Queue + Agents
+- Send multiple messages as LLM types and they queue
+- Multiple user messages coalesce to 1
+- Agents can all return at same time and each gets a message
+- Complete refactor of agents registry and toolset
 # 2.13.6 - MCP Personality
 - Other AIs can use Sapphire's tools, memory, capabilities
 - Claude code etc can ding the user, TTS speak, STT listen
