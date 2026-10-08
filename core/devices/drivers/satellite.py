@@ -36,7 +36,7 @@ SPEC = {
     'label': 'Satellite (a board that speaks the protocol)',
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                     'sensors'],
+                     'sensors', 'firmware'],
     # it calls Sapphire with its own key (wake, voice, text, events): the
     # address it calls from becomes its url, so a board set up from the
     # browser needs none typed, and a new DHCP lease is followed
@@ -52,6 +52,10 @@ SPEC = {
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
          'capability': 'camera',
          'help': "Off = Sapphire is not offered a camera on this satellite."},
+        {'key': 'ota', 'type': 'boolean', 'label': 'Updates over the air', 'tab': 'Status', 'default': True,
+         'capability': 'firmware',
+         'help': "Off = no program is ever sent to this board from here; its Firmware tab only checks. "
+                 "A board with one program slot never offers this and is updated over USB."},
         # the mic's fields, or the keyboard's on a board that types instead of listening
         {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'capability': ('mic', 'keyboard'),
          'help': "The chat this satellite's questions land in. Empty = the last chat used."},
@@ -99,6 +103,7 @@ ABOUT_FRESH = 60              # seconds what a satellite said about itself is ta
 SPEAK_WAIT = 150              # the satellite answers only when it has finished playing
 LOOK_WAIT = 25                # a picture: 2 s of warning light and sound, then the shot
 STORE_WAIT = 120              # one blocked send or the answer after a 70 MB backup onto a card
+UPDATE_WAIT = 300             # a 2 MB program over WiFi, written and checked on the board
 _NAME = re.compile(r'^[A-Za-z0-9_.-]{1,96}$')
 _DURATION = re.compile(r'^(\d+(?:\.\d+)?)(s|m|h)$', re.I)
 _KNOB = re.compile(r'^(bpm|speed|floor|ceiling)=(.+)$', re.I)
@@ -418,7 +423,79 @@ def describe(device, config):
         told['storage']['actions']['format'] = {
             'help': 'wipe the card and format it FAT32', 'example': '', 'owner': True,
             'danger': f"Formats the card in {device['id']}. Every backup on it is erased."}
+    if 'firmware' in _has(device):             # two program slots: a board says so; a Pi never does
+        told['firmware'] = {'label': 'Firmware', 'help': "the board's program, sent over the air from the firmware "
+                            "source (Settings > Devices > New board uses the same source)", 'actions': {
+            'check': {'help': "read the firmware source now and say whether a newer program is there for this board",
+                      'example': '', 'values': '(no value)'},
+        }}
+        if config.get('ota', True) is False:
+            told['firmware']['help'] += ". Updates over the air are OFF for this device (its Status tab)"
+        else:
+            told['firmware']['actions']['update'] = {
+                'help': "install the newest program the source has for this board, then restart onto it. "
+                        "A program that fails to run rolls back by itself. 'again' installs the same version once more",
+                'example': '', 'values': "(no value) | again", 'owner': True,
+                'danger': f"Replaces the program on {device['id']} and restarts it. The board is away for a "
+                          f"minute. If the new program does not run, the old one comes back on its own."}
     return told
+
+
+def _has(device):
+    """What the board's last /health said it has, from the health cache
+    (describe() has no key to ask with). [] for a board never heard from, or
+    an early Pi that says nothing."""
+    with _lock:
+        _, said = _about.get(device['id'], (0, None))
+    has = (said or {}).get('has') if isinstance(said, dict) else None
+    return [str(c) for c in has] if isinstance(has, list) else []
+
+
+def _check(device, config, secrets):
+    """The source read now, against what the board runs. Fills what the
+    status strip reads from (firmware.known_version)."""
+    from core.devices import firmware
+    h = _health(device, config, secrets, fresh=True)
+    model = str(h.get('model') or '').strip().lower()
+    running = str(h.get('firmware') or '?')
+    if not model:
+        return f"{device['id']} runs {running}, and its program does not say which firmware it is: too old to update over the air.", False
+    try:
+        b = firmware.board(model, fresh=True)
+    except firmware.FirmwareError as e:
+        return f"{device['id']} runs {running}. {e}", False
+    if b['version'] == running:
+        return f"{device['id']} runs {running}, the newest the source has.", True
+    return f"{device['id']} runs {running}; the source has {b['version']}. 'update' installs it.", True
+
+
+def _update(device, config, secrets, value):
+    """The newest program for this board, from the firmware source, onto the
+    board's other slot (ota.c on the board: PUT /firmware with the sha256)."""
+    import hashlib
+    from core.devices import firmware
+    h = _health(device, config, secrets, fresh=True)
+    model = str(h.get('model') or '').strip().lower()
+    if not model:
+        return "This board's program does not say which firmware it is (no model in /health): too old to update over the air.", False
+    try:
+        path, version = firmware.app_part(model)
+    except firmware.FirmwareError as e:
+        return f"No program to send: {e}", False
+    running = str(h.get('firmware') or '?')
+    if version == running and str(value or '').strip().lower() != 'again':
+        return f"{device['id']} already runs {version}. Say 'again' to install it once more.", True
+    sha = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for piece in iter(lambda: f.read(1 << 20), b''):
+            sha.update(piece)
+    with open(path, 'rb') as f:
+        out = _json(_call('PUT', '/firmware', config, secrets, timeout=UPDATE_WAIT, data=f,
+                          headers={'Content-Type': 'application/octet-stream', 'X-Sha256': sha.hexdigest()}))
+    with _lock:
+        _about.pop(device['id'], None)
+    return (f"{device['id']}: {version} is in slot {out.get('slot', '?')} and it is restarting onto it "
+            f"(it ran {running}). Back in about a minute; if the new program fails, the old one returns by itself."), True
 
 
 def _can(device):
@@ -440,6 +517,20 @@ def status(device, config, secrets):
     readings = {}
     if h.get('firmware'):
         readings['program'] = ' '.join(str(x) for x in (h.get('board'), h['firmware']) if x)[:60]
+    if h.get('mac'):
+        readings['board id'] = str(h['mac'])[:17]                      # the chip's MAC (pocket 0.2.1, satellite 0.2.3)
+    if isinstance(h.get('has'), list):                                 # how its program is replaced
+        if 'firmware' not in h['has']:
+            readings['updates'] = 'over USB only: one program slot'
+        elif config.get('ota', True) is False:
+            readings['updates'] = 'over the air, turned off for this device'
+        else:
+            readings['updates'] = 'over the air' + (f", running {h['slot']}" if h.get('slot') else '')
+    if h.get('model') and h.get('firmware') and 'firmware' in (h.get('has') or []) and config.get('ota', True) is not False:
+        from core.devices import firmware                               # the source's newest, from what is known: no network here
+        newest = firmware.known_version(h['model'])
+        if newest and newest != str(h['firmware']):
+            readings['update'] = f"{newest} is in the firmware source (Firmware tab)"
     if isinstance(h.get('volume'), (int, float)):
         readings['volume'] = f"{int(h['volume'])}%"
     mic = h.get('mic') if isinstance(h.get('mic'), dict) else {}
@@ -858,6 +949,13 @@ def run(device, capability, action, value, config, secrets, call_tool):
             if not isinstance(got, dict) or not got:
                 return "No sensor answered.", False
             return ' · '.join(f"{k}: {v}" for k, v in got.items()), True
+        if capability == 'firmware' and action == 'check':
+            return _check(device, config, secrets)
+        if capability == 'firmware' and action == 'update':
+            try:
+                return _update(device, config, secrets, value)
+            except Missing:
+                return "This board's program has no door for updates over the air. Update it over USB once.", False
         if capability == 'power' and action in ('restart', 'shutdown'):
             try:
                 out = _json(_call('POST', f'/power?action={action}', config, secrets))

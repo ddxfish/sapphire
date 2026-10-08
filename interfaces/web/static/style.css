@@ -4214,6 +4214,7 @@ div.hb-response-summary {
 .agent-card-pop .acp-row input { flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); }
 .agent-card-pop .acp-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 0; color: var(--text-muted); }
 .agent-card-pop .acp-item em { opacity: .8; font-style: normal; font-size: 11px; }
+.agent-card-pop .ask-card { margin: 6px 0 0; }   /* an agent's fork drawn by the one card renderer */
 
 .msg-avatar {
     width: var(--msg-avatar-size);
@@ -4434,22 +4435,41 @@ a.gallery-caption:hover {
 }
 
 /* Question card (shared/ask-marker.js, 2026-10-07): the ask_user tool's card in
-   her bubble — tabs when several questions, options as buttons, type-your-own.
-   Locks (dims, no buttons) once the user has spoken after it. */
+   her bubble — a title row with × to dismiss, tabs when several questions, the
+   options one per line, type-your-own, Send. After Send (or once the user has
+   spoken after it) it locks and folds to its title; the title opens it again
+   to flip through the tabs and see the picks. */
 .ask-card {
     margin: 10px 0;
     max-width: 100%;
-    padding: 10px 12px;
+    padding: 8px 12px 10px;
     background: var(--bg-inset);
     border: 1px solid var(--border);
     border-left: 3px solid var(--trim);
     border-radius: var(--radius-md);
 }
+.ask-card.locked { opacity: .75; }
+.ask-card.locked .ask-opt:not(.picked) { opacity: .5; }
+.ask-card.collapsed { padding-bottom: 8px; }
+.ask-card.collapsed .ask-tabs, .ask-card.collapsed .ask-body, .ask-card.collapsed .ask-foot { display: none; }
 
-.ask-card.locked { opacity: .6; }
-.ask-card.locked .ask-opt:not(.picked) { opacity: .55; }
+.ask-card .ask-head { display: flex; align-items: center; gap: 8px; }
+.ask-card .ask-title {
+    flex: 1; min-width: 0; padding: 2px 0; text-align: left;
+    border: 0; background: transparent; color: var(--text-secondary);
+    font-size: var(--font-sm); cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ask-card.locked .ask-title { cursor: pointer; }
+.ask-card.locked .ask-title::before { content: '\25B8  '; }
+.ask-card.locked:not(.collapsed) .ask-title::before { content: '\25BE  '; }
+.ask-card .ask-x {
+    width: 24px; height: 24px; padding: 0; line-height: 22px; border-radius: 50%;
+    border: 1px solid transparent; background: transparent; color: var(--text-secondary); font-size: 18px; cursor: pointer;
+}
+.ask-card .ask-x:hover { border-color: var(--border); color: var(--text); }
+.ask-card .ask-x[hidden] { display: none; }
 
-.ask-card .ask-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.ask-card .ask-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 0; }
 .ask-card .ask-tab {
     padding: 3px 10px; border-radius: var(--radius-md);
     border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
@@ -4458,27 +4478,29 @@ a.gallery-caption:hover {
 .ask-card .ask-tab.active { border-color: var(--trim); color: var(--text); }
 .ask-card .ask-tab.done { color: var(--text); }
 
-.ask-card .ask-q { margin: 0 0 8px 2px; font-weight: 600; white-space: pre-wrap; }
+.ask-card .ask-q { margin: 8px 0 6px 2px; font-weight: 600; white-space: pre-wrap; }
 
-.ask-card .ask-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ask-card .ask-opts { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .ask-card .ask-opt {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
-    max-width: 100%; padding: 6px 12px; border-radius: var(--radius-md);
-    border: 1px solid var(--text-secondary); background: var(--bg-tertiary); color: var(--text);
+    display: flex; align-items: baseline; gap: 10px; width: 100%;
+    padding: 5px 10px; border-radius: var(--radius-md);
+    border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text);
     font-size: var(--font-sm); text-align: left; cursor: pointer;
     transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 .ask-card .ask-opt:hover:not(:disabled) { border-color: var(--trim); }
+.ask-card .ask-opt:disabled { cursor: default; }
 .ask-card .ask-opt.picked { border-color: var(--trim); background: var(--trim-soft, var(--bg-secondary)); }
-.ask-card .ask-opt-desc { font-size: 11px; color: var(--text-secondary); }
+.ask-card .ask-opt-label { flex: 0 0 auto; }
+.ask-card .ask-opt-desc { flex: 1; min-width: 0; font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .ask-card .ask-foot { display: flex; gap: 6px; }
 .ask-card .ask-other {
-    flex: 1; min-width: 0; padding: 6px 10px; border-radius: var(--radius-md);
+    flex: 1; min-width: 0; padding: 5px 10px; border-radius: var(--radius-md);
     border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); font-size: var(--font-sm);
 }
 .ask-card .ask-send {
-    padding: 6px 14px; border-radius: var(--radius-md);
+    padding: 5px 14px; border-radius: var(--radius-md);
     border: 1px solid var(--trim); background: var(--trim); color: var(--bg); font-weight: 600;
     font-size: var(--font-sm); cursor: pointer;
 }

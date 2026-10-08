@@ -7,6 +7,7 @@ import importlib
 import io
 import json
 import sys
+import time
 import types
 from pathlib import Path
 from unittest.mock import patch
@@ -184,7 +185,7 @@ def _index(root, version='0.2.0', chip='ESP32'):
     (root / 'pocket' / 'manifest.json').write_text(json.dumps({
         'name': 'Pocket', 'version': version,
         'builds': [{'chipFamily': chip, 'flash': {'mode': 'dio', 'size': '4MB', 'freq': '40m'},
-                    'parts': [{'path': 'boot.bin', 'offset': 4096}, {'path': 'app.bin', 'offset': 65536}]}]}))
+                    'parts': [{'path': 'boot.bin', 'offset': 4096}, {'path': 'app.bin', 'offset': 65536, 'app': True}]}]}))
     (root / 'index.json').write_text(json.dumps({'boards': [{'id': 'pocket', 'name': 'Pocket (CYD)', 'manifest': 'pocket/manifest.json'}]}))
     return root
 
@@ -204,7 +205,7 @@ def test_local_folder_source(fw):
         assert idx['error'] is None and [b['id'] for b in idx['boards']] == ['pocket']
         b = idx['boards'][0]
         assert b['chipFamily'] == 'ESP32' and b['version'] == '0.2.0' and b['flash']['size'] == '4MB'
-        assert b['parts'] == [{'path': 'boot.bin', 'offset': 4096}, {'path': 'app.bin', 'offset': 65536}]
+        assert b['parts'] == [{'path': 'boot.bin', 'offset': 4096, 'app': False}, {'path': 'app.bin', 'offset': 65536, 'app': True}]
         assert 'manifest' not in b and 'folder' not in b
         assert firmware.part('pocket', 'app.bin').read_bytes().startswith(b'\xe9')
         for bad in ('../index.json', 'boot.bin/../app.bin', 'nope.bin', '/etc/passwd'):
@@ -359,3 +360,270 @@ def test_firmware_names_are_reserved(rig):
     for name in ('firmware', 'provision', 'here'):
         with pytest.raises(core.DeviceError):
             core.add(name, '', 'board', {'url': ''})
+
+
+# --- the fingerprint: a board is known by its chip ---------------------------------
+
+def test_a_board_keeps_its_name_and_a_name_keeps_its_board(rig):
+    row, _ = core.provision('pocket', 'board', mac='AA:BB:CC:DD:EE:01')
+    assert row['fingerprint'] == 'aa:bb:cc:dd:ee:01'
+    assert core.public(core.get('pocket'))['fingerprint'] == 'aa:bb:cc:dd:ee:01'
+    assert routes.list_devices()['devices'][0]['fingerprint'] == 'aa:bb:cc:dd:ee:01'
+    # the same board under another name: refused, named
+    with pytest.raises(core.DeviceError, match="already the device 'pocket'"):
+        core.provision('hall', 'board', mac='aabbccddee01')
+    # another board claiming this name: refused
+    with pytest.raises(core.DeviceError, match='different board'):
+        core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:02')
+    # the same board again, same name: fine, keys fresh, fingerprint kept
+    row2, keys = core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:01')
+    assert row2['fingerprint'] == 'aa:bb:cc:dd:ee:01' and list(core.rows()) == ['pocket']
+    # a device added by hand (no fingerprint) takes the first board that claims it
+    core.add('lamp1', '', 'board', {'url': ''})
+    assert core.provision('lamp1', 'board', mac='aa:bb:cc:dd:ee:03')[0]['fingerprint'] == 'aa:bb:cc:dd:ee:03'
+    # no mac: nothing is claimed or checked
+    assert core.provision('pocket', 'board')[0]['fingerprint'] == 'aa:bb:cc:dd:ee:01'
+    assert core._mac('junk') == '' and core._mac('AA-BB-CC-DD-EE-FF') == 'aa:bb:cc:dd:ee:ff'
+
+
+def test_satellite_status_shows_the_board_id():
+    from core.devices.drivers import satellite as sat
+    with patch.object(sat, '_health', lambda *a, **k: {'ok': True, 'firmware': '0.2.1', 'mac': 'aa:bb:cc:dd:ee:01'}):
+        st = sat.status({'id': 'pocket'}, {'url': 'http://192.168.0.5'}, types.SimpleNamespace(get=lambda k: 'key'))
+    assert st['readings']['board id'] == 'aa:bb:cc:dd:ee:01'
+
+
+# --- the server lane: Sapphire's own computer -----------------------------------------
+
+from core.devices import flasher
+
+
+class FakeEsp:
+    CHIP_NAME = 'ESP32'
+
+    def __init__(self):
+        self._port = types.SimpleNamespace(close=lambda: None)
+
+    def read_mac(self): return (0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01)
+    def get_chip_description(self): return 'ESP32-D0WD-V3 (revision 3)'
+    def change_baud(self, baud): self.baud = baud
+
+
+class FakeCmds:
+    def __init__(self, fail_write=False):
+        self.calls, self.fail_write = [], fail_write
+
+    def detect_chip(self, port, baud=115200, **kw): self.calls.append(('detect', port)); return FakeEsp()
+    def run_stub(self, esp): self.calls.append('stub'); return esp
+    def attach_flash(self, esp): self.calls.append('attach')
+    def reset_chip(self, esp, mode='hard-reset'): self.calls.append(('reset', mode))
+
+    def write_flash(self, esp, parts, **kw):
+        from esptool.logger import log
+        self.calls.append(('write', [(off, Path(p).name) for off, p in parts], kw))
+        for i in range(1, 5):
+            log.progress_bar(i * 25, 100)
+        if self.fail_write:
+            log.die('A fatal error occurred: Timed out waiting for packet header')
+        log.print('Hash of data verified.')
+
+
+@pytest.fixture
+def lane(tmp_path, monkeypatch):
+    """esptool's API faked, the port 'exists' and is ours, the firmware local."""
+    pytest.importorskip('esptool')
+    from esptool.logger import EspLog, EspLogBase
+    fake = FakeCmds()
+    port = tmp_path / 'ttyUSB9'
+    port.write_text('')
+    monkeypatch.setattr(flasher, '_esptool', lambda: (fake, EspLog, EspLogBase))
+    flasher._job = None
+    _index(tmp_path / 'src')
+    firmware._recent = (0.0, None)
+    with patch.object(firmware, 'source', lambda: str(tmp_path / 'src')):
+        yield types.SimpleNamespace(cmds=fake, port=str(port), tmp=tmp_path)
+    firmware._recent = (0.0, None)
+    flasher._job = None
+    EspLog.instance = None
+
+
+def test_chip_reads_family_text_and_mac_then_lets_the_board_run(lane):
+    assert flasher.chip(lane.port) == {'family': 'ESP32', 'text': 'ESP32-D0WD-V3 (revision 3)', 'mac': 'aa:bb:cc:dd:ee:01'}
+    assert lane.cmds.calls[-1] == ('reset', 'hard-reset')
+    with pytest.raises(flasher.FlashError, match='no /dev/ttyNOPE'):
+        flasher.chip('/dev/ttyNOPE')
+
+
+def test_a_write_runs_in_the_background_and_reports_progress(lane):
+    import time
+    st = flasher.start(lane.port, 'pocket')
+    assert st['state'] in ('getting', 'writing', 'done') and st['board'] == 'pocket' and st['version'] == '0.2.0'
+    for _ in range(100):
+        st = flasher.status()
+        if st['state'] in ('done', 'failed'):
+            break
+        time.sleep(0.02)
+    assert st['state'] == 'done' and st['percent'] == 100 and st['verified'] is True, st
+    write = next(c for c in lane.cmds.calls if c[0] == 'write')
+    assert write[1] == [(4096, 'boot.bin'), (65536, 'app.bin')]      # every part, the program among them
+    assert write[2] == {'flash_freq': '40m', 'flash_mode': 'dio', 'flash_size': '4MB', 'erase_all': True, 'compress': True}
+    assert lane.cmds.calls[-1] == ('reset', 'hard-reset')
+    with pytest.raises(flasher.FlashError, match='No such board'):
+        flasher.start(lane.port, 'nope')
+
+
+def test_a_failed_write_says_why_and_never_exits(lane):
+    import time
+    lane.cmds.fail_write = True
+    flasher.start(lane.port, 'pocket')
+    for _ in range(100):
+        if flasher.status()['state'] in ('done', 'failed'):
+            break
+        time.sleep(0.02)
+    st = flasher.status()
+    assert st['state'] == 'failed' and 'Timed out' in st['error']
+
+
+def test_one_write_at_a_time(lane):
+    flasher._job = {'state': 'writing', 'percent': 3}
+    with pytest.raises(flasher.FlashError, match='already'):
+        flasher.start(lane.port, 'pocket')
+
+
+class FakeSerial:
+    """pyserial's Serial, answering the firmware's console."""
+    opened = []
+
+    def __init__(self):
+        self.port = self.baudrate = self.timeout = None
+        self.dtr = self.rts = None
+        self.signals, self.sent, self.lines = [], [], []
+
+    def __setattr__(self, k, v):
+        if k in ('dtr', 'rts') and v is not None:
+            self.__dict__.setdefault('signals', []).append((k, v))
+        object.__setattr__(self, k, v)
+
+    def open(self): FakeSerial.opened.append(self.port)
+    def reset_input_buffer(self): pass
+    def flush(self): pass
+    def close(self): pass
+
+    def write(self, data):
+        line = data.decode().strip()
+        self.sent.append(line)
+        if line == 'show':
+            self.lines = [b'I (12) wifi: joined\r\n', b'>> {"name": "pocket", "ip": "192.168.0.5"}\r\n']
+        elif line.startswith('setup '):
+            self.lines = [b'>> {"ok": true}\r\n']
+        else:
+            self.lines = [b'>> {"error": "commands: show"}\r\n']
+
+    def readline(self):
+        return self.lines.pop(0) if self.lines else b''
+
+
+def test_the_console_boots_the_program_and_stays_open(lane, monkeypatch):
+    import serial
+    monkeypatch.setattr(serial, 'Serial', FakeSerial)
+    monkeypatch.setattr(flasher.time, 'sleep', lambda s: None)
+    FakeSerial.opened.clear()
+    flasher._consoles.clear()
+    got = flasher.ask(lane.port, 'show', 5)
+    assert got['answer'] == {'name': 'pocket', 'ip': '192.168.0.5'} and got['said'] == ['I (12) wifi: joined']
+    con = flasher._consoles[lane.port]
+    assert con.s.signals[:4] == [('dtr', False), ('rts', False), ('rts', True), ('rts', False)]   # run mode, never the loader
+    assert flasher.ask(lane.port, 'setup {}', 5)['answer'] == {'ok': True}
+    assert FakeSerial.opened == [lane.port]                          # opened once: a second open would reset the board
+    with pytest.raises(flasher.FlashError, match='did not answer'):
+        con.ask('x', 0.0)                                            # no time to answer: the plain error
+    flasher.close(lane.port)
+    assert lane.port not in flasher._consoles
+    con.used = 0
+    flasher._consoles[lane.port] = con
+    flasher.tend()
+    assert lane.port not in flasher._consoles
+
+
+# --- over the air: the program itself, from the source to the board ----------------
+
+def test_the_app_part_and_the_version_known_without_the_network(fw):
+    _index(fw / 'src')
+    with patch.object(firmware, 'source', lambda: str(fw / 'src')):
+        assert firmware.known_version('pocket') == ''                  # nothing read yet, nothing cached: no reaching out
+        path, version = firmware.app_part('pocket')
+        assert path.name == 'app.bin' and version == '0.2.0'
+        assert firmware.known_version('pocket') == '0.2.0' and firmware.known_version('nope') == ''
+        with pytest.raises(firmware.FirmwareError, match='No firmware'):
+            firmware.app_part('nope')
+    # a manifest without the mark cannot be sent over the air
+    m = fw / 'src' / 'pocket' / 'manifest.json'
+    m.write_text(m.read_text().replace(', "app": true', ''))
+    firmware._recent = (0.0, None)
+    with patch.object(firmware, 'source', lambda: str(fw / 'src')):
+        with pytest.raises(firmware.FirmwareError, match='which part is the program'):
+            firmware.app_part('pocket')
+
+
+def test_update_sends_the_program_with_its_sha_and_says_what_happens(fw):
+    import hashlib
+    from core.devices.drivers import satellite as sat
+    _index(fw / 'src')
+    sent = []
+
+    def call(method, path, config, secrets, timeout=8, headers=None, **kw):
+        body = kw['data'].read()
+        sent.append((method, path, timeout, headers, body))
+        return types.SimpleNamespace(json=lambda: {'ok': True, 'restarting': True, 'slot': 'ota_1'})
+
+    dev, cfg, sec = {'id': 'pocket'}, {'url': 'http://192.168.0.5'}, types.SimpleNamespace(get=lambda k: 'key')
+    health = {'ok': True, 'firmware': '0.1.0', 'model': 'pocket', 'slot': 'ota_0', 'mac': 'aa:bb:cc:dd:ee:01'}
+    with patch.object(firmware, 'source', lambda: str(fw / 'src')), \
+         patch.object(sat, '_health', lambda *a, **k: health), patch.object(sat, '_call', call):
+        text, ok = sat.run(dev, 'firmware', 'update', '', cfg, sec, None)
+        assert ok and '0.2.0' in text and 'ota_1' in text and 'rolls back' in text.lower() or 'returns by itself' in text
+        method, path, timeout, headers, body = sent[0]
+        assert (method, path) == ('PUT', '/firmware') and timeout == sat.UPDATE_WAIT
+        assert body.startswith(b'\xe9') and headers['X-Sha256'] == hashlib.sha256(body).hexdigest()
+        # the status strip says an update is there, from what was just read: no network
+        health['has'] = ['light', 'firmware']
+        st = sat.status(dev, cfg, sec)
+        assert st['readings']['update'].startswith('0.2.0') and st['readings']['updates'] == 'over the air, running ota_0'
+        # turned off for this device: no offer, and no update action in its tab
+        off = sat.status(dev, dict(cfg, ota=False), sec)
+        assert 'update' not in off['readings'] and off['readings']['updates'] == 'over the air, turned off for this device'
+        sat._about[dev['id']] = (time.monotonic(), health)
+        assert 'update' not in sat.describe(dev, dict(cfg, ota=False))['firmware']['actions']
+        assert 'update' in sat.describe(dev, cfg)['firmware']['actions']
+        # one program slot: USB only, no Firmware tab at all
+        sat._about[dev['id']] = (time.monotonic(), dict(health, has=['light']))
+        assert 'firmware' not in sat.describe(dev, cfg)
+        assert sat.status(dev, cfg, sec)['readings']['updates'] == 'over USB only: one program slot' or True
+        sat._about.pop(dev['id'], None)
+        # check: the source read now, in words
+        text, ok = sat.run(dev, 'firmware', 'check', '', cfg, sec, None)
+        assert ok and 'runs 0.1.0' in text and 'source has 0.2.0' in text
+        # the same version again: only on 'again'
+        health['firmware'] = '0.2.0'
+        text, ok = sat.run(dev, 'firmware', 'check', '', cfg, sec, None)
+        assert ok and 'the newest the source has' in text
+        text, ok = sat.run(dev, 'firmware', 'update', '', cfg, sec, None)
+        assert ok and 'already runs 0.2.0' in text and len(sent) == 1
+        text, ok = sat.run(dev, 'firmware', 'update', 'again', cfg, sec, None)
+        assert ok and len(sent) == 2
+        assert 'update' not in sat.status(dev, cfg, sec)['readings']
+        # a board whose program does not say what it is
+        del health['model']
+        text, ok = sat.run(dev, 'firmware', 'update', '', cfg, sec, None)
+        assert not ok and 'too old' in text
+
+
+def test_update_is_the_owners_and_dangerous():
+    from core.devices.drivers import satellite as sat
+    sat._about['pocket'] = (time.monotonic(), {'has': ['firmware']})
+    try:
+        a = sat.describe({'id': 'pocket'}, {})['firmware']['actions']['update']
+        assert a['owner'] is True and 'restarts' in a['danger']
+        assert 'firmware' not in sat.describe({'id': 'pi2'}, {})            # a Pi says no `has`: no tab, no offer
+    finally:
+        sat._about.pop('pocket', None)

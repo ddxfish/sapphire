@@ -5,6 +5,7 @@
 // into the chat box. Pills show status; a waiting pill pulses.
 import * as eventBus from '../core/event-bus.js';
 import { fetchWithTimeout } from '../shared/fetch.js';
+import { normalizeAsk, buildAskCards } from '../shared/ask-marker.js';
 
 let bar = null;
 let pollTimer = null;
@@ -249,12 +250,6 @@ async function openQuestionCard(pill, agent) {
     } catch (err) { console.warn('[Agents] question fetch failed:', err); }
     const card = cardAt(pill);
     if (!q) { card.innerHTML = `<div class="acp-title">${esc(agent.name)} is not asking anything right now.</div>`; return; }
-    const qs = q.questions || [{ question: q.text, options: [] }];
-    card.innerHTML = `<div class="acp-title">${esc(agent.name)} asks</div>` + qs.map(x => `
-        <div class="acp-q">${esc(x.header ? x.header + ': ' : '')}${esc(x.question || '')}</div>
-        <div class="acp-opts">${(x.options || []).map((o, i) =>
-            `<button data-ans="${esc(o.label)}" title="${esc(o.description || '')}">(${String.fromCharCode(97 + i)}) ${esc(o.label)}</button>`).join('')}</div>`).join('')
-      + `<div class="acp-row"><input placeholder="…or in your own words"><button data-ans-text>Answer</button></div>`;
     const answer = async (value) => {
         if (!value?.trim()) return;
         try {
@@ -265,7 +260,22 @@ async function openQuestionCard(pill, agent) {
         } catch (err) { console.warn('[Agents] answer failed:', err); }
         closeCard();
     };
-    card.querySelectorAll('[data-ans]').forEach(b => b.addEventListener('click', () => answer(b.dataset.ans)));
+    card.innerHTML = `<div class="acp-title">${esc(agent.name)} asks</div>`;
+    // AskUserQuestion's shape IS the question card's: the ONE renderer (shared/
+    // ask-marker.js) draws it - tabs for several questions, one answer each
+    // (the old lettered card sent one answer to every question), the answer
+    // text is the card's own `Question → Answer` lines, which the engine maps
+    // per question (core/agents/base.py _parse_per_question). 2026-10-07.
+    const qs = q.questions
+        ? normalizeAsk({ questions: q.questions.map(x => ({ ...x, multi_select: x.multiSelect ?? x.multi_select })) })
+        : [];
+    if (qs.length) {
+        buildAskCards([qs], answer).forEach(el => card.appendChild(el));
+        return;
+    }
+    // a free-text question (no options): one box
+    card.innerHTML += `<div class="acp-q">${esc(q.text || '')}</div>`
+      + `<div class="acp-row"><input placeholder="Your answer"><button data-ans-text>Answer</button></div>`;
     card.querySelector('[data-ans-text]').addEventListener('click', () => answer(card.querySelector('input').value));
     card.querySelector('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') answer(e.target.value); });
 }
@@ -279,8 +289,11 @@ function renderInboxChip(queued, chat) {
         chip.style.borderColor = '#9aa7b8';
         chip.title = 'Waiting in this chat\'s inbox — click to see';
         bar.insertBefore(chip, bar.firstChild);
-        chip.addEventListener('click', () => openInboxCard(chip, chat));
+        // the chat is read at CLICK time: the chip outlives a chat switch, and a
+        // listener bound to the chat it was made for opened the wrong queue
+        chip.addEventListener('click', () => openInboxCard(chip, chip.dataset.chat || chat));
     }
+    chip.dataset.chat = chat || '';
     chip.innerHTML = `<span class="agent-name">\u29d6 ${queued} queued</span>`;
 }
 

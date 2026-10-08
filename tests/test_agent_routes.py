@@ -23,6 +23,9 @@ import pytest
 def test_get_agents_status_filters_by_chat(client, mock_system):
     """[PROACTIVE] check_all receives chat_name as filter and route forwards."""
     c, csrf = client
+    sm = mock_system.llm_chat.session_manager
+    sm.is_chat_hidden.return_value = False
+    sm.read_chat_settings.return_value = {'private_chat': False}
     mock_system.agent_manager.check_all.return_value = [
         {'id': 'a1', 'name': 'Alpha', 'chat_name': 'trinity'},
     ]
@@ -30,6 +33,20 @@ def test_get_agents_status_filters_by_chat(client, mock_system):
     assert r.status_code == 200
     assert r.json() == {'agents': [{'id': 'a1', 'name': 'Alpha', 'chat_name': 'trinity'}]}
     mock_system.agent_manager.check_all.assert_called_once_with(chat_name='trinity')
+
+
+def test_get_agents_status_is_gated_like_every_other_agent_route(client, mock_system):
+    """to_dict() carries the mission and the pending question; a sealed chat's
+    came out of this one route in plaintext (privacy scout, 2026-10-07)."""
+    c, csrf = client
+    sm = mock_system.llm_chat.session_manager
+    sm.is_chat_hidden.return_value = True
+    mock_system.agent_manager.check_all.return_value = [{'id': 'a1', 'name': 'Alpha', 'chat_name': 'vault',
+                                                         'mission': 'secret'}]
+    assert c.get('/api/agents/status?chat=vault').status_code == 404
+    # unfiltered: a hidden chat's agents are left out
+    r = c.get('/api/agents/status')
+    assert r.status_code == 200 and r.json() == {'agents': []}
 
 
 def test_get_agents_status_no_filter_returns_all(client, mock_system):

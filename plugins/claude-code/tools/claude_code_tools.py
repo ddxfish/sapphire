@@ -282,8 +282,9 @@ def _clean_env():
     return env
 
 
-def _resolve_claude_executable(env):
-    """Resolve the `claude` CLI to its full path, honoring PATHEXT on Windows.
+def _resolve_claude_executable(env, name='claude'):
+    """Resolve the `claude` CLI (or the command `name` the user typed) to its
+    full path, honoring PATHEXT on Windows.
 
     Returns (full_path, None) on success, (None, error_message) on failure.
 
@@ -297,7 +298,7 @@ def _resolve_claude_executable(env):
     absolute path to Popen sidesteps the issue. 2026-05-14.
     """
     path_env = env.get('PATH', '')
-    resolved = shutil.which('claude', path=path_env)
+    resolved = shutil.which(name or 'claude', path=path_env) or (shutil.which('claude', path=path_env) if name != 'claude' else None)
     if resolved:
         logger.info(f"[claude-code] Resolved claude -> {resolved}")
         return resolved, None
@@ -344,10 +345,20 @@ def _resolve_claude_executable(env):
     return None, diag
 
 
+# Windows reserves these as device names in EVERY directory, case-insensitively
+# (with or without an extension): a workspace called `con` or `aux` cannot be
+# made, or resolves to the device (windows scout, 2026-10-07).
+_RESERVED = {'con', 'prn', 'aux', 'nul'} | {f'com{i}' for i in range(1, 10)} | {f'lpt{i}' for i in range(1, 10)}
+
+
+def _unreserved(name):
+    return f"{name}-ws" if name.split('.')[0].lower() in _RESERVED else name
+
+
 def _slugify(text, max_len=40):
     words = re.sub(r'[^a-zA-Z0-9\s]', '', text).split()[:6]
     slug = '-'.join(w.lower() for w in words)
-    return slug[:max_len] or 'project'
+    return _unreserved(slug[:max_len] or 'project')
 
 
 def _safe_dir_name(text, default='project'):
@@ -356,7 +367,7 @@ def _safe_dir_name(text, default='project'):
     if not text:
         return default
     cleaned = re.sub(r'[^a-zA-Z0-9_-]', '', str(text)).lower().lstrip('-_')[:64]
-    return cleaned or default
+    return _unreserved(cleaned) if cleaned else default
 
 
 def _resolve_workspace(settings, project_name):
@@ -583,8 +594,9 @@ def _sanity_check(workspace_path, mode='project', root=None):
         return f"SAFETY: a plugin workspace must live under user/plugins, not '{ws}'."
     if mode == 'core' and ws != root:
         return f"SAFETY: core mode runs at the Sapphire root, not '{ws}'."
+    ws_posix = Path(ws).as_posix().lower()        # the markers are '/'-shaped; Windows paths are not
     for marker in ['/envs/', '/conda', '/.venv/', '/virtualenvs/']:
-        if mode == 'project' and marker in ws.lower():
+        if mode == 'project' and marker in ws_posix:
             return f"SAFETY: Workspace '{ws}' appears to be inside a Python environment."
     return None
 

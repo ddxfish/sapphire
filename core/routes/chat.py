@@ -182,7 +182,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     import concurrent.futures as _cf
     import threading as _threading
     started = _cf.Future()
-    chat_key = chat or (system.llm_chat.session_manager.get_active_chat_name() or '')
+    chat_key = str(chat or (system.llm_chat.session_manager.get_active_chat_name() or '') or '')
     text_in, prefill_in, skip_in = data['text'], prefill, skip_user_message
     images_in, files_in, cont_in = images, files, continue_from
     payload = {'text': text_in, 'images': images or [], 'files': files or [], 'started': started}
@@ -200,9 +200,17 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
         for o in others:
             images_all += list((o.payload or {}).get('images') or [])
             files_all += list((o.payload or {}).get('files') or [])
-        if chat:
+        # ALWAYS by name, the chat this item was queued on (chat_key = the chat
+        # the user was in when they sent). This body runs later, on the drainer,
+        # and the active pointer may have moved meanwhile (another tab, the
+        # phone, a switch while an agent report held the chat) - an unpinned
+        # begin_stream() here ran the words typed in chat A inside chat B, and
+        # a private chat's words on B's cloud model (three scouts, 2026-10-07).
+        # operator=True keeps today's path when the chat is still the active
+        # one (pointer-bound) and pins it only once the pointer has moved.
+        if chat_key:
             stream, sid, active_chat = system.llm_chat.begin_stream(
-                chat_name=chat, exclusive=True, operator=True)
+                chat_name=chat_key, exclusive=True, operator=True)
         else:
             stream, sid, active_chat = system.llm_chat.begin_stream(exclusive=True)
         stream.operator_lane = True   # a human typed this (talk-stamp + vault touch ride)
@@ -221,6 +229,8 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                 _released[0] = True
             system.llm_chat.end_stream(sid, active_chat)
             system.web_active_dec()
+            for t in [ticket_box.get('ticket')] + [o.ticket for o in others]:
+                _ticket_note(t, ended=time.monotonic())
 
         try:
             gen = stream.chat_stream(text_all, prefill=prefill_in, skip_user_message=skip_in,
@@ -234,12 +244,15 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             for o in others:
                 (o.payload or {}).get('started', _cf.Future()).set_exception(e)
             raise
+        for t in [ticket_box.get('ticket')] + [o.ticket for o in others]:
+            _ticket_note(t, chat=chat_key, turn=turn)
         started.set_result((turn, viewer))
         for o in others:
             (o.payload or {}).get('started', _cf.Future()).set_result(('merged', turn))
         turn.done.wait()          # the inbox's one-runner rule: hold the lane until this turn ends
         return None
 
+    ticket_box = {}
     try:
         # fold_key 'web': typed turns standing together fold (people with people,
         # never with a satellite's question or a machine's report)
@@ -248,7 +261,38 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     except inbox.InboxRefused as e:
         logger.info(f"[CHAT-STREAM] inbox refused a typed turn on '{chat_key}': {e}")
         return JSONResponse({"error": str(e)}, status_code=409)
+    ticket_box['ticket'] = item.ticket
+    _ticket_note(item.ticket, chat=chat_key, item=item, started=started)
     return _queued_viewer_response(item, started, chat_key)
+
+
+# ─── tickets: a typed turn's identity across a dropped socket ────────────────
+# Krem's phone: the screen locks, Brave drops the SSE, the turn (or the item
+# still waiting in the inbox) lives on. The tab reattaches BY TICKET - by chat
+# it attached to whatever turn was live on the chat, another one's as often as
+# not once the inbox started turns back to back (race scout, 2026-10-07).
+import threading as _tl
+_TICKETS = {}                     # ticket -> {'chat', 'item', 'started', 'turn', 'ended'}
+_TICKETS_LOCK = _tl.Lock()
+TICKET_KEEP_S = 180.0             # a finished ticket answers 'finished' this long, then is forgotten
+
+
+def _ticket_note(ticket, **fields):
+    if not ticket:
+        return
+    now = time.monotonic()
+    with _TICKETS_LOCK:
+        for t, e in list(_TICKETS.items()):
+            if e.get('ended') is not None and now - e['ended'] > TICKET_KEEP_S:
+                _TICKETS.pop(t, None)
+        e = _TICKETS.setdefault(ticket, {'chat': '', 'item': None, 'started': None, 'turn': None, 'ended': None})
+        e.update(fields)
+
+
+def _ticket_lookup(ticket):
+    with _TICKETS_LOCK:
+        e = _TICKETS.get(ticket)
+        return dict(e) if e else None
 
 
 def _sse_line(event):
@@ -289,23 +333,27 @@ def _sse_line(event):
     return f"data: {json.dumps(out)}\n\n"
 
 
-def _queued_viewer_response(item, started, chat_key):
-    """SSE body for a typed turn that may be waiting in the chat's inbox: a
-    `queued` event first when it does not start within a breath (ticket +
-    position, so the bubble can pulse and carry a ×), keepalive comments while
-    it waits, then the turn's events over its viewer. A dropped item (× on the
-    bubble, the chat deleted) ends the body with `queued_dropped`."""
+def _queued_viewer_response(item, started, chat_key, since=None, own_viewer=False):
+    """SSE body for a typed turn that may be waiting in the chat's inbox: the
+    turn's `ticket` first (its identity if this socket dies), a `queued` event
+    when it does not start within a breath (position, so the bubble can pulse
+    and carry a ×), keepalive comments while it waits, then the turn's events
+    over its viewer. A dropped item (× on the bubble, the chat deleted) ends
+    the body with `queued_dropped`. own_viewer: a reattaching tab - it attaches
+    its own viewer to the turn (`since` its last seq) instead of the one the
+    first socket got."""
     from core.chat import inbox
     KEEPALIVE_S = 15.0
 
     def generate():
         turn = viewer = None
         try:
+            yield f"data: {json.dumps({'type': 'ticket', 'ticket': item.ticket, 'chat': chat_key})}\n\n"
             deadline = time.monotonic() + 0.25
             while not started.done() and not item.reply.done() and time.monotonic() < deadline:
                 time.sleep(0.02)
             if not started.done() and not item.reply.done():
-                yield f"data: {json.dumps({'type': 'queued', 'ticket': item.ticket, 'position': inbox.position(chat_key, item.ticket)})}\n\n"
+                yield f"data: {json.dumps({'type': 'queued', 'ticket': item.ticket, 'chat': chat_key, 'position': inbox.position(chat_key, item.ticket)})}\n\n"
                 last = time.monotonic()
                 while not started.done() and not item.reply.done():
                     time.sleep(0.1)
@@ -328,9 +376,16 @@ def _queued_viewer_response(item, started, chat_key):
                 return
             if turn == 'merged':
                 # folded into the turn ahead of it: that response streams the reply
-                yield f"data: {json.dumps({'type': 'merged'})}\n\n"
-                turn = viewer = None
-                return
+                # (a reattaching tab follows the merged turn itself instead)
+                merged_turn = viewer
+                if own_viewer and merged_turn is not None and not merged_turn.done.is_set():
+                    turn, viewer = merged_turn, merged_turn.attach(since=since, audio=False)
+                else:
+                    yield f"data: {json.dumps({'type': 'merged'})}\n\n"
+                    turn = viewer = None
+                    return
+            elif own_viewer:
+                viewer = turn.attach(since=since, audio=False)
             for event in viewer:
                 line = _sse_line(event)
                 if line:
@@ -420,6 +475,23 @@ async def handle_chat_attach(request: Request, _=Depends(require_login), system=
     except (TypeError, ValueError):
         since = None
     _sm = system.llm_chat.session_manager
+    ticket = str(data.get('ticket') or '').strip()
+    if ticket:
+        # BY TICKET (2026-10-07): the tab's own turn, whatever else runs on the chat
+        e = _ticket_lookup(ticket)
+        if e is None:
+            return JSONResponse({"error": "That message is not known here any more (a restart, or long ago)."}, status_code=404)
+        if e.get('chat') and _sm.is_chat_hidden(e['chat']):
+            return JSONResponse({"error": "That chat is sealed in a locked vault."}, status_code=409)
+        turn = e.get('turn')
+        if turn is not None:
+            # live, or just finished: the ring replays what this tab missed, exact-once
+            logger.info(f"[CHAT-ATTACH] viewer rejoining its turn {ticket} since seq {since}")
+            return _viewer_response(turn, turn.attach(since=since, audio=False))
+        if turn is None and e.get('item') is not None and e.get('started') is not None and not e['item'].reply.done():
+            logger.info(f"[CHAT-ATTACH] viewer rejoining its QUEUED turn {ticket}")
+            return _queued_viewer_response(e['item'], e['started'], e['chat'], since=since, own_viewer=True)
+        return Response(status_code=204)                  # it ran (or was dropped) while the tab was away
     if chat:
         if _sm.is_chat_hidden(chat):
             return JSONResponse({"error": f"Chat '{chat}' is sealed in a locked vault."}, status_code=409)

@@ -234,11 +234,21 @@ number until it is calibrated.
 
 ### A new board from the browser
 
-An ESP32 board that has never been set up is done entirely from this page,
-in Chrome or Edge: **+ Add Device > New board (USB)**. Plug the board into
-the computer the browser runs on with a data cable, press **Connect** and
-pick its port. The chip is read, so only the boards it can run are offered;
-**Install** writes the firmware over USB (a progress bar, under a minute).
+An ESP32 board that has never been set up is done entirely from this page:
+**+ Add Device > New board (USB)**. The first question is where the board is
+plugged in. **This computer** means the browser writes it over USB (Web
+Serial, so Chrome or Edge): press **Connect** and pick its port in the
+browser's window. **The computer Sapphire runs on** means she writes it
+herself, from any browser: pick the port from the list. That lane needs
+esptool in her environment; the first time it is missing, the page offers
+to install it on the spot (the `flash` set, `install/requirements-flash.txt`,
+into her own interpreter, with pip's words shown as they come). Flashing
+from Chrome or Edge needs nothing. Either way the chip
+is read, so only the boards it can run are offered, and the chip's own id
+(its MAC) becomes the device's fingerprint: a board set up before is named
+on the spot and keeps its name, and no name can be taken by a second board.
+**Install** writes the firmware (a progress bar, under a minute) and checks
+the hash of every part against what the chip reports.
 Then a name, the WiFi (the networks the board can see, or one typed, for
 a hidden network or a board being set up away from home), the password,
 and **Sapphire's address** as the house sees this computer, prefilled from
@@ -256,6 +266,28 @@ A board already running Sapphire's firmware can have its name, WiFi or
 Sapphire's address changed the same way, without reinstalling: the link
 under the board cards.
 
+**Updates, over the air.** After that first install the cable is never
+needed again: a board with two program slots says `firmware` and gets a
+**Firmware** tab with one action, `update`. It sends the newest program the
+firmware source has for that board, the board writes it into its other
+slot, checks it, and restarts onto it. The new program is on trial until it
+joins the WiFi or runs 90 seconds; one that fails is replaced by the old one
+at the next boot, by the bootloader, with nobody's help. The status strip
+says "update: 0.3.1 is in the firmware source" when a newer one is known
+(`check` reads the source now; nothing is fetched in the background), and
+the device's card in the list wears an "update 0.3.1" badge. `update` is
+yours alone: Sapphire never runs it on her own and it can't be scheduled.
+`again` installs the same version once more.
+
+Every satellite's status strip says how its program is replaced:
+"updates: over the air, running ota_0", "over USB only: one program slot"
+(a board whose builder kept the whole flash for the program, or a tiny
+chip), or "over the air, turned off for this device". That last one is the
+**Updates over the air** switch on the device's Status tab: off means no
+program is ever sent to that board from here, and its Firmware tab only
+checks. The switch is Sapphire's; the board's own two slots are its
+builder's choice and show up as `firmware` in what it says it has.
+
 The firmware comes from the source named by `DEVICE_FIRMWARE_SOURCE`: the
 firmware release URL, or a folder on Sapphire's computer with an
 `index.json` (`tools/firmware_manifest.py` makes one from an ESP-IDF
@@ -264,7 +296,7 @@ under `user/firmware_cache` so a board can be flashed again offline. With
 nothing to offer, the flasher shows the source and lets you set it there.
 
 On Linux the browser opens the port as you, so you need to be in the
-`dialout` group once. A board with native USB (an ESP32-S3) vanishes from
+`dialout` group once; for the Sapphire-side lane it is the user she runs as. A board with native USB (an ESP32-S3) vanishes from
 the port list while it restarts; if it does not come back on its own, the
 flasher asks you to unplug it and plug it back in. If no bootloader answers
 at all, hold the BOOT button while plugging the board in.

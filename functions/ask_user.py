@@ -23,10 +23,11 @@ TOOLS = [
                 "Show the user a question card: clickable options plus a type-your-own box, right in the "
                 "chat. For a choice that is genuinely theirs - a fork, a preference, a confirmation with "
                 "real alternatives. Up to 4 questions per card (they appear as tabs and come back "
-                "together), 2-6 options each. Their picks arrive as their NEXT message, one line per "
-                "question: `Question? → Answer`. So: ask in your own words, call this, then END your "
-                "turn (one short line after is fine) - do not wait or re-ask. On voice there is no screen: "
-                "say the options aloud."
+                "together), 2-6 options each. Their picks arrive as their NEXT message, led by the line "
+                "`[Question card (ask_user) — what the user clicked; not typed by the user]` then one "
+                "`Question? → Answer` line per question. So: ask in your own words, call this, then END "
+                "your turn (one short line after is fine) - do not wait or re-ask. The user may also dismiss "
+                "the card or just type. On voice there is no screen: say the options aloud."
             ),
             "parameters": {
                 "type": "object",

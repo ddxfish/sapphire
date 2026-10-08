@@ -4,12 +4,16 @@ ONE marker, a sibling of FILES (core/attachments.py) and GALLERY:
     <!--ASK:{"questions": [{"question": "...", "header": "...", "multi_select": false,
                             "options": [{"label": "...", "description": "..."}]}]}-->
 The chat renders it as a card in her bubble: one tab per question, the options
-as buttons, a type-your-own box (interfaces/web/static/shared/ask-marker.js).
-The user's picks are sent as THEIR next message - `Question? → Answer`, one line
-per question - so the answer is an ordinary turn: it queues in the inbox like
-anything typed, reads naturally in history, and works on voice by just saying
-it. UI-only: kept in history for the browser, stripped from every copy the
-model reads (chat_tool_calling.strip_ui_markers, history._UI_MARKER_RE).
+one per line, a type-your-own box, an × to dismiss (shared/ask-marker.js). The
+user's picks are sent as THEIR next message, led by the inbox header line
+`[Question card (ask_user) — what the user clicked; not typed by the user]`
+(inbox.header - the same line every not-typed door leads with) then one
+`Question? → Answer` line per question. So the answer is an ordinary turn: it
+queues in the inbox like anything typed, reads naturally in history, and works
+on voice by just saying it. After Send the card folds to its title, reopenable
+to see the picks; a reload reads them back out of that message. UI-only: kept
+in history for the browser, stripped from every copy the model reads
+(core/ui_markers.py, shared by strip_ui_markers and history).
 
 Same shape as Claude Code's AskUserQuestion so an agent's fork can be relayed
 as the same card one day: 1-4 questions, 2-6 options each.
@@ -32,6 +36,11 @@ def _clean(value, key):
 def normalize(questions):
     """The card's payload from a tool's `questions` argument.
     Raises ValueError with a message the model can act on."""
+    if isinstance(questions, str):
+        try:
+            questions = json.loads(questions)
+        except ValueError:
+            pass
     if isinstance(questions, dict):
         questions = [questions]
     if not isinstance(questions, list) or not questions:
@@ -46,7 +55,17 @@ def normalize(questions):
         if not text:
             raise ValueError(f"question {i} has no text")
         opts = []
-        for o in list(q.get('options') or [])[:MAX_OPTIONS]:
+        raw_opts = q.get('options') or []
+        if isinstance(raw_opts, str):
+            # local models stringify nested arrays; iterating the string drew one
+            # option per CHARACTER and said success (chaos scout, 2026-10-07)
+            try:
+                raw_opts = json.loads(raw_opts)
+            except ValueError:
+                raw_opts = [p.strip() for p in raw_opts.split(',') if p.strip()]
+            if not isinstance(raw_opts, list):
+                raw_opts = []
+        for o in list(raw_opts)[:MAX_OPTIONS]:
             if isinstance(o, str):
                 o = {'label': o}
             if not isinstance(o, dict):

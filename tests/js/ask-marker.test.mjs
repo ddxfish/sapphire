@@ -2,17 +2,21 @@
 // A small fake DOM proves: marker parse + strip + normalize, and the card's
 // behaviour — one question/single-select sends on click; several questions are
 // tabs, a pick moves to the next open tab, Send waits for all; multi-select
-// toggles; a typed answer counts; the answer text is `Question → Answer` per
-// line, dispatched as sapphire:ask_answer; a card locks once sent or once a
-// user message follows it. 2026-10-07.
+// toggles; a typed answer counts; the answer text leads with the inbox header
+// line then `Question → Answer` per line, dispatched as sapphire:ask_answer; ×
+// dismisses; after Send the card locks and folds to its title, opens again with
+// the tabs browsable and Send dead; a reloaded card reads its picks back out of
+// the user message that answered it. 2026-10-07.
 
 class El {
     constructor(tag) {
         this.tagName = tag.toUpperCase(); this.children = []; this.parent = null;
         this.listeners = {}; this.dataset = {}; this._cls = new Set(); this.disabled = false;
         this.textContent = ''; this.value = ''; this.type = ''; this.placeholder = ''; this.title = '';
+        this.hidden = false;
         this.classList = {
             add: (...c) => c.forEach(x => this._cls.add(x)),
+            remove: (...c) => c.forEach(x => this._cls.delete(x)),
             contains: c => this._cls.has(c),
         };
     }
@@ -48,7 +52,7 @@ globalThis.CustomEvent = class { constructor(type, init) { this.type = type; thi
 globalThis.document = { createElement: t => new El(t), dispatchEvent: ev => { sent.push(ev); return true; } };
 globalThis.console = { ...console, warn: () => {} };
 
-const { ASK_RE, normalizeAsk, parseAskMarker, buildAskCards, lockCard, lockAnsweredAskCards } =
+const { ASK_RE, ANSWER_HEADER, normalizeAsk, parseAskMarker, parseAnswers, buildAskCards, lockCard, lockAnsweredAskCards } =
     await import('../../interfaces/web/static/shared/ask-marker.js');
 
 let passed = 0;
@@ -59,6 +63,10 @@ const opts = card => byCls(card, 'ask-opt');
 const tabs = card => byCls(card, 'ask-tab');
 const other = card => byCls(card, 'ask-other')[0];
 const sendBtn = card => byCls(card, 'ask-send')[0];
+const title = card => byCls(card, 'ask-title')[0];
+const xBtn = card => byCls(card, 'ask-x')[0];
+const HEAD = ANSWER_HEADER + '\n';
+ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSWER_HEADER), 'header follows the inbox header grammar');
 
 // ── parse ────────────────────────────────────────────────────────────────────
 {
@@ -87,11 +95,17 @@ const sendBtn = card => byCls(card, 'ask-send')[0];
     ok(sendBtn(card).textContent === '↵', 'single question shows a return key, not Send');
     opts(card)[1].fire('click');
     ok(sent.length === 1 && sent[0].type === 'sapphire:ask_answer', 'a click dispatches the answer');
-    ok(sent[0].detail.text === 'Fav color? → Red', 'answer line is `Question → Answer`');
+    ok(sent[0].detail.text === HEAD + 'Fav color? → Red', 'header line, then `Question → Answer`');
     ok(card.classList.contains('locked') && opts(card).every(b => b.disabled), 'card locks after sending');
-    ok(opts(card)[1].classList.contains('picked'), 'the pick stays highlighted');
-    opts(card)[0].fire('click');
+    ok(card.classList.contains('collapsed') && title(card).textContent === 'Fav color? ✓', 'folds to its title with a tick');
+    ok(xBtn(card).hidden, 'the × goes once locked');
+    title(card).fire('click');
+    ok(!card.classList.contains('collapsed'), 'the title opens it again');
+    ok(opts(card)[1].classList.contains('picked') && sendBtn(card).disabled, 'the pick is shown; Send is dead');
+    opts(card)[0].fire('click'); sendBtn(card).fire('click');
     ok(sent.length === 1, 'a locked card sends nothing more');
+    title(card).fire('click');
+    ok(card.classList.contains('collapsed'), 'and folds again');
 }
 
 // ── typed answer ─────────────────────────────────────────────────────────────
@@ -100,7 +114,7 @@ const sendBtn = card => byCls(card, 'ask-send')[0];
     const [card] = buildAskCards(parseAskMarker(mark([{ question: 'Fav color?', options: ['Blue', 'Red'] }])).cards);
     other(card).value = '  teal-ish ';
     other(card).fire('keydown', { key: 'Enter' });
-    ok(sent.length === 1 && sent[0].detail.text === 'Fav color? → teal-ish', 'Enter sends the typed answer, trimmed');
+    ok(sent.length === 1 && sent[0].detail.text === HEAD + 'Fav color? → teal-ish', 'Enter sends the typed answer, trimmed');
     const [card2] = buildAskCards(parseAskMarker(mark([{ question: 'Fav color?', options: ['Blue', 'Red'] }])).cards);
     other(card2).fire('keydown', { key: 'Enter' });
     sendBtn(card2).fire('click');
@@ -131,9 +145,15 @@ const sendBtn = card => byCls(card, 'ask-send')[0];
     ok(!sendBtn(card).disabled, 'all answered: Send enabled');
     ok(sent.length === 0, 'Enter on the last open tab does not send by itself');
     sendBtn(card).fire('click');
-    ok(sent.length === 1 && sent[0].detail.text === 'Color? → Blue\nPet? → a cat named Steve\nSnack? → Fruit',
+    ok(sent.length === 1 && sent[0].detail.text === HEAD + 'Color? → Blue\nPet? → a cat named Steve\nSnack? → Fruit',
        'one line per question, in question order');
-    ok(card.classList.contains('locked'), 'locked after Send');
+    ok(card.classList.contains('locked') && card.classList.contains('collapsed'), 'locked and folded after Send');
+    ok(title(card).textContent === 'Color · Q2 · Snack ✓', 'title is the question group');
+    title(card).fire('click');
+    tabs(card)[2].fire('click');
+    ok(byCls(card, 'ask-q')[0].textContent === 'Snack?' && opts(card)[1].classList.contains('picked'), 'tabs still flip when locked, picks shown');
+    tabs(card)[1].fire('click');
+    ok(other(card).value === 'a cat named Steve' && other(card).disabled, 'the typed answer shows, read-only');
 }
 
 // ── multi-select ─────────────────────────────────────────────────────────────
@@ -148,27 +168,82 @@ const sendBtn = card => byCls(card, 'ask-send')[0];
     other(card).value = 'pineapple';
     other(card).fire('keydown', { key: 'Enter' });
     sendBtn(card).fire('click');
-    ok(sent.length === 1 && sent[0].detail.text === 'Toppings? → Corn, pineapple', 'picks and a typed one, comma-joined');
+    ok(sent.length === 1 && sent[0].detail.text === HEAD + 'Toppings? → Corn, pineapple', 'picks and a typed one, comma-joined');
 }
 
-// ── lock when a user message follows ─────────────────────────────────────────
+// ── × dismisses ──────────────────────────────────────────────────────────────
+{
+    sent.length = 0;
+    const [card] = buildAskCards(parseAskMarker(mark([{ question: 'Fav color?', options: ['Blue', 'Red'] }])).cards);
+    ok(!xBtn(card).hidden, 'a live card has its ×');
+    xBtn(card).fire('click');
+    ok(sent.length === 0, 'dismissing sends nothing');
+    ok(card.classList.contains('locked') && card.classList.contains('dismissed') && card.classList.contains('collapsed'), 'locked, dismissed, folded');
+    ok(title(card).textContent === 'Fav color? \u2014 dismissed', 'title says so');
+    title(card).fire('click');
+    ok(!card.classList.contains('collapsed') && opts(card).every(b => b.disabled), 'opens read-only');
+}
+
+// ── parseAnswers: the sent message read back ─────────────────────────────────
+{
+    const qs = parseAskMarker(mark([{ question: 'Color?', options: ['Blue', 'Red'] },
+        { question: 'Toppings?', options: ['Ham', 'Corn'], multi_select: true }, { question: 'Snack?', options: ['Chips', 'Fruit'] }])).cards[0];
+    const a = parseAnswers(qs, HEAD + 'Color? \u2192 Blue\nToppings? \u2192 Corn, pineapple\nSnack? \u2192 Fruit');
+    ok(a[0] === 'Blue' && a[2] === 'Fruit', 'single answers read back');
+    ok(Array.isArray(a[1]) && a[1].join('|') === 'Corn|pineapple', 'multi answers split');
+    const flat = parseAnswers(qs, 'Color? \u2192 Blue Toppings? \u2192 Ham Snack? \u2192 my own thing');
+    ok(flat[0] === 'Blue' && flat[1][0] === 'Ham' && flat[2] === 'my own thing', 'line breaks the renderer dropped do not matter');
+    const partial = parseAnswers(qs, 'Snack? \u2192 Chips');
+    ok(partial[0] === undefined && partial[2] === 'Chips', 'missing questions stay unanswered');
+    ok(parseAnswers(qs, 'I changed my mind, pizza').every(x => x === undefined), 'a plain reply answers nothing');
+}
+
+// ── lock when a user message follows; picks read back on reload ─────────────
 {
     const chat = new El('div');
-    const mk = (role, card) => { const m = new El('div'); m.className = 'message ' + role; const c = new El('div'); m.appendChild(c); if (card) c.appendChild(card); chat.appendChild(m); return m; };
-    const card1 = buildAskCards(parseAskMarker(mark([{ question: 'A?', options: ['x', 'y'] }])).cards)[0];
-    const card2 = buildAskCards(parseAskMarker(mark([{ question: 'B?', options: ['x', 'y'] }])).cards)[0];
-    mk('assistant', card1); mk('user'); mk('assistant', card2);
+    const mk = (role, card, text) => {
+        const m = new El('div'); m.className = 'message ' + role;
+        const c = new El('div'); c.className = 'message-content'; if (text) c.textContent = text; m.appendChild(c);
+        if (card) c.appendChild(card); chat.appendChild(m); return m;
+    };
+    const two = () => buildAskCards(parseAskMarker(mark([{ question: 'Color?', header: 'Color', options: ['Blue', 'Red'] },
+                                                        { question: 'Pet?', header: 'Pet', options: ['Dog', 'Cat'] }])).cards)[0];
+    const card1 = two(), card2 = two(), card3 = two();
+    mk('assistant', card1); mk('user', null, HEAD + 'Color? \u2192 Red\nPet? \u2192 a goat');
+    mk('assistant', card2); mk('user', null, 'actually never mind');
+    mk('assistant', card3);
     lockAnsweredAskCards(chat);
-    ok(card1.classList.contains('locked') && opts(card1).every(b => b.disabled), 'a card the user spoke after is locked');
-    ok(!card2.classList.contains('locked'), 'the card in the last message stays live');
+    ok(card1.classList.contains('locked') && card1.classList.contains('collapsed'), 'an answered card is locked and folded');
+    ok(title(card1).textContent === 'Color \u00b7 Pet \u2713', 'and ticked: its picks were read back');
+    title(card1).fire('click');
+    ok(opts(card1)[1].classList.contains('picked'), 'Red is shown picked');
+    tabs(card1)[1].fire('click');
+    ok(other(card1).value === 'a goat', 'the typed answer is shown');
+    ok(card2.classList.contains('locked') && title(card2).textContent === 'Color \u00b7 Pet', 'a card answered in free text locks without a tick');
+    ok(!card3.classList.contains('locked'), 'the card in the last message stays live');
     mk('assistant');                                  // her next turn (an agent report, say) does not lock it
     lockAnsweredAskCards(chat);
-    ok(!card2.classList.contains('locked'), 'another assistant message does not lock it');
-    mk('user');
+    ok(!card3.classList.contains('locked'), 'another assistant message does not lock it');
+    mk('user', null, 'hi');
     lockAnsweredAskCards(chat);
-    ok(card2.classList.contains('locked'), 'the user speaking locks it');
-    lockCard(card2);
-    ok(card2.classList.contains('locked'), 'lockCard is idempotent');
+    ok(card3.classList.contains('locked'), 'the user speaking locks it');
+    lockCard(card3);
+    ok(card3.classList.contains('locked'), 'lockCard is idempotent');
+}
+
+// ── onSubmit: the agent pill's card answers through its route, not the chat ──
+{
+    sent.length = 0;
+    const got = [];
+    const qs = parseAskMarker(mark([{ question: 'Framework?', header: 'Framework', options: ['FastAPI', 'Flask'] },
+                                    { question: 'Tests?', options: ['pytest', 'unittest'] }])).cards[0];
+    const [card] = buildAskCards([qs], text => got.push(text));
+    opts(card)[1].fire('click');                      // Flask → next tab
+    opts(card)[0].fire('click');                      // pytest
+    sendBtn(card).fire('click');
+    ok(got.length === 1 && got[0] === 'Framework? \u2192 Flask\nTests? \u2192 pytest', 'per-question lines go to onSubmit');
+    ok(sent.length === 0, 'and nothing is sent as a chat message');
+    ok(card.classList.contains('locked'), 'the card locks all the same');
 }
 
 console.log(`ask-marker corpus: ${passed} checks passed`);

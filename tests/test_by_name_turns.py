@@ -259,12 +259,18 @@ def test_stream_route_by_name_calls_operator_door(client, mock_system):
     mock_system.llm_chat.end_stream.assert_called_once_with('sid1', 'story_x')
 
 
-def test_stream_route_without_chat_is_unchanged(client, mock_system):
+def test_stream_route_without_chat_runs_on_the_chat_it_was_queued_on(client, mock_system):
+    """A send that names no chat is queued on the active chat AT SEND TIME and
+    runs there by name - operator=True keeps it pointer-bound while that chat
+    is still the active one and pins it once the pointer moved. An unpinned
+    begin_stream() here ran the words in whatever chat was active when the
+    inbox reached them (three scouts, 2026-10-07)."""
     c, csrf = client
+    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
     mock_system.llm_chat.begin_stream.return_value = (_stream_mock(), 'sid1', 'trinity')
     r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
-    mock_system.llm_chat.begin_stream.assert_called_once_with(exclusive=True)
+    mock_system.llm_chat.begin_stream.assert_called_once_with(chat_name='trinity', exclusive=True, operator=True)
 
 
 def test_stream_route_refuses_sealed_and_missing_chats(client, mock_system):

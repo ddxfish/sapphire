@@ -6,6 +6,7 @@
 // call is chat-local (core/routes/agents.py); live updates ride the SSE bus.
 // This is Trinity's pane viewer done structured — no scraped terminal.
 import * as eventBus from '/static/core/event-bus.js';
+import { normalizeAsk, buildAskCards } from '/static/shared/ask-marker.js';
 
 const API = '/api/agents';
 const POLL_MS = 4000;
@@ -180,11 +181,13 @@ function cardHtml(a) {
     const q = a.pending_question;
     let qHtml = '';
     if (q) {
-        const qs = q.questions || [{ question: q.text, options: [] }];
-        qHtml = `<div class="ag-q">${qs.map((x, qi) => `
-            <div class="qt">${esc(x.header ? x.header + ': ' : '')}${esc(x.question)}</div>
-            <div class="opts">${(x.options || []).map((o, i) => `<button data-answer="${esc(o.label)}" title="${esc(o.description || '')}">(${String.fromCharCode(97 + i)}) ${esc(o.label)}</button>`).join('')}</div>`).join('')}
-          <div class="ag-row"><input placeholder="…or answer in your own words" data-answer-text><button data-answer-btn>Answer</button></div>
+        // a fork with options is drawn by the ONE question-card renderer in
+        // wireCard (tabs for several questions, one answer each); a free-text
+        // question keeps the plain box
+        qHtml = q.questions
+            ? `<div class="ag-q" data-ask-slot></div>`
+            : `<div class="ag-q"><div class="qt">${esc(q.text || '')}</div>
+          <div class="ag-row"><input placeholder="Your answer" data-answer-text><button data-answer-btn>Answer</button></div>
         </div>`;
     }
     const ev = (a.events || []).map(e => {
@@ -212,7 +215,11 @@ function cardHtml(a) {
 
 function wireCard(el, a) {
     if (!el) return;
-    el.querySelectorAll('[data-answer]').forEach(b => b.addEventListener('click', () => action(a.name, 'answer', b.dataset.answer)));
+    const slot = el.querySelector('[data-ask-slot]');
+    if (slot && a.pending_question?.questions) {
+        const qs = normalizeAsk({ questions: a.pending_question.questions.map(x => ({ ...x, multi_select: x.multiSelect ?? x.multi_select })) });
+        buildAskCards([qs], lines => action(a.name, 'answer', lines)).forEach(c => slot.appendChild(c));
+    }
     el.querySelector('[data-answer-btn]')?.addEventListener('click', () => action(a.name, 'answer', el.querySelector('[data-answer-text]').value));
     el.querySelector('[data-say-btn]')?.addEventListener('click', () => action(a.name, 'say', el.querySelector('[data-say]').value));
     el.querySelector('[data-stop]')?.addEventListener('click', () => action(a.name, 'stop', ''));

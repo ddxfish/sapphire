@@ -343,7 +343,7 @@ class TestWiring:
     def test_route_passes_continue_from_to_the_engine(self):
         src = _src("core/routes/chat.py")
         assert "data.get('continue_from')" in src
-        assert "continue_from=continue_from" in src
+        assert "continue_from=cont_in" in src        # the inbox body's captured copy (wave I-2)
 
     def test_client_no_longer_pops_the_row_or_resends_the_user_text(self):
         chat_js = _src("interfaces/web/static/chat.js")

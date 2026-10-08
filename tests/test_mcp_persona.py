@@ -329,7 +329,7 @@ def test_ask_and_tell_sign_with_the_keys_persona_unless_the_client_names_itself(
     monkeypatch.setattr(mcp, '_item', lambda system, chat, text, who, where: (seen.append(who), (chat, 'hello back'))[1])
     monkeypatch.setattr(mcp, '_chat_ready', lambda system, chat: chat)
     from core.chat import inbox
-    monkeypatch.setattr(inbox, 'ask', lambda chat, body, source, timeout=None: 'hello back')
+    monkeypatch.setattr(inbox, 'ask', lambda chat, body, source, timeout=None, **kw: 'hello back')
     mcp.call(world.system, 'ask', {'text': 'hi', 'chat': 'lookout'}, persona='claude')
     mcp.call(world.system, 'ask', {'text': 'hi', 'chat': 'lookout', 'from': 'Claude Code'}, persona='claude')
     mcp.call(world.system, 'ask', {'text': 'hi', 'chat': 'lookout'})

@@ -264,6 +264,115 @@ def test_shutdown_stops_live_agents(agent_world):
         assert [x for x in w.store['rows'] if x['id'] == i][0]['status'] == 'stopped'
 
 
+# --- the 2026-10-07 scout fixes -----------------------------------------------------------------------
+
+def test_a_graceful_restart_rests_a_conversational_session_and_say_wakes_it(agent_world):
+    """shutdown() wrote 'stopped' and boot only revived LIVE rows: every Claude
+    Code session was orphaned by a restart (day-ruiner). Sessions persist (Krem)."""
+    w = agent_world
+    r = w.mgr.spawn('talker', 'm', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.resume_token = 'sess-9'
+    w.mgr.shutdown(timeout=2)
+    row = [x for x in w.store['rows'] if x['id'] == r['id']][0]
+    assert row['status'] == 'resting' and row['resume_token'] == 'sess-9'
+    w.mgr._rows = None                                   # a new process
+    text, ok = w.mgr.action_text('desk', 'Spark', 'say', 'carry on')
+    assert ok and 'woke' in text
+    a2 = [x for x in w.mgr._agents.values() if x.name == 'Spark'][0]
+    assert a2.resume_token == 'sess-9'
+    a2.finish()
+
+
+def test_say_wakes_a_stopped_or_failed_row_that_still_has_a_session(agent_world):
+    w = agent_world
+    w.store['rows'] = [
+        {'id': 'cc', 'name': 'Spark', 'kind': 'talker', 'chat': 'desk', 'status': 'failed', 'started': time.time(),
+         'ended': time.time(), 'resume_token': 'sess-2', 'privacy': False, 'conversational': True},
+        {'id': 'dd', 'name': 'Alpha', 'kind': 'talker', 'chat': 'desk', 'status': 'stopped', 'started': time.time(),
+         'ended': time.time(), 'resume_token': None, 'privacy': False, 'conversational': True},
+    ]
+    w.mgr._rows = None
+    text, ok = w.mgr.action_text('desk', 'Spark', 'say', 'try again')
+    assert ok and 'woke' in text
+    text, ok = w.mgr.action_text('desk', 'Alpha', 'say', 'hello?')
+    assert ok is False and 'nothing to say to' in text          # no session to pick up
+    [x for x in w.mgr._agents.values() if x.name == 'Spark'][0].finish()
+
+
+def test_a_wake_keeps_the_options_but_drops_context_and_cannot_happen_twice(agent_world):
+    w = agent_world
+    r = w.mgr.spawn('talker', 'build it', chat='desk', options={'context': 'long private notes'})
+    a = w.mgr._agents[r['id']]
+    a.resume_token = 'sess-3'
+    w.mgr.resting(a)                                     # the kind went idle past its timeout
+    a.finish()
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    text, ok = w.mgr.action_text('desk', 'Spark', 'say', 'fix the tests please')
+    assert ok
+    a2 = w.mgr._agents[r['id']]
+    assert 'context' not in a2.options and a2.mission == 'fix the tests please'
+    text, ok = w.mgr.action_text('desk', 'Spark', 'say', 'and again')           # already awake: no second process
+    assert 'already awake' in text or 'still working' in text
+    a2.finish()
+
+
+def test_a_new_agent_never_takes_a_resting_agents_name(agent_world):
+    w = agent_world
+    w.store['rows'] = [
+        {'id': 'ee', 'name': 'Spark', 'kind': 'talker', 'chat': 'desk', 'status': 'resting', 'started': time.time(),
+         'ended': time.time(), 'resume_token': 'sess-4', 'privacy': False, 'conversational': True},
+    ]
+    w.mgr._rows = None
+    w.mgr._name_counters = {}                            # a restart: counters start over
+    r = w.mgr.spawn('talker', 'm', chat='desk')
+    assert r['name'] != 'Spark', 'say would have reached the wrong agent'
+    w.mgr._agents[r['id']].finish()
+
+
+def test_a_failure_the_kind_never_reported_still_reaches_the_chat(agent_world):
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    w.mgr._agents[r['id']].finish_with_error(RuntimeError('claude-agent-sdk is not installed'))
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    told = [t for t in w.tells if 'failed' in t['text']]
+    assert told and 'not installed' in told[-1]['text'] and 'not typed by the user' in told[-1]['header']
+    # a kind that DID report its own failure is not reported twice
+    r2 = w.mgr.spawn('probe', 'm2', chat='desk')
+    a2 = w.mgr._agents[r2['id']]
+    a2.report('[Alpha stopped: my own words]')
+    a2.finish_with_error(RuntimeError('boom'))
+    assert w.wait_for(lambda: r2['id'] not in w.mgr._agents)
+    assert sum(1 for t in w.tells if 'boom' in t['text']) == 0
+
+
+def test_an_answered_question_withdraws_its_queued_turn(agent_world, monkeypatch):
+    from core.chat import inbox
+    w = agent_world
+    monkeypatch.setattr(inbox, 'tell', lambda *a, **k: 'tkt-1')
+    dropped = []
+    monkeypatch.setattr(inbox, 'drop', lambda chat, ticket, why='': dropped.append((chat, ticket, why)) or True)
+    r = w.mgr.spawn('probe', 'm', chat='desk', options={'ask': {'text': 'tea or coffee?'}, 'ask_timeout': 5})
+    a = w.mgr._agents[r['id']]
+    assert w.wait_for(lambda: a.pending_question is not None)
+    text, ok = w.mgr.action_text('desk', a.name, 'answer', 'tea')
+    assert ok and dropped and dropped[0][:2] == ('desk', 'tkt-1')
+    a.finish()
+
+
+def test_a_question_the_chat_refuses_does_not_hold_the_agent(agent_world, monkeypatch):
+    from core.chat import inbox
+    w = agent_world
+    def _refuse(*a, **k):
+        raise inbox.InboxRefused('sealed')
+    monkeypatch.setattr(inbox, 'tell', _refuse)
+    r = w.mgr.spawn('probe', 'm', chat='desk', options={'ask': {'text': 'tea or coffee?'}, 'ask_timeout': 600})
+    a = w.mgr._agents[r['id']]
+    assert w.wait_for(lambda: a.pending_question is None and a.status == 'running', timeout=3), \
+        'the agent sat out the whole timeout for a question nobody could be asked'
+    a.finish()
+
+
 # --- the tools ----------------------------------------------------------------------------------------
 
 def test_tool_descriptions_carry_kinds_and_never_live_agents(agent_world):
@@ -338,3 +447,32 @@ def test_rows_and_live_agents_follow_a_chat_rename_and_die_with_a_delete(agent_w
     w.mgr.chat_deleted('desk-2')
     assert w.wait_for(lambda: live['id'] not in w.mgr._agents)
     assert not [r for r in w.store['rows'] if r['id'] == live['id']]
+
+
+def test_agent_events_are_not_replayed_to_a_later_tab(agent_world):
+    """agent_spawned/agent_completed carry the chat's name (and error text): a
+    tab opened after a vault lock must not get them from the replay ring."""
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='desk')
+    w.mgr._agents[r['id']].finish_with_result('ok')
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    named = [(t, eph) for t, d, eph in w.events if t in ('agent_spawned', 'agent_completed')]
+    assert named and all(eph for _, eph in named)
+
+
+def test_no_ronin_an_agent_needs_a_chat(agent_world):
+    w = agent_world
+    r = w.mgr.spawn('probe', 'm', chat='')
+    assert 'error' in r and 'ronin' in r['error']
+    assert not w.mgr._agents
+
+
+def test_a_multi_question_answer_in_the_cards_format_lands_per_question():
+    from core.agents.base import _map_answers
+    qs = [{'question': 'Framework?', 'options': [{'label': 'FastAPI'}, {'label': 'Flask'}]},
+          {'question': 'Tests?', 'options': [{'label': 'pytest'}, {'label': 'unittest'}]}]
+    got = _map_answers(qs, 'Framework? → b\nTests? → pytest')
+    assert got == {'Framework?': 'Flask', 'Tests?': 'pytest'}
+    got = _map_answers(qs, '{"Framework?": "FastAPI", "Tests?": "my own runner"}')
+    assert got == {'Framework?': 'FastAPI', 'Tests?': 'my own runner'}
+    assert _map_answers(qs, 'b') == {'Framework?': 'Flask', 'Tests?': 'unittest'}     # one letter still answers all

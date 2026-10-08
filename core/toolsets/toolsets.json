@@ -28,7 +28,6 @@
   "default": {
     "emoji": "\uD83E\uDDF0",
     "functions": [
-      "ask_user",
       "web_search",
       "get_website",
       "get_wikipedia",

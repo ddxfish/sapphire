@@ -60,7 +60,7 @@ def list_devices():
         v = e.public(row)
         first = v["parts"][0] if v["parts"] else {}
         devices.append({"id": v["id"], "label": v["label"], "enabled": v["enabled"],
-                        "location": v["location"],
+                        "location": v["location"], "fingerprint": v["fingerprint"],
                         "driver": first.get("driver", ""),
                         "type": first.get("label", "").split(" (")[0],     # the pill: "Satellite", not the aside
                         "capabilities": [c["capability"] for c in e.describe(row) if not c["error"]],
@@ -159,7 +159,7 @@ def provision_device(body):
     e = _engine()
     sapphire = _sapphire_url(body.get("sapphire"))
     row, keys = e.provision(body.get("label"), body.get("driver") or "satellite",
-                            location=body.get("location") or '')
+                            location=body.get("location") or '', mac=body.get("mac") or '')
     return {"device": _view(row), "id": row["id"], **keys, "sapphire": sapphire, "cert": cert_pem()}
 
 
@@ -174,6 +174,21 @@ def firmware_part(board_id, path):
         return firmware.part(board_id, path)
     except firmware.FirmwareError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# the server lane of the flasher: a board plugged into Sapphire's own computer
+def _flasher():
+    from core.devices import flasher
+    flasher.tend()
+    return flasher
+
+
+def flash_call(name, *args):
+    f = _flasher()
+    try:
+        return getattr(f, name)(*args)
+    except f.FlashError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def run_action(device_id, body):
@@ -251,6 +266,47 @@ async def devices_provision(request: Request, _=Depends(require_login)):
 async def devices_here(request: Request, _=Depends(require_login)):
     _open(request)
     return await _do(here)
+
+
+@router.get("/api/devices/flash/ports")
+async def devices_flash_ports(request: Request, _=Depends(require_login)):
+    _open(request)
+    return {"ports": await _do(flash_call, 'ports')}
+
+
+@router.post("/api/devices/flash/chip")
+async def devices_flash_chip(request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    body = await _body(request)
+    return await _do(flash_call, 'chip', str(body.get("port") or ''))
+
+
+@router.post("/api/devices/flash/start")
+async def devices_flash_start(request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    body = await _body(request)
+    return await _do(flash_call, 'start', str(body.get("port") or ''), str(body.get("board") or ''))
+
+
+@router.get("/api/devices/flash/status")
+async def devices_flash_status(request: Request, _=Depends(require_login)):
+    _open(request)
+    return await _do(flash_call, 'status')
+
+
+@router.post("/api/devices/flash/ask")
+async def devices_flash_ask(request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    body = await _body(request)
+    wait = min(60.0, max(1.0, float(body.get("wait") or 15)))
+    return await _do(flash_call, 'ask', str(body.get("port") or ''), str(body.get("line") or '')[:8000], wait)
+
+
+@router.post("/api/devices/flash/close")
+async def devices_flash_close(request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    body = await _body(request)
+    return await _do(flash_call, 'close', str(body.get("port") or ''))
 
 
 @router.get("/api/devices/firmware")

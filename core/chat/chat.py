@@ -257,6 +257,19 @@ class LLMChat:
 
     # ── Per-request streaming state API ──
 
+    def queued_target(self, chat_name):
+        """begin_stream's chat argument for a turn that waited in the inbox for
+        `chat_name`: None (pointer-bound, today's path) while that chat is still
+        the active one, the name itself (pinned, A1) once the pointer has moved.
+        None for no chat. The web door gets the same rule from operator=True."""
+        if not chat_name:
+            return None
+        try:
+            active = self.session_manager.get_active_chat_name() or ''
+        except Exception:
+            active = ''
+        return None if chat_name == active else chat_name
+
     def begin_stream(self, chat_name=None, exclusive=False, operator=False):
         """Create a fresh StreamingChat, register it. Caller owns the ref.
 
@@ -762,16 +775,20 @@ class LLMChat:
         if not chat_name:
             return self._chat_turn(user_input, on_event)
         try:
-            return inbox.turn(chat_name, lambda: self._chat_turn(user_input, on_event),
+            return inbox.turn(chat_name, lambda: self._chat_turn(user_input, on_event, chat_name),
                               source='voice', lane='now')
         except inbox.InboxRefused as e:
             logger.warning(f"chat: inbox refused the turn on '{chat_name}': {e}")
             return self._chat_turn(user_input, on_event)
 
-    def _chat_turn(self, user_input, on_event=None):
+    def _chat_turn(self, user_input, on_event=None, queued_on=None):
         """The blocking turn itself (see chat()). Raises ChatBusy when the
-        active chat already has a live turn - the inbox requeues on that."""
-        stream, sid, chat_name = self.begin_stream(None, exclusive=True)
+        chat already has a live turn - the inbox requeues on that.
+        queued_on: the chat this turn waited in line for. It runs THERE:
+        pointer-bound while that chat is still the active one (today's path),
+        pinned once the pointer moved - never in whatever chat happens to be
+        active when the line reaches it (2026-10-07)."""
+        stream, sid, chat_name = self.begin_stream(self.queued_target(queued_on), exclusive=True)
         stream.suppress_tts = True   # the caller voices the blob; pump stays inert
         final_text = None
         fallback_parts = []

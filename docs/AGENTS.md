@@ -42,8 +42,11 @@ called), `model`, `context` (extra material appended to the mission). Each kind 
 
 Reports and questions land in the chat through the **inbox** — a per-chat queue in front of the
 turn engine. If she is mid-message, the item waits until her message truly ends (every tool round
-included) and then runs as its own turn. Several reports that arrive within three seconds fold
-into one message with a block each. Nothing is dropped and no browser needs to be open.
+included) and then runs as its own turn — in the chat it was queued on, even if you switched chats
+meanwhile. Each machine return gets her own reply (only your typed turns fold). The report's row
+stays in history even if you stop her reply. A question answered before its turn came up (from the
+pill, say) is withdrawn from the line. Nothing is dropped and no browser needs to be open; the
+queue's cap applies to machine items only — a typed or spoken turn is never refused.
 
 What you see in the chat:
 
@@ -97,6 +100,12 @@ report, a satellite's question, a Discord message, a MIDI take each get her own 
 `resting` (idle past its timeout; it keeps its session id and `say` wakes it) → `done` / `failed`
 / `stopped` / `lost` (it was live when Sapphire restarted and could not be resumed).
 
+A Sapphire **restart** (even a graceful one) puts a conversational agent with a session to
+`resting`, and `say` resumes it with the same workspace. A `failed` or `stopped` agent that still
+has a session can be woken the same way; one without a session cannot. An agent that fails before
+it ever reported (its setup, a missing SDK) still tells the chat `[Spark failed: …]`. Names are
+never reused while an agent of that name is live or resting.
+
 The pill bar above the chat input shows them: yellow running, **purple pulsing waiting**, teal
 idle, green done (amber if the run degraded to a placeholder), red failed. A finished pill
 lingers eight seconds and goes.
@@ -117,7 +126,10 @@ approve is denied with a reason. Only `AskUserQuestion` forks reach her. (Settin
 Claude Code lets you switch to bypass.)
 
 A session stays alive between turns: `agent_action('Spark', 'say', '…')` sends the next one.
-Idle past the timeout it rests; the next `say` wakes it with `--resume` — history intact.
+Idle past the timeout it rests; the next `say` wakes it with `--resume` — history intact, same
+workspace. Stop in the first seconds (before the CLI has connected) stops it before the mission
+runs. On Windows the session runs on its own Proactor event loop (the app's Selector policy
+cannot spawn the CLI).
 
 **Billing.** Sessions run on *your Claude Code login* (Pro / Max): any `ANTHROPIC_API_KEY` in
 Sapphire's environment is blanked for the session, and the CLI reports `apiKeySource: none`. No
@@ -156,7 +168,7 @@ instruction textareas (Base, Project, Plugin, Core).
 
 - **She says the agent tools aren't in her toolset** — add the four `agent_*` tools to the chat's toolset.
 - **A cloud kind is refused** — the chat (or the turn) is private. That is the design.
-- **`claude_code` refuses with "claude-agent-sdk is not installed"** — `python -m pip install claude-agent-sdk` in Sapphire's environment.
+- **`claude_code` refuses with "claude-agent-sdk is not installed"** — `pip install -r install/requirements-agents.txt` in Sapphire's environment (the SDK bundles the CLI, ~250 MB).
 - **An agent shows `lost`** — Sapphire restarted while it was live and it had no session to resume. Spawn again.
 - **"Agent limit reached"** — Max Concurrent counts running agents; stop one or raise the limit.
 

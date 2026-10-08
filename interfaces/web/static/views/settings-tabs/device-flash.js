@@ -1,21 +1,28 @@
 // settings-tabs/device-flash.js - a new board from the browser (tmp/board-flash-web-plan.md)
 //
-// + Add Device > "New board (USB)". The board is written over USB from this
-// browser (Web Serial, esptool-js), then told its name, the WiFi, and what
-// Sapphire gave it (POST /api/devices/provision: its keys, her address, her
-// certificate) over the same port, with the firmware's own `setup {json}`
-// console line. Its address is never typed: it is learned when the board
-// calls in. This page is a courier. The firmware comes from Sapphire
+// + Add Device > "New board (USB)". The board is written over USB, then told
+// its name, the WiFi, and what Sapphire gave it (POST /api/devices/provision:
+// its keys, her address, her certificate) over the same port, with the
+// firmware's own `setup {json}` console line. Its address is never typed: it
+// is learned when the board calls in, and written here as soon as `show`
+// reports it. This page is a courier. The firmware comes from Sapphire
 // (GET /api/devices/firmware), never from the internet directly.
 //
-// A `lane` is where the board is plugged in. Web Serial (this computer) is
-// the one lane for now; a server lane (the board on Sapphire's computer,
-// pyserial + esptool there) would speak the same four verbs: connect, flash,
-// ask, reopen.
+// Two lanes, one wizard. A `lane` is where the board is plugged in:
+//   webSerialLane - this computer: the browser writes it (Web Serial,
+//                   esptool-js, Chrome/Edge), MD5 of every part checked
+//                   against what the chip reports
+//   serverLane    - Sapphire's computer: she writes it (core/devices/flasher.py,
+//                   esptool's own API, hash verified there); any browser
+// Both speak: connect, flash, reopen, ask, close. The chip's MAC is the
+// board's fingerprint: a board seen before is named, and one that comes back
+// from a reset as something else is refused.
 
 import { showModal, escapeHtml as esc } from '../../shared/modal.js';
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
+import { md5 } from '../../shared/md5.js';
+import { ensureExtra } from '../../shared/extras.js';
 
 const API = '/api/devices';
 const FLASH_BAUD = 460800;
@@ -26,8 +33,15 @@ const ASK_WAIT = 15000;        // ms for one console answer
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = msg => { throw new Error(msg); };
+const call = (method, path, body, ms = 30000) => fetchWithTimeout(API + path, {
+    method, headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+}, ms);
+// "esp32s3", "ESP32-S3", "ESP32-S3 (QFN56)" -> ESP32-S3; "ESP32-D0WD-V3 (revision 3)" -> ESP32
+const family = s => (String(s || '').toUpperCase().replace(/\s+/g, '').replace(/^ESP32(?=[SCH]\d)/, 'ESP32-')
+    .match(/^ESP32(-[SCH]\d+)?|^ESP8266/) || [''])[0];
 
-// ---- the firmware's console over an open port -------------------------------
+// ---- the firmware's console over an open Web Serial port ------------------------
 // One line in; log lines come out until one `>> {json}` answers.
 
 class Console {
@@ -87,22 +101,35 @@ class Console {
     }
 }
 
-// ---- the Web Serial lane ------------------------------------------------------
+// ---- lane 1: this computer, over Web Serial --------------------------------------
+
+async function partBytes(board, p) {
+    const r = await fetch(`${API}/firmware/${board.id}/${p.path}`, { credentials: 'same-origin' });
+    if (!r.ok) {
+        let why = `HTTP ${r.status}`;
+        try { why = (await r.json()).detail || why; } catch { /* not json */ }
+        fail(`Could not get ${p.path}: ${why}`);
+    }
+    return { ...p, data: new Uint8Array(await r.arrayBuffer()) };
+}
 
 function webSerialLane(log) {
     let port = null, transport = null, loader = null, con = null, tools = null;
     const info = () => port?.getInfo?.() || {};
     const same = p => { const a = p.getInfo(), b = info(); return a.usbVendorId === b.usbVendorId && a.usbProductId === b.usbProductId; };
 
+    async function letGo() {                          // out of the bootloader session, the board running
+        if (!transport) return;
+        await loader?.after('hard_reset').catch(() => {});
+        await transport.disconnect().catch(() => {});
+        loader = transport = null;
+    }
+
     // the port again after a reset: the same one (a UART bridge) or the one
     // that reappears (native USB re-enumerates). Resolves when it is open.
     async function reopen(onWaiting) {
         if (con) { await con.close(); con = null; }
-        if (transport) {                              // still in the bootloader from connect(): let it run
-            await loader?.after('hard_reset').catch(() => {});
-            await transport.disconnect().catch(() => {});
-            loader = transport = null;
-        }
+        await letGo();
         const until = Date.now() + COME_BACK;
         let warned = false;
         for (;;) {
@@ -122,6 +149,7 @@ function webSerialLane(log) {
     }
 
     return {
+        id: 'browser',
         name: 'this computer',
         available: () => !!navigator.serial,
 
@@ -141,28 +169,40 @@ function webSerialLane(log) {
             });
             try {
                 const text = await loader.main();                     // "ESP32-D0WD-V3 (revision 3)": the silicon
-                return { family: loader.chip?.CHIP_NAME || family(text), text };   // "ESP32", "ESP32-S3": what firmware fits
+                let mac = '';
+                try { mac = String(await loader.chip.readMac(loader)).toLowerCase(); } catch { /* an old stub */ }
+                return { family: loader.chip?.CHIP_NAME || family(text), text, mac };
             } catch (e) {
                 await transport.disconnect().catch(() => {});
+                loader = transport = null;
                 throw new Error(portProblem(e));
             }
         },
 
-        async flash(board, parts, onProgress) {
+        async flash(board, onProgress) {
+            onProgress(0, 'Getting the firmware from Sapphire...');
+            const parts = [];
+            for (const p of board.parts) parts.push(await partBytes(board, p));
+            const total = parts.reduce((n, p) => n + p.data.length, 0);
+            let before = 0;
             await loader.writeFlash({
                 fileArray: parts.map(p => ({ data: p.data, address: p.offset })),
                 flashSize: board.flash.size, flashMode: board.flash.mode, flashFreq: board.flash.freq,
                 eraseAll: true, compress: true,
-                reportProgress: (i, written, total) => onProgress(i, written, total),
+                calculateMD5Hash: image => md5(image),              // the chip hashes what landed; must match
+                reportProgress: (i, written, size) => {
+                    if (i > 0 && written === 0) before = parts.slice(0, i).reduce((n, p) => n + p.data.length, 0);
+                    const done = before + written;
+                    onProgress(Math.round(100 * done / total), `${Math.round(done / 1024)} of ${Math.round(total / 1024)} KB`);
+                },
             });
-            await loader.after('hard_reset').catch(() => {});
-            await transport.disconnect().catch(() => {});
-            loader = transport = null;
+            onProgress(100, 'Written and verified. Waiting for it to start...');
+            await letGo();
         },
 
         reopen,
         ask: (cmd, ms) => con.ask(cmd, ms),
-        async close() { if (con) await con.close(); con = null; await transport?.disconnect().catch(() => {}); },
+        async close() { if (con) await con.close(); con = null; await letGo(); },
     };
 }
 
@@ -174,26 +214,65 @@ function portProblem(e) {
     return m;
 }
 
-// ---- the wizard ----------------------------------------------------------------
+// ---- lane 2: Sapphire's computer, through her routes ------------------------------
 
-const call = (method, path, body) => fetchWithTimeout(API + path, {
-    method, headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-}, 30000);
+function serverLane(log) {
+    let port = '';
+    const said = lines => { for (const l of lines || []) log(l); };
 
-async function partBytes(board, p) {
-    const r = await fetch(`${API}/firmware/${board.id}/${p.path}`, { credentials: 'same-origin' });
-    if (!r.ok) {
-        let why = `HTTP ${r.status}`;
-        try { why = (await r.json()).detail || why; } catch { /* not json */ }
-        fail(`Could not get ${p.path}: ${why}`);
+    async function ask(cmd, ms = ASK_WAIT) {
+        const r = await call('POST', '/flash/ask', { port, line: cmd, wait: ms / 1000 }, ms + 10000);
+        said(r.said);
+        return r.answer;
     }
-    return { ...p, data: new Uint8Array(await r.arrayBuffer()) };
+
+    return {
+        id: 'server',
+        name: "Sapphire's computer",
+        available: () => true,
+        ports: async () => (await call('GET', '/flash/ports')).ports,
+        use: p => { port = p; },
+
+        async connect(onStatus) {
+            if (!port) fail('Pick the port the board is on.');
+            onStatus?.(`Sapphire is looking for the board on ${port}: a few seconds...`);
+            const c = await call('POST', '/flash/chip', { port }, 60000);
+            log(`Chip is ${c.text}, MAC ${c.mac}`);
+            return c;
+        },
+
+        async flash(board, onProgress) {
+            await call('POST', '/flash/start', { port, board: board.id });
+            for (;;) {
+                await sleep(700);
+                const s = await call('GET', '/flash/status');
+                onProgress(s.percent, s.text);
+                if (s.state === 'done') break;
+                if (s.state === 'failed') fail(s.error || 'The write failed.');
+            }
+            onProgress(100, 'Written and verified. Waiting for it to start...');
+        },
+
+        async reopen(onWaiting) {
+            await call('POST', '/flash/close', { port }).catch(() => {});
+            const until = Date.now() + COME_BACK;
+            let warned = false;
+            for (;;) {
+                try { await ask('show', 5000); return; }
+                catch (e) {
+                    log(`(not yet: ${e.message})`);
+                    if (!warned && Date.now() > until) { warned = true; onWaiting?.(); }
+                    await sleep(1000);
+                }
+            }
+        },
+
+        ask,
+        close: () => call('POST', '/flash/close', { port }).catch(() => {}),
+    };
 }
 
-// "esp32s3", "ESP32-S3", "ESP32-S3 (QFN56)" -> ESP32-S3; "ESP32-D0WD-V3 (revision 3)" -> ESP32
-const family = s => (String(s || '').toUpperCase().replace(/\s+/g, '').replace(/^ESP32(?=[SCH]\d)/, 'ESP32-')
-    .match(/^ESP32(-[SCH]\d+)?|^ESP8266/) || [''])[0];
+// ---- the wizard ----------------------------------------------------------------------
 
 export function openFlash(onDone) {
     const modal = showModal('\u{1F4E1} New board (USB)', [{ type: 'html', value: '<div id="flash"></div>' }], null, { wide: true });
@@ -208,8 +287,10 @@ export function openFlash(onDone) {
         if (el) { el.textContent += text + '\n'; el.scrollTop = el.scrollHeight; }
     };
     const status = text => { const el = body.querySelector('#flash-status'); if (el) el.textContent = text; };
-    const lane = webSerialLane(log);
-    let chip = { family: '', text: '' }, board = null, given = null, button = null;
+    const lanes = { browser: webSerialLane(log), server: serverLane(log) };
+    let lane = lanes.browser.available() ? lanes.browser : lanes.server;
+    let chip = { family: '', text: '', mac: '' }, board = null, given = null, button = null, known = null;
+
     // the modal has no close event: when it leaves the page, let the port go
     const gone = new MutationObserver(() => { if (!modal.element.isConnected) { gone.disconnect(); hold(false); lane.close(); } });
     gone.observe(document.body, { childList: true });
@@ -243,8 +324,7 @@ export function openFlash(onDone) {
             <p class="setting-help" id="flash-status" style="margin-top:8px;min-height:1.2em"></p>
             <details style="margin-top:6px"><summary class="setting-help" style="cursor:pointer">Details: what the flasher and the board said</summary>
             <pre id="flash-log" style="max-height:140px;overflow:auto;font-size:0.75em;opacity:0.7;margin:6px 0 0;white-space:pre-wrap"></pre></details>`;
-        const pre = body.querySelector('#flash-log');
-        pre.textContent = said.slice(-20).join('\n') + (said.length ? '\n' : '');
+        body.querySelector('#flash-log').textContent = said.slice(-20).join('\n') + (said.length ? '\n' : '');
         if (foot) {
             button = document.createElement('button');
             button.className = 'btn btn-primary';
@@ -267,26 +347,63 @@ export function openFlash(onDone) {
         if (el) { el.firstElementChild.style.width = `${pct}%`; el.nextElementSibling.textContent = text; }
     };
 
-    // 1. plug it in
-    const connect = () => {
-        if (!lane.available()) {
-            return screen('This step needs Chrome or Edge',
-                `<p class="setting-help">This browser cannot talk to a USB port (Web Serial). Open this page in Chrome or Edge on the computer the board is plugged into.</p>`);
-        }
-        screen('Plug the board in',
-            `<p class="setting-help">Plug the board into <b>this</b> computer with a data cable (many USB cables carry power only), then press Connect and pick its port.</p>`,
+    // 1. plug it in: where?
+    const connect = async () => {
+        const here = lanes.browser.available();
+        screen('Plug the board in', `
+            <div class="settings-grid">
+                <div class="setting-row"><div class="setting-label"><label>Where is it plugged in?</label>
+                    <div class="setting-help">Use a data cable: many USB cables carry power only.</div></div>
+                    <div class="setting-input">
+                        <label style="display:block"><input type="radio" name="fl-lane" value="browser" ${lane.id === 'browser' ? 'checked' : ''} ${here ? '' : 'disabled'}>
+                            This computer${here ? '' : ' (needs Chrome or Edge)'}</label>
+                        <label style="display:block"><input type="radio" name="fl-lane" value="server" ${lane.id === 'server' ? 'checked' : ''}>
+                            The computer Sapphire runs on</label></div></div>
+                <div class="setting-row" id="fl-ports-row" style="${lane.id === 'server' ? '' : 'display:none'}"><div class="setting-label"><label>Port</label>
+                    <div class="setting-help">USB ports on Sapphire's computer. <a href="#" id="fl-ports-again">Look again</a></div></div>
+                    <div class="setting-input"><select id="fl-ports"><option value="">looking...</option></select></div></div>
+            </div>`,
             { text: 'Connect', run: async () => {
-                status('Pick the port in the browser\'s window...');
+                if (lane.id === 'server') lane.use(body.querySelector('#fl-ports').value);
+                else status("Pick the port in the browser's window...");
                 chip = await lane.connect(status);
                 if (!chip) { status(''); button.disabled = false; return; }
                 await pick();
             } });
+        const portsRow = body.querySelector('#fl-ports-row');
+        const listPorts = async () => {
+            const sel = body.querySelector('#fl-ports');
+            try {
+                const ports = await lanes.server.ports();
+                sel.innerHTML = ports.length ? ports.map(p => `<option value="${esc(p.port)}">${esc(p.port)} - ${esc(p.name)} (${esc(p.bridge)})</option>`).join('')
+                    : '<option value="">no USB serial port found: plug the board into that computer</option>';
+            } catch (e) { sel.innerHTML = `<option value="">${esc(e.message)}</option>`; }
+        };
+        // Sapphire's own lane needs esptool in her environment: offered on the spot when it is missing
+        const serverReady = async () => {
+            try { return await ensureExtra('flash'); }
+            catch (e) { status(e.message); return false; }
+        };
+        body.querySelectorAll('input[name="fl-lane"]').forEach(r => r.addEventListener('change', async () => {
+            lane = lanes[r.value];
+            portsRow.style.display = lane.id === 'server' ? '' : 'none';
+            if (lane.id !== 'server') return;
+            if (await serverReady()) return listPorts();
+            if (here) { lane = lanes.browser; body.querySelector('input[name="fl-lane"][value="browser"]').checked = true; portsRow.style.display = 'none'; }
+            else status("Sapphire's computer cannot flash until that set is installed.");
+        }));
+        body.querySelector('#fl-ports-again').addEventListener('click', e => { e.preventDefault(); listPorts(); });
+        if (lane.id === 'server') { if (await serverReady()) listPorts(); else status("Sapphire's computer cannot flash until that set is installed."); }
     };
 
-    // 2. which board: only the ones this chip can run
+    // 2. which board: only the ones this chip can run; a board seen before is named
     const pick = async () => {
         screen(`Found an ${esc(chip.family)}`, '<p class="setting-help">Reading the firmware list...</p>');
         const fw = await call('GET', '/firmware');
+        known = null;
+        if (chip.mac) {
+            try { known = ((await call('GET', '')).devices || []).find(d => d.fingerprint === chip.mac) || null; } catch { /* the list is a nicety here */ }
+        }
         const fit = fw.boards.filter(b => family(b.chipFamily) === chip.family);
         if (!fit.length) {
             // nothing to offer: say why, and let the source be fixed right here
@@ -301,7 +418,8 @@ export function openFlash(onDone) {
                 } });
             return;
         }
-        screen(`Found an ${esc(chip.family)}`, `<p class="setting-help">${esc(chip.text)}. Which board is it?</p>
+        const seen = known ? `<p class="setting-help" style="margin-bottom:8px">This board is <b>${esc(known.label || known.id)}</b>, set up before${known.status?.online ? ' and online' : ''}. Installing writes it afresh; it keeps that name.</p>` : '';
+        screen(`Found an ${esc(chip.family)}`, `${seen}<p class="setting-help">${esc(chip.text)}${chip.mac ? `, id ${esc(chip.mac)}` : ''}. Which board is it?</p>
             <div class="ui-grid ui-grid-sm">${fit.map((b, i) => `
                 <button type="button" class="ui-card" data-board="${esc(b.id)}" style="text-align:left;font:inherit;cursor:pointer${i ? '' : ';outline:2px solid var(--primary)'}">
                     <div class="ui-card-title">${esc(b.name)}</div>
@@ -309,6 +427,10 @@ export function openFlash(onDone) {
             <p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`,
             { text: 'Install', run: () => install() });
         board = fit[0];
+        body.querySelectorAll('[data-board]').forEach(c => c.addEventListener('click', () => {
+            board = fit.find(b => b.id === c.dataset.board);
+            body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x === c ? '2px solid var(--primary)' : '');
+        }));
         body.querySelector('#fl-settings-only').addEventListener('click', async e => {
             e.preventDefault();
             button.disabled = true;
@@ -318,10 +440,6 @@ export function openFlash(onDone) {
                 await setup();
             } catch (err) { status(err.message); showToast(err.message, 'error'); button.disabled = false; }
         });
-        body.querySelectorAll('[data-board]').forEach(c => c.addEventListener('click', () => {
-            board = fit.find(b => b.id === c.dataset.board);
-            body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x === c ? '2px solid var(--primary)' : '');
-        }));
     };
 
     // 3. write it
@@ -330,19 +448,15 @@ export function openFlash(onDone) {
         screen(`Installing ${esc(board.name)} ${esc(board.version)}`, `
             <div id="flash-bar" style="height:8px;background:var(--bg-tertiary,#333);border-radius:4px;overflow:hidden"><div style="height:100%;width:0;background:var(--primary)"></div></div>
             <p class="setting-help" style="margin-top:6px">Getting the firmware from Sapphire...</p>`);
-        const parts = [];
-        for (const p of board.parts) parts.push(await partBytes(board, p));
-        const total = parts.reduce((n, p) => n + p.data.length, 0);
-        let before = 0;
-        await lane.flash(board, parts, (i, written, size) => {
-            if (i > 0 && written === 0) before = parts.slice(0, i).reduce((n, p) => n + p.data.length, 0);
-            const done = before + written;
-            bar(Math.round(100 * done / total), `${Math.round(done / 1024)} of ${Math.round(total / 1024)} KB`);
-        });
-        bar(100, 'Written. Waiting for it to start...');
+        await lane.flash(board, bar);
         await lane.reopen(() => bar(100, 'Unplug the board and plug it back in.'));
         hold(false);
         await setup();
+    };
+
+    // the board that came back is the board that was written
+    const sameBoard = s => {
+        if (chip.mac && s.mac && s.mac.toLowerCase() !== chip.mac) fail(`A different board answered (id ${s.mac}, not ${chip.mac}). Is more than one plugged in?`);
     };
 
     // 4. its name and WiFi
@@ -355,7 +469,7 @@ export function openFlash(onDone) {
         screen('Name it and give it the WiFi', `
             <div class="settings-grid">
                 <div class="setting-row"><div class="setting-label"><label>Name</label><div class="setting-help">What Sapphire calls it.</div></div>
-                    <div class="setting-input"><input type="text" id="fl-name" value="${esc(board.id)}" maxlength="33"></div></div>
+                    <div class="setting-input"><input type="text" id="fl-name" value="${esc(known?.id || board.id)}" maxlength="33"></div></div>
                 <div class="setting-row"><div class="setting-label"><label>WiFi</label><div class="setting-help">${names.length ? 'What the board can see. ' : ''}Type one it cannot see yet.</div></div>
                     <div class="setting-input">${names.length ? `<select id="fl-pick">${names.map(n => `<option>${esc(n)}</option>`).join('')}<option value="">Other network...</option></select>` : ''}
                         <input type="text" id="fl-ssid" placeholder="network name" ${names.length ? 'style="display:none;margin-top:6px"' : ''}></div></div>
@@ -383,7 +497,7 @@ export function openFlash(onDone) {
         if (!ssid) fail('Which WiFi?');
         if (!sapphire) fail("Where is Sapphire? Her address is needed.");
         hold(true);
-        given = await call('POST', '/provision', { label: name, driver: 'satellite', sapphire });
+        given = await call('POST', '/provision', { label: name, driver: 'satellite', sapphire, mac: chip.mac });
         const said = await lane.ask('setup ' + JSON.stringify({
             name: given.id, wifi_ssid: ssid, wifi_password: pass,
             key: given.token, voice_key: given.voice_key, sapphire: given.sapphire, cert: given.cert || '',
@@ -396,6 +510,7 @@ export function openFlash(onDone) {
         while (Date.now() < until) {
             let s = {};
             try { s = await lane.ask('show', 5000); } catch { /* still booting */ }
+            sameBoard(s);
             if (s.ip) {
                 // its address, before it has called in: the device window can reach it now,
                 // and its status says whether it reaches Sapphire ("link to Sapphire")

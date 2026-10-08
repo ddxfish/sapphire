@@ -51,7 +51,7 @@ PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
 LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage')    # these carry a "Sapphire may use this" switch
 MAX_FOUND = 64           # things one driver may report as found
 ALL = 'all'              # the composite device: her voice on every device that can speak
-RESERVED = ('found', ALL, 'firmware', 'provision', 'here')   # names a device may not have: the routes and `all` use them
+RESERVED = ('found', ALL, 'firmware', 'provision', 'here', 'flash')   # names a device may not have: the routes and `all` use them
 CLEAR = '__CLEAR__'
 KEPT = 'set'            # what public() shows for a stored secret; sent back, it means "as it is"
 PAGE = 'Settings > Devices'
@@ -634,26 +634,52 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     return row, failed
 
 
-def provision(label, driver_id, location=''):
+def _mac(text):
+    """A chip's MAC as 'aa:bb:cc:dd:ee:ff', or '' for anything else."""
+    hexes = re.sub(r'[^0-9a-f]', '', str(text or '').lower())
+    return ':'.join(hexes[i:i + 2] for i in range(0, 12, 2)) if len(hexes) == 12 else ''
+
+
+def provision(label, driver_id, location='', mac=''):
     """A board about to be set up from the browser (the Devices page's
     flasher): its name and the two keys it will carry. A new name is a new
     row with NO address: that is learned when the board calls in. A name in
     use is that device with fresh keys: the board is being flashed again.
+    `mac` is the chip's own id, read over USB: it is kept as the device's
+    fingerprint, so two boards are never mixed up (a board that is already
+    some device keeps that name; a name cannot be taken by a second board).
     Returns (row, {'token', 'voice_key'})."""
     import secrets as rand
     driver_id = _slug(driver_id)
     device_id = _name_from(label)
+    mac = _mac(mac)
     if not ID_RE.fullmatch(device_id) or device_id in RESERVED:
         raise DeviceError("Give the board a name: letters and digits, up to 33 characters.")
+    table = rows()
+    if mac:
+        other = next((r for r in table.values() if r.get('fingerprint') == mac and r['id'] != device_id), None)
+        if other:
+            raise DeviceError(f"This board is already the device '{other['id']}'. Use that name, or remove "
+                              f"'{other['id']}' in {PAGE} first.")
     keys = {'token': rand.token_urlsafe(24), 'voice_key': rand.token_urlsafe(24)}
-    if device_id in rows():
-        if not _part(get(device_id), driver_id):
+    if device_id in table:
+        old = table[device_id]
+        if not _part(old, driver_id):
             raise DeviceError(f"'{device_id}' is a different kind of device. Pick another name.")
+        if mac and old.get('fingerprint') and old['fingerprint'] != mac:
+            raise DeviceError(f"'{device_id}' is a different board (id {old['fingerprint']}). Pick another "
+                              f"name, or remove '{device_id}' in {PAGE} first.")
         row, failed = update(device_id, parts={driver_id: keys})
     else:
         row, failed = add(device_id, label, driver_id, dict(keys, url=''), location=location)
     if failed:
         raise DeviceError("The board's keys could not be stored: " + ", ".join(failed) + ".")
+    if mac and row.get('fingerprint') != mac:
+        def step(table):
+            if row['id'] in table:
+                table[row['id']]['fingerprint'] = mac
+        _write(step)
+        row['fingerprint'] = mac
     return row, keys
 
 
@@ -759,7 +785,8 @@ def public(row):
                       'unreadable': unreadable})
     return {'id': row['id'], 'label': row.get('label', row['id']),
             'location': _place(row.get('location')), 'locked': locked(row),
-            'enabled': bool(row.get('enabled', True)), 'parts': parts}
+            'enabled': bool(row.get('enabled', True)), 'parts': parts,
+            'fingerprint': str(row.get('fingerprint') or '')}      # the chip's MAC, from the flasher
 
 
 # --- describe ----------------------------------------------------------------

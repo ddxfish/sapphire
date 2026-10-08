@@ -116,9 +116,12 @@ function card(d) {
     const caps = (d.capabilities || []).join(' · ') || 'nothing yet';
     const missing = (d.missing || []).length
         ? ` <span style="color:var(--error,#e53935)">driver off: ${esc(d.missing.join(', '))}</span>` : '';
-    const readings = (st?.parts || []).flatMap(p => Object.entries(p.readings || {})).slice(0, 2)
-        .map(([k, v]) => `${k} ${v}`);
+    const all = (st?.parts || []).flatMap(p => Object.entries(p.readings || {}));
+    const readings = all.slice(0, 2).map(([k, v]) => `${k} ${v}`);
     const meta = [stateWord(d), when(st), ...readings].filter(Boolean);
+    // a newer program in the firmware source: said on the card, not only in the window
+    const newer = all.find(([k]) => k === 'update')?.[1];
+    const update = newer ? `<span class="sched-plugin-badge" style="background:var(--primary);color:#fff" title="${esc(newer)}">update ${esc(String(newer).split(' ')[0])}</span>` : '';
     return `
     <div class="sched-task-card" data-device="${esc(d.id)}" style="cursor:pointer">
         ${dot(d)}
@@ -130,7 +133,7 @@ function card(d) {
         </div>
         <div class="sched-task-actions" style="flex-direction:column;align-items:flex-end;gap:4px">
             ${d.location ? `<span class="text-muted" style="font-size:var(--font-xs)">${esc(d.location)}</span>` : ''}
-            ${d.type ? `<span class="sched-plugin-badge">${esc(d.type)}</span>` : ''}
+            ${update}${d.type ? `<span class="sched-plugin-badge">${esc(d.type)}</span>` : ''}
         </div>
     </div>`;
 }

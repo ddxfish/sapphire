@@ -26,7 +26,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as _FutureTimeout   # builtin TimeoutError on 3.11+, its own class before
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -37,7 +37,6 @@ DEPTH_MAX = 20                # per chat; past it put() refuses with a reason
 SWEEP_S = 2.0                 # the drainer looks again this often with no signal
 DRAINER_IDLE_EXIT_S = 10.0    # an empty inbox lets its thread go
 BACKOFF_MIN, BACKOFF_MAX = 0.1, 2.0   # after ChatBusy: a typed turn won the race
-UNREACHABLE = ("isn't reachable", "sealed", "not found", "unreachable", "does not exist")
 
 
 class InboxRefused(Exception):
@@ -70,6 +69,18 @@ class Item:
     fold_key: str = ''
     payload: Any = None                             # a door's own data for a folded run (the web route's started Future)
     run_folded: Optional[Callable[[list], Any]] = None   # run(), given the OTHER items folded in with this one
+    # A door's OWN rule, asked again the moment the item is about to run: '' to
+    # go, or why not (the item is dropped with that reason). An MCP ask checked
+    # "is this chat private?" at put time only - a chat that turned private
+    # while the ask waited ran with the private history and its reply left over
+    # the network (privacy scout, 2026-10-07). Sealed/missing chats are the
+    # inbox's own check; this is for what only the door knows.
+    gate: Optional[Callable[[], str]] = None
+    # Privacy rolls downhill (Krem): anything queued while its chat was PRIVATE
+    # never runs public. Set by put(); checked the moment the item is about to
+    # run. The other direction (public → private) needs nothing: the turn reads
+    # the chat's privacy when it runs and goes local.
+    private_at_put: bool = False
 
     def __post_init__(self):
         if not self.fold_key and self.coalesce and self.run is None:
@@ -132,9 +143,14 @@ def put(chat, item):
         raise InboxRefused('An item needs text or a run().')
     if item.ctx is None:
         item.ctx = contextvars.copy_context()
+    item.private_at_put = _chat_private(chat)
     c = _chat(chat)
     with c.lock:
-        if len(c.now_q) + len(c.later_q) >= DEPTH_MAX:
+        # The cap is for machines (the `later` lane): a person's typed turn and
+        # a satellite's spoken one are NEVER refused (Krem's ruling) - twenty
+        # agent reports in line used to bounce the user's own message with a
+        # 409 and lose its images (day-ruiner scout, 2026-10-07).
+        if item.lane == 'later' and len(c.later_q) >= DEPTH_MAX:
             raise InboxRefused(f"Her inbox for '{chat}' is full ({DEPTH_MAX} waiting).")
         (c.now_q if item.lane == 'now' else c.later_q).append(item)
         c.idle_since = None
@@ -148,8 +164,10 @@ def put(chat, item):
     return item
 
 
-def tell(chat, text, source, header_line='', coalesce=True, **kw):
-    """A machine says something and does not wait. Returns the ticket."""
+def tell(chat, text, source, header_line='', coalesce=False, **kw):
+    """A machine says something and does not wait. Returns the ticket.
+    coalesce defaults False (Krem, 2026-10-06): a machine's returns never fold
+    with each other - each gets her own reply. Only a person's typed turns fold."""
     return put(chat, Item(text=text, source=source, lane='later', header=header_line,
                           coalesce=coalesce, **kw)).ticket
 
@@ -161,7 +179,7 @@ def ask(chat, text, source, header_line='', timeout=None, **kw):
     _refuse_self_wait(chat)
     item = put(chat, Item(text=text, source=source, lane='later', header=header_line,
                           coalesce=False, **kw))
-    return item.reply.result(timeout)
+    return _await(chat, item, timeout)
 
 
 def turn(chat, fn, source='door', lane='now', timeout=None):
@@ -172,7 +190,19 @@ def turn(chat, fn, source='door', lane='now', timeout=None):
     returns what fn returned. The wake word and the conversation driver."""
     _refuse_self_wait(chat)
     item = put(chat, Item(run=fn, source=source, lane=lane))
-    return item.reply.result(timeout)
+    return _await(chat, item, timeout)
+
+
+def _await(chat, item, timeout):
+    """Wait for the item's reply. A caller that gives up takes its item back
+    out of the line: an MCP ask that timed out used to run anyway later - a
+    ghost turn she answered into the void, twice if the client retried
+    (chaos + race scouts, 2026-10-07). Already running: nothing to take back."""
+    try:
+        return item.reply.result(timeout)
+    except (TimeoutError, _FutureTimeout):
+        drop(chat, item.ticket, 'the asker stopped waiting')
+        raise
 
 
 def drop(chat, ticket, why='dropped'):
@@ -307,10 +337,29 @@ def _refusal(chat):
         if sm.is_chat_hidden(chat) is True:        # only an explicit True hides
             return f"The chat '{chat}' is sealed."
         if sm.read_chat_settings(chat) is None:
-            return f"There is no chat named '{chat}'."
+            # None is also what a locked database or a sealed-while-active
+            # corner reads as; only a chat that is GONE is refused here. A
+            # chat that exists but can't be read right now holds its items -
+            # run_turn's own reachability check is the judge at run time
+            # (day-ruiner scout, 2026-10-07: a backup's lock dropped everything).
+            exists = getattr(sm, 'chat_exists', None)
+            if exists is None or not exists(chat):
+                return f"There is no chat named '{chat}'."
     except Exception as e:
-        logger.debug(f"[INBOX] refusal check for '{chat}' failed: {e}")
+        logger.debug(f"[INBOX] refusal check for '{chat}' failed (holding): {e}")
     return ''
+
+
+def _chat_private(chat):
+    """The chat's privacy right now. Unreadable counts as private (fail closed)."""
+    system = _system()
+    if system is None:
+        return False                               # before boot nothing runs anyway
+    try:
+        s = system.llm_chat.session_manager.read_chat_settings(chat)
+    except Exception:
+        return True
+    return s is None or bool(s.get('private_chat'))
 
 
 def _refuse_self_wait(chat):
@@ -421,8 +470,44 @@ def _expire(c):
 
 def _drain(c):
     """The one runner for a chat. Lives while anything waits, exits after
-    DRAINER_IDLE_EXIT_S of nothing; put() starts it again."""
+    DRAINER_IDLE_EXIT_S of nothing; put() starts it again. Whatever ends this
+    thread - the idle exit or something escaping _run (a BaseException from a
+    door's run()) - leaves alive=False behind, so put() can start a new one: a
+    dead drainer with alive=True stranded the chat's whole line (race scout)."""
+    try:
+        _drain_loop(c)
+    except BaseException as e:            # noqa: BLE001 - the thread is ending either way
+        logger.error(f"[INBOX] drainer for '{c.name}' died: {type(e).__name__}: {e}")
+        raise
+    finally:
+        restart = False
+        with c.lock:
+            # only while this thread is still the chat's drainer: after the
+            # idle exit, put() may already have started the next one
+            if c.thread is threading.current_thread():
+                c.alive = False
+                restart = bool(c.now_q or c.later_q)
+        if restart:
+            _restart(c)
+
+
+def _restart(c):
+    """Items are waiting and their drainer just died: start another."""
+    with c.lock:
+        if c.alive:
+            return
+        c.alive = True
+        c.thread = threading.Thread(target=_drain, args=(c,), daemon=True, name=f"inbox-{c.name[:24]}")
+        c.thread.start()
+    c.wake.set()
+
+
+HINT_MAX_S = 30.0             # the idle hint may hold the line this long; then begin_stream judges
+
+
+def _drain_loop(c):
     backoff = BACKOFF_MIN
+    hinted_since = None
     logger.debug(f"[INBOX] drainer up for '{c.name}'")
     while True:
         c.wake.wait(timeout=SWEEP_S)
@@ -440,7 +525,14 @@ def _drain(c):
                 continue
             c.idle_since = None
         if not _idle_hint(c):
-            continue                                # her message is still going (a hint, not the gate)
+            # her message is still going - a hint, not the gate. A hint that
+            # never clears (a leaked counter) must not hold the line forever:
+            # past HINT_MAX_S we try anyway and let begin_stream judge.
+            hinted_since = hinted_since or time.monotonic()
+            if time.monotonic() - hinted_since < HINT_MAX_S:
+                continue
+            logger.warning(f"[INBOX] '{c.name}': idle hint stuck for {HINT_MAX_S:.0f}s - trying anyway")
+        hinted_since = None
         with c.lock:
             picked = _pick(c)
         if picked is None:
@@ -464,6 +556,10 @@ def _drain(c):
                 _dropped(it, why)
             _changed(c)
             continue
+        picked = _gated(c, picked)                  # each door's own run-time rule
+        if picked is None:
+            _changed(c)
+            continue
         try:
             _run(c, picked)
             backoff = BACKOFF_MIN
@@ -477,6 +573,40 @@ def _drain(c):
 
 class _Busy(Exception):
     pass
+
+
+def _gated(c, picked):
+    """Drop every picked item whose own gate says no, now. Returns what is
+    left (None when nothing is). A folded run drops as a whole if any member
+    is refused - they would have ridden one turn."""
+    items = picked if isinstance(picked, list) else [picked]
+    public_now = None
+    for it in items:
+        why = ''
+        if it.private_at_put:
+            if public_now is None:
+                public_now = not _chat_private(c.name)
+            if public_now:
+                why = (f"queued while '{c.name}' was private; the chat is public now, so it did not run "
+                       f"- say it again if you mean it to")
+        if not why and it.gate is not None:
+            try:
+                why = it.gate() or ''
+            except Exception as e:
+                why = f"gate check failed: {e}"
+        if why:
+            for x in items:
+                _dropped(x, why)
+            return None
+    return picked
+
+
+def _is_unreachable(e):
+    try:
+        from core import cadence
+        return isinstance(e, cadence.Unreachable)
+    except Exception:
+        return False
 
 
 def _run(c, picked):
@@ -503,7 +633,10 @@ def _run(c, picked):
     except ChatBusy:
         raise _Busy()
     except Exception as e:
-        unreachable = any(s in str(e).lower() for s in UNREACHABLE)
+        # Only the chat being gone/sealed/unreadable drops the item (a typed
+        # check: cadence.Unreachable, or this inbox's own refusal). Anything
+        # else is a FAILED turn - its waiter hears the error, the log says so.
+        unreachable = isinstance(e, InboxRefused) or _is_unreachable(e)
         for it in items:
             if unreachable:
                 _dropped(it, str(e))
@@ -515,7 +648,7 @@ def _run(c, picked):
     for it in items:
         if not it.reply.done():
             it.reply.set_result(result)
-    logger.info(f"[INBOX] '{c.name}': ran {len(items)} item(s) from {', '.join(sorted({it.source for it in items}))}")
+    logger.info(f"[INBOX] ran {len(items)} item(s) from {', '.join(sorted({it.source for it in items}))}")
 
 
 def _compose(c, items):
@@ -533,6 +666,8 @@ def _compose(c, items):
 
 def _run_turn(chat, text, first, speak):
     from core import cadence
+    # keep_prompt: a text item's row is the record (a report, an MCP message,
+    # a call transcript) - it survives an empty or stopped answer
     return cadence.run_turn(chat, text, images=first.images, speak=speak,
                             source=first.source, on_event=first.on_event,
-                            stream_speech=first.stream_speech)
+                            stream_speech=first.stream_speech, keep_prompt=True)

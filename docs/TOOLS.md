@@ -156,7 +156,7 @@ Pixels only reach the model if the provider is known to accept them — tick the
 | `check_internet` | network.py | Internet connectivity test |
 | `website_status` | network.py | Check if URL is up |
 | `search_help_docs` | docs.py | Search Sapphire documentation |
-| `ask_user` | ask_user.py | A question card in the chat: clickable options, a type-your-own box, up to 4 questions as tabs. The picks come back as your next message (`Question? → Answer`, one line each) |
+| `ask_user` | ask_user.py | A question card in the chat: options one per line, a type-your-own box, up to 4 questions as tabs, × to dismiss. Your picks go out as your next message — the `[Question card (ask_user) — …; not typed by the user]` header line, then `Question? → Answer` per question. The card then folds to its title; open it to see your answers |
 
 ---
 
@@ -237,7 +237,7 @@ TOOL MODULES:
 - network.py: get_external_ip, check_internet, website_status
 - notepad.py: notepad_read, notepad_append_lines, notepad_delete_lines, notepad_insert_line
 - docs.py: search_help_docs
-- ask_user.py (core): ask_user(questions=[{question, header?, options:[{label, description?}], multi_select?}]) — a question card with buttons + a type-your-own box; 1-4 questions (tabs), 2-6 options each. The user's picks arrive as their NEXT message, one `Question? → Answer` line each: ask in your words, call it, END your turn; never wait or re-ask. On voice say the options aloud
+- ask_user.py (core): ask_user(questions=[{question, header?, options:[{label, description?}], multi_select?}]) — a question card with buttons + a type-your-own box; 1-4 questions (tabs), 2-6 options each. The user's picks arrive as their NEXT message: the `[Question card (ask_user) — what the user clicked; not typed by the user]` line, then one `Question? → Answer` line each. Ask in your words, call it, END your turn; never wait or re-ask. They may dismiss it or just type. On voice say the options aloud
 
 TOOL CREATION: Use tool_save + tool_load. For format and rules, see TOOLMAKER doc.
 

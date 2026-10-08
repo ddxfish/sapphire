@@ -184,8 +184,13 @@ const processSSEData = (data, handlers) => {
     // Inbox (2026-10-06): a typed turn sent while she was mid-message waits in
     // the chat's inbox. The server says so first, then streams the turn when
     // it is its turn; or says the item was dropped (× on the bubble).
+    if (data.type === 'ticket') {
+        // the turn's identity: a tab that loses this socket reattaches BY TICKET
+        if (handlers.onTicket) handlers.onTicket(data.ticket, data.chat);
+        return {};
+    }
     if (data.type === 'queued') {
-        if (handlers.onQueued) handlers.onQueued(data.ticket, data.position);
+        if (handlers.onQueued) handlers.onQueued(data.ticket, data.position, data.chat);
         return {};
     }
     if (data.type === 'queued_dropped') {
@@ -401,7 +406,7 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
 const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
                                    onToolStart = null, onToolEnd = null,
                                    onStreamStarted = null, onIterationStart = null,
-                                   onQueued = null, onQueuedDropped = null, onMerged = null }) => {
+                                   onQueued = null, onQueuedDropped = null, onMerged = null, onTicket = null }) => {
     onChunk = _wrapChunkWithAvatarScan(onChunk);
     let res;
     try {
@@ -432,6 +437,7 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
         onQueued,
         onQueuedDropped,
         onMerged,
+        onTicket,
         onReload: () => setTimeout(() => window.location.reload(), 500),
         onLegacyChunk: onChunk
     };
@@ -459,19 +465,26 @@ export const streamChatContinue = (timestamp, onChunk, onComplete, onError, sign
 // finished while we were away — refresh history), {live:null, error} when the
 // server was unreachable (retry). Text only: audio is never replayed, so the
 // completion reports ttsStreamed=false and the caller speaks the reply once.
-export const attachTurn = async (chat, since, handlers) => {
+// `ticket`: this tab's own turn (from the stream's first line). With it the
+// server answers for THAT turn - still queued (the body re-sends `queued` and
+// waits), live (attach `since`), finished (204), unknown (404 → `unknown`). By
+// chat alone it attached to whatever ran on the chat - another turn's as often
+// as not once the inbox ran turns back to back (race scout, 2026-10-07).
+export const attachTurn = async (chat, since, handlers, ticket = null) => {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
     let res;
     try {
         res = await fetch('/api/chat/attach', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ chat: chat || null, since: typeof since === 'number' ? since : null })
+            body: JSON.stringify({ chat: chat || null, since: typeof since === 'number' ? since : null,
+                                   ticket: ticket || null })
         });
     } catch (e) {
         return { live: null, error: e };
     }
     if (res.status === 204) return { live: false };
+    if (res.status === 404 && ticket) return { live: null, unknown: true };
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         return { live: null, error: new Error(err.error || `HTTP ${res.status}`) };
@@ -589,14 +602,16 @@ export const streamChat = (text, onChunk, onComplete, onError, signal = null, pr
     if (bound) body.chat = bound;   // F1: a bound rail's turn names its session
     return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart,
                                onQueued: queueHooks?.onQueued || null, onQueuedDropped: queueHooks?.onQueuedDropped || null,
-                               onMerged: queueHooks?.onMerged || null });
+                               onMerged: queueHooks?.onMerged || null, onTicket: queueHooks?.onTicket || null });
 };
 
 // Take a waiting typed turn out of the chat's inbox (the × on a queued bubble).
-export const dropQueued = (ticket) => fetchWithTimeout('/api/chat/queue/drop', {
+// `chat`: the queue the item sits in (the server named it on `queued`) - the
+// active chat may have moved since, and the item did not move with it.
+export const dropQueued = (ticket, chat = null) => fetchWithTimeout('/api/chat/queue/drop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ticket, chat: getBoundChat() || undefined })
+    body: JSON.stringify({ ticket, chat: chat || getBoundChat() || undefined })
 }, 5000);
 
 export const fetchAudio = async (text, signal = null, opts = null) => {

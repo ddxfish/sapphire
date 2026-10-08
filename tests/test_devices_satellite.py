@@ -86,8 +86,12 @@ def test_spec_registers_as_a_core_driver():
     assert reg.register_driver('satellite', sat.SPEC, 'core', builtin=True)
     spec = reg.get_driver('satellite')
     assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                                    'sensors']
-    assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))
+                                    'sensors', 'firmware']
+    sat._about[DEV['id']] = (0, {'has': ['firmware']})      # describe() offers firmware only to a board that says it
+    try:
+        assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))
+    finally:
+        sat._about.pop(DEV['id'], None)
     assert spec['locked_by_default'] == []                    # she may restart a satellite
     assert [f['key'] for f in spec['config_schema'] if f.get('secret')] == ['token', 'voice_key']
     assert spec['learns_address'] is True                     # it calls in: its address is learned
@@ -308,7 +312,9 @@ def test_wake_word(pi):
 def test_every_example_in_the_help_really_runs(pi):
     with patch.object(voice, 'render', return_value=(b'OggS', 'audio/ogg')), \
          patch.object(voice, 'stt_refusal', return_value=''), \
-         patch.object(voice, 'transcribe', return_value=('hi', '')):
+         patch.object(voice, 'transcribe', return_value=('hi', '')), \
+         patch.object(sat, '_update', lambda d, c, s, v: ('over the air: tests/test_devices_flash.py', True)), \
+         patch.object(sat, '_check', lambda d, c, s: ('the source: tests/test_devices_flash.py', True)):
         for cap, info in sat.describe(DEV, CFG).items():
             for action, a in info['actions'].items():
                 told, ok = run(cap, action, a['example'])
@@ -381,7 +387,8 @@ def test_a_board_says_what_it_has_and_the_engine_is_told(board):
     assert st['has'] == ['speaker', 'mic', 'wake']
     assert st['detail'] == 'den at 192.168.1.100:8090'
     assert st['readings'] == {'program': 'waveshare-s3-audio 0.1.0', 'volume': '85%', 'running for': '1m 1s',
-                              'wake word': 'listening for hey_sapphire', 'link to Sapphire': 'connected'}
+                              'wake word': 'listening for hey_sapphire', 'link to Sapphire': 'connected',
+                              'updates': 'over USB only: one program slot'}       # it said `has` without firmware
 
 
 def test_volume_read_set_and_step(board):

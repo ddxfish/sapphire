@@ -15,10 +15,13 @@ import { releaseOwnership, refresh } from '../core/state.js';
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 15000, 15000];
 
-export async function becomeViewer({ since, handlers, onGiveUp }) {
+// `ticket` + `chat`: this tab's own turn and the chat it was queued on (the
+// stream's first line names both). The reattach is BY TICKET - by chat it
+// followed whatever turn was live on the chat (2026-10-07).
+export async function becomeViewer({ since, handlers, onGiveUp, ticket = null, chat: ownChat = null }) {
     releaseOwnership();   // controller → null: main.js's typing mirror holds the button now
     ui.showToast("Connection dropped — she's still working, reconnecting…", 'warning');
-    const chat = getBoundChat() || document.getElementById('chat-select')?.value || null;
+    const chat = ownChat || getBoundChat() || document.getElementById('chat-select')?.value || null;
     let lastSeq = typeof since === 'number' ? since : null;
 
     const giveUp = async (reason) => {
@@ -26,6 +29,7 @@ export async function becomeViewer({ since, handlers, onGiveUp }) {
         try { await onGiveUp?.(reason); } catch { /* button release is best-effort */ }
         await refresh(false);
         if (reason === 'unreachable') ui.showToast("Couldn't reconnect — her reply lands in the chat when she finishes", 'error');
+        if (reason === 'unknown') ui.showToast("Lost track of that message (she restarted?) — check the chat; send it again if it isn't there", 'warning');
     };
 
     for (let i = 0; i < BACKOFF_MS.length; i++) {
@@ -48,10 +52,11 @@ export async function becomeViewer({ since, handlers, onGiveUp }) {
                 handlers.onResync?.();
             },
         };
-        const r = await api.attachTurn(chat, lastSeq, h);
+        const r = await api.attachTurn(chat, lastSeq, h, ticket);
         if (typeof r.lastSeq === 'number') lastSeq = r.lastSeq;
         if (r.live === true && outcome !== 'lost') return;     // ended through the handlers
         if (r.live === false) { await giveUp('finished'); return; }
+        if (r.unknown) { await giveUp('unknown'); return; }
         // unreachable, or the feed died again → back off and retry
     }
     await giveUp('unreachable');

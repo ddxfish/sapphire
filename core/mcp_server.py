@@ -193,7 +193,11 @@ def ask(system, args, where='', persona=None):
     token = answering.set(True)
     try:
         try:
-            reply = inbox.ask(name, body, source=f"mcp:{where or 'client'}", timeout=ASK_WAIT)
+            # gate: asked again the moment the turn is about to run - the chat may
+            # have turned private while the ask waited in line, and the reply
+            # would leave over the network (2026-10-07)
+            reply = inbox.ask(name, body, source=f"mcp:{where or 'client'}", timeout=ASK_WAIT,
+                              gate=lambda: f"The chat '{name}' is private now." if _private(system, name) else '')
         except inbox.InboxRefused as e:
             raise ValueError(str(e))
         except TimeoutError:
@@ -212,7 +216,8 @@ def tell(system, args, where='', persona=None):
     name, body = _item(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
     token = answering.set(True)
     try:
-        inbox.tell(name, body, source=f"mcp:{where or 'client'}", coalesce=False)
+        inbox.tell(name, body, source=f"mcp:{where or 'client'}", coalesce=False,
+                   gate=lambda: f"The chat '{name}' is private now." if _private(system, name) else '')
     except inbox.InboxRefused as e:
         raise ValueError(str(e))
     finally:

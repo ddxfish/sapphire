@@ -11,7 +11,9 @@
 #   manifest.json  {"name": "...", "version": "0.2.0",
 #                   "builds": [{"chipFamily": "ESP32",
 #                               "flash": {"mode": "dio", "size": "4MB", "freq": "40m"},   (ours; optional)
-#                               "parts": [{"path": "bootloader.bin", "offset": 4096}, ...]}]}
+#                               "parts": [{"path": "bootloader.bin", "offset": 4096},
+#                                         {"path": "app.bin", "offset": 131072, "app": true}, ...]}]}
+#   ("app": true marks the program itself, the one part an update over the air sends)
 #
 # Parts fetched from a URL are kept under user/firmware_cache/<board>/<version>/
 # so a board can be flashed again without the network; older versions of
@@ -135,7 +137,7 @@ def _board(entry, base):
     parts = []
     for p in (b.get('parts') or []):
         try:
-            parts.append({'path': _safe_path(p.get('path')), 'offset': int(p.get('offset'))})
+            parts.append({'path': _safe_path(p.get('path')), 'offset': int(p.get('offset')), 'app': p.get('app') is True})
         except (TypeError, ValueError, AttributeError):
             raise FirmwareError(f"A part of {board_id} has no offset.")
     if not parts:
@@ -192,6 +194,36 @@ def index():
     return {'source': source(), 'error': error,
             'boards': [{k: b[k] for k in ('id', 'name', 'chipFamily', 'version', 'flash', 'parts')}
                        for b in boards.values()]}
+
+
+def board(board_id, fresh=False):
+    """One board of the source, or FirmwareError saying why not."""
+    boards, error = _boards(fresh=fresh)
+    b = boards.get(str(board_id or '').strip().lower())
+    if not b:
+        raise FirmwareError(error or f"No firmware for a '{board_id}' in the firmware source.")
+    return b
+
+
+def app_part(board_id):
+    """The program itself, as a local file: what an update over the air sends."""
+    b = board(board_id, fresh=True)
+    app = next((p['path'] for p in b['parts'] if p['app']), None)
+    if not app:
+        raise FirmwareError(f"The {b['id']} manifest does not say which part is the program (\"app\": true).")
+    return part(board_id, app), b['version']
+
+
+def known_version(board_id):
+    """The version the source offers for this board, from what is already
+    known (the index read lately, or the cache): never the network, so a
+    status probe can ask without reaching out. '' when nothing is known."""
+    board_id = str(board_id or '').strip().lower()
+    _, boards = _recent
+    if boards is None:
+        boards = _cached_boards()
+    b = (boards or {}).get(board_id)
+    return b['version'] if b else ''
 
 
 def part(board_id, path):

@@ -42,6 +42,18 @@ class TestNormalize:
         with pytest.raises(ValueError, match=re.escape(msg)):
             ask_card.normalize(bad)
 
+    def test_stringified_lists_are_parsed_not_iterated_by_character(self):
+        """Local models stringify nested arrays; the card drew `[`, `{`, `"`...
+        as options and said success (chaos scout, 2026-10-07)."""
+        q = ask_card.normalize([{'question': 'Color?', 'options': '["Red", {"label": "Blue"}]'}])['questions'][0]
+        assert [o['label'] for o in q['options']] == ['Red', 'Blue']
+        q = ask_card.normalize([{'question': 'Color?', 'options': 'Red, Blue, Green'}])['questions'][0]
+        assert [o['label'] for o in q['options']] == ['Red', 'Blue', 'Green']
+        qs = ask_card.normalize('[{"question": "Pet?", "options": ["Dog", "Cat"]}]')['questions']
+        assert qs[0]['question'] == 'Pet?'
+        with pytest.raises(ValueError, match='needs 2-6'):
+            ask_card.normalize([{'question': 'Color?', 'options': 'just-one-word'}])
+
     def test_limits_one_line_and_the_comment_cannot_be_closed_early(self):
         p = ask_card.normalize([{'question': 'a\nb --> c', 'options': ['x' * 500, 'y']}])
         q = p['questions'][0]
@@ -101,10 +113,14 @@ class TestTool:
         assert item['required'] == ['question', 'options']
         assert 'ask_user' in ask_user.AVAILABLE_FUNCTIONS
 
-    def test_default_toolsets_carry_it(self):
+    def test_default_toolsets_carry_it_except_the_agent_baseline(self):
+        """'default' is the lean background-worker baseline the llm agent kind runs
+        on: an agent that 'asks' a card nobody sees ends its mission on a question
+        (chaos scout, 2026-10-07). Every chat-facing default set has it."""
         d = json.loads((ROOT / 'core' / 'toolsets' / 'toolsets.json').read_text(encoding='utf-8'))
-        sets = [k for k, v in d.items() if isinstance(v, dict) and 'functions' in v]
-        assert sets and all('ask_user' in d[k]['functions'] for k in sets)
+        sets = {k for k, v in d.items() if isinstance(v, dict) and 'functions' in v}
+        assert 'ask_user' not in d['default']['functions']
+        assert all('ask_user' in d[k]['functions'] for k in sets - {'default'})
 
 
 class TestBrowserWiring:
@@ -117,11 +133,22 @@ class TestBrowserWiring:
             src = (static / f).read_text(encoding='utf-8')
             assert "from './shared/ask-marker.js'" in src and 'parseAskMarker(' in src and 'buildAskCards(' in src
         ui = (static / 'ui.js').read_text(encoding='utf-8')
-        assert ui.count('lockAnsweredAskCards(chat)') == 2        # history render + user message
+        assert ui.count('lockAnsweredAskCards(chat)') == 3        # history render + user message + finish swap
         ev = (static / 'core' / 'events.js').read_text(encoding='utf-8')
         assert "'sapphire:ask_answer'" in ev and 'triggerSendWithText(text)' in ev
         card = (static / 'shared' / 'ask-marker.js').read_text(encoding='utf-8')
         assert "new CustomEvent('sapphire:ask_answer'" in card
+
+    def test_the_answer_leads_with_the_inbox_header(self):
+        """Every door that isn't the user typing leads with inbox.header(...);
+        the card's answer (Krem, 2026-10-07: 'so she knows it's not from me')
+        uses the very same grammar, spelled once in the JS."""
+        from core.chat import inbox
+        card = (ROOT / 'interfaces' / 'web' / 'static' / 'shared' / 'ask-marker.js').read_text(encoding='utf-8')
+        m = re.search(r"export const ANSWER_HEADER = '(.+?)';", card)
+        assert m
+        js = m.group(1).encode('utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8')
+        assert js == inbox.header('Question card', 'ask_user', 'what the user clicked')
 
     def test_dictation_no_longer_drops_while_a_turn_is_live(self):
         src = (ROOT / 'interfaces' / 'web' / 'static' / 'handlers' / 'send-handlers.js').read_text(encoding='utf-8')

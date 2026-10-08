@@ -342,6 +342,9 @@ def test_stream_route_wire_format_unchanged_plus_seq(client, mock_system):
     r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
     lines = [l for l in r.text.split('\n') if l.startswith('data: ')]
+    # one line precedes the engine's: the turn's ticket (reattach-by-ticket, 2026-10-07)
+    assert '"type": "ticket"' in lines[0] and '"ticket": "' in lines[0]
+    lines = lines[1:]
     assert '"type": "content", "text": "hello", "seq": 1' in lines[0]
     assert '"type": "tool_start"' in lines[1] and '"type": "tool_end"' in lines[2]
     assert '"type": "llm_done"' in lines[3] and '"seq": 4' in lines[3]
@@ -403,6 +406,51 @@ def test_attach_route_replays_since_text_only(client, mock_system):
     assert 'tts_chunk' not in r.text and 'tts_stream_start' not in r.text
 
 
+def test_attach_by_ticket_finds_this_tabs_turn_whatever_runs_on_the_chat(client, mock_system):
+    """Krem codes from his phone through her; the screen lock drops the socket.
+    By chat the tab rejoined whatever turn was live on the chat - another one's
+    once the inbox ran turns back to back (race scout, 2026-10-07). By TICKET it
+    rejoins its own: live → attach since; finished → 204; unknown → 404."""
+    from core.routes import chat as route
+    import concurrent.futures as cf
+    c, csrf = client
+    sm = mock_system.llm_chat.session_manager
+    sm.is_chat_hidden.return_value = False
+    sm.read_chat_settings.return_value = {}
+    mine, _ = _finished_turn()
+    other = MagicMock()                                   # the chat's current live turn: NOT ours
+    mock_system.llm_chat.live_turn.return_value = other
+    route._ticket_note('tk-live', chat='trinity', turn=mine)
+    r = c.post('/api/chat/attach', json={'chat': 'trinity', 'since': 4, 'ticket': 'tk-live'}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200
+    lines = [l for l in r.text.split('\n') if l.startswith('data: ')]
+    assert '"text": "world"' in lines[0] and lines[-1] == 'data: {"done": true, "ephemeral": false, "seq": 8}'
+    other.attach.assert_not_called()
+    # finished while the tab was away: the ring still replays the tail it missed
+    route._ticket_note('tk-done', chat='trinity', turn=mine, ended=time.monotonic())
+    r = c.post('/api/chat/attach', json={'ticket': 'tk-done', 'since': 7}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200 and r.text.strip().endswith('data: {"done": true, "ephemeral": false, "seq": 8}')
+    # ran and was forgotten (ticket kept, turn gone)
+    route._ticket_note('tk-gone', chat='trinity', ended=time.monotonic())
+    assert c.post('/api/chat/attach', json={'ticket': 'tk-gone'}, headers={'X-CSRF-Token': csrf}).status_code == 204
+    # never heard of it (a restart)
+    assert c.post('/api/chat/attach', json={'ticket': 'tk-nope'}, headers={'X-CSRF-Token': csrf}).status_code == 404
+    # still queued: the body re-sends `queued` for it and waits (dropped here, so the body ends)
+    from core.chat import inbox
+    item = inbox.Item(run=lambda: None, source='web', lane='now')
+    started = cf.Future()
+    route._ticket_note('tk-queued', chat='trinity', item=item, started=started)
+    threading.Timer(0.4, lambda: item.reply.set_exception(RuntimeError('dropped: taken back'))).start()
+    r = c.post('/api/chat/attach', json={'ticket': 'tk-queued'}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200 and '"type": "ticket"' in r.text and '"type": "queued"' in r.text
+    assert 'taken back' in r.text                      # dropped while the tab watched: it hears why
+    # dropped before the tab came back: nothing to attach to
+    gone = inbox.Item(run=lambda: None, source='web', lane='now')
+    gone.reply.set_exception(RuntimeError('dropped'))
+    route._ticket_note('tk-dropped', chat='trinity', item=gone, started=cf.Future())
+    assert c.post('/api/chat/attach', json={'ticket': 'tk-dropped'}, headers={'X-CSRF-Token': csrf}).status_code == 204
+
+
 # ─── client contracts (source tripwires) ────────────────────────────────────
 
 def _src(rel):
@@ -417,7 +465,13 @@ def test_client_treats_a_dead_feed_as_lost_not_finished():
     assert "handlers.lastSeq = data.seq" in api
     sh = _src('handlers/send-handlers.js')
     assert "from '../features/viewer.js'" in sh and 'e.feedLost && !viewer' in sh
-    assert 'if (armed && !viewer) setProc(false)' in sh
+    # the reattach is by TICKET (2026-10-07): the stream's first line names it
+    assert 'ticket: myTicket, chat: myChat' in sh and "onTicket: (ticket, chat) =>" in sh
+    assert "if (data.type === 'ticket')" in api and 'ticket: ticket || null' in api
+    vw = _src('features/viewer.js')
+    assert 'api.attachTurn(chat, lastSeq, h, ticket)' in vw and "giveUp('unknown')" in vw
+    # the live slot is OWNED (2026-10-07): a turn clears it only while it still holds it
+    assert 'if (armed && ownsLive())' in sh and 'if (!viewer) setProc(false)' in sh
     chat = _src('chat.js')
     assert "document.getElementById('streaming-message')" in chat   # refresh hold
     assert chat.count('e.feedLost') == 2                             # regen + continue lanes

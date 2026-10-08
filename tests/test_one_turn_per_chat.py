@@ -134,23 +134,27 @@ def test_stream_route_queues_when_busy_then_streams(client, mock_system, monkeyp
     r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
     lines = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ')]
-    assert lines[0]['type'] == 'queued' and lines[0]['ticket'] and lines[0]['position'] == 1
+    # the turn's identity first (a dropped socket reattaches by it), then the queue
+    assert lines[0]['type'] == 'ticket' and lines[0]['ticket']
+    assert lines[1]['type'] == 'queued' and lines[1]['ticket'] == lines[0]['ticket'] and lines[1]['position'] == 1
     assert any(l.get('type') == 'content' and l.get('text') == 'later' for l in lines)
     assert lines[-1].get('done') is True
     assert mock_system.llm_chat.begin_stream.call_count == 4
 
 
 def test_stream_route_returns_409_error_json_when_the_inbox_refuses(client, mock_system, monkeypatch):
-    """The 409 lane survives for a chat that cannot take the turn at all
-    (sealed, full inbox): {"error"} shape, the frontend toast reads err.error."""
+    """The 409 lane survives for a chat that cannot take the turn at all (a
+    sealed chat): {"error"} shape, the frontend toast reads err.error. A FULL
+    inbox is no longer one of those for a person: the depth cap counts machine
+    items only (Krem: typed-while-busy is never refused; 2026-10-07)."""
     from core.chat import inbox
     c, csrf = client
     monkeypatch.setattr(inbox, 'DEPTH_MAX', 0)
     mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
-    mock_system.llm_chat.session_manager.is_chat_hidden.return_value = False
+    mock_system.llm_chat.session_manager.is_chat_hidden.return_value = True
     r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 409
-    assert 'full' in r.json()['error']
+    assert 'sealed' in r.json()['error']
     mock_system.web_active_inc.assert_not_called()
     mock_system.llm_chat.end_stream.assert_not_called()
 
@@ -164,10 +168,13 @@ def test_stream_route_opts_into_exclusive(client, mock_system):
         {"type": "content", "text": "hello"},
         {"type": "final", "text": "hello", "cancelled": False, "error": False},
     ])
+    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
     mock_system.llm_chat.begin_stream.return_value = (stream, 'sid1', 'trinity')
     r = c.post('/api/chat/stream', json={'text': 'hi'},
                headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
     assert '"done": true' in r.text
-    mock_system.llm_chat.begin_stream.assert_called_once_with(exclusive=True)
+    # by NAME - the chat the turn was queued on, pointer-bound while it is
+    # still the active one, pinned once the pointer moved (2026-10-07)
+    mock_system.llm_chat.begin_stream.assert_called_once_with(chat_name='trinity', exclusive=True, operator=True)
     mock_system.llm_chat.end_stream.assert_called_once_with('sid1', 'trinity')

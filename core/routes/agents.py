@@ -49,7 +49,23 @@ async def agent_status(chat: str = Query('', description="Filter by chat name"),
         return {"agents": []}
     # '' (the query default) = unfiltered, matching the old route contract;
     # check_all itself now treats '' as the chatless-agents filter.
-    return {"agents": system.agent_manager.check_all(chat_name=chat or None)}
+    # Same hidden-chat gate as every other agent route: to_dict() carries the
+    # mission and the pending question, and this route handed a sealed chat's
+    # out in plaintext - by name, or unfiltered (privacy scout, 2026-10-07).
+    if chat:
+        _chat_or_404(system, chat)
+        return {"agents": system.agent_manager.check_all(chat_name=chat)}
+    sm = system.llm_chat.session_manager
+    out = []
+    for a in system.agent_manager.check_all(chat_name=None):
+        c = a.get('chat_name') or ''
+        try:
+            hidden = bool(c) and (sm.is_chat_hidden(c) or sm.read_chat_settings(c) is None)
+        except Exception:
+            hidden = True
+        if not hidden:
+            out.append(a)
+    return {"agents": out}
 
 
 @router.get("/api/agents/providers")

@@ -108,6 +108,7 @@ class AgentManager:
         self._name_counters = {}
         self._last_event_at = {}     # agent id -> monotonic
         self._rows = None            # loaded on first use
+        self._shutting_down = False  # finished() rests conversational sessions instead of stopping them
 
     # --- kinds ------------------------------------------------------------------
 
@@ -211,11 +212,15 @@ class AgentManager:
         return None
 
     def _row_update(self, agent_id, **fields):
-        r = self._row(agent_id)
-        if r is not None:
-            r.update(fields)
-            self._save_rows()
-        return r
+        # under the lock (RLock): _save_rows rebinds the list, and an unlocked
+        # update from an agent's thread racing a spawn lost the new row - and
+        # with it the resume token (race + day-ruiner scouts, 2026-10-07)
+        with self._lock:
+            r = self._row(agent_id)
+            if r is not None:
+                r.update(fields)
+                self._save_rows()
+            return r
 
     def _content_put(self, chat, agent_id, **fields):
         """Mission, question, report: under the chat, not in the row."""
@@ -269,6 +274,9 @@ class AgentManager:
 
     # --- lookups, chat-local ---------------------------------------------------------
 
+    def _live_by_id(self, agent_id):
+        return self._agents.get(agent_id)
+
     def _live_in(self, chat):
         with self._lock:
             return [a for a in self._agents.values() if a.chat == chat]
@@ -294,8 +302,16 @@ class AgentManager:
 
     def _next_name(self, spec):
         names = spec.get('names') or DEFAULT_NAMES
+        if isinstance(names, str):
+            names = [names]
         with self._lock:
+            # live agents AND rows still reachable by name (resting ones wake
+            # on `say`): a second 'Forge' while Forge rested sent her say to the
+            # wrong one, and the counters reset on restart (chaos scout).
             live = {a.name.lower() for a in self._agents.values()}
+            live |= {str(r.get('name') or '').lower() for r in self._load_rows()
+                     if r.get('status') in LIVE or r.get('status') == 'resting'
+                     or (r.get('resume_token') and r.get('conversational'))}
             idx = self._name_counters.get(spec['kind'], 0)
             for i in range(len(names) * 4):
                 base = names[(idx + i) % len(names)]
@@ -348,6 +364,12 @@ class AgentManager:
             if not mission:
                 return {'error': 'An agent needs a mission.'}
             chat = str(chat or '').strip()
+            if not chat:
+                # Krem (2026-10-07): no ronin. A chatless lane (a continuity task
+                # with no chat) pooled every such agent together and their
+                # reports went nowhere (privacy + chaos scouts).
+                return {'error': "An agent needs a chat to report into; this lane has none (no ronin agents). "
+                                 "Give the task a chat, or do the work in this turn."}
             self._gate(spec, chat)
             mod = self._module(spec)
             ps = _settings()
@@ -374,10 +396,12 @@ class AgentManager:
                 self._save_rows()
             self._content_put(chat, agent.id, mission=mission, options=dict(options or {}))
             agent.start()
+            # ephemeral: live tabs hear it; a tab opened after a vault lock must
+            # not get a private chat's name replayed (privacy scout, 2026-10-07)
             publish(Events.AGENT_SPAWNED, {'id': agent.id, 'name': agent.name, 'chat_name': chat,
-                                           'agent_type': spec['kind']})
-            logger.info(f"Agent {agent.name} ({agent.id}) spawned: kind={spec['kind']} chat={chat!r} "
-                        f"mission {len(mission)} chars")
+                                           'agent_type': spec['kind']}, ephemeral=True)
+            logger.info(f"Agent {agent.name} ({agent.id}) spawned: kind={spec['kind']} "
+                        f"chat={'set' if chat else 'none'} mission {len(mission)} chars")
             return {'id': agent.id, 'name': agent.name, 'kind': spec['kind']}
         except AgentError as e:
             return {'error': str(e)}
@@ -396,15 +420,24 @@ class AgentManager:
         self._gate(spec, row.get('chat', ''), row, what='woken')
         mod = self._module(spec)
         content = self._content_get(row.get('chat', ''), row['id'])
-        full = dict(row, mission=text, options=content.get('options') or {})
+        # The agent is rebuilt from its ROW plus the stored options, and `text`
+        # is the next TURN, not a new mission: the kind derived its workspace
+        # from the mission, so a wake on "fix the tests" moved a project-mode
+        # session into an empty ~/claude-workspaces/fix-the-tests (two scouts,
+        # 2026-10-07). `context` rode along again on every wake; it is in the
+        # session's history already.
+        options = {k: v for k, v in (content.get('options') or {}).items() if k != 'context'}
+        full = dict(row, mission=text, options=options, wake_text=text)
         with self._lock:
+            if self._live_by_id(row['id']) is not None:
+                raise AgentError(f"{row.get('name')} is already awake.")
             agent = mod.Agent(full, self)
             self._agents[agent.id] = agent
             agent.status = 'running'
             self._row_update(agent.id, status='running', ended=None)
         agent.start()
         publish(Events.AGENT_SPAWNED, {'id': agent.id, 'name': agent.name, 'chat_name': agent.chat,
-                                       'agent_type': spec['kind'], 'woken': True})
+                                       'agent_type': spec['kind'], 'woken': True}, ephemeral=True)
         return agent
 
     # --- what agents call back -----------------------------------------------------------
@@ -416,12 +449,25 @@ class AgentManager:
         self._content_put(agent.chat, agent.id, pending_question=summary)
         publish(Events.AGENT_WAITING, {'id': agent.id, 'name': agent.name, 'chat_name': agent.chat}, ephemeral=True)
         if not agent.chat:
-            return
+            return None
         text = _question_text(agent, summary)
         # coalesce=False (Krem 2026-10-06): each agent's return is one event from
-        # one author and gets her dedicated reply; only a person's typed turns fold
-        inbox.tell(agent.chat, text, source=f'agent:{agent.kind}', coalesce=False,
-                   header_line=inbox.header(f'Agent {agent.name}', agent.kind, 'asks'))
+        # one author and gets her dedicated reply; only a person's typed turns fold.
+        # The ticket goes back to the agent: a question answered from the pill
+        # (or timed out) before its turn ran is withdrawn, not asked anyway.
+        return inbox.tell(agent.chat, text, source=f'agent:{agent.kind}', coalesce=False,
+                          header_line=inbox.header(f'Agent {agent.name}', agent.kind, 'asks'))
+
+    def question_withdrawn(self, agent, ticket, why):
+        """The question was answered (or given up on) before its turn in the
+        chat came: take the item back so she is not asked about a settled
+        fork (race + chaos scouts, 2026-10-07)."""
+        from core.chat import inbox
+        try:
+            if ticket and agent.chat and inbox.drop(agent.chat, ticket, why):
+                logger.info(f"Agent {agent.name}: queued question withdrawn ({why})")
+        except Exception as e:
+            logger.debug(f"[AGENTS] question not withdrawn: {e}")
 
     def report_out(self, agent, text):
         from core.chat import inbox
@@ -448,15 +494,25 @@ class AgentManager:
         """The agent's thread is done (any terminal status, or a conversational
         kind going to rest)."""
         status = agent.status
+        if self._shutting_down and status == 'stopped' and agent.resume_token and self._is_conversational(agent):
+            status = 'resting'       # the process is ending, not the session: `say` resumes it after the restart
         with self._lock:
             self._row_update(agent.id, status=status, ended=_now(), resume_token=agent.resume_token)
             if status not in LIVE:
                 self._agents.pop(agent.id, None)
+        if status == 'failed' and not getattr(agent, '_reported', False):
+            # the kind never got to report (its setup raised, the SDK is missing,
+            # a bad setting): she said "it reports back when done" - say so
+            # (chaos scout, 2026-10-07). An SSE event alone reaches only the UI.
+            try:
+                self.report_out(agent, f"[{agent.name} failed: {_short(agent.error or 'unknown error', 300)}]")
+            except Exception as e:
+                logger.debug(f"[AGENTS] failure report for {agent.name} not sent: {e}")
         publish(Events.AGENT_COMPLETED, {
             'id': agent.id, 'name': agent.name, 'status': status, 'elapsed': agent.elapsed,
             'warning': agent.warning, 'error': (agent.error or '')[:200] or None,
             'agent_type': agent.kind, 'chat_name': agent.chat,
-        })
+        }, ephemeral=True)
         logger.info(f"Agent {agent.name} ({agent.id}) {status} after {agent.elapsed}s")
 
     def resting(self, agent):
@@ -545,7 +601,14 @@ class AgentManager:
         logger.info(f"Agent {a.name} ({agent_id}) dismissed")
         return {'name': a.name, 'status': 'dismissed', 'last_result': a.result}
 
+    def _is_conversational(self, agent):
+        spec = _registry().get_kind(agent.kind)
+        if spec is not None:
+            return bool(spec.get('conversational'))
+        return bool((self._row(agent.id) or {}).get('conversational'))
+
     def shutdown(self, timeout=10):
+        self._shutting_down = True
         with self._lock:
             live = [(aid, a) for aid, a in self._agents.items() if a.status in LIVE]
         for aid, a in live:
@@ -554,9 +617,13 @@ class AgentManager:
                 a.stop()
             except Exception as e:
                 logger.warning(f"[AGENTS] {a.name}.stop() raised at shutdown: {e}")
-            # the row says stopped now, whether or not the thread gets to finished()
-            # before the process ends - a restart must not read it as 'running'
-            self._row_update(aid, status='stopped', ended=_now(), resume_token=a.resume_token)
+            # the row says so now, whether or not the thread gets to finished()
+            # before the process ends - a restart must not read it as 'running'.
+            # A conversational kind with a session RESTS: `say` resumes it after
+            # the restart (Krem: sessions persist). 'stopped' here orphaned every
+            # Claude Code session on a graceful restart (day-ruiner, 2026-10-07).
+            status = 'resting' if (a.resume_token and self._is_conversational(a)) else 'stopped'
+            self._row_update(aid, status=status, ended=_now(), resume_token=a.resume_token)
         for aid, a in live:
             if a._thread and a._thread.is_alive():
                 a._thread.join(timeout=timeout)
@@ -739,9 +806,15 @@ class AgentManager:
             if not text:
                 return "say needs the text of the follow-up turn.", False
             if agent is None:
-                if row.get('status') != 'resting':
-                    return f"{who} is {row.get('status')}; nothing to say to.", False
-                a = self._revive(row, text)
+                # resting, or stopped/failed with a session to pick up (plan §12:
+                # `say` may try --resume); the whole check-and-wake is one critical
+                # section so two says at once can't resume the same session twice
+                with self._lock:
+                    if self._live_by_id(row.get('id')) is not None:
+                        return f"{who} is already awake.", False
+                    if not row.get('resume_token'):
+                        return f"{who} is {row.get('status')}; nothing to say to.", False
+                    a = self._revive(row, text)
                 return f"{a.name} woke and took your message.", True
             spec = _registry().get_kind(agent.kind) or {'kind': agent.kind, 'cloud': True}
             self._gate(spec, chat, row, what='spoken to')

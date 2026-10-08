@@ -1,0 +1,5 @@
+# Boards flashed by Sapphire herself (Settings > Devices > New board (USB) >
+# "The computer Sapphire runs on"). Optional: flashing from the browser
+# (Chrome/Edge, Web Serial) needs nothing here. esptool brings pyserial,
+# bitstring, intelhex, reedsolo, esp-pylib and rich_click with it.
+esptool>=5.0

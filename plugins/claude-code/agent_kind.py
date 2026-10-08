@@ -18,6 +18,7 @@
 # Sapphire root itself). Replaces plugins/claude-code's headless workers and
 # the Trinity tmux plugin.
 import asyncio
+import sys
 import logging
 import os
 import queue
@@ -59,7 +60,7 @@ def _sdk():
         return sdk
     except ImportError:
         raise RuntimeError("claude-agent-sdk is not installed in Sapphire's environment. "
-                           "Install it there: python -m pip install claude-agent-sdk")
+                           "Install it there: pip install -r install/requirements-agents.txt")
 
 
 def _head(text, n=120):
@@ -80,7 +81,11 @@ class Agent(BaseAgent):
         self.mode = str(o.get('mode') or 'project').strip().lower()
         if self.mode not in ('project', 'plugin', 'core'):
             self.mode = 'project'
-        self.wsname = h._safe_dir_name(o.get('name') or '', default='') or h._slugify(self.mission)
+        # The workspace name sticks to the ROW once chosen: a wake passes the
+        # say text as the mission, and re-deriving the name from it moved a
+        # project-mode session into a fresh empty folder (two scouts, 2026-10-07).
+        self.wsname = (str(row.get('wsname') or '').strip()
+                       or h._safe_dir_name(o.get('name') or '', default='') or h._slugify(self.mission))
         if o.get('context'):
             self.mission = f"{self.mission}\n\n---\n\nContext:\n{o['context']}"
         self._say_q = queue.Queue()
@@ -95,13 +100,16 @@ class Agent(BaseAgent):
     def run(self, mission):
         sdk = _sdk()
         warnings.filterwarnings('ignore', category=sdk.CanUseToolShadowedWarning)  # wrong for AskUserQuestion (verified)
+        if self._cancelled.is_set():
+            return                                   # stopped before it began: no CLI is ever spawned
         settings = _settings()
         self.workspace = self._workspace(settings)
+        self.remember(wsname=self.wsname)            # the row keeps the name a wake must reuse
         self._prepare_workspace(settings)
         options = self._options(sdk, settings)
         self.event('note', f"{self.mode} mode in {self.workspace}" + (' (resumed)' if self.resume_token else ''))
         try:
-            asyncio.run(self._main(sdk, options, mission))
+            self._run_loop(self._main(sdk, options, mission))
         except (sdk.ProcessError, sdk.CLIConnectionError) as e:
             self.error = str(e)
             self.status = 'failed'
@@ -112,23 +120,58 @@ class Agent(BaseAgent):
         # the loop ended on the idle timeout: rest, with the session to pick up
         self.status = 'resting' if self.resume_token else 'done'
 
+    def _run_loop(self, coro):
+        """The session's own event loop on this thread. On Windows sapphire.py
+        pins the Selector policy process-wide, and a Selector loop cannot spawn
+        a subprocess - asyncio.run() inherited it and the SDK could not start
+        the CLI at all (windows scout, 2026-10-07). A Proactor loop built here
+        needs no signal handling; the global policy stays untouched - the same
+        pattern as plugins/mcp_client. No asyncio.run() either: its executor
+        shutdown waited on a blocked ask() for the full fork timeout."""
+        loop = asyncio.ProactorEventLoop() if sys.platform == 'win32' else asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            asyncio.set_event_loop(None)
+            loop.close()
+
     async def _main(self, sdk, options, mission):
         self._loop = asyncio.get_running_loop()
         idle_s = max(60, int(float(_settings().get('idle_timeout_min') or 60) * 60))
-        async with sdk.ClaudeSDKClient(options) as client:
-            self._client = client
-            await self._turn(sdk, mission)
-            while not self._cancelled.is_set():
-                self.status = 'idle'
-                text = await self._loop.run_in_executor(None, self._next_say, idle_s)
-                if text is None:
-                    break
-                await self._turn(sdk, text)
-        self._client = None
+        try:
+            async with sdk.ClaudeSDKClient(options) as client:
+                self._client = client
+                # Stop arrived while the CLI was starting (the × in the first
+                # seconds): the mission must not run anyway (race scout).
+                if self._cancelled.is_set():
+                    return
+                await self._turn(sdk, mission)
+                while not self._cancelled.is_set():
+                    self.status = 'idle'
+                    text = await self._loop.run_in_executor(None, self._next_say, idle_s)
+                    if text is None:
+                        # the idle timeout: from here on say() is refused, so a say
+                        # that slipped in meanwhile is taken, not lost on a queue
+                        # nothing reads (race scout, 2026-10-07)
+                        self.status = 'resting'
+                        text = self._next_say(0)
+                        if text is None or self._cancelled.is_set():
+                            break
+                    await self._turn(sdk, text)
+        finally:
+            self._client = None
+            # a fork question still waiting when the session dies would hold
+            # its thread for the whole timeout; the answer is None now
+            self._end_question(None)
 
     def _next_say(self, idle_s):
         try:
-            return self._say_q.get(timeout=idle_s)
+            return self._say_q.get(timeout=idle_s) if idle_s > 0 else self._say_q.get_nowait()
         except queue.Empty:
             return None
 
@@ -272,12 +315,14 @@ class Agent(BaseAgent):
         env['PATH'] = clean.get('PATH', '')
         env['ANTHROPIC_API_KEY'] = ''              # the login, never an inherited key
         cli_path = None
-        wanted = str(settings.get('claude_binary') or '').strip()
+        wanted = str(settings.get('claude_binary') or '').strip().strip('"').strip("'")   # Explorer's "Copy as path" quotes
         if wanted:
             if os.path.isfile(wanted):
                 cli_path = wanted
             else:
-                resolved, err = h._resolve_claude_executable(clean)
+                # a command NAME ('claude', 'claude.exe') is looked up as typed; the
+                # setting used to ignore the value and always look up 'claude'
+                resolved, err = h._resolve_claude_executable(clean, name=os.path.basename(wanted) or 'claude')
                 if err:
                     raise RuntimeError(err)
                 cli_path = resolved
@@ -288,7 +333,11 @@ class Agent(BaseAgent):
             append = '\n\n'.join(p for p in parts if p)
         add_dirs = []
         if self.mode in ('plugin', 'core'):
-            for rel in (('docs',), ('user', 'logs')):
+            # docs for both; the logs only in core mode (ruled unrestricted). A
+            # plugin-mode session is the narrower one, and the logs carry chat
+            # names and exception text (privacy scout, 2026-10-07).
+            rels = (('docs',), ('user', 'logs')) if self.mode == 'core' else (('docs',),)
+            for rel in rels:
                 d = os.path.join(_ROOT, *rel)
                 if os.path.isdir(d):
                     add_dirs.append(d)

@@ -141,8 +141,27 @@ def execute(function_name, arguments, config):
 - The chat renders the marker as a row under the tool result: audio files (`mp3`, `wav`, `ogg`, `oga`, `m4a`, `flac`) get a player, every file gets a download button named by `name`. The player fetches nothing until play is pressed.
 - **URLs are your own plugin routes only** (`/api/plugin/<name>/...`). `attachments.marker` raises `ValueError` on anything else, and the browser renderer drops it too. A tool result can carry text from the open web, so the marker can never point the browser at a third party.
 - The marker is UI-only. It stays in history for the browser and is stripped from every copy the model reads, so say in plain words what you saved. Up to 12 files per marker.
-- The same marker works in the text of a turn your plugin starts itself (`core.cadence.fire_once`). The row then shows on that message.
+- The same marker works in the text of a turn your plugin starts itself (see [Starting a turn yourself](#starting-a-turn-yourself)). The row then shows on that message.
 - Serve the bytes with a `FileResponse` so seeking works, and keep them where the user's data lives (`user/plugin_state/<name>_*`). Files outside the chat database are not covered by a private chat's vault, so refuse to write them when `scope_private` is set.
+
+## Starting a turn yourself
+
+A plugin that has something for the chat outside a tool call — a daemon's result, a device's take, a finished background job — puts it in the chat's **inbox** and the AI answers it as a turn of its own, in order, after whatever she is saying now. Nothing is dropped and no browser needs to be open.
+
+```python
+from core.chat import inbox
+
+inbox.tell(chat_name, "Take 3 is in: 42 notes, 9.8 s.",
+           source='my-plugin',
+           header_line=inbox.header('My plugin', 'take', 'a recording finished'),
+           speak='speakers')          # or 'browser', or None for text only
+```
+
+- `header_line` is the one line above your text that says who wrote it and that the user did not type it — `[My plugin (take) — a recording finished; not typed by the user]`. Every door that isn't the user typing leads with one (agents, satellites, MIDI, phone calls); use `inbox.header(who, kind, what)` so yours reads the same.
+- `inbox.ask(chat, text, source, timeout=...)` is the same door when you need her reply back as the return value (it blocks until she answers or the timeout passes).
+- Returns from a machine never fold with each other: each gets her own reply. Only the user's own typed turns fold. Don't pass `coalesce=True`.
+- The inbox refuses a **private** (vaulted) chat with `inbox.InboxRefused`; catch it and keep your result where your plugin's own state lives.
+- `core.cadence.fire_once(chat, text, ...)` is the older door that **raises `ChatBusy` instead of waiting**. Use it only when a stale result is worse than no result (a timer tick that will fire again anyway). Before 2026-10-06 every plugin used it and lost results whenever she was mid-sentence.
 
 ## Networking from Plugins
 
@@ -375,7 +394,8 @@ Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](.
 ## Reference for AI
 
 - Tool file exports: `ENABLED`, `EMOJI`, `AVAILABLE_FUNCTIONS`, `TOOLS`, `execute(function_name, arguments, config, plugin_settings=None, credentials=None)` → `(message: str, success: bool)`. Signature is inspected — declare 3, 4, or 5 params; extras are passed only if accepted. Optional `get_tools()` returns TOOLS-shaped schemas from current settings.
-- Files for the user: `from core import attachments`; append `attachments.marker(title, [{url, name}, ...])` to the result text. URLs must be the plugin's own routes (`/api/plugin/<name>/...`, else `ValueError`); audio renders a player, every file a download button; max 12; UI-only (stripped from the model's copy). Also valid in the text of a `core.cadence.fire_once` turn.
+- Files for the user: `from core import attachments`; append `attachments.marker(title, [{url, name}, ...])` to the result text. URLs must be the plugin's own routes (`/api/plugin/<name>/...`, else `ValueError`); audio renders a player, every file a download button; max 12; UI-only (stripped from the model's copy). Also valid in the text of a turn the plugin starts through the inbox.
+- Starting a turn yourself: `from core.chat import inbox; inbox.tell(chat, text, source='my-plugin', header_line=inbox.header('My plugin', kind, what), speak=None|'browser'|'speakers')` — waits its turn, never drops, own reply (no folding). `inbox.ask(...)` returns her reply. Private chat → `inbox.InboxRefused`. `core.cadence.fire_once` raises `ChatBusy` instead of waiting — only for a result that goes stale.
 - Schema flags: `is_local` `True|False|"endpoint"` gates PRIVATE chats only (True runs; False/"endpoint" refused; unset refused unless `PRIVATE_ALLOW_UNFLAGGED_TOOLS`); `network: true` = UI "network tools" labeling only; `hidden: true` = out of the Toolsets picker but still registered and callable. No flag routes traffic.
 - Networking: `from core import net` — `net.get/post/put/delete/request(url, ...)` (requests-shaped), `net.session_for(url)` (pooled, lane-fixed), `net.wan_session()` (WAN lane, browser profile). Host classification is syntactic, never resolves DNS: LAN = loopback / RFC1918 / link-local / `*.local` / `*.lan` / `*.home.arpa` / single-label names / registered direct hosts → direct, redirects refused by default; WAN = everything else → proxy env when SOCKS is on. Register LAN FQDNs: `core.socks_proxy.register_direct_hosts(zero_arg_callable, owner=plugin_name)`; keyed by owner (replace-on-reregister), auto-unregistered on plugin unload.
 - `get_tools()` live refresh: re-run on settings save; only `description`/`parameters` update in place; tool names never change; add/remove needs a reload. Keep a static `TOOLS` fallback.

@@ -682,7 +682,16 @@ export const finishStreaming = async (ephemeral = false) => {
             try {
                 const hist = await api.fetchHistory();
                 if (hist && hist.length > 0) {
-                    const lastMsg = hist[hist.length - 1];
+                    // THIS turn's row is the last ASSISTANT row, not the last row:
+                    // the inbox starts the next turn within milliseconds of this
+                    // one ending, and its user row was already last by the time
+                    // the 500 ms passed — her finished reply vanished, replaced
+                    // by the next message's text (race scout, 2026-10-07). An
+                    // assistant row of the NEXT turn cannot exist yet: it lands
+                    // only when that turn ends.
+                    let li = hist.length - 1;
+                    while (li > 0 && hist[li]?.role !== 'assistant') li--;
+                    const lastMsg = hist[li]?.role === 'assistant' ? hist[li] : hist[hist.length - 1];
                     // Strip avatar tags from history if setting is enabled
                     if (window._avatarStripTags && lastMsg.content) {
                         lastMsg.content = lastMsg.content.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
@@ -692,9 +701,13 @@ export const finishStreaming = async (ephemeral = false) => {
                             ? { ...p, text: p.text.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '') }
                             : p);
                     }
-                    const { clone } = createMessage(lastMsg, hist.length - 1, hist.length, true);
+                    const { clone } = createMessage(lastMsg, li, hist.length, true);
 
                     streamingMsg.replaceWith(clone);
+                    // a question card rebuilt from history is live again; if the
+                    // user already answered (their reply queued while she wrote)
+                    // it must stay locked - Send never fires twice
+                    lockAnsweredAskCards(chat);
                 }
             } catch (e) {
                 console.error('[SWAP] Failed:', e);

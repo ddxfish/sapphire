@@ -45,6 +45,13 @@ THINK_BUDGET_CHARS = 6000
 _lock = threading.RLock()
 _records = {}                   # chat -> dict
 _system = None
+
+
+class Unreachable(RuntimeError):
+    """run_turn's chat is missing, sealed or unreadable. A TYPE, so the inbox
+    drops the item on exactly this and treats every other failure (a provider's
+    "model not found") as a failed turn - matching the message text turned real
+    errors into silent drops (chaos + day-ruiner scouts, 2026-10-07)."""
 _thread = None
 _stop = threading.Event()
 
@@ -233,11 +240,15 @@ def armed():
 # ── the turn ────────────────────────────────────────────────────────────────
 
 def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=None,
-             stream_speech=False):
+             stream_speech=False, keep_prompt=False):
     """One unprompted turn on `chat` through THE engine, live to the wire.
     Raises ChatBusy when the chat has a turn in flight. Returns her text.
     on_event(event) sees every event of THIS turn as it happens (the bus
     cannot say whose turn a tool belongs to). Its faults are swallowed.
+    keep_prompt=True: the prompt row IS the record (an agent's report, an MCP
+    message, a call transcript, a MIDI take) - it stays in history even when
+    her answer comes back empty or is stopped. Default False keeps cadence's
+    own rule for its worthless prompts: no answer, no trace (2026-10-07).
     stream_speech=True (a device lane): her voice is made sentence by
     sentence while she writes, as `tts_chunk` events on_event takes to the
     device; the lane below speaks the whole reply only when no sentence was
@@ -251,7 +262,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
     # unreadable chat used to get its text sent over SSE as VOICE_TURN_START
     # and only THEN refused inside chat_stream (scout C, 2026-10-06).
     if sm.get_settings_for(chat) is None:
-        raise RuntimeError(f"chat '{chat}' isn't reachable (missing, sealed or unreadable)")
+        raise Unreachable(f"chat '{chat}' isn't reachable (missing, sealed or unreadable)")
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
     sentences = 0                         # tts_chunk events this turn made
     parts, cancelled, errored, overthought = [], False, None, False
@@ -349,11 +360,15 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
             rounds = [visible_text(b) for b in blocks + [''.join(parts)]]
             final = '\n\n'.join(r for r in rounds if r) if not cancelled or overthought else ''
             if overthought or (not final and not errored and not tools_ran):
-                # no answer (a think loop, an empty reply): nothing to show, speak, or keep
+                # no answer (a think loop, an empty reply): nothing to show or speak
                 final = ''
-                rows_after = _live_row_count(sm, chat)
-                added = (rows_after - rows_before) if (rows_before is not None and rows_after is not None) else None
-                dropped = _drop_last_turn(chat, 'thinking never finished' if overthought else 'empty answer', added)
+                if not keep_prompt:
+                    # ...or keep: cadence's own prompt rows go. A door's content
+                    # row (keep_prompt) stays - Stop on an agent's report used to
+                    # erase the report itself (day-ruiner scout, 2026-10-07).
+                    rows_after = _live_row_count(sm, chat)
+                    added = (rows_after - rows_before) if (rows_before is not None and rows_after is not None) else None
+                    dropped = _drop_last_turn(chat, 'thinking never finished' if overthought else 'empty answer', added)
         except Exception as e:
             logger.warning(f"[CADENCE] '{chat}': end-of-turn history work failed: {e}")
         llm.end_stream(sid, chat_name)

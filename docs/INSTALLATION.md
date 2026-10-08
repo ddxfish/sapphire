@@ -95,6 +95,9 @@ pip install -r install/requirements-minimal.txt
 Then add features as needed:
 
 ```bash
+# Claude Code agents (the Claude Agent SDK + its bundled claude CLI, ~250 MB; runs on your Claude login)
+pip install -r install/requirements-agents.txt
+
 # TTS (Kokoro voice synthesis)
 pip install -r install/requirements-tts.txt
 
@@ -103,11 +106,16 @@ pip install -r install/requirements-stt.txt
 
 # Wakeword (OpenWakeWord detection)
 pip install -r install/requirements-wakeword.txt
+
+# Flashing ESP32 boards from Sapphire's own computer (Settings > Devices > New board)
+# Not needed to flash from the browser (Chrome/Edge): that lane has no dependency.
+# Skip it: the Devices page offers to install this set the first time it is needed.
+pip install -r install/requirements-flash.txt
 ```
 
 Enable each in Settings after installing, then restart.
 
-> **Note:** those three files are the *only* difference from the full install. The minimal set already includes everything else — the dependencies for the Telegram and MCP plugins, EPUB and HEIC/iPhone files in the Library, and SOCKS proxy support for the LLM lane (see [NETWORK.md](NETWORK.md)).
+> **Note:** those four files are the *only* difference from the full install. The minimal set already includes everything else — the dependencies for the Telegram and MCP plugins, EPUB and HEIC/iPhone files in the Library, and SOCKS proxy support for the LLM lane (see [NETWORK.md](NETWORK.md)).
 
 ---
 

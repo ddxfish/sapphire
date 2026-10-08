@@ -4252,6 +4252,17 @@ class ChatSessionManager:
     def get_turn_count(self) -> int:
         return self._effective_chat().get_turn_count()
 
+    def chat_exists(self, chat_name: str) -> bool:
+        """Whether a chat row exists - and NOTHING else: no decrypt, no privacy
+        gate. Raises on a database error, unlike read_chat_settings (which
+        answers None for missing, sealed AND unreadable alike), so a caller
+        that must tell 'gone' from 'can't read it right now' can: the inbox
+        drops items for a chat that is gone and holds them through a locked
+        database (2026-10-07)."""
+        self._ensure_db()
+        with self._get_connection() as conn:
+            return conn.execute("SELECT 1 FROM chats WHERE name = ?", (chat_name,)).fetchone() is not None
+
     def read_chat_settings(self, chat_name: str) -> Optional[Dict[str, Any]]:
         """Read a chat's settings from SQLite WITHOUT switching active chat.
         Returns None if the chat doesn't exist. Applies system defaults

@@ -109,14 +109,14 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
     assert [d['driver'] for d in engine.drivers()] == ['sapphire', 'satellite', 'computer']   # all three ship inside core, by label
     row = engine.get('pi2')
     assert row['parts'][0] == {'driver': 'satellite', 'plugin': 'core',
-                               'config': {'url': 'http://192.168.1.100:8090', 'camera': True, 'chat': '',
+                               'config': {'url': 'http://192.168.1.100:8090', 'camera': True, 'ota': True, 'chat': '',
                                           'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
                                           'look_tool': 'purple pulse', 'look_speaking': 'cyan solid',
                                           'look_nolink': 'red pulse',
                                           'lights_from': '08:00', 'lights_until': '00:00', 'look_night': 'off',
                                           'keep_daily': 7, 'keep_weekly': 4, 'keep_monthly': 3}}
-    assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard', 'sensors']
+    assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard', 'sensors']   # firmware: only a board that says it has two slots
     view = engine.public(row)
     assert view['parts'][0]['values']['token'] == 'set' and view['parts'][0]['values']['voice_key'] == 'set'
 

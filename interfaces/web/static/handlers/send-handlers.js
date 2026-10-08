@@ -30,7 +30,16 @@ export async function handleSend({ refocus = true } = {}) {
     // blocked — it waits its turn in the chat's inbox, server-side, in order
     // with everything else. The bubble pulses until the turn starts; the
     // live turn keeps Stop, the status line and the abort slot until then.
-    const queuedSend = getIsProc();
+    //
+    // The SERVER says whether this send queued (its first event is `queued`),
+    // never this tab's busy flag: the flag misses audio tails, pinned agent
+    // and satellite turns, and other tabs — a send armed as live then got a
+    // `queued` event with no bubble to pulse (race scout, 2026-10-07). So
+    // every send starts un-armed and arms on its own first live event. And
+    // the live slot (abort controller, busy state, Stop) is OWNED: a turn
+    // only clears what it still owns — the inbox starts the next turn within
+    // milliseconds of this one ending, and the old turn's finally used to
+    // switch the new turn's controls off.
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
     if (!txt && !Images.hasPendingUploadImages() && !Images.hasPendingFiles()) return;
@@ -45,13 +54,7 @@ export async function handleSend({ refocus = true } = {}) {
     dispatch(Events.USER_SENT, { text: txt });
 
     const abortController = new AbortController();
-    if (!queuedSend) {
-        setAbortController(abortController);
-        setIsCancelling(false);
-        setProc(true);
-        sendBtn.disabled = true;
-        setSendLabel('busy');
-    }
+    const ownsLive = () => getAbortController() === abortController;
     input.value = '';
     input.dispatchEvent(new Event('input'));
     
@@ -66,36 +69,23 @@ export async function handleSend({ refocus = true } = {}) {
     Images.clearPendingFiles();
     updateImagePreviewArea();
 
-    // A queued send's bubble pulses, carries its place in line, and a × that
-    // takes it back out of the inbox (the text returns to the box).
+    // This send's bubble: it pulses, carries its place in line and a × that
+    // takes it back out of the inbox, from the moment the server says `queued`.
     const bubbles = document.querySelectorAll('#chat-container .message.user');
-    const myBubble = queuedSend ? bubbles[bubbles.length - 1] : null;
-    let myTicket = null;
-    let armed = !queuedSend;          // false until this turn's first event arrives
-    if (myBubble) {
-        myBubble.classList.add('queued');
-        myBubble.title = 'Waiting for Sapphire to finish…';
-        const x = document.createElement('button');
-        x.className = 'queued-x';
-        x.type = 'button';
-        x.title = 'Take it back out of the queue';
-        x.textContent = '\u00d7';
-        x.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (!myTicket) return;
-            try { await api.dropQueued(myTicket); } catch (err) { console.warn('[QUEUE] drop failed:', err); }
-        });
-        myBubble.appendChild(x);
-    }
+    const myBubble = bubbles[bubbles.length - 1] || null;
+    let myTicket = null, myChat = null;
+    let armed = false;                // until this turn's first live event arrives
+    const solid = () => {
+        if (!myBubble) return;
+        myBubble.classList.remove('queued');
+        myBubble.title = '';
+        myBubble.querySelector('.queued-x')?.remove();
+    };
     const armLive = () => {
         // our turn started: take the status line, Stop and the abort slot
         if (armed) return;
         armed = true;
-        if (myBubble) {
-            myBubble.classList.remove('queued');
-            myBubble.title = '';
-            myBubble.querySelector('.queued-x')?.remove();
-        }
+        solid();
         setAbortController(abortController);
         setIsCancelling(false);
         setProc(true);
@@ -105,11 +95,26 @@ export async function handleSend({ refocus = true } = {}) {
         ui.updateStatus('Generating...');
     };
     const queueHooks = {
-        onQueued: (ticket, position) => {
+        onTicket: (ticket, chat) => { myTicket = ticket; myChat = chat || null; },   // every send: its identity
+        onQueued: (ticket, position, chat) => {
             myTicket = ticket;
-            if (myBubble) {
-                myBubble.dataset.ticket = ticket;
-                myBubble.title = position > 1 ? `Waiting — ${position} in line` : 'Waiting for Sapphire to finish…';
+            myChat = chat || null;    // the queue this item sits in, for the × after a chat switch
+            if (!myBubble || armed) return;
+            myBubble.dataset.ticket = ticket;
+            myBubble.title = position > 1 ? `Waiting — ${position} in line` : 'Waiting for Sapphire to finish…';
+            if (!myBubble.classList.contains('queued')) {
+                myBubble.classList.add('queued');
+                const x = document.createElement('button');
+                x.className = 'queued-x';
+                x.type = 'button';
+                x.title = 'Take it back out of the queue';
+                x.textContent = '\u00d7';
+                x.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (!myTicket) return;
+                    try { await api.dropQueued(myTicket, myChat); } catch (err) { console.warn('[QUEUE] drop failed:', err); }
+                });
+                myBubble.appendChild(x);
             }
         },
         onQueuedDropped: (reason) => {
@@ -120,18 +125,11 @@ export async function handleSend({ refocus = true } = {}) {
             }
             ui.showToast(`Not sent: ${reason}`, 'warning');
         },
-        onMerged: () => {
-            // folded into the queued turn ahead of it: one turn, one reply,
-            // streamed by that send. This bubble just goes solid.
-            if (myBubble) {
-                myBubble.classList.remove('queued');
-                myBubble.title = '';
-                myBubble.querySelector('.queued-x')?.remove();
-            }
-        },
+        onMerged: solid,              // folded into the turn ahead: one turn, one reply, streamed by that send
     };
 
-    if (!queuedSend) {
+    if (!getIsProc()) {
+        // nothing of ours is live in this tab: a hint while the server decides
         ui.showStatus();
         ui.updateStatus('Connecting...');
     }
@@ -238,8 +236,10 @@ export async function handleSend({ refocus = true } = {}) {
                 viewer = true;
                 becomeViewer({
                     since: lastSeq,
-                    handlers: { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync },
-                    onGiveUp: async () => { ui.hideStatus(); setProc(false); },
+                    ticket: myTicket, chat: myChat,       // OUR turn, not whatever runs on the chat
+                    handlers: { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync,
+                                ...queueHooks },           // a still-queued turn keeps pulsing after the reattach
+                    onGiveUp: async () => { ui.hideStatus(); if (ownsLive() || !getIsProc()) setProc(false); },
                 });
                 return;
             }
@@ -278,12 +278,17 @@ export async function handleSend({ refocus = true } = {}) {
         }
         return null;
     } finally {
-        // a queued send that never got to run (dropped) owns none of this:
-        // the live turn's handler does
-        if (armed) {
+        // Only what this turn still OWNS: a send that never ran (dropped, or
+        // merged into another) owns none of it, and once a later turn has
+        // armed itself the slot is that turn's — finishStreaming's 500 ms
+        // sleep is long enough for the inbox to have started it.
+        if (armed && ownsLive()) {
             if (!viewer) ui.hideStatus();
             sendBtn.disabled = false;
             setSendLabel('send');
+            if (!viewer) setProc(false);        // a viewer's button belongs to the typing mirror now
+        } else if (!armed && !getIsProc()) {
+            ui.hideStatus();                    // the 'Connecting…' hint, nothing else was ours
         }
         // Not unconditional: the user may have moved into a sidebar textarea
         // while she replied — yanking the cursor back was the seeded case of
@@ -291,7 +296,6 @@ export async function handleSend({ refocus = true } = {}) {
         // (nothing editable holds focus after a mic tap, so the guard alone
         // couldn't stop the keyboard pop).
         if (refocus) focusUnlessEditing(input);
-        if (armed && !viewer) setProc(false);   // a viewer's button belongs to the typing mirror now
     }
 }
 
@@ -485,9 +489,16 @@ export async function handleStop() {
 
         controller.abort();
         audio.stop(true);
-        ui.cancelStreaming();
-        ui.hideStatus();
-        setProc(false);
+        // Only if the turn we stopped still holds the slot: during the await
+        // the inbox may have started the NEXT turn, which is now live and
+        // not ours to tear down (race scout, 2026-10-07).
+        if (getAbortController() === controller) {
+            ui.cancelStreaming();
+            ui.hideStatus();
+            setProc(false);
+        } else {
+            setIsCancelling(false);
+        }
         ui.showToast('Generation stopped', 'success');
     } else {
         // Voice turn (wake / local conversation): no fetch to abort — the

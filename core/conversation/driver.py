@@ -255,7 +255,17 @@ class ConversationDriver:
                 # the inbox's drainer thread in this caller's context, and
                 # exclusive — it used to begin a NON-exclusive stream that
                 # could land on top of a live turn in the same chat.
-                stream, sid, chat = self.system.llm_chat.begin_stream(self._chat_name, exclusive=True)
+                # A newer utterance superseded this one while it waited in line
+                # (the caller said "hello?" twice): its turn is moot — running it
+                # would feed a stale reply into the newer turn's sink (2026-10-07).
+                if my_gen != self._turn_gen:
+                    logger.info("[CONV] queued utterance superseded before it ran — skipped")
+                    return
+                # The chat this utterance was queued on, not whatever is active
+                # when the line reaches it: a bound rail's own chat, else the
+                # active chat AT QUEUE TIME (pinned only if the pointer moved).
+                target = self._chat_name or self.system.llm_chat.queued_target(_queue_chat)
+                stream, sid, chat = self.system.llm_chat.begin_stream(target, exclusive=True)
                 if self._tts_split:
                     # Phone surface: force the sentence-split pump so the first
                     # sentence synthesizes while the rest still generates. Inert
@@ -297,6 +307,7 @@ class ConversationDriver:
             from core.chat import inbox
             _queue_chat = self._chat_name or _active or ''
             if _queue_chat:
+                # (a bound rail's own chat, else the active chat right now)
                 inbox.turn(_queue_chat, _body, source='conversation', lane='now')
             else:
                 _body()

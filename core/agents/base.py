@@ -15,6 +15,7 @@
 #   self.report(text)   -> the turn's result; the engine delivers it into the chat
 #                          through the inbox, no browser needed.
 import contextvars
+import json
 import logging
 import threading
 import time
@@ -55,8 +56,9 @@ class Agent:
         self._events = deque(maxlen=TRANSCRIPT_RING)
         self.tool_count = 0
         self.last_event = ''
-        self._question = None                          # {'id', 'text' | 'questions', 'event', 'answer', 'asked_at'}
+        self._question = None                          # {'id', 'text' | 'questions', 'event', 'answer', 'asked_at', 'ticket'}
         self._question_lock = threading.Lock()
+        self._reported = False                         # report() ran: the chat heard from this agent
 
     # --- status ---------------------------------------------------------------
 
@@ -165,9 +167,18 @@ class Agent:
         self.status = 'waiting'
         self.event('ask', _question_summary(q))
         try:
-            self._engine.question_out(self, q)
+            q['ticket'] = self._engine.question_out(self, q)
         except Exception as e:
+            # the chat can't take it (sealed, gone): nobody will ever be asked -
+            # don't hold the agent for the whole timeout (chaos scout, 2026-10-07)
             logger.warning(f"Agent {self.name}: could not deliver its question: {e}")
+            with self._question_lock:
+                if self._question is q:
+                    self._question = None
+            if self.status == 'waiting':
+                self.status = 'running'
+            self.event('note', 'the question could not reach the chat; going on with the default')
+            return None
         got = q['event'].wait(timeout)
         with self._question_lock:
             answer = q['answer'] if got else None
@@ -177,7 +188,17 @@ class Agent:
             self.status = 'running'
         if not got:
             self.event('note', 'no answer from the director in time')
+            self._withdraw(q, 'no answer in time')
         return answer
+
+    def _withdraw(self, q, why):
+        """The queued 'Agent X asks' turn is moot once the question is settled."""
+        ticket = (q or {}).get('ticket')
+        if ticket:
+            try:
+                self._engine.question_withdrawn(self, ticket, why)
+            except Exception as e:
+                logger.debug(f"Agent {self.name}: withdraw failed: {e}")
 
     def answer(self, value):
         """The director's answer (agent_action answer). (text, ok)."""
@@ -192,6 +213,7 @@ class Agent:
             self._question = None
             q['event'].set()
         self.event('answer', value if isinstance(value, str) else str(value))
+        self._withdraw(q, 'answered')
         return f"Answered {self.name}.", True
 
     def _end_question(self, answer):
@@ -224,9 +246,20 @@ class Agent:
         except Exception as e:
             logger.debug(f"Agent {self.name}: event_out failed: {e}")
 
+    def remember(self, **fields):
+        """Metadata a kind needs back on its next wake (a workspace name, a
+        mode) - onto the ROW, which is metadata-only by contract: never a
+        mission, a question or a report (those go through the engine's
+        content store under the chat)."""
+        try:
+            self._engine._row_update(self.id, **fields)
+        except Exception as e:
+            logger.debug(f"Agent {self.name}: remember({list(fields)}) failed: {e}")
+
     def report(self, text):
         """The turn's result. Delivered into the chat by the engine."""
         self.result = text if text is None else str(text)
+        self._reported = True
         try:
             self._engine.report_out(self, self.result)
         except Exception as e:
@@ -304,6 +337,10 @@ def _map_answers(questions, value):
     question - a letter (a/b/c) or an option label picks that option, anything
     else is free text. A list answers the questions in order."""
     out = {}
+    if isinstance(value, str) and len(questions) > 1:
+        parsed = _parse_per_question(questions, value)
+        if parsed is not None:
+            value = parsed
     if isinstance(value, dict):
         for x in questions:
             qt = str(x.get('question', ''))
@@ -318,6 +355,32 @@ def _map_answers(questions, value):
         return out
     for x in questions:
         out[str(x.get('question', ''))] = _pick(x, value)
+    return out
+
+
+def _parse_per_question(questions, text):
+    """A string that answers SEVERAL questions: the question card's own
+    `Question? → Answer` lines (what the director relays from the user's
+    card), or a JSON object {question: answer}. None when it is neither -
+    then the one string answers every question, as before."""
+    t = (text or '').strip()
+    if t.startswith('{'):
+        try:
+            d = json.loads(t)
+            return d if isinstance(d, dict) else None
+        except ValueError:
+            return None
+    if '\u2192' not in t:
+        return None
+    marks = {str(q.get('question', '')): t.find(str(q.get('question', '')) + ' \u2192 ') for q in questions}
+    found = {q: i for q, i in marks.items() if i >= 0}
+    if not found:
+        return None
+    out = {}
+    for qt, i in found.items():
+        start = i + len(qt) + 3
+        nxt = [j for j in found.values() if j > i]
+        out[qt] = t[start:min(nxt) if nxt else len(t)].strip()
     return out
 
 

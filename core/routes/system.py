@@ -1,4 +1,5 @@
 # core/routes/system.py - Backup, audio devices, continuity, setup wizard, avatars, system restart/shutdown
+import asyncio
 import json
 import os
 import time
@@ -18,6 +19,35 @@ router = APIRouter()
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
+
+
+# =============================================================================
+# OPTIONAL SETS (core/extras.py): installed into her environment when a page
+# first needs one. Only the sets named there; nothing from a request reaches
+# pip.
+# =============================================================================
+
+@router.get("/api/system/extras")
+async def extras_status(request: Request, _=Depends(require_login)):
+    from core import extras
+    return {"extras": await asyncio.to_thread(extras.status)}
+
+
+@router.get("/api/system/extras/{name}")
+async def extras_state(name: str, request: Request, _=Depends(require_login)):
+    from core import extras
+    if name not in extras.EXTRAS:
+        raise HTTPException(status_code=404, detail=f"There is no optional set called '{name}'.")
+    return await asyncio.to_thread(extras.state, name)
+
+
+@router.post("/api/system/extras/{name}/install")
+async def extras_install(name: str, request: Request, _=Depends(require_login)):
+    from core import extras
+    try:
+        return await asyncio.to_thread(extras.start, name)
+    except extras.ExtraError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # =============================================================================

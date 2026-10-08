@@ -568,3 +568,23 @@ def test_a_refused_turn_keeps_none_of_the_rounds():
     cadence._system = sysobj
     with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='refused'):
         cadence.run_turn('c', 'go')
+
+
+def test_keep_prompt_keeps_the_row_when_the_answer_is_empty_or_stopped():
+    """A door's text item (an agent's report, an MCP message, a call
+    transcript) rides run_turn through the inbox; its prompt row IS the
+    record. Stop on her reply used to erase the report itself (day-ruiner
+    scout, 2026-10-07). Cadence's own prompts keep the old rule."""
+    events = [{'type': 'final', 'text': '', 'cancelled': True}]
+    sysobj, stream, llm = _system(events, active='c', rows=2)
+    llm.session_manager.remove_last_messages.return_value = True
+    cadence._system = sysobj
+    with patch('core.cadence.publish'):
+        out = cadence.run_turn('c', '[Agent Forge (claude_code) — done in 2m; not typed by the user]\nAll tests pass.',
+                               speak=None, source='agent:claude_code', keep_prompt=True)
+    assert out == ''
+    llm.session_manager.remove_last_messages.assert_not_called()
+    # the inbox's text items ask for it
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / 'core' / 'chat' / 'inbox.py').read_text(encoding='utf-8')
+    assert 'keep_prompt=True' in src

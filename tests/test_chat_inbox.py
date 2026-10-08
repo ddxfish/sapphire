@@ -24,7 +24,7 @@ class Engine:
         self.ran = threading.Event()
 
     def __call__(self, chat, text, images=None, speak=None, source='cadence', on_event=None,
-                 stream_speech=False):
+                 stream_speech=False, **kw):
         if self.busy > 0:
             self.busy -= 1
             raise ChatBusy(chat)
@@ -266,7 +266,8 @@ def test_a_turn_may_not_wait_on_its_own_chat(fast, monkeypatch):
 
 
 def test_an_unreachable_chat_drops_the_item_without_retrying(fast):
-    eng = Engine(fail=RuntimeError("chat 'desk' isn't reachable (missing, sealed or unreadable)"))
+    from core import cadence
+    eng = Engine(fail=cadence.Unreachable("chat 'desk' isn't reachable (missing, sealed or unreadable)"))
     with patch('core.cadence.run_turn', eng):
         item = inbox.put('desk', inbox.Item(text='hello', lane='later'))
         assert _wait(lambda: item.reply.done())
@@ -274,6 +275,48 @@ def test_an_unreachable_chat_drops_the_item_without_retrying(fast):
             item.reply.result()
         time.sleep(0.1)
     assert inbox.depth('desk') == 0
+
+
+def test_a_provider_error_that_sounds_unreachable_is_still_a_failed_turn(fast):
+    """'model x not found' matched the old UNREACHABLE substrings and was
+    dropped silently (chaos/day-ruiner scouts, 2026-10-07). The drop is typed now."""
+    eng = Engine(fail=RuntimeError("model 'llama-x' not found - does not exist on this host"))
+    with patch('core.cadence.run_turn', eng):
+        item = inbox.put('desk', inbox.Item(text='hello', lane='later'))
+        assert _wait(lambda: item.reply.done())
+        with pytest.raises(RuntimeError, match='not found'):
+            item.reply.result()
+    assert inbox.depth('desk') == 0
+
+
+def test_a_person_is_never_refused_by_the_depth_cap(fast, monkeypatch):
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)
+    monkeypatch.setattr(inbox, 'DEPTH_MAX', 2)
+    inbox.put('desk', inbox.Item(text='1', lane='later'))
+    inbox.put('desk', inbox.Item(text='2', lane='later'))
+    with pytest.raises(inbox.InboxRefused, match='full'):
+        inbox.put('desk', inbox.Item(text='3', lane='later'))         # a machine waits its turn elsewhere
+    for i in range(5):
+        inbox.put('desk', inbox.Item(run=lambda: None, lane='now', source='web'))   # people always get in line
+    assert inbox.depth('desk') == 7
+
+
+def test_an_asker_that_gives_up_takes_its_item_back(fast, monkeypatch):
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)
+    with pytest.raises(Exception):
+        inbox.ask('desk', 'quick question', source='mcp:test', timeout=0.05)
+    assert inbox.depth('desk') == 0, 'the timed-out ask would have run later as a ghost turn'
+
+
+def test_a_chat_that_cannot_be_read_right_now_holds_its_items(fast, monkeypatch):
+    """read_chat_settings answers None for missing, sealed AND unreadable; only
+    a chat that is GONE is refused (a backup's lock dropped everything)."""
+    from types import SimpleNamespace
+    sm = SimpleNamespace(is_chat_hidden=lambda c: False, read_chat_settings=lambda c: None,
+                         chat_exists=lambda c: c == 'desk')
+    monkeypatch.setattr(inbox, '_system', lambda: SimpleNamespace(llm_chat=SimpleNamespace(session_manager=sm)))
+    assert inbox._refusal('desk') == ''
+    assert 'no chat named' in inbox._refusal('ghost')
 
 
 def test_a_provider_error_reaches_the_waiter_and_is_not_retried(fast):
@@ -337,3 +380,62 @@ def test_an_item_runs_in_the_context_it_was_put_from(fast):
     finally:
         flag.reset(token)
     assert seen['flag'] is True
+
+
+def test_a_doors_own_gate_is_asked_again_when_the_item_is_about_to_run(fast, monkeypatch):
+    """An MCP ask checked 'is this chat private?' at put time only: a chat that
+    turned private while the ask waited ran with the private history and the
+    reply left over the network (privacy scout, 2026-10-07)."""
+    private = {'now': False}
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)          # hold the line
+    eng = Engine()
+    with patch('core.cadence.run_turn', eng):
+        item = inbox.put('desk', inbox.Item(text='quick question', lane='later', source='mcp:test',
+                                            gate=lambda: 'The chat is private now.' if private['now'] else ''))
+        private['now'] = True                                           # the eyeball toggles while it waits
+        monkeypatch.setattr(inbox, '_idle_hint', lambda c: True)
+        inbox.kick('desk')
+        assert _wait(lambda: item.reply.done())
+        with pytest.raises(RuntimeError, match='private now'):
+            item.reply.result()
+    assert eng.calls == [], 'the turn must not run'
+    # and a gate that says go lets it through
+    with patch('core.cadence.run_turn', eng):
+        item = inbox.put('desk', inbox.Item(text='fine', lane='later', source='mcp:test', gate=lambda: ''))
+        assert _wait(lambda: item.reply.done()) and eng.calls
+
+
+def test_the_mcp_door_regates_privacy_at_run_time():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / 'core' / 'mcp_server.py').read_text(encoding='utf-8')
+    assert src.count("gate=lambda: f\"The chat '{name}' is private now.\" if _private(system, name) else ''") == 2
+
+
+def test_privacy_rolls_downhill_a_message_queued_while_private_never_runs_public(fast, monkeypatch):
+    """Krem, 2026-10-07: 'she is typing, I queue, then ... my queued message goes to
+    the provider at THAT moment it fires?' A turn reads the chat's privacy when it
+    runs, so public → private goes local; private → public must NOT go cloud."""
+    from types import SimpleNamespace
+    privacy = {'desk': True}
+    sm = SimpleNamespace(is_chat_hidden=lambda c: False,
+                         read_chat_settings=lambda c: {'private_chat': privacy.get(c, False)},
+                         chat_exists=lambda c: True)
+    monkeypatch.setattr(inbox, '_system', lambda: SimpleNamespace(llm_chat=SimpleNamespace(session_manager=sm)))
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)
+    eng = Engine()
+    with patch('core.cadence.run_turn', eng):
+        item = inbox.put('desk', inbox.Item(text='my private words', lane='later', source='web'))
+        assert item.private_at_put is True
+        privacy['desk'] = False                       # the eyeball flips the chat public while it waits
+        monkeypatch.setattr(inbox, '_idle_hint', lambda c: True)
+        inbox.kick('desk')
+        assert _wait(lambda: item.reply.done())
+        with pytest.raises(RuntimeError, match='was private'):
+            item.reply.result()
+        assert eng.calls == []
+        # public at put, private at run: runs (the turn goes local by itself)
+        item2 = inbox.put('desk', inbox.Item(text='public words', lane='later', source='web'))
+        assert item2.private_at_put is False
+        privacy['desk'] = True
+        inbox.kick('desk')
+        assert _wait(lambda: item2.reply.done()) and eng.calls

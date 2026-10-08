@@ -95,3 +95,7 @@ httpx[socks]>=0.27.0  # [socks]=socksio: SOCKS-for-all env routing (2026-08-31);
 
 # Timezone auto-detect on Windows (sapphire.py soft-imports it; the /etc/localtime walk is Linux-only — broadsword M-W5)
 tzlocal>=5.0
+
+# Claude Code agents (plugins/claude-code) - install/requirements-agents.txt. The SDK
+# bundles the claude CLI it drives; sessions run on the user's Claude Code login.
+claude-agent-sdk>=0.2.163

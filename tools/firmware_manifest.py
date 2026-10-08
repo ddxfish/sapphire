@@ -33,10 +33,14 @@ def main():
     home = a.out / a.board
     home.mkdir(parents=True, exist_ok=True)
     parts = []
+    app = Path(plan.get('app', {}).get('file') or '').name
     for offset, rel in sorted(plan['flash_files'].items(), key=lambda kv: int(kv[0], 16)):
         src = a.build / rel
         shutil.copyfile(src, home / src.name)
-        parts.append({'path': src.name, 'offset': int(offset, 16)})
+        part = {'path': src.name, 'offset': int(offset, 16)}
+        if src.name == app:
+            part['app'] = True                     # the program itself: what an update over the air sends
+        parts.append(part)
     fs = plan.get('flash_settings', {})
     manifest = {
         'name': a.name or about.get('project_name') or a.board,
