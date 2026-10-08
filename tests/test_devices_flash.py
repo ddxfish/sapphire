@@ -816,6 +816,53 @@ def test_update_is_the_owners_and_dangerous():
         sat._about.pop('pocket', None)
 
 
+def test_danger_is_the_owners_even_when_a_driver_forgets_to_say_so(rig):
+    mod = sys.modules[MOD]
+    mod.describe = lambda device, config: {'light': {'label': 'Light', 'help': '', 'actions': {
+        'off': {'help': ''}, 'burn': {'help': 'burn the bulb', 'danger': 'Burns the bulb out.'}}}}
+    core.add('l1', '', 'board', {'url': 'http://10.0.0.5', 'token': 't', 'voice_key': 'v'})
+    assert core.run('l1', 'light', 'off', '')[1] is True
+    told, ok = core.run('l1', 'light', 'burn', '')
+    assert not ok and 'for the person at' in told
+    assert core.run('l1', 'light', 'burn', '', owner=True)[1] is True
+    assert 'burn' not in core.status_text('l1')                                   # not in what she reads either
+
+
+def test_a_chip_is_not_read_while_a_board_is_being_written(lane):
+    flasher._job = {'state': 'writing'}
+    try:
+        with pytest.raises(flasher.FlashError, match='being written'):
+            flasher.chip(lane.port)
+    finally:
+        flasher._job = None
+
+
+def test_the_firmware_tab_holds_on_what_the_row_remembers():
+    from core.devices.drivers import satellite as sat
+    sat._about.pop('pocket', None)                                                # a missed probe: cache empty
+    assert 'firmware' in sat.describe({'id': 'pocket', 'has': ['firmware', 'light']}, {})
+    assert 'firmware' not in sat.describe({'id': 'pocket', 'has': ['light']}, {})
+    assert 'firmware' not in sat.describe({'id': 'pocket', 'has': None}, {})        # a Pi: never said
+
+
+def test_a_picture_takes_only_the_three_handles():
+    from core.devices.drivers import satellite as sat
+    for bad in ('https://x.test/?beacon', '/etc/hostname', 'img:../x', 'file:///tmp/a'):
+        told, ok = sat._picture(bad, {'id': 'pocket'}, {}, None)
+        assert not ok and 'image handle' in told
+
+
+def test_removing_or_renaming_a_device_clears_what_its_voice_held(rig):
+    from core.devices import voice
+    core.add('pocket', '', 'board', {'url': 'http://10.0.0.5', 'token': 't', 'voice_key': 'v'})
+    voice._replies['pocket'] = ['old reply']; voice._showing['pocket'] = 'think'
+    core.update('pocket', new_id='hall')
+    assert 'pocket' not in voice._replies and 'pocket' not in voice._showing
+    voice._replies['hall'] = ['x']
+    core.remove('hall')
+    assert 'hall' not in voice._replies
+
+
 def test_slow_actions_say_how_long_and_the_page_hears_it(rig):
     """A driver's `wait` reaches the page through describe(), clamped;
     nothing a driver forgets or garbles becomes a long request."""

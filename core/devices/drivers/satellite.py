@@ -448,6 +448,8 @@ def _has(device):
     with _lock:
         _, said = _about.get(device['id'], (0, None))
     has = (said or {}).get('has') if isinstance(said, dict) else None
+    if not isinstance(has, list):
+        has = device.get('has')            # what the engine keeps on the row: a missed probe drops no tab
     return [str(c) for c in has] if isinstance(has, list) else []
 
 
@@ -641,6 +643,8 @@ def _picture(value, device, config, secrets):
         if not found:
             return "There is no image in this chat yet. Make or find one first, then say picture last.", True
         source = f'img:{found}'
+    if not re.fullmatch(r'img:[A-Za-z0-9_-]{1,64}|doc:\d{1,9}', source):      # the three handles, nothing fetched
+        return "Give an image handle: img:<id> (the receipt an image tool gives you), doc:<n> from the library, or last.", False
     try:
         got = images.resolve(source)
     except Exception as e:

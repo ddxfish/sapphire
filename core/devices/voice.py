@@ -77,6 +77,14 @@ wake.told = lambda device_id: cue(device_id, 'standdown')   # the main app took 
 _spoke = threading.local() # did the reply lane manage to speak, on this thread
 
 
+def forget(device_id):
+    """A device removed or renamed: nothing it said or was told waits for a
+    device that takes its name later."""
+    with _lock:
+        for table in (_waiting, _showing, _live, _replies):
+            table.pop(device_id, None)
+
+
 def _system():
     from core.api_fastapi import get_system
     return get_system()
@@ -258,10 +266,21 @@ def key_ok(device_id, presented):
         (_engine().promote(device_id, presented) and _key_stored(device_id, presented))
 
 
+def _key_part(row):
+    """The part whose key the device presents: one whose driver says the
+    device calls in on its own (learns_address), else the one that talks.
+    A board with no microphone still has a light, sensors and a door."""
+    e = _engine()
+    for part in row.get('parts', []):
+        if (e._registry().get_driver(part.get('driver')) or {}).get('learns_address'):
+            return part
+    return _talk_part(row)
+
+
 def _key_stored(device_id, presented):
     e = _engine()
     row = e.rows().get(str(device_id or '').strip().lower())
-    part = _talk_part(row) if row and row.get('enabled', True) else None
+    part = _key_part(row) if row and row.get('enabled', True) else None
     if not part:
         return False
     try:

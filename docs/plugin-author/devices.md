@@ -4,7 +4,7 @@ Teach Sapphire to use a machine or a gadget. **Devices** is part of core: it own
 
 Anything can be a device: a thermostat, a television, a robot arm. If your code can reach it, Sapphire can use it, and it gets the same page, the same three tools and the same help as every built-in device.
 
-Reference drivers: **`plugins/ssh`** (stored logins, user-written commands), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the two that ship inside core, `core/devices/drivers/satellite.py` and `computer.py`.
+Reference drivers: **`plugins/ssh`** (stored logins, user-written commands), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the three that ship inside core, `core/devices/drivers/satellite.py`, `computer.py` and `sapphire.py` (another Sapphire).
 
 ## What Sapphire sees
 
@@ -164,6 +164,7 @@ restart is needed.
 | `config_schema` | no | Per-device fields, in the [settings field shape](settings.md#field-schema). Up to 40 |
 | `locked_by_default` | no | Capabilities Sapphire may not use until the user allows it. See Power below |
 | `presence` | no | `true`: its things come and go, and the driver is kept told. See Things that come and go |
+| `learns_address` | no | `true`: the device calls Sapphire with its own key, and the address it calls from becomes its `url` (see SATELLITE-PROTOCOL.md, "Its own address is learned") |
 
 `devices` is a list. One plugin may bring several device types, each with its
 own module. The MIDI plugin brings two: a hardware synth, and a plain MIDI keyboard.
@@ -188,7 +189,7 @@ Fields land on the tab of the driver's first capability. Add `"capability": "sou
 
 `example` is the value she would pass, not the whole call. Core builds the call. Every example must run exactly as written.
 
-Two optional flags on an action: `"owner": true` keeps it for the person at the Devices page only (she never sees it in her help, and `run()` refuses her); `"danger": "Formats the card. Every backup on it is erased."` makes the page ask for I UNDERSTAND before its Try button runs, with those words. Use both for anything that destroys data. A third, `"wait": 300`, is the seconds a slow action may take (a firmware update, a long recording): the page's Try button waits that long instead of its usual 30 s, so a slow success is never shown as a timeout. Up to 900.
+Two optional flags on an action: `"owner": true` keeps it for the person at the Devices page only (she never sees it in her help, and `run()` refuses her); `"danger": "Formats the card. Every backup on it is erased."` makes the page ask for I UNDERSTAND before its Try button runs, with those words; it also keeps the action from her (she cannot answer that question), so `danger` implies `owner`. Use both for anything that destroys data. A third, `"wait": 300`, is the seconds a slow action may take (a firmware update, a long recording): the page's Try button waits that long instead of its usual 30 s, so a slow success is never shown as a timeout. Up to 900.
 
 `describe` may return fewer capabilities than the manifest lists. A gadget that reports only a light gets only a Light tab.
 
@@ -228,7 +229,7 @@ after every save. Hand the settings over there:
 def apply(device, config, secrets):
     r = requests.put(config["url"] + "/led/looks", json={...}, headers=auth(secrets), timeout=6)
     if r.status_code >= 400:
-        raise DeviceError("the board did not take the looks: " + r.text[:100])
+        raise RuntimeError("the board did not take the looks: " + r.text[:100])
 ```
 
 The save holds either way. What you raise is shown beside "Saved": *Saved, but
@@ -237,7 +238,7 @@ turned off is not told. Keep `apply` short; it runs while the user waits.
 
 ## Rules
 
-- **Do not reimplement your plugin.** If a tool of yours already does the work, run it with `call_tool`. It goes through the function manager, so it uses the same state, settings, and privacy gates as the tool itself.
+- **Do not reimplement your plugin.** If a tool of yours already does the work, run it with `call_tool`. It goes through the function manager, so it uses the same state and settings as the tool itself (it runs even when the tool's toolset is off: the driver owns the call).
 - **Do not import your modules under a second name.** A module imported twice is two copies of its state. If you must read a helper, take it from the module the loader already holds (`plugins.<your-plugin>.tools.<file>`).
 - **Secrets stay out of text.** Never put a secret in a result, a log line, or a URL. Core scrubs results as a second line of defense, not a first.
 - **Quote what she types.** If her value reaches a shell, quote it (`shlex.quote`). Refuse templates that would put it inside quotes.
@@ -548,9 +549,9 @@ and answers "The board is not plugged in." when there is none.
 
 ## Drivers that ship inside core
 
-Two drivers live in `core/devices/drivers/` because every install should have
-them: `satellite` (a room box with mic, speaker, light and camera) and
-`computer` (the machine Sapphire runs on). Their ids are reserved: a plugin
+Three drivers live in `core/devices/drivers/` because every install should have
+them: `satellite` (a room box with mic, speaker, light and camera),
+`computer` (the machine Sapphire runs on) and `sapphire` (another Sapphire). Their ids are reserved: a plugin
 cannot register a driver with one of those names, and cannot call itself
 `core`. Everything in this guide applies to them unchanged. Their manifest
 entry is a `SPEC` dict in the module.
@@ -585,6 +586,6 @@ These work in any plugin's settings schema.
 - Self-report: `status()` may answer `has: [capability]`. `engine._learn` keeps it on the row as `parts[].has` (written only on a change, names outside the manifest dropped with one warning). `engine.capabilities(part, spec)` is the manifest list held to it; `describe`, `public`, `run` and `voice._voice_part` all use it. `public` hides schema fields whose `capability` the device lacks. No key = never said = everything.
 - Sound format: `voice.fit(audio, kind, plays)` and `voice.wanted(plays)`. numpy and soundfile only. Going down in rate it low-pass filters first.
 - After a save: `engine.tell(row)` calls each part's `apply` and returns problems in words; the routes put them in the save's `warning`. `voice.clock()` = `{now, tz}` (POSIX zone from `/etc/localtime`'s footer) rides on the events stream's `connected` line.
-- Routes (session auth, `core/routes/devices.py`): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`. Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
+- Routes (`core/routes/devices.py`; a login session or a Bearer API token, which runs as the owner): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`, `POST /api/devices/provision`, `GET /api/devices/here`, `/api/devices/flash/*`, `GET /api/devices/firmware[/{board}/{part}]`; with the device's own key: `/api/devices/{id}/voice|wake|text|events`. Scheduled Device tasks run as the owner too (locks and owner-only actions pass; `danger` actions cannot be scheduled). Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
 - Presence: `core/devices/presence.py`, started after the plugin scan (`sapphire.py`), stopped before plugin services. Manifest `"presence": true` plus optional module functions `discover(config) -> [{id, name, kind}]`, `watch(changed, stopped)`, `tend(device, config, secrets, present, leaving)`. `tend` is level triggered: called on a poke (watcher, device saved, plugin loaded), on the 15 s heartbeat, and once with `leaving=True, present=[]` when the device is disabled or removed, the plugin unloads (`presence.release(plugin)`, called by the loader before it unregisters the drivers) or the app stops. One keeper thread, one watcher thread per driver with an enabled device, tends on a pool of 4, never two at once for one device. Pokes are gathered for 0.3 s.
 - Filter: a `config_schema` field of `"type": "found"` (one per driver). Stored in the part's config as `{all: bool, only: [{id, name}]}`. `engine.found(driver, config)` cleans what `discover` returns (64 at most). `engine.passing(spec, config, things)` applies the filter. `"many": false` keeps one.

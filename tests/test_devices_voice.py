@@ -645,12 +645,15 @@ def test_a_body_that_is_no_sound_is_refused(home):
     assert home.heard == []
 
 
-def test_a_board_that_says_it_has_no_mic_cannot_use_the_door(home):
+def test_a_board_that_says_it_has_no_mic_keeps_its_door_but_is_not_heard(home):
+    """A sensor board, a speaker with a light: its key still opens its doors
+    (events, a learned address), only the voice door says no."""
     assert voice.key_ok('pi2', 'voice-key-12345678') is True
     with patch.object(sat, 'status', lambda d, c, s: {'online': True, 'has': ['speaker', 'light']}):
         engine.status('pi2')
-    assert voice.key_ok('pi2', 'voice-key-12345678') is False
+    assert voice.key_ok('pi2', 'voice-key-12345678') is True
     assert voice.hear('pi2', b'RIFFaudio')['error'] == "'pi2' has no microphone."
+    assert voice.woke('pi2')['ok'] is False
 
 
 # --- her voice, in the format a device plays -------------------------------------

@@ -633,11 +633,20 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     _seen_from.pop(device_id, None)               # a typed address, or a new name: learn afresh
     _declined.pop(device_id, None)
     if target != device_id:
+        _voice_forget(device_id)
         _health().rename(device_id, target)
     else:
         _health().poke(target)           # its settings may have changed: look again soon
     _changed()
     return row, failed
+
+
+def _voice_forget(device_id):
+    try:
+        from core.devices import voice
+        voice.forget(device_id)
+    except Exception as e:
+        logger.warning(f"[DEVICES] {device_id}: its voice state was not cleared: {e}")
 
 
 def _mac(text):
@@ -827,6 +836,7 @@ def remove(device_id):
     _secrets().delete(row['id'])
     _seen_from.pop(row['id'], None)
     _declined.pop(row['id'], None)
+    _voice_forget(row['id'])
     for k in [k for k, p in _pending.items() if row['id'] in (k, p['from'])]:
         _pending.pop(k, None)
     _health().forget(row['id'])
@@ -881,7 +891,7 @@ def describe(row):
     for part in row.get('parts', []):
         try:
             mod, spec = _driver(part['driver'], part.get('plugin', ''))
-            told = mod.describe(_brief(row), dict(part.get('config') or {})) or {}
+            told = mod.describe(dict(_brief(row), has=part.get('has')), dict(part.get('config') or {})) or {}
         except DeviceError as e:
             out.append({'capability': part['driver'], 'label': part['driver'], 'help': '',
                         'driver': part['driver'], 'actions': {}, 'error': str(e),
@@ -917,6 +927,12 @@ def describe(row):
                         'driver': part['driver'], 'actions': actions, 'error': '',
                         'lockable': cap in LOCKABLE, 'locked': cap in shut})
     return out
+
+
+def _hers(action):
+    """May she run this? Not an owner-only action, and not a dangerous one:
+    danger means the page asks I UNDERSTAND first, which she cannot answer."""
+    return not (action.get('owner') or action.get('danger'))
 
 
 def _seconds(v, most=900):
@@ -1099,7 +1115,7 @@ def _block(row, c, limit):
     if c['locked']:
         return f"{c['capability']} (locked) - {LOCKED_NOTE}"
     title = c['capability'] + (f" - {c['help']}" if c['help'] else '')
-    items = [(n, a) for n, a in c['actions'].items() if not a.get('owner')]   # hers to read: not the owner-only ones
+    items = [(n, a) for n, a in c['actions'].items() if _hers(a)]   # hers to read: not the owner-only ones
     lines = [(f"{name} {a['values']}".strip(), a['help'] or '-') for name, a in items[:limit]]
     body = _columns_text(lines) or f"  (no actions yet - the user adds them in {PAGE})"
     more = f"  ... {len(items) - limit} more: {_call(row['id'], c['capability'])}" if len(items) > limit else ''
@@ -1117,8 +1133,8 @@ def _screen(row, caps, only=None):
     head = f"{_head(row, st)}, " + (f"checked {_age(st['ts'])}" if st['ts'] else 'not checked yet')
     readings = [f"{k} {v}" for p in st['parts'] for k, v in p['readings'].items()][:READINGS]
     usable = [c for c in shown if not c['error'] and not c['locked'] and c['actions']]
-    pick = next(((c, n, a) for c in usable for n, a in c['actions'].items() if a['example'] and not a.get('owner')), None) \
-        or next(((c, n, a) for c in usable for n, a in c['actions'].items() if not a.get('owner')), None)
+    pick = next(((c, n, a) for c in usable for n, a in c['actions'].items() if a['example'] and _hers(a)), None) \
+        or next(((c, n, a) for c in usable for n, a in c['actions'].items() if _hers(a)), None)
     if pick:
         c, n, a = pick
         foot = 'Run one: ' + _call(*([row['id'], c['capability'], n] + ([a['example']] if a['example'] else [])))
@@ -1289,7 +1305,7 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
         return _screen(row, caps, only=cap), True
     if act not in cap['actions']:
         return f"'{cap_name}' has no action '{action}'.\n{_screen(row, caps, only=cap)}", False
-    if cap['actions'][act].get('owner') and not owner:
+    if not _hers(cap['actions'][act]) and not owner:
         return f"'{act}' on '{row['id']}' is for the person at {PAGE} only.", False
 
     part = _part(row, cap['driver'])

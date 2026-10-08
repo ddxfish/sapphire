@@ -372,7 +372,7 @@ async def _device_key(device_id, request, door, per_min=VOICE_PER_MIN):
         raise HTTPException(status_code=401, detail="unknown device or wrong key")
     from core.devices import health
     device_id = device_id.strip().lower()
-    health.seen(device_id)                     # it spoke with its own key: it is online
+    await asyncio.to_thread(health.seen, device_id)     # it spoke with its own key: it is online
     await asyncio.to_thread(_engine().learned, device_id, get_client_ip(request))   # and that is where it lives
     return key
 

@@ -131,6 +131,8 @@ def chip(port):
     _no_access(port)
     _drop_console(port)
     with _lock:
+        if _job and _job['state'] in ('getting', 'writing'):
+            raise FlashError("A board is being written right now. Wait for it.")
         EspLog.set_logger(_Quiet())
         try:
             esp = cmds.detect_chip(port, baud=CONSOLE_BAUD)

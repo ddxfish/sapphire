@@ -499,6 +499,8 @@ A satellite without a key cannot reach Sapphire at all.
 |---|---|
 | `POST /api/devices/<name>/voice` | What it heard. Proven with its own key |
 | `GET /api/devices/<name>/events` | What its light should show. Proven with its own key |
+| `POST /api/devices/<name>/wake` | It heard the wake word: the room is its for the next words |
+| `POST|GET /api/devices/<name>/text` | What was typed on it, and her reply for its screen |
 
 ### Coming from the Body plugin
 
