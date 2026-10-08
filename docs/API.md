@@ -442,7 +442,10 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/plugins/rescan` | Discover newly added plugins without restart |
 | POST | `/api/plugins/{name}/reload` | Hot-reload a plugin (unload + load) |
 | GET | `/api/plugins/{name}/check-deps` | Check a plugin's pip dependencies |
-| POST | `/api/plugins/{name}/install-deps` | Install a plugin's declared pip dependencies |
+| GET | `/api/system/extras` | The optional package sets core knows (`flash`, …): label, note, installed, the install job in flight |
+| GET | `/api/system/extras/{name}` | One set's install state (`idle`/`running`/`done`/`failed`, pip's last lines) — `plugin:{plugin}` for a plugin's own set |
+| POST | `/api/system/extras/{name}/install` | Install a set in the background (core/extras.py); one at a time; refused on hosted installs |
+| POST | `/api/plugins/{name}/install-deps` | Install a plugin's declared packages (`pip_dependencies` and the optional `extra`) in the background through core's one pip engine; returns the job state, poll `GET /api/system/extras/plugin:{name}`; the plugin reloads when pip is done. conda/venv only; refused on hosted installs |
 | PUT | `/api/plugins/{name}/surfaces` | Set where the plugin's presence injections show up |
 | POST | `/api/plugins/{name}/build-env` | Build (or rebuild) a plugin's dedicated conda env in the background |
 | GET | `/api/plugins/{name}/env-status` | Env build/readiness status + build log tail (UI polls this) |

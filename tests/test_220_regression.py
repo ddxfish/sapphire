@@ -365,6 +365,10 @@ class TestForegroundDoesNotHijackUI:
             mock_session = MagicMock()
             mock_session.list_chat_files.return_value = [{"name": "task_chat"}]
             mock_session.read_chat_messages.return_value = []
+            # a PUBLIC target chat: the executor stamps privacy from the chat's
+            # settings (fail-closed), and a bare MagicMock reads as private -
+            # which then needs a live LOCAL provider to pass (2026-10-08)
+            mock_session.read_chat_settings.return_value = {}
 
             mock_fm = MagicMock()
             mock_fm.all_possible_tools = []

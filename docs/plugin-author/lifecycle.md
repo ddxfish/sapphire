@@ -52,7 +52,7 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
 | POST | `/api/plugins/rescan` | Discover new/removed plugins |
 | POST | `/api/plugins/{name}/reload` | Hot-reload (dev) |
 | GET | `/api/plugins/{name}/check-deps` | Which `pip_dependencies` are missing, the environment, and the install command |
-| POST | `/api/plugins/{name}/install-deps` | Install the missing ones (conda/venv only), then auto-reload the plugin |
+| POST | `/api/plugins/{name}/install-deps` | Install the plugin's packages — `pip_dependencies` and its optional `extra` — in the background (core/extras.py; conda/venv only; poll `GET /api/system/extras/plugin:{name}`), then auto-reload the plugin |
 | GET | `/api/webui/plugins/{name}/settings` | Read plugin settings |
 | PUT | `/api/webui/plugins/{name}/settings` | Save plugin settings |
 | DELETE | `/api/webui/plugins/{name}/settings` | Reset plugin settings |

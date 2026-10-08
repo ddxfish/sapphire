@@ -8,13 +8,24 @@
 # someone picks "the computer Sapphire runs on". TTS, STT and the wake word
 # are NOT here: they stay part of the main install.
 #
-# Only the sets named below can be installed. Nothing from a request reaches
-# pip's arguments. One install at a time, on a thread, its words kept for
-# the page and in user/logs/extras-<name>.log. Hosted installs refuse.
+# Only the sets named below can be installed, plus one set PER PLUGIN built
+# from its own manifest (`plugin:<name>`, 2026-10-08): the plugin's hard
+# `pip_dependencies` and/or its optional `extra` - {label, pip: [specs],
+# modules?: [...], note}. A hard dependency keeps the plugin from loading until
+# it is there (core/plugin_loader.py); an optional extra lets the plugin load
+# and only the feature that needs it refuses (the Claude Code plugin's Agent
+# SDK, 250 MB, which nothing else in Sapphire uses). Both install through
+# HERE - the one pip engine - from the plugin card or the moment the plugin
+# is enabled, on the person's say-so. Nothing from a request reaches pip's
+# arguments: a request names a set, the set names its packages. One install
+# at a time, on a thread, its words kept for the page and in
+# user/logs/extras-<name>.log. Hosted installs refuse.
 import importlib
+import importlib.metadata
 import importlib.util
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -40,10 +51,78 @@ EXTRAS = {
 
 _lock = threading.Lock()
 _job = None                       # the install in flight, or the last one
+PLUGIN_PREFIX = 'plugin:'
+# A requirement as pip_dependencies has always allowed it: `name[extras]` with
+# version operators, or a PEP 508 direct reference `name[extras] @ git+https://…`
+# (the discord plugin's py-cord). Never an option (`-…`), a bare path or URL.
+_NAME = r'[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?'
+_SPEC_RE = re.compile(
+    r'^' + _NAME + r'\s*(([<>=!~]=?\s*[A-Za-z0-9._*+-]+\s*(,\s*[<>=!~]=?\s*[A-Za-z0-9._*+-]+\s*)*)'
+    r'|(@\s*(git\+https|git\+ssh|https|http)://\S+))?$')
 
 
 class ExtraError(Exception):
     """A reason fit to show as it is."""
+
+
+def _dist_name(spec):
+    return re.split(r'[<>=!~\[; ]', str(spec), 1)[0].strip()
+
+
+def _plugin_spec(plugin_name):
+    """The set a plugin declares, from its manifest, or None. Specs are plain
+    requirement specifiers only - never a pip option, a URL or a path - so a
+    manifest cannot smuggle arguments to pip."""
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(plugin_name)
+    except Exception:
+        info = None
+    if not info:
+        return None
+    manifest = info.get('manifest') or {}
+    extra = manifest.get('extra') if isinstance(manifest.get('extra'), dict) else {}
+    hard = [str(x) for x in (manifest.get('pip_dependencies') or [])]
+    soft = [str(x) for x in (extra.get('pip') or [])]
+    specs = [x.strip() for x in hard + soft if x and str(x).strip()]
+    bad = [x for x in specs if not _SPEC_RE.match(x)]
+    if bad:
+        logger.debug(f"[EXTRAS] {plugin_name}: ignoring pip specs that are not requirements: {bad}")
+        specs = [x for x in specs if x not in bad]
+    if not specs:
+        return None
+    title = manifest.get('title') or manifest.get('display_name') or plugin_name
+    return {
+        'label': str(extra.get('label') or f"Packages for {title}"),
+        'specs': specs,
+        'modules': tuple(str(m) for m in (extra.get('modules') or [])),
+        'note': str(extra.get('note') or ('Installs: ' + ', '.join(specs))),
+        'restart': bool(extra.get('restart', False)),
+        'hard': bool(hard),
+        'plugin': plugin_name,
+    }
+
+
+def _spec(name):
+    if name in EXTRAS:
+        return EXTRAS[name]
+    if isinstance(name, str) and name.startswith(PLUGIN_PREFIX):
+        return _plugin_spec(name[len(PLUGIN_PREFIX):])
+    return None
+
+
+def known(name):
+    return _spec(name) is not None
+
+
+def plugin_extra(plugin_name):
+    """What the plugin card shows: {name, label, note, installed, hard} or None."""
+    spec = _plugin_spec(plugin_name)
+    if not spec:
+        return None
+    name = PLUGIN_PREFIX + plugin_name
+    return {'name': name, 'label': spec['label'], 'note': spec['note'],
+            'installed': _installed(spec), 'hard': spec['hard'], 'restart': spec['restart']}
 
 
 def _managed():
@@ -57,13 +136,20 @@ def _managed():
 def installed(name):
     """Whether the set's packages can be found, looked up fresh: a package
     pip just put there is not in the import caches yet."""
-    spec = EXTRAS.get(name)
-    if not spec:
-        return False
+    spec = _spec(name)
+    return _installed(spec) if spec else False
+
+
+def _installed(spec):
     importlib.invalidate_caches()
     try:
-        return all(importlib.util.find_spec(m) is not None for m in spec['modules'])
-    except (ImportError, ValueError):
+        if spec.get('modules'):
+            return all(importlib.util.find_spec(m) is not None for m in spec['modules'])
+        # a plugin set with no module names: the distributions themselves
+        for x in spec.get('specs') or ():
+            importlib.metadata.version(_dist_name(x))
+        return bool(spec.get('specs'))
+    except (ImportError, ValueError, importlib.metadata.PackageNotFoundError):
         return False
 
 
@@ -86,10 +172,19 @@ def state(name):
     return job or {'name': name, 'state': 'idle', 'lines': [], 'error': '', 'installed': installed(name)}
 
 
+def describe(name):
+    """One set as the page sees it, or None (a plugin's set included)."""
+    spec = _spec(name)
+    if not spec:
+        return None
+    return {'label': spec['label'], 'note': spec['note'], 'restart': spec.get('restart', False),
+            'installed': _installed(spec)}
+
+
 def start(name):
     """Install one set in the background. Returns its state."""
     global _job
-    spec = EXTRAS.get(name)
+    spec = _spec(name)
     if not spec:
         raise ExtraError(f"There is no optional set called '{name}'.")
     if _managed():
@@ -109,14 +204,17 @@ def start(name):
 
 
 def _install(job, spec):
-    req = ROOT / spec['file']
     env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONUNBUFFERED='1')
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"extras-{job['name']}.log"
+    log_path = LOG_DIR / f"extras-{job['name'].replace(':', '-')}.log"
     try:
-        if not req.is_file():
-            raise ExtraError(f"{spec['file']} is missing from this Sapphire.")
-        cmd = [sys.executable, '-m', 'pip', 'install', '-r', str(req)]
+        if spec.get('specs'):
+            cmd = [sys.executable, '-m', 'pip', 'install', *spec['specs']]
+        else:
+            req = ROOT / spec['file']
+            if not req.is_file():
+                raise ExtraError(f"{spec['file']} is missing from this Sapphire.")
+            cmd = [sys.executable, '-m', 'pip', 'install', '-r', str(req)]
         with open(log_path, 'w', encoding='utf-8') as log:
             log.write(' '.join(cmd) + '\n')
             proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -136,11 +234,19 @@ def _install(job, spec):
             code = proc.wait(timeout=60)
         if code:
             raise ExtraError(f"pip failed (exit {code}). The log is user/logs/{log_path.name}.")
-        if not installed(job['name']):
+        if not _installed(spec):
             raise ExtraError("pip finished, but the packages still cannot be found. The log may say why.")
         with _lock:
             job.update(state='done', installed=True)
         logger.info(f"[EXTRAS] installed '{job['name']}'")
+        if spec.get('plugin'):
+            # a plugin whose hard dependencies were missing sat enabled-but-
+            # unloaded; it loads now (the optional case reloads harmlessly)
+            try:
+                from core.plugin_loader import plugin_loader
+                plugin_loader.reload_plugin(spec['plugin'])
+            except Exception as e:
+                logger.warning(f"[EXTRAS] {spec['plugin']}: reload after install failed: {e}")
     except Exception as e:
         with _lock:
             job.update(state='failed', error=str(e))

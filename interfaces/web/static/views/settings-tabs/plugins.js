@@ -2,6 +2,7 @@
 import * as ui from '../../ui.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { setupModalClose } from '../../shared/modal.js';
+import { ensureExtra } from '../../shared/extras.js';
 import pluginsAPI from '../../shared/plugins-api.js';
 
 // Core plugins hidden from the toggle list: manifest/meta "essential": true
@@ -204,19 +205,16 @@ function _updateRowInPlace(el, ctx, name, locked) {
         }
     }
 
-    // Missing-deps warning strip — sync against cached.missing_deps.
+    // Packages strip — hard deps missing, or an optional extra not installed
+    // (core/extras.py `plugin:<name>`); sync against the cached entry.
     const existingWarn = card.querySelector('.pm-deps-warning');
-    const deps = cached.missing_deps || [];
-    if (deps.length && !existingWarn) {
+    const html = _depsStripHTML(cached);
+    if (html && !existingWarn) {
         const tmpl = document.createElement('div');
-        tmpl.innerHTML = `<div class="pm-deps-warning" data-plugin-deps="${_esc(name)}">
-            <span class="pm-deps-icon">&#x26A0;</span>
-            <span class="pm-deps-text">Missing: ${_esc(deps.join(', '))}</span>
-            <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(name)}">Install</button>
-        </div>`.trim();
+        tmpl.innerHTML = html.trim();
         card.appendChild(tmpl.firstElementChild);
         // .pm-deps-fix-btn is delegated, no manual bind needed.
-    } else if (!deps.length && existingWarn) {
+    } else if (!html && existingWarn) {
         existingWarn.remove();
     }
 
@@ -421,12 +419,7 @@ function _renderRow(p, locked) {
                 </label>
                 ${kebab}
             </div>
-            ${p.missing_deps?.length ? `
-            <div class="pm-deps-warning" data-plugin-deps="${_esc(p.name)}">
-                <span class="pm-deps-icon">&#x26A0;</span>
-                <span class="pm-deps-text">Missing: ${_esc(p.missing_deps.join(', '))}</span>
-                <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(p.name)}">Install</button>
-            </div>` : ''}
+            ${_depsStripHTML(p)}
             ${_surfacesStripHTML(p)}
             ${_envStripHTML(p)}
         </div>
@@ -439,6 +432,31 @@ function _renderRow(p, locked) {
 // per-plugin override core applies to prompt_inject/ghost_inject delivery.
 // Labels come from the list payload (core/hooks.py SURFACES).
 let _surfaceDefs = [];
+// The packages strip under a card: hard `pip_dependencies` that are missing
+// (the plugin is enabled but not loaded) or an optional `extra` not installed
+// (the plugin runs; one feature waits). Both install through the same button.
+function _depsStripHTML(p) {
+    const deps = p.missing_deps || [];
+    const extra = p.extra;
+    if (deps.length) {
+        return `
+            <div class="pm-deps-warning" data-plugin-deps="${_esc(p.name)}">
+                <span class="pm-deps-icon">&#x26A0;</span>
+                <span class="pm-deps-text">Missing: ${_esc(deps.join(', '))}</span>
+                <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(p.name)}">Install</button>
+            </div>`;
+    }
+    if (extra && !extra.installed && !extra.hard) {
+        return `
+            <div class="pm-deps-warning pm-deps-optional" data-plugin-deps="${_esc(p.name)}" title="${_esc(extra.note || '')}">
+                <span class="pm-deps-icon">&#x1F4E6;</span>
+                <span class="pm-deps-text">${_esc(extra.label)} — not installed</span>
+                <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(p.name)}">Install</button>
+            </div>`;
+    }
+    return '';
+}
+
 function _surfacesStripHTML(p) {
     if (!Array.isArray(p.surfaces) || !_surfaceDefs.length) return '';
     const active = new Set(p.surfaces_active || []);
@@ -1162,7 +1180,10 @@ export default {
             }
         });
 
-        // ── Install deps (delegated) ──
+        // ── Install packages (delegated): the ONE pip engine's modal —
+        // what it is, Install, pip's words as they come, done — for a hard
+        // dependency and an optional extra alike (core/extras.py). The server
+        // reloads the plugin when pip is through.
         el.addEventListener('click', async e => {
             const btn = e.target.closest('.pm-deps-fix-btn');
             if (!btn) return;
@@ -1170,78 +1191,25 @@ export default {
             const ctx = el._pluginCtx;
 
             btn.disabled = true;
-            btn.textContent = 'Checking...';
             try {
-                // First check what we're dealing with
-                const checkRes = await fetch(`/api/plugins/${name}/check-deps`);
-                if (!checkRes.ok) throw new Error('Failed to check deps');
-                const depInfo = await checkRes.json();
-
-                if (!depInfo.missing?.length) {
-                    ui.showToast('Dependencies already installed — reloading plugin', 'success');
-                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-                    await fetch(`/api/plugins/${name}/reload`, { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
-                    await ctx.refreshTab();
-                    return;
-                }
-
-                const cmd = depInfo.command;
-                const envLabel = depInfo.env_type === 'conda' ? `conda env "${depInfo.env_name}"`
-                    : depInfo.env_type === 'venv' ? `venv "${depInfo.env_name}"` : 'system Python';
-
-                if (!depInfo.can_auto_install) {
+                const depInfo = await (await fetch(`/api/plugins/${name}/check-deps`)).json().catch(() => ({}));
+                if (depInfo && depInfo.can_auto_install === false) {
                     // System Python — manual only
-                    ui.showToast(`Cannot auto-install on ${envLabel}. Run manually:\n${cmd}`, 'warning', 0);
+                    ui.showToast(`Cannot auto-install on system Python. Run manually:\n${depInfo.command || ''}`, 'warning', 0);
                     btn.textContent = 'Manual';
                     btn.disabled = false;
                     return;
                 }
-
-                // Show confirmation with exact command
-                const confirmed = await showDangerConfirm({
-                    title: `Install Dependencies for ${name}`,
-                    warnings: [
-                        `This will run: ${cmd}`,
-                        `Environment: ${envLabel}`,
-                        'You can also run this command yourself in your terminal',
-                        'Packages are installed from PyPI (the public Python package index)',
-                    ],
-                    buttonLabel: 'Install Now',
-                });
-
-                if (!confirmed) {
-                    // User declined — offer copy
-                    try { await navigator.clipboard.writeText(cmd); } catch {}
-                    ui.showToast(`Command copied: ${cmd}`, 'info', 5000);
-                    btn.textContent = 'Install';
-                    btn.disabled = false;
-                    return;
-                }
-
-                btn.textContent = 'Installing...';
-                const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-                const installRes = await fetch(`/api/plugins/${name}/install-deps`, {
-                    method: 'POST', headers: { 'X-CSRF-Token': csrf },
-                });
-                const result = await installRes.json();
-
-                if (result.status === 'ok') {
-                    ui.showToast(`Dependencies installed for ${name} — plugin reloaded`, 'success');
-                    // Update cached plugin data
+                const ok = await ensureExtra(`plugin:${name}`);
+                if (ok) {
                     const cached = ctx.pluginList?.find(p => p.name === name);
-                    if (cached) cached.missing_deps = [];
+                    if (cached) { cached.missing_deps = []; if (cached.extra) cached.extra.installed = true; }
                     await ctx.refreshTab();
-                } else if (result.status === 'partial') {
-                    ui.showToast(`Some deps still missing: ${result.still_missing.join(', ')}`, 'warning', 0);
-                    btn.textContent = 'Retry';
-                    btn.disabled = false;
                 } else {
-                    ui.showToast(`Install failed: ${result.message || 'unknown error'}`, 'error', 0);
-                    btn.textContent = 'Failed';
                     btn.disabled = false;
                 }
             } catch (err) {
-                ui.showToast(`Dep install failed: ${err.message}`, 'error', 5000);
+                ui.showToast(`Install failed: ${err.message}`, 'error', 5000);
                 btn.textContent = 'Install';
                 btn.disabled = false;
             }
@@ -1359,12 +1327,15 @@ export default {
 
                 window.dispatchEvent(new CustomEvent('functions-changed'));
                 document.dispatchEvent(new CustomEvent('sapphire:plugin_toggled', { detail: data }));
-                // Show sticky toast if plugin enabled but has missing deps
-                if (data.enabled && data.missing_deps?.length) {
-                    ui.showToast(
-                        `${cached?.title || name} needs: ${data.missing_deps.join(', ')} — go to Plugins to install`,
-                        'warning', 0
-                    );
+                // Just enabled and its packages are not here (hard deps, or an
+                // optional extra): offer the install now, on this click's say-so
+                // (core/extras.py). Declined → the card keeps its Install button.
+                if (data.enabled && (data.missing_deps?.length || (cached?.extra && !cached.extra.installed))) {
+                    ensureExtra(`plugin:${name}`).then(ok => {
+                        if (!ok) return;
+                        if (cached) { cached.missing_deps = []; if (cached.extra) cached.extra.installed = true; }
+                        ctx.refreshTab();
+                    }).catch(err => ui.showToast(`Install failed: ${err.message}`, 'error', 5000));
                 }
 
                 ui.showToast(`${cached?.title || name} ${data.enabled ? 'enabled' : 'disabled'}`, 'success');

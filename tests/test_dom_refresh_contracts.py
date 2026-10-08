@@ -239,7 +239,7 @@ def test_provider_tabs_pass_the_module_and_repaint_only_on_change():
 
 def test_dictated_turns_do_not_refocus_the_composer():
     s = _src("handlers/send-handlers.js")
-    assert "export async function handleSend({ refocus = true } = {})" in s
+    assert "export async function handleSend({ refocus = true, text = null, attach = true } = {})" in s
     assert "if (refocus) focusUnlessEditing(input);" in s
     assert "await handleSend({ refocus: false });" in s
 

@@ -43,8 +43,17 @@ class TestHelpers:
 
 
 class TestKind:
-    def test_the_sdk_is_declared(self):
-        assert 'claude-agent-sdk' in (ROOT / 'requirements.txt').read_text(encoding='utf-8')
+    def test_the_sdk_is_the_plugins_optional_extra_not_a_root_requirement(self):
+        """250 MB nothing else uses: installed from the plugin card through core's
+        one pip engine (core/extras.py `extra`), never by the main install (Krem, 2026-10-08)."""
+        import json
+        assert 'claude-agent-sdk' not in (ROOT / 'requirements.txt').read_text(encoding='utf-8')
+        assert not (ROOT / 'install' / 'requirements-agents.txt').exists()
+        m = json.loads((ROOT / 'plugins' / 'claude-code' / 'plugin.json').read_text(encoding='utf-8'))
+        assert m['extra']['pip'] == ['claude-agent-sdk>=0.2.163'] and m['extra']['modules'] == ['claude_agent_sdk']
+        assert 'pip_dependencies' not in m                       # optional: the plugin loads without it
+        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        assert 'click Install on the' in src.split('def _sdk')[1].split('def _head')[0]
 
     def test_the_session_runs_on_its_own_loop_not_asyncio_run(self):
         """Windows: sapphire.py pins the Selector policy; a Selector loop cannot

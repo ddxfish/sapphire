@@ -6738,6 +6738,16 @@ span[data-image-gone] {
 }
 .pm-deps-icon { font-size: 1em; }
 .pm-deps-text { flex: 1; color: #e0a030; }
+/* an OPTIONAL package set (core/extras.py `extra`): the plugin runs, one feature waits - a note, not a warning */
+.pm-deps-warning.pm-deps-optional {
+    background: var(--bg-tertiary, rgba(128, 128, 128, 0.08));
+    border-color: var(--border-color, rgba(128, 128, 128, 0.25));
+}
+.pm-deps-optional .pm-deps-text { color: var(--text-secondary, inherit); }
+.pm-deps-optional .pm-deps-fix-btn {
+    background: var(--bg-secondary, rgba(128, 128, 128, 0.15));
+    border-color: var(--border-color, rgba(128, 128, 128, 0.35));
+}
 .pm-deps-fix-btn {
     font-size: 0.75em !important;
     padding: 2px 10px !important;

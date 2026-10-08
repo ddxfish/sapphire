@@ -23,8 +23,8 @@ STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
 
 # =============================================================================
 # OPTIONAL SETS (core/extras.py): installed into her environment when a page
-# first needs one. Only the sets named there; nothing from a request reaches
-# pip.
+# first needs one. Only the sets named there, plus `plugin:<name>` built from a
+# plugin's own manifest; nothing from a request reaches pip.
 # =============================================================================
 
 @router.get("/api/system/extras")
@@ -36,9 +36,11 @@ async def extras_status(request: Request, _=Depends(require_login)):
 @router.get("/api/system/extras/{name}")
 async def extras_state(name: str, request: Request, _=Depends(require_login)):
     from core import extras
-    if name not in extras.EXTRAS:
+    if not await asyncio.to_thread(extras.known, name):
         raise HTTPException(status_code=404, detail=f"There is no optional set called '{name}'.")
-    return await asyncio.to_thread(extras.state, name)
+    st = await asyncio.to_thread(extras.state, name)
+    st['set'] = await asyncio.to_thread(extras.describe, name)   # a plugin's set is not in the status() list
+    return st
 
 
 @router.post("/api/system/extras/{name}/install")

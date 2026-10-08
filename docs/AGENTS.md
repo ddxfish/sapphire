@@ -177,7 +177,7 @@ instruction textareas (Base, Project, Plugin, Core).
 
 - **She says the agent tools aren't in her toolset** — add the four `agent_*` tools to the chat's toolset.
 - **A cloud kind is refused** — the chat (or the turn) is private. That is the design.
-- **`claude_code` refuses with "claude-agent-sdk is not installed"** — `pip install -r install/requirements-agents.txt` in Sapphire's environment (the SDK bundles the CLI, ~250 MB).
+- **`claude_code` refuses with "The Claude Agent SDK is not installed yet"** — Settings → Plugins → Claude Code → **Install** on the card (the SDK bundles the CLI, ~250 MB; no restart). Enabling the plugin offers the same install.
 - **An agent shows `lost`** — Sapphire restarted while it was live and it had no session to resume. Spawn again.
 - **"Agent limit reached"** — Max Concurrent counts running agents; stop one or raise the limit.
 

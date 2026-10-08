@@ -95,8 +95,8 @@ pip install -r install/requirements-minimal.txt
 Then add features as needed:
 
 ```bash
-# Claude Code agents (the Claude Agent SDK + its bundled claude CLI, ~250 MB; runs on your Claude login)
-pip install -r install/requirements-agents.txt
+# Claude Code agents: the Claude Agent SDK (~250 MB) is installed from Settings → Plugins → Claude Code
+# (Install on the card, or the prompt when you enable the plugin) — nothing to pip here
 
 # TTS (Kokoro voice synthesis)
 pip install -r install/requirements-tts.txt

@@ -372,6 +372,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "surfaces": manifest.get("surfaces") if isinstance(manifest.get("surfaces"), list) else None,
                     "surfaces_active": plugin_loader.effective_surfaces(info["name"], manifest),
                     "missing_deps": info.get("missing_deps", []),
+                    "extra": _plugin_extra(info["name"]),
                     "essential": manifest.get("essential", False),
                     "env": info.get("env"),
                     "has_prev": (info.get("band") == "user"
@@ -1576,24 +1577,37 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
     }
 
 
+def _plugin_extra(plugin_name):
+    """The plugin's package set for its card (core/extras.py), or None."""
+    try:
+        from core import extras
+        return extras.plugin_extra(plugin_name)
+    except Exception:
+        return None
+
+
 @router.post("/api/plugins/{plugin_name}/install-deps")
 def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
-    """Install missing pip dependencies for a plugin.
+    """Install a plugin's packages - its hard `pip_dependencies` and its
+    optional `extra` alike - through the ONE pip engine (core/extras.py): in
+    the background, logged, hosted installs refused, the plugin reloaded when
+    pip is done. The old body ran pip inline with a 120 s timeout, which a
+    large set (the Claude Agent SDK, 250 MB) could never meet. Returns the
+    job state; the page polls /api/system/extras/plugin:<name>.
 
-    Only runs inside conda or venv — refuses on bare system Python.
-    """
-    import subprocess
+    Only runs inside conda or venv — refuses on bare system Python."""
     import sys
+    from core import extras
     from core.plugin_loader import plugin_loader
 
     info = plugin_loader.get_plugin_info(plugin_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
-
-    manifest = info.get("manifest", {})
-    missing = plugin_loader._check_dependencies(manifest)
-    if not missing:
-        return {"status": "ok", "message": "All dependencies already installed", "installed": []}
+    name = extras.PLUGIN_PREFIX + plugin_name
+    if not extras.known(name):
+        return {"status": "ok", "message": "This plugin declares no packages", "state": "done"}
+    if extras.installed(name):
+        return {"status": "ok", "message": "All dependencies already installed", "state": "done"}
 
     # Environment safety gate
     conda_env = _conda_env_name()
@@ -1601,47 +1615,14 @@ def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     if not conda_env and not in_venv:
         raise HTTPException(status_code=400, detail=(
             "Sapphire is running in system Python — auto-install disabled for safety. "
-            f"Run manually: {plugin_loader.pip_hint(missing)}"
+            f"Run manually: {plugin_loader.pip_hint(extras._spec(name)['specs'])}"
         ))
-
-    env_label = f"conda:{conda_env}" if conda_env else f"venv:{os.path.basename(sys.prefix)}"
-    logger.info(f"[PLUGINS] Installing deps for {plugin_name} in {env_label}: {missing}")
-
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", *missing],
-            capture_output=True, text=True, timeout=120,
-            encoding='utf-8', errors='replace',
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="pip install timed out (120s)")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"pip install failed: {e}")
-
-    if result.returncode != 0:
-        return JSONResponse(status_code=500, content={
-            "status": "error", "message": "pip install failed",
-            "output": result.stderr or result.stdout, "command": plugin_loader.pip_hint(missing),
-        })
-
-    # Verify deps are now importable
-    still_missing = plugin_loader._check_dependencies(manifest)
-
-    # Auto-reload the plugin if all deps are now satisfied
-    if not still_missing:
-        try:
-            plugin_loader.reload_plugin(plugin_name)
-            logger.info(f"[PLUGINS] Auto-reloaded {plugin_name} after dep install")
-        except Exception as e:
-            logger.warning(f"[PLUGINS] Dep install OK but reload failed for {plugin_name}: {e}")
-
-    return {
-        "status": "ok" if not still_missing else "partial",
-        "installed": [d for d in missing if d not in still_missing],
-        "still_missing": still_missing,
-        "output": result.stdout,
-        "env": env_label,
-    }
+        job = extras.start(name)
+    except extras.ExtraError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info(f"[PLUGINS] installing packages for {plugin_name} (extras job)")
+    return {"status": "started" if job.get("state") == "running" else job.get("state"), **job}
 
 
 # ── Per-plugin conda environments (core/plugin_envs.py) ──

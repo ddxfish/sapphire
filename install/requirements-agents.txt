@@ -1,5 +1,0 @@
-# Claude Code agents (plugins/claude-code): the Claude Agent SDK, which bundles
-# the claude CLI it drives (~250 MB). Optional: without it, agent_spawn of the
-# claude_code kind answers with this install hint. Sessions run on your Claude
-# Code login (Pro/Max), never an API key.
-claude-agent-sdk>=0.2.163

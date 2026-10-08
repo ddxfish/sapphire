@@ -56,11 +56,15 @@ def _settings():
 
 def _sdk():
     try:
+        import importlib
+        importlib.invalidate_caches()           # a package pip just installed is not in the caches yet
         import claude_agent_sdk as sdk
         return sdk
     except ImportError:
-        raise RuntimeError("claude-agent-sdk is not installed in Sapphire's environment. "
-                           "Install it there: pip install -r install/requirements-agents.txt")
+        # the plugin's optional extra (plugin.json `extra`, core/extras.py):
+        # one click on the plugin card installs it, no restart
+        raise RuntimeError("The Claude Agent SDK is not installed yet. Ask the user to click Install on the "
+                           "Claude Code card (Settings → Plugins) - about 250 MB, a minute or two - then spawn again.")
 
 
 def _head(text, n=120):

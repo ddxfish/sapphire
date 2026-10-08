@@ -104,3 +104,74 @@ def test_a_failed_install_says_so_and_names_the_log():
 def test_pip_that_lies_is_caught():
     st, _ = _run(['Successfully installed nothing\n'], 0, after_install=False)
     assert st['state'] == 'failed' and 'still cannot be found' in st['error']
+
+
+# ── plugin sets: `plugin:<name>` built from a plugin's own manifest (2026-10-08) ──
+
+def _loader_with(manifest, name='demo'):
+    info = {'name': name, 'manifest': manifest, 'path': '/x'}
+    return types.SimpleNamespace(get_plugin_info=lambda n: info if n == name else None,
+                                 reload_plugin=lambda n: None)
+
+
+def test_a_plugin_declares_its_set_hard_or_optional(monkeypatch):
+    import core.plugin_loader as pl
+    monkeypatch.setattr(pl, 'plugin_loader', _loader_with({
+        'title': 'Demo', 'pip_dependencies': ['telethon>=1.34'],
+        'extra': {'label': 'Big thing', 'pip': ['bigthing>=2'], 'modules': ['bigthing'], 'note': 'huge'}}))
+    spec = extras._spec('plugin:demo')
+    assert spec['specs'] == ['telethon>=1.34', 'bigthing>=2'] and spec['hard'] is True and spec['label'] == 'Big thing'
+    assert extras.known('plugin:demo') and not extras.known('plugin:ghost') and not extras.known('demo')
+    with patch.object(importlib.util, 'find_spec', present('bigthing')):
+        assert extras.installed('plugin:demo') is True          # `modules` proves it
+        x = extras.plugin_extra('demo')
+    assert x['name'] == 'plugin:demo' and x['installed'] is True and x['hard'] is True
+    # optional only, no modules named: the distributions are checked
+    monkeypatch.setattr(pl, 'plugin_loader', _loader_with({'extra': {'pip': ['bigthing>=2']}}))
+    with patch.object(importlib.metadata, 'version', lambda d: '2.0' if d == 'bigthing' else (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError(d))):
+        assert extras.installed('plugin:demo') is True
+        assert extras.plugin_extra('demo')['hard'] is False
+    with patch.object(importlib.metadata, 'version', lambda d: (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError(d))):
+        assert extras.installed('plugin:demo') is False
+    # a plugin that declares nothing has no set
+    monkeypatch.setattr(pl, 'plugin_loader', _loader_with({'title': 'Plain'}))
+    assert extras._spec('plugin:demo') is None and extras.plugin_extra('demo') is None
+    assert extras.describe('plugin:demo') is None and extras.describe('flash')['label']
+
+
+def test_a_manifest_cannot_smuggle_pip_arguments(monkeypatch):
+    import core.plugin_loader as pl
+    monkeypatch.setattr(pl, 'plugin_loader', _loader_with({'extra': {'pip': [
+        '--index-url=http://evil', '-e .', 'git+https://x/y.git', '/tmp/wheel.whl', 'good-pkg>=1.0,<2', 'other[extra]==3.1',
+        'py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@abc123']}}))
+    # options, bare URLs and paths never reach pip; a PEP 508 direct reference (what
+    # pip_dependencies has always allowed - the discord plugin's py-cord) does
+    assert extras._spec('plugin:demo')['specs'] == ['good-pkg>=1.0,<2', 'other[extra]==3.1',
+                                                   'py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@abc123']
+
+
+def test_a_plugin_set_installs_by_spec_and_reloads_the_plugin(monkeypatch, tmp_path):
+    import core.plugin_loader as pl
+    reloaded = []
+    loader = _loader_with({'extra': {'label': 'Big', 'pip': ['bigthing>=2'], 'modules': ['bigthing']}})
+    loader.reload_plugin = lambda n: reloaded.append(n)
+    monkeypatch.setattr(pl, 'plugin_loader', loader)
+    seen = {}
+
+    def popen(cmd, **kw):
+        seen['cmd'] = cmd
+        return FakePip(['Successfully installed bigthing-2.0\n'], 0)
+    found = [False]
+    with patch.object(extras.subprocess, 'Popen', popen), \
+         patch.object(importlib.util, 'find_spec', lambda m, *a, **k: object() if found[0] and m == 'bigthing' else None):
+        job = extras.start('plugin:demo')
+        assert job['state'] == 'running'
+        found[0] = True
+        for _ in range(200):
+            if extras.state('plugin:demo')['state'] != 'running':
+                break
+            time.sleep(0.01)
+    st = extras.state('plugin:demo')
+    assert st['state'] == 'done' and seen['cmd'][-1] == 'bigthing>=2' and '-r' not in seen['cmd']
+    assert reloaded == ['demo']                                  # the plugin sees its packages now
+    assert (tmp_path / 'logs' / 'extras-plugin-demo.log').is_file()

@@ -1,4 +1,5 @@
-"""Root requirements.txt must equal the union of install/requirements-*.txt.
+"""Root requirements.txt must equal the union of install/requirements-*.txt
+(minus the on-demand sets core/extras.py installs from a page when first needed).
 
 The Dockerfile installs from the install/ split (minimal + tts + stt) and
 INSTALLATION.md's minimal path uses the same files, while `pip install -r
@@ -13,7 +14,18 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-SPLIT = sorted((ROOT / "install").glob("requirements-*.txt"))
+# On-demand sets (core/extras.py EXTRAS - the board flasher's esptool) are
+# installed from the page that needs them, on the person's say-so, and are
+# NOT part of the main install: they stand outside the parity rule (2026-10-08).
+def _on_demand():
+    try:
+        from core import extras
+        return {(ROOT / spec['file']).resolve() for spec in extras.EXTRAS.values() if spec.get('file')}
+    except Exception:
+        return set()
+
+
+SPLIT = sorted(p for p in (ROOT / "install").glob("requirements-*.txt") if p.resolve() not in _on_demand())
 
 
 def _specs(path: Path) -> dict:

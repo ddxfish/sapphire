@@ -6,6 +6,12 @@
   "author": "Sapphire",
   "emoji": "⚡",
   "priority": 50,
+  "extra": {
+    "label": "Claude Agent SDK",
+    "pip": ["claude-agent-sdk>=0.2.163"],
+    "modules": ["claude_agent_sdk"],
+    "note": "The Claude Agent SDK, which bundles the Claude Code CLI it drives (about 250 MB). Only claude_code agents need it; the rest of Sapphire runs without it. Sessions run on your Claude Code login (Pro/Max), never an API key."
+  },
   "capabilities": {
     "tools": ["tools/claude_code_tools.py"],
     "agents": [
