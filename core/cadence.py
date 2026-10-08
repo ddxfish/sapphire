@@ -333,8 +333,16 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
                 if visible_text(''.join(parts)):
                     blocks.append(''.join(parts))
                 parts = []
+                # the tab paints the accordion as it happens - before this the
+                # tools of an agent-report turn appeared only after a refresh
+                # (Krem, 2026-10-08). Same exposure class as the chunks above.
+                publish(Events.VOICE_TURN_TOOL, {"message_id": mid, "chat": chat, "foreign": foreign, "phase": "start",
+                                                 "id": ev.get('id'), "name": ev.get('name'), "args": ev.get('args')})
             elif et == 'tool_end':
                 tools_ran = True
+                publish(Events.VOICE_TURN_TOOL, {"message_id": mid, "chat": chat, "foreign": foreign, "phase": "end",
+                                                 "id": ev.get('id'), "name": ev.get('name'),
+                                                 "result": ev.get('result'), "error": bool(ev.get('error'))})
             elif et == 'tts_chunk':
                 sentences += 1
             elif et == 'final':

@@ -588,3 +588,32 @@ def test_keep_prompt_keeps_the_row_when_the_answer_is_empty_or_stopped():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / 'core' / 'chat' / 'inbox.py').read_text(encoding='utf-8')
     assert 'keep_prompt=True' in src
+
+
+def test_run_turn_publishes_its_tool_calls_so_the_tab_paints_them_live():
+    """Krem, 2026-10-08: an agent-report turn showed think › think › prose
+    live; the tool calls between them appeared only after a refresh. The engine's
+    tool_start/tool_end reach run_turn; they ride the bus now, the same gate
+    (chat, foreign) as the chunks, ephemeral like them."""
+    sysobj, stream, llm = _system([{'type': 'content', 'text': 'checking '},
+                                   {'type': 'tool_start', 'id': 'c1', 'name': 'agent_peek', 'args': {'agent': 'Delta'}},
+                                   {'type': 'tool_end', 'id': 'c1', 'name': 'agent_peek', 'result': 'done', 'error': False},
+                                   {'type': 'content', 'text': 'all good.'},
+                                   {'type': 'final', 'text': 'all good.', 'cancelled': False}])
+    cadence._system = sysobj
+    published = []
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))):
+        cadence.run_turn('c', 'the report')
+    names = [et for et, _ in published]
+    assert names == ['voice_turn_start', 'voice_turn_chunk', 'voice_turn_tool', 'voice_turn_tool',
+                     'voice_turn_chunk', 'voice_turn_end']
+    start, end = published[2][1], published[3][1]
+    assert start == {'message_id': published[0][1]['message_id'], 'chat': 'c', 'foreign': True, 'phase': 'start',
+                     'id': 'c1', 'name': 'agent_peek', 'args': {'agent': 'Delta'}}
+    assert end['phase'] == 'end' and end['result'] == 'done' and end['error'] is False and end['chat'] == 'c'
+    from core.event_bus import EventBus
+    assert 'voice_turn_tool' in EventBus._EPHEMERAL_TYPES, 'tool args/results are chat content: never replayed'
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent.parent / 'interfaces' / 'web' / 'static' / 'main.js').read_text(encoding='utf-8')
+    handler = js.split("eventBus.on('voice_turn_tool'")[1].split("eventBus.on('voice_turn_end'")[0]
+    assert '_notMine(data) || !_voiceTurnActive' in handler and 'ui.startTool(' in handler and 'ui.endTool(' in handler

@@ -315,8 +315,10 @@ def test_h12_resolver_applies_the_hidden_rule_everywhere():
         assert names == {"a", "c"}
         names = {t["function"]["name"] for t in fm.resolve_tools("none", add_tools=["c"])}
         assert names == {"c"}
+        # drop FIRST, then add: a name in both is ON (the self agent drops every
+        # memory tool and adds the read set - add-then-drop erased the adds)
         names = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=["b", "c"], drop_tools=["a", "c"])}
-        assert names == {"b"}
+        assert names == {"b", "c"}
 
 
 def test_h12_mirrors_are_delegates():

@@ -733,6 +733,16 @@ function initEventBus() {
         if (_notMine(data) || !_voiceTurnActive) return;
         try { ui.appendStream(data?.text || ''); } catch (e) { /* ignore */ }
     });
+    // A tool call inside the turn: the same accordion the typed path paints
+    // (an agent's report turn used to show think › think › prose live, the
+    // tools between them only after a refresh; 2026-10-08).
+    eventBus.on('voice_turn_tool', (data) => {
+        if (_notMine(data) || !_voiceTurnActive) return;
+        try {
+            if (data?.phase === 'start') ui.startTool(data.id, data.name, data.args || {});
+            else if (data?.phase === 'end') ui.endTool(data.id, data.name, data.result ?? '', !!data.error);
+        } catch (e) { /* ignore */ }
+    });
     eventBus.on('voice_turn_end', async (data) => {
         if (_notMine(data) || !_voiceTurnActive) return;
         _voiceTurnActive = false;

@@ -34,7 +34,7 @@ class EventBus:
     # would hold a private task response past a lock (Phase 3).
     _EPHEMERAL_TYPES = frozenset({
         "plugin_notice", "voice_turn_start", "voice_turn_chunk",
-        "voice_turn_end", "tts_speak",
+        "voice_turn_tool", "voice_turn_end", "tts_speak",
     })
 
     def publish(self, event_type: str, data: Optional[Dict[str, Any]] = None,
@@ -277,6 +277,7 @@ class Events:
     # blobbing). START: {message_id}. CHUNK: {message_id, text}. END: {message_id}.
     VOICE_TURN_START = "voice_turn_start"
     VOICE_TURN_CHUNK = "voice_turn_chunk"
+    VOICE_TURN_TOOL = "voice_turn_tool"      # phase start|end: a tool call inside an unprompted turn, painted live
     VOICE_TURN_END = "voice_turn_end"
     
     # Tool events

@@ -281,3 +281,26 @@ def test_memory_is_refused_off_self_and_when_misspelt(kind, monkeypatch):
     with pytest.raises(AgentError, match="read-only"):
         kind.Agent(_row(prompt='self', memory='sometimes'), _Engine())
     assert kind._memory_mode(None) == 'read' and kind._memory_mode(True) == 'full' and kind._memory_mode('READ_ONLY') == 'read'
+
+
+def test_the_self_memory_rule_through_the_real_resolver(kind):
+    """The meaning test the settings-dict tests missed: the kind drops EVERY
+    memory tool and adds the read set - on the real resolver that must leave
+    the read tools on and the write tools off (add-then-drop left her with a
+    toolset and no memory, dev + server Sapph, 2026-10-08)."""
+    from core.chat.function_manager import FunctionManager
+    fm = FunctionManager.__new__(FunctionManager)
+    every = list(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS) + ['web_search', 'get_time']
+    fm.all_possible_tools = [{"type": "function", "function": {"name": n, "parameters": {}}} for n in every]
+    fm._hidden_tools = set()
+    fm.function_modules = {"mod": {"available_functions": ['web_search', 'get_time', 'save_memory', 'search_memory']}}
+    fm._mode_filters = {}
+    fm._settings_gates = {}
+    fm._enabled_tools = []
+    drop = list(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+    got = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=list(kind.MEMORY_READ_TOOLS), drop_tools=drop)}
+    assert got == {'web_search', 'get_time', *kind.MEMORY_READ_TOOLS}, got
+    got = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=drop, drop_tools=drop)}
+    assert got == {'web_search', 'get_time', *kind.MEMORY_READ_TOOLS, *kind.MEMORY_WRITE_TOOLS}
+    got = {t["function"]["name"] for t in fm.resolve_tools("mod", drop_tools=drop)}
+    assert got == {'web_search', 'get_time'}
