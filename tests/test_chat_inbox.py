@@ -568,3 +568,41 @@ def test_drops_are_typed_so_a_door_can_tell_privacy_from_stale(fast, monkeypatch
     src = (__import__('pathlib').Path(__file__).resolve().parent.parent / 'plugins' / 'twilio-voice' / 'daemon.py').read_text(encoding='utf-8')
     assert "if item.drop_kind in ('privacy', 'sealed', 'gone'):" in src
     assert '_fallback()' not in src.split('def _watch():')[1].split('threading.Thread')[0], 'a failed turn is not re-written'
+
+
+def test_the_idle_hint_asks_begin_streams_rule_not_the_session_counters(monkeypatch):
+    """Krem, server Sapph 2026-10-08: queued messages popped only after he
+    stopped her TTS. The hint read chat_idle_event, which clears in the engine's
+    finally - after the audio tail. It asks LLMChat.chat_free now: a stream past
+    llm_done is a tail, the chat is free, the next item pops as she stops writing."""
+    class LLM:
+        def __init__(self, free):
+            self.free = free
+            self.session_manager = type('SM', (), {'chat_idle_event': lambda self, n: threading.Event()})()
+        def chat_free(self, name):
+            return self.free
+    c = inbox._Chat('desk')
+    monkeypatch.setattr(inbox, '_system', lambda: type('S', (), {'llm_chat': LLM(False)})())
+    assert inbox._idle_hint(c) is False
+    monkeypatch.setattr(inbox, '_system', lambda: type('S', (), {'llm_chat': LLM(True)})())
+    assert inbox._idle_hint(c) is True            # the counters above still say busy; the registry rules
+    monkeypatch.setattr(inbox, '_system', lambda: None)
+    assert inbox._idle_hint(c) is True
+
+
+def test_the_next_item_pops_the_moment_a_run_returns_not_next_sweep(fast, monkeypatch):
+    """The lane frees at llm_done, before end_stream's kick (that comes when the
+    tail ends). With both items put before the drainer's first look, nothing
+    set `wake` again: the second waited a whole SWEEP_S. Now the loop looks
+    again at once whenever something still waits."""
+    monkeypatch.setattr(inbox, 'SWEEP_S', 2.0)
+    hold = {'idle': False}
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: hold['idle'])
+    marks = []
+    inbox.put('desk', inbox.Item(run=lambda: marks.append(('a', time.monotonic())), lane='later', source='mcp:a'))
+    inbox.put('desk', inbox.Item(run=lambda: marks.append(('b', time.monotonic())), lane='later', source='mcp:b'))
+    time.sleep(0.1)                       # both in line, the drainer's wake cleared
+    hold['idle'] = True
+    inbox.kick('desk')
+    assert _wait(lambda: len(marks) == 2, 5)
+    assert marks[1][1] - marks[0][1] < 1.0, f"the second item waited a sweep: {marks[1][1] - marks[0][1]:.2f}s"

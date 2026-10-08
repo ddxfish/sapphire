@@ -140,6 +140,40 @@ def test_cancel_before_llm_done_ends_the_turn_and_closes_the_engine():
     assert log == ['closed']          # the engine was closed by the TURN, after the cancel
 
 
+def test_the_lane_frees_at_llm_done_while_the_audio_tail_still_runs():
+    """Krem on server Sapph (2026-10-08): three queued messages popped only
+    after he stopped her TTS. Turn.llm_done is the lane's end: set the moment
+    the llm_done event passes, while the tail (tts_chunk...) is still being
+    fed and `done` is not."""
+    import queue as _q
+    q = _q.Queue()
+    s = FakeStream()
+    t = Turn(s, fed_gen(q))
+    v = t.attach(audio=True)
+    t.start()
+    it = iter(v)
+    q.put({'type': 'content', 'text': 'words'})
+    assert next(it)['text'] == 'words'
+    assert not t.llm_done.is_set()
+    s.llm_done = True
+    q.put({'type': 'llm_done', 'tts_streamed': True})
+    assert next(it)['type'] == 'llm_done'
+    assert t.llm_done.wait(2), "the lane must free on llm_done"
+    assert not t.done.is_set(), "...while the turn itself still runs its tail"
+    q.put({'type': 'tts_chunk', 'audio_b64': 'zz'})     # the tail goes on
+    assert next(it)['type'] == 'tts_chunk'
+    q.put(None)
+    assert t.done.wait(2)
+
+
+def test_a_cancel_or_error_before_llm_done_frees_the_lane_too():
+    s = FakeStream()
+    t = Turn(s, gen_of([{'type': 'content', 'text': 'x'}], raise_after=0))
+    t.attach(audio=True)
+    t.start()
+    assert t.done.wait(2) and t.llm_done.is_set()
+
+
 def test_cancel_after_llm_done_is_a_clean_done():
     """Stop during the audio tail: the row is written — the wire ends with
     `done`, exactly what the route did (E1#7)."""

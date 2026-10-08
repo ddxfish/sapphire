@@ -4,7 +4,9 @@
 # MIDI, cadence); the engine allows one live turn per chat. Before this file
 # the losers each had their own retry-then-drop loop. Now a door `put`s an
 # Item: if the chat is free it runs at once, if not it waits and runs when her
-# current message truly ends (all tool rounds). Record: tmp/chat-inbox-plan.md.
+# current message's WORDS end (all tool rounds, llm_done) - not its voice: a
+# streaming-TTS tail is preempted by the next turn, which cuts over as it
+# starts (Krem, 2026-10-08). Record: tmp/chat-inbox-plan.md.
 #
 # Two lanes answer one question - who is waiting? `now` is a person (typed,
 # spoke to a satellite): FIFO, keeps its voice lane. `later` is a machine
@@ -446,11 +448,15 @@ def _dropped(it, why, kind='dropped'):
 
 
 def _idle_hint(c):
+    """Would begin_stream(exclusive) take the chat now? Its own rule, asked of
+    the stream registry: a stream past llm_done (an audio tail) is not live.
+    The session counters (chat_idle_event) stay up until the engine's finally,
+    after the tail - asking them held the line through her whole reply aloud."""
     system = _system()
     if system is None:
-        return True                                # no counter to ask: let begin_stream judge
+        return True                                # nothing to ask: let begin_stream judge
     try:
-        return system.llm_chat.session_manager.chat_idle_event(c.name).is_set()
+        return bool(system.llm_chat.chat_free(c.name))
     except Exception:
         return True
 
@@ -624,6 +630,11 @@ def _drain_loop(c):
             backoff = min(backoff * 2, BACKOFF_MAX)
             c.wake.set()
         _changed(c)
+        with c.lock:
+            # the lane frees at llm_done, before end_stream's kick (that comes
+            # when the tail ends): whatever waits is picked now, not next sweep
+            if c.now_q or c.later_q:
+                c.wake.set()
 
 
 class _Busy(Exception):

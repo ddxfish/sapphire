@@ -117,6 +117,13 @@ class Turn:
         self._viewers = []
         self._lock = threading.RLock()
         self.done = threading.Event()
+        # The LLM half is over - her row is written; only the audio tail may
+        # still run. The lane a door holds for the inbox ends HERE, not at
+        # `done`: begin_stream(exclusive) already counts a tail as free and
+        # preempts it, so the next thing in line pops the moment she has
+        # finished writing, her voice cut over as it starts (Krem, 2026-10-08:
+        # "pop pop pop right when LLM is done"). Nothing waiting: the tail plays out.
+        self.llm_done = threading.Event()
         self.terminal = None
         self.started_at = time.time()
         self.thread = None
@@ -155,6 +162,8 @@ class Turn:
                     break
                 n += 1
                 self._fanout(ev)
+                if ev.get('type') == 'llm_done':
+                    self.llm_done.set()
         except ConnectionError as e:
             logger.warning(f"[TURN] {self.label}: {e}")
             terminal = {'type': 'turn_end', 'error': self._friendly(e)}
@@ -186,6 +195,7 @@ class Turn:
             self._fanout(terminal)
             with self._lock:
                 self.done.set()
+                self.llm_done.set()       # a cancel or error before llm_done frees the lane too
                 for v in self._viewers:
                     v._end()
                 self._viewers = []

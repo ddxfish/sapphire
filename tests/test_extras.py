@@ -175,3 +175,23 @@ def test_a_plugin_set_installs_by_spec_and_reloads_the_plugin(monkeypatch, tmp_p
     assert st['state'] == 'done' and seen['cmd'][-1] == 'bigthing>=2' and '-r' not in seen['cmd']
     assert reloaded == ['demo']                                  # the plugin sees its packages now
     assert (tmp_path / 'logs' / 'extras-plugin-demo.log').is_file()
+
+
+def test_the_page_asks_for_a_set_by_name_so_plugin_sets_install():
+    """Krem's first real click on server Sapph (2026-10-08): "Install failed: No
+    optional set called 'plugin:claude-code'". ensureExtra read the list of
+    CORE sets (/api/system/extras, status()) - a plugin's set is only known to
+    the per-set route (known + describe). The browser threw before the server
+    ever heard of the install."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    js = (root / 'interfaces' / 'web' / 'static' / 'shared' / 'extras.js').read_text(encoding='utf-8')
+    head = js.split('return new Promise')[0]
+    assert '`/api/system/extras/${name}`' in head, 'the set is fetched by name'
+    assert "fetchWithTimeout('/api/system/extras'," not in head, 'the core-set list does not decide what exists'
+    assert 'st?.set' in head or 'st.set' in head
+    # and the per-set route answers for a plugin's set with what the modal reads
+    import core.plugin_loader as pl
+    with patch.object(pl, 'plugin_loader', _loader_with({'extra': {'label': 'Big', 'pip': ['bigthing>=2'], 'modules': ['bigthing']}})):
+        d = extras.describe('plugin:demo')
+    assert set(d) >= {'label', 'note', 'restart', 'installed'} and d['label'] == 'Big'

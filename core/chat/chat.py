@@ -318,15 +318,18 @@ class LLMChat:
                 mine = [self._streams_by_id[i]
                         for i in self._streams_by_chat.get(chat_name, set())
                         if i in self._streams_by_id]
-                live = [s for s in mine if not s.cancel_flag and not s.llm_done]
+                live = [s for s in mine if self._live(s)]
                 if live:
                     logger.info(f"begin_stream: refused — chat '{chat_name}' "
                                 f"has {len(live)} live stream(s)")
                     raise ChatBusy(chat_name)
                 # Web tails only: a phone/driver stream (explicit target_chat)
                 # draining on the chat the operator happens to be viewing is
-                # the CALLER's voice — never muted by a web send (E1#4).
-                tails = [s for s in mine if s.llm_done and not s.cancel_flag and not s.target_chat]
+                # the CALLER's voice — never muted by a web send (E1#4). A
+                # typed turn's own tail (operator_lane, pinned once the view
+                # moved) is the operator's voice: the next turn cuts it.
+                tails = [s for s in mine if s.llm_done and not s.cancel_flag
+                         and (not s.target_chat or getattr(s, 'operator_lane', False))]
             self._streams_by_id[sid] = stream
             self._streams_by_chat.setdefault(chat_name, set()).add(sid)
         stream.active_chat_name = chat_name
@@ -432,6 +435,20 @@ class LLMChat:
         with self._streams_lock:
             ids = list(self._streams_by_chat.get(chat_name, set()))
             return [self._streams_by_id[i] for i in ids if i in self._streams_by_id]
+
+    @staticmethod
+    def _live(s):
+        """begin_stream(exclusive)'s one rule: a stream occupies its chat until
+        its LLM half is over or it is cancelled. Past llm_done it is an audio
+        tail - the row is written, the next turn preempts it."""
+        return not s.cancel_flag and not s.llm_done
+
+    def chat_free(self, chat_name):
+        """Would begin_stream(exclusive) take `chat_name` right now? The inbox's
+        idle hint (core/chat/inbox.py) asks THIS, not the session counters,
+        which stay up through the audio tail - the line used to wait for her
+        voice to finish, not her words (Krem, 2026-10-08)."""
+        return not any(self._live(s) for s in self.streams_for_chat(chat_name))
 
     def live_turn(self, chat_name):
         """The server-owned Turn (core/chat/turn.py) still running on a chat,

@@ -41,9 +41,10 @@ called), `model`, `context` (extra material appended to the mission). Each kind 
 ## How she hears from them: the inbox
 
 Reports and questions land in the chat through the **inbox** — a per-chat queue in front of the
-turn engine. If she is mid-message, the item waits until her message truly ends (every tool round
-included) and then runs as its own turn — in the chat it was queued on, even if you switched chats
-meanwhile. Each machine return gets her own reply (only your typed turns fold). The report's row
+turn engine. If she is mid-message, the item waits until she has finished *writing* (every tool
+round included) and then runs as its own turn — in the chat it was queued on, even if you switched
+chats meanwhile. Her voice is not waited for: with streaming TTS on, the next turn cuts in as it
+starts speaking. When nothing is waiting, she finishes talking. Each machine return gets her own reply (only your typed turns fold). The report's row
 stays in history even if you stop her reply. A question answered before its turn came up (from the
 pill, say) is withdrawn from the line. A machine's item waits through a busy chat, a locked database and even a locked vault (held until the unlock); it is dropped only when the chat is gone, when it was queued while the chat was private and the chat went public (privacy rolls downhill), or on a restart. No browser needs to be open; the
 queue's cap applies to machine items only — a typed or spoken turn is never refused.
@@ -89,7 +90,7 @@ see them, × takes one back out.
 ## Typing while she talks
 
 Send while she is mid-message and the turn **waits its turn** — the bubble pulses until it
-runs, with a × to take it back. Several messages typed while she talks **fold into one turn**:
+runs, with a × to take it back. It runs the moment her words end, not her voice. Several messages typed while she talks **fold into one turn**:
 one user message (your thoughts separated by blank lines), one reply, one set of tokens — they
 were continuations of one thought. Only *your* typed turns fold with each other: an agent's
 report, a satellite's question, a Discord message, a MIDI take each get her own reply.

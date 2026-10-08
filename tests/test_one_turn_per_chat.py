@@ -88,6 +88,41 @@ def test_non_exclusive_lanes_unaffected(llm):
     assert len(llm._streams_by_id) == 3
 
 
+def test_chat_free_is_begin_streams_own_rule(llm):
+    """The inbox's idle hint asks THIS (2026-10-08): a live stream occupies the
+    chat; past llm_done it is an audio tail and the chat is free; cancelled is
+    free. The session counters it used to read stay up through the tail - the
+    line waited for her voice, not her words."""
+    assert llm.chat_free('trinity') is True
+    s, sid, _ = llm.begin_stream(exclusive=True)
+    assert llm.chat_free('trinity') is False
+    s.llm_done = True
+    assert llm.chat_free('trinity') is True
+    assert llm.chat_free('other') is True
+    s.llm_done = False
+    s.cancel_flag = True
+    assert llm.chat_free('trinity') is True
+
+
+def test_the_next_turn_mutes_a_typed_turns_tail_even_when_pinned(llm):
+    """A typed turn whose view moved runs pinned (target_chat set, operator_lane).
+    Its tail is the operator's own voice: the next typed turn on that chat cuts
+    it, like an unpinned web tail. A phone/driver tail (target_chat, no operator
+    lane) is still never muted by a web send (E1#4)."""
+    llm.session_manager.get_active_chat_name.return_value = 'elsewhere'
+    pinned, sid, _ = llm.begin_stream(chat_name='trinity', exclusive=True, operator=True)
+    pinned.operator_lane = True
+    pinned.llm_done = True
+    pinned.stop_tts = MagicMock()
+    phone, psid, _ = llm.begin_stream(chat_name='phone-1', exclusive=True)
+    phone.llm_done = True
+    phone.stop_tts = MagicMock()
+    llm.begin_stream(chat_name='trinity', exclusive=True, operator=True)
+    llm.begin_stream(chat_name='phone-1', exclusive=True)
+    pinned.stop_tts.assert_called_once()
+    phone.stop_tts.assert_not_called()
+
+
 def test_simultaneous_exclusive_sends_exactly_one_wins(llm):
     """Check + register are one critical section: N racing sends → 1 stream."""
     n = 12
@@ -164,6 +199,53 @@ def test_stream_route_queues_when_busy_closes_and_the_tab_follows_by_ticket(clie
     assert any(l.get('type') == 'content' and l.get('text') == 'later' for l in follow)
     assert follow[-1].get('done') is True
     assert mock_system.llm_chat.begin_stream.call_count == 4
+
+
+def test_the_web_door_frees_the_inbox_lane_at_llm_done_not_at_the_end_of_the_tail(client, mock_system, monkeypatch):
+    """Krem, server Sapph 2026-10-08: he asked for a three-paragraph story,
+    queued three messages, and they popped only after he stopped her TTS. The
+    web door's item must return when her WORDS end (llm_done) while the
+    streaming-TTS tail is still on the wire; begin_stream counts a tail as free
+    and preempts it, the browser cuts over on the next tts_stream_start."""
+    from core.chat import inbox
+    from core.routes import chat as route
+    monkeypatch.setattr(route, 'publish', lambda name, data=None, **kw: None)
+    c, csrf = client
+    stream = MagicMock()
+    stream.cancel_flag = False
+    stream.ephemeral = False
+    stream.llm_done = False
+    tail_gate, lane_free, seen = threading.Event(), threading.Event(), {}
+
+    def engine():
+        yield {"type": "content", "text": "a story"}
+        stream.llm_done = True
+        yield {"type": "llm_done", "tts_streamed": True}
+        tail_gate.wait(5)                                  # the audio tail, held by the test
+        yield {"type": "tts_stream_end", "stream_id": "s1"}
+        yield {"type": "final", "text": "a story", "cancelled": False, "error": False}
+
+    stream.chat_stream.return_value = engine()
+    mock_system.llm_chat.begin_stream.return_value = (stream, 'sid1', 'trinity')
+    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
+    mock_system.llm_chat.session_manager.is_chat_hidden.return_value = False
+    mock_system.llm_chat.session_manager.read_chat_settings.return_value = {}
+    real_run = inbox._run
+
+    def run_and_tell(ch, picked):
+        real_run(ch, picked)
+        lane_free.set()                                    # the drainer got its lane back
+    monkeypatch.setattr(inbox, '_run', run_and_tell)
+
+    def watcher():
+        seen['freed_during_tail'] = lane_free.wait(5)      # must happen while the gate still holds the tail
+        tail_gate.set()
+    threading.Thread(target=watcher, daemon=True).start()
+    r = c.post('/api/chat/stream', json={'text': 'tell me a story'}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200
+    lines = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ')]
+    assert any(l.get('type') == 'llm_done' for l in lines) and lines[-1].get('done') is True
+    assert seen.get('freed_during_tail') is True, "the lane waited for the tail to end"
 
 
 def test_stream_route_returns_409_error_json_when_the_inbox_refuses(client, mock_system, monkeypatch):

@@ -277,7 +277,12 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             _ticket_event(ticket_box.get('ticket'), 'started')
         for o in others:
             _ticket_event(o.ticket, 'merged')
-        turn.done.wait()          # the inbox's one-runner rule: hold the lane until this turn ends
+        # The inbox's one-runner rule: hold the lane until her WORDS end, not her
+        # voice. Past llm_done this stream is an audio tail begin_stream already
+        # counts as free and preempts (the browser cuts over on the next turn's
+        # first tts_stream_start); the registration itself (_release) still goes
+        # when the turn ends. Nothing in line: the tail plays out untouched.
+        turn.llm_done.wait()
         return None
 
     ticket_box = {}

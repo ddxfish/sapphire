@@ -5,6 +5,11 @@
 //
 // Asks the server whether the set is there; if not, one modal: what it is,
 // Install, pip's words as they come, done. Nothing else on the page changes.
+//
+// The set is asked for BY NAME (/api/system/extras/<name>): a plugin's set
+// (`plugin:<name>`, built from its manifest) is not in the /api/system/extras
+// list of core sets - reading that list here was the "No optional set called
+// 'plugin:claude-code'" toast on the first real Install click (2026-10-08).
 
 import { showModal, escapeHtml as esc } from './modal.js';
 import { fetchWithTimeout } from './fetch.js';
@@ -13,8 +18,8 @@ import { showToast } from './toast.js';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export async function ensureExtra(name) {
-    const all = (await fetchWithTimeout('/api/system/extras', {}, 15000)).extras || {};
-    const x = all[name];
+    const st = await fetchWithTimeout(`/api/system/extras/${name}`, {}, 15000);
+    const x = st?.set;
     if (!x) throw new Error(`No optional set called '${name}'.`);
     if (x.installed) return true;
     return new Promise(resolve => {
