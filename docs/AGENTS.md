@@ -135,12 +135,23 @@ workspace. Stop in the first seconds (before the CLI has connected) stops it bef
 runs. On Windows the session runs on its own Proactor event loop (the app's Selector policy
 cannot spawn the CLI).
 
-**Billing.** Sessions run on *your Claude Code login* (Pro / Max): any `ANTHROPIC_API_KEY` in
-Sapphire's environment is blanked for the session, and the CLI reports `apiKeySource: none`. No
-dollar figure appears on reports in that case — the CLI's `total_cost_usd` is an estimate at API
-list price that it computes whether or not anyone is billed. If a key *is* being billed (the login
-is missing, or a key helper is configured), reports carry `cost so far $… (<source>)` and the
-agent's transcript notes it.
+**Sign-in and billing.** Sessions run on *your Claude Code sign-in* (Pro / Max): any
+`ANTHROPIC_API_KEY` in Sapphire's environment is blanked for the session, Sapphire's own provider
+keys never enter the environment at all, and the CLI reports `apiKeySource: none`. Every report
+says what it ran on: `(your Claude sign-in · session …)`, or — if a key *is* being billed (a key
+helper in Claude Code's own settings) — `cost so far $… (<source>)`, with a note in the agent's
+transcript either way. The dollar figure is the CLI's estimate at API list price; on the sign-in it
+is not a bill, so it is not shown.
+
+A computer that never installed Claude Code still has the CLI: the SDK ships it. With **no sign-in**
+the run does nothing and bills nothing — the report says so and names the command: `claude auth login`
+(or the bundled binary's path when `claude` is not on PATH), run once as the user Sapphire runs as,
+choosing the Claude account with your subscription; a headless box can take `CLAUDE_CODE_OAUTH_TOKEN`
+from `claude setup-token` in the service environment instead. `claude auth status` shows what is
+signed in. Anthropic's Help Center (updated 2026-10-07) says subscribers may use the Agent SDK and
+`claude -p` within their subscription limits; the Agent SDK docs forbid *third-party developers*
+from offering claude.ai login *for their products* — Sapphire offers none: it runs Claude Code's own
+sign-in on your own machine.
 
 Core mode can see what you can see: it runs at the Sapphire root with your Claude Code login and
 settings. Project and plugin modes load only the workspace's own CLAUDE.md, no user-level settings

@@ -72,6 +72,40 @@ def _head(text, n=120):
     return s if len(s) <= n else s[:n - 1] + '…'
 
 
+def _claude_exe():
+    """The Claude Code binary on this computer: `claude` on PATH, else the one
+    the SDK ships (241 MB, in its own package) - a box that never installed
+    Claude Code still has a CLI to sign in with."""
+    import shutil
+    exe = shutil.which('claude')
+    if exe:
+        return exe
+    try:
+        import claude_agent_sdk
+        cand = Path(claude_agent_sdk.__file__).parent / '_bundled' / ('claude.exe' if os.name == 'nt' else 'claude')
+        if cand.is_file():
+            return str(cand)
+    except Exception:
+        pass
+    return 'claude'
+
+
+def _not_signed_in(why):
+    return 'not logged in' in why.lower() or '/login' in why
+
+
+def _login_help():
+    """What a run on a box with no Claude sign-in reports (verified 2026-10-08:
+    the CLI answers "Not logged in · Please run /login", apiKeySource none,
+    cost 0 - nothing ran, nothing was billed). Sapphire blanks ANTHROPIC_API_KEY
+    for the CLI (helpers._cli_env), so the only way in is Claude Code's own
+    sign-in, and this says how."""
+    return (f"Claude Code has no working sign-in on this computer, so nothing ran and nothing was billed. "
+            f"Sign in once, as the user Sapphire runs as: `{_claude_exe()} auth login` (pick the Claude account "
+            f"with your subscription, not the Console/API key), or set CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token` "
+            f"in her service environment. Sapphire never hands the CLI an API key.")
+
+
 class Agent(BaseAgent):
     """A Claude Code session. run(mission) opens it and takes the first turn;
     say(text) sends another; stop() interrupts and closes it. Idle past
@@ -104,6 +138,7 @@ class Agent(BaseAgent):
         self._client = None
         self._cost = 0.0
         self._api_key = None            # apiKeySource when a key is billed; None = the login
+        self._auth_noted = False        # the transcript says once what this session runs on
         self.workspace = None
 
     # --- the thread -----------------------------------------------------------
@@ -197,6 +232,9 @@ class Agent(BaseAgent):
                 if src not in (None, 'none'):
                     self._api_key = src
                     self.event('note', f"billing an API key ({src}), not the login")
+                elif not self._auth_noted:
+                    self.event('note', 'on the Claude Code sign-in (your subscription), no API key')
+                self._auth_noted = True
             elif isinstance(msg, sdk.AssistantMessage):
                 for b in msg.content:
                     if isinstance(b, sdk.TextBlock) and b.text:
@@ -217,12 +255,19 @@ class Agent(BaseAgent):
                     self.report((body + '\n\n' if body else '') + '[stopped by the director]')
                 elif msg.is_error:
                     why = '; '.join(msg.errors or []) or (msg.result or msg.subtype or 'error')
-                    self.report((body + '\n\n' if body else '') + f"[ended: {msg.subtype} — {_head(why, 300)}]")
+                    if _not_signed_in(why):
+                        self.report(_login_help())
+                    else:
+                        # the CLI's subtype is 'success' even for a failed result
+                        label = 'ended with an error' if msg.subtype == 'success' else f"ended: {msg.subtype}"
+                        self.report((body + '\n\n' if body else '') + f"[{label} — {_head(why, 300)}]")
                 else:
                     # total_cost_usd is the CLI's estimate at API list price, computed
                     # whether or not anyone is billed. On the login (Pro/Max) it is
-                    # not a bill, so it only shows when a key is (verified 2026-10-07).
-                    cost = f"cost so far ${self._cost:.2f} ({self._api_key}) · " if self._api_key else ''
+                    # not a bill, so it only shows when a key is (verified 2026-10-07);
+                    # the login is NAMED instead, so every report says what it ran on.
+                    cost = (f"cost so far ${self._cost:.2f} ({self._api_key}) · " if self._api_key
+                            else 'your Claude sign-in · ')
                     tail = f"\n\n({cost}session {str(self.resume_token or '')[:8]})"
                     denied = _denials(msg)
                     if denied:

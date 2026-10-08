@@ -172,3 +172,43 @@ class TestSecondWave:
         assert "self.report((final or '(no text)') + tail)" in turn
         src = (ROOT / 'plugins' / 'claude-code' / 'plugin.json').read_text(encoding='utf-8')
         assert 'READ access to user/logs' not in src
+
+
+class TestWhatItRunsOn:
+    """Krem, 2026-10-08: "will it pull from her system-wide API key? will it
+    notify the user?" Verified against SDK 0.2.163 with an empty config dir: the
+    bundled CLI runs, apiKeySource is 'none', the result is an error that reads
+    "Not logged in · Please run /login", cost 0 - nothing ran, nothing billed."""
+
+    def _kind(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('cc_kind', ROOT / 'plugins' / 'claude-code' / 'agent_kind.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_the_cli_never_inherits_an_api_key(self, monkeypatch):
+        monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-should-never-reach-the-cli')
+        monkeypatch.setenv('ANTHROPIC_AUTH_TOKEN', 'nor-this')
+        monkeypatch.setenv('CLAUDE_CODE_OAUTH_TOKEN', 'the-subscription-token-may')
+        env = helpers._cli_env()
+        assert env['ANTHROPIC_API_KEY'] == '' and env['ANTHROPIC_AUTH_TOKEN'] == ''
+        assert 'CLAUDE_CODE_OAUTH_TOKEN' not in env      # not blanked: the SDK lays env over os.environ, so it passes through
+
+    def test_a_box_with_no_sign_in_gets_told_how_not_a_cli_quirk(self):
+        k = self._kind()
+        assert k._not_signed_in('Not logged in · Please run /login')
+        assert k._not_signed_in('Invalid API key · Please run /login')
+        assert not k._not_signed_in('rate limited')
+        help_text = k._login_help()
+        assert 'auth login' in help_text and 'CLAUDE_CODE_OAUTH_TOKEN' in help_text and 'nothing was billed' in help_text
+        exe = k._claude_exe()
+        assert exe == 'claude' or Path(exe).is_file()       # PATH, or the SDK's bundled binary
+
+    def test_every_report_names_what_it_ran_on(self):
+        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        turn = src.split('async def _turn(')[1].split('# --- what the director does')[0]
+        assert "else 'your Claude sign-in · ')" in turn, 'the login is named, not silent'
+        assert 'billing an API key' in turn and 'no API key' in turn
+        assert 'if _not_signed_in(why):' in turn and 'self.report(_login_help())' in turn
+        assert "'ended with an error' if msg.subtype == 'success'" in turn
