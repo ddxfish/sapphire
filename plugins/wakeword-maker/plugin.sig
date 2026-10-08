@@ -20,7 +20,7 @@
     "app/tabs/wakewords.js": "sha256:eacc13d8ca63808cba460883751caa4fc89bec4b92998f523fc4269a083298af",
     "daemon.py": "sha256:1c9ec291e08df75473043799cf66799b02e5ba31502d6ad96664d506cf97ac0a",
     "plugin.json": "sha256:965f7476f11aa0e00d546cbba238a83a17cd378818c5850626ff15e32498d017",
-    "routes/api.py": "sha256:b1c2c738ce52286032afcee91d682c0785a347c3af23ebf5dfefa2872fbc0590",
+    "routes/api.py": "sha256:0897adddf2f94be1c6071893932fae1d8dd5bfad723e1ce02c09d16175464aa1",
     "tests/test_wakeword_maker.py": "sha256:b078f3375dabbcbefb75bf79536d0cee8013172f07f7a0a9850d1c8807c277bf",
     "wakeword_maker/__init__.py": "sha256:721dc1b5f2f2a867b8f1dd00cbbd4c8b19f02d012590d86b096c07eb5e4a84b6",
     "wakeword_maker/augment.py": "sha256:5627311a302681846954eed59cc8c151ad95ab9b5dbec2025619010df2fc19b7",
@@ -46,5 +46,5 @@
     "wakeword_maker/voices.py": "sha256:8f204033e069a6c93c89741f44d70fa7cfa16c95a5a8cf3e88bc6ddcd8750ac9",
     "wakeword_maker/watch.py": "sha256:2eb9f18759a19e7462d8959e66f6f565d2f60333951295902bb40883a7ac59b9"
   },
-  "signature": "cjWUeoeSV1zQt5LRn0ODgFRDwFhBUHJTPUPXAYRgyhmdEFmWqh3otivXTLTLYbfnfRdIq5whRSl5vYpmiu0LDA=="
+  "signature": "na5yxOM6rf8uIy+DoMCH0U7jX8rFox5VPiY5oKUIu/SetUAQKgZHLrk2wc1tNCPhWtBl8z83aXeodBubOnLfBQ=="
 }

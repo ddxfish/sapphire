@@ -29,7 +29,7 @@ _lock = threading.Lock()
 _wake = threading.Event()
 _halt = threading.Event()
 _keeper = None
-_belief = {}         # device id -> {'online', 'misses', 'checking', 'ts', 'due', 'parts'}
+_belief = {}         # device id -> {'online', 'misses', 'checking', 'ts', 'due', 'parts', 'probe_misses'}
 _saved = None        # {device id: online} as the file had it, read once
 
 
@@ -62,7 +62,8 @@ def _entry_locked(device_id):
     b = _belief.get(device_id)
     if b is None:
         b = _belief[device_id] = {'online': _saved_locked().get(device_id, False), 'misses': 0,
-                                  'checking': False, 'ts': 0.0, 'due': 0.0, 'parts': []}
+                                  'checking': False, 'ts': 0.0, 'due': 0.0, 'parts': [],
+                                  'probe_misses': 0}       # probes alone: a check-in never resets it
     return b
 
 
@@ -100,9 +101,10 @@ def told(device_id, result):
         b = _entry_locked(device_id)
         was = b['online']
         if result.get('online'):
-            b['online'], b['misses'] = True, 0
+            b['online'], b['misses'], b['probe_misses'] = True, 0, 0
         else:
             b['misses'] += 1
+            b['probe_misses'] += 1
             if b['misses'] >= MISSES:
                 b['online'] = False
         b['checking'] = False
@@ -153,11 +155,30 @@ def seen(device_id):
 
 
 def poke(device_id=None):
-    """Look at this device (or all of them) at the next chance. Never waits."""
+    """Look at this device (or all of them) at the next chance. Never waits.
+    Its address may have just changed: the probes start over."""
     with _lock:
         for k in ([device_id] if device_id else list(_belief)):
-            _entry_locked(k)['due'] = 0.0
+            b = _entry_locked(k)
+            b['due'], b['probe_misses'] = 0.0, 0
     _wake.set()
+
+
+def look(device_id):
+    """Look at this device at the next chance, counting on: its address is
+    the same, the question is whether it still answers there."""
+    with _lock:
+        _entry_locked(device_id)['due'] = 0.0
+    _wake.set()
+
+
+def reached(device_id):
+    """True while the device answers probes at its stored address: fewer
+    than MISSES probes in a row have failed since the address was set. What
+    the device itself says by calling in does not count here, so a caller
+    from elsewhere cannot make a reachable device look lost."""
+    with _lock:
+        return _entry_locked(device_id)['probe_misses'] < MISSES
 
 
 def forget(device_id):

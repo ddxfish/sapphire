@@ -249,11 +249,20 @@ def _talk_part(row):
 
 
 def key_ok(device_id, presented):
-    """True when `presented` is the key stored for this device's voice."""
+    """True when `presented` is the key stored for this device's voice - or
+    the one provision() minted for this name, which becomes the stored one
+    now (engine.promote): a board proves its new keys by calling in."""
+    if not presented:
+        return False
+    return _key_stored(device_id, presented) or \
+        (_engine().promote(device_id, presented) and _key_stored(device_id, presented))
+
+
+def _key_stored(device_id, presented):
     e = _engine()
     row = e.rows().get(str(device_id or '').strip().lower())
     part = _talk_part(row) if row and row.get('enabled', True) else None
-    if not part or not presented:
+    if not part:
         return False
     try:
         stored = e._part_secrets(row['id'], part['driver']).get('voice_key')

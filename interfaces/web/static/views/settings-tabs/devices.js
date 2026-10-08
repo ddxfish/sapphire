@@ -31,11 +31,11 @@ let typeFilter = '';    // a driver label, or '' for every type
 let timer = null;
 let onPoll = null;      // the open device window reads each poll, so it never has to ask itself
 
-const call = (method, path = '', body) => fetchWithTimeout(API + path, {
+const call = (method, path = '', body, ms = 30000) => fetchWithTimeout(API + path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
-}, 30000);
+}, ms);
 
 const ago = ts => { const s = Math.max(0, Math.round(Date.now() / 1000 - ts)); return s < 90 ? `${s}s ago` : `${Math.round(s / 60)}m ago`; };
 const stateWord = d => !d.enabled ? 'off' : d.status?.online ? 'online' : 'offline';
@@ -74,7 +74,7 @@ function drawPage(container) {
     clearInterval(timer);
     timer = setInterval(() => {
         if (!page || !page.isConnected) { clearInterval(timer); timer = null; return; }
-        if (!document.hidden) loadList();
+        if (!document.hidden && page.offsetParent) loadList();     // not while another view is up (the router only hides this one)
     }, POLL_MS);
 }
 
@@ -398,10 +398,11 @@ function mountActions(el, device, cap) {
         out.hidden = false; out.textContent = 'Running...';
         showPics([]);
         try {
+            const wait = cap.actions[row.dataset.action]?.wait || 0;        // seconds the driver says it may take
             const res = await call('POST', `/${encodeURIComponent(device.id)}/run`, {
                 capability: cap.capability, action: row.dataset.action,
                 value: row.querySelector('.dev-try-value').value,
-            });
+            }, Math.max(30, wait + 15) * 1000);
             out.textContent = (res.ok ? '' : 'FAILED\n') + res.text;
             showPics(res.images);
         } catch (err) { out.textContent = 'FAILED\n' + err.message; }

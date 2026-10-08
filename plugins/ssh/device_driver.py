@@ -176,7 +176,7 @@ def status(device, config, secrets):
     out = {'online': bool(ok), 'detail': where if ok else f"{where} - {_reason(text)}"}
     if ok and config.get('backup_dir'):
         try:
-            info = SshTarget(server, auth, config, device).info()
+            info = SshTarget(server, auth, config, device).info(make=False)
             out['readings'] = {'backup folder': f"{config['backup_dir']} ({len(info['files'])} there, "
                                                 f"{info['free_bytes'] // (1024 * 1024):,} MB free)"}
         except Problem as e:
@@ -214,9 +214,11 @@ class SshTarget(Target):
             raise Problem(f"not a backup name: {name!r}")
         return f"{self.dir}/{name}"
 
-    def info(self):
+    def info(self, make=True):
+        """What is in the folder and the room left. make=False only looks:
+        a health probe must not create folders on someone's server."""
         d = shlex.quote(self.dir)
-        out = self._sh(f"mkdir -p {d} && cd {d} && ls -ln && echo __DF__ && df -Pk . | tail -1")
+        out = self._sh(f"{'mkdir -p ' + d + ' && ' if make else ''}cd {d} && ls -ln && echo __DF__ && df -Pk . | tail -1")
         listing, _, df = out.partition('__DF__')
         files = {}
         for line in listing.splitlines():

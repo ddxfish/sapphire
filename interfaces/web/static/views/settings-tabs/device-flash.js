@@ -23,12 +23,16 @@ import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
 import { md5 } from '../../shared/md5.js';
 import { ensureExtra } from '../../shared/extras.js';
+import { showDangerConfirm } from '../../shared/danger-confirm.js';
 
 const API = '/api/devices';
 const FLASH_BAUD = 460800;
 const BOOT_WAIT = 2500;        // ms a board takes to boot: a UART-bridge board resets when its port opens
 const JOIN_WAIT = 45000;       // ms for WiFi to join
 const COME_BACK = 8000;        // ms a native-USB board gets to reappear after its reset, before "unplug it"
+const GIVE_UP = 180000;        // ms before a board that never comes back is given up on: the window can close again
+const GAVE_UP = 'The board did not come back. Unplug it, plug it in again, and try again from the port.';
+const CLOSED = 'The window was closed.';
 const ASK_WAIT = 15000;        // ms for one console answer
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -114,7 +118,7 @@ async function partBytes(board, p) {
 }
 
 function webSerialLane(log) {
-    let port = null, transport = null, loader = null, con = null, tools = null;
+    let port = null, transport = null, loader = null, con = null, tools = null, stopped = false;
     const info = () => port?.getInfo?.() || {};
     const same = p => { const a = p.getInfo(), b = info(); return a.usbVendorId === b.usbVendorId && a.usbProductId === b.usbProductId; };
 
@@ -130,9 +134,10 @@ function webSerialLane(log) {
     async function reopen(onWaiting) {
         if (con) { await con.close(); con = null; }
         await letGo();
-        const until = Date.now() + COME_BACK;
+        const until = Date.now() + COME_BACK, deadline = Date.now() + GIVE_UP;
         let warned = false;
         for (;;) {
+            if (stopped) throw new Error(CLOSED);
             try {
                 con = new Console(port, log);
                 await con.open();
@@ -142,6 +147,7 @@ function webSerialLane(log) {
                 con = null;
                 const back = (await navigator.serial.getPorts()).find(same);
                 if (back && back !== port) { port = back; continue; }
+                if (Date.now() > deadline) throw new Error(GAVE_UP);
                 if (!warned && Date.now() > until) { warned = true; onWaiting?.(); }
                 await sleep(500);
             }
@@ -202,7 +208,7 @@ function webSerialLane(log) {
 
         reopen,
         ask: (cmd, ms) => con.ask(cmd, ms),
-        async close() { if (con) await con.close(); con = null; await letGo(); },
+        async close() { stopped = true; if (con) await con.close(); con = null; await letGo(); },
     };
 }
 
@@ -217,12 +223,13 @@ function portProblem(e) {
 // ---- lane 2: Sapphire's computer, through her routes ------------------------------
 
 function serverLane(log) {
-    let port = '';
+    let port = '', stopped = false;
     const said = lines => { for (const l of lines || []) log(l); };
 
     async function ask(cmd, ms = ASK_WAIT) {
         const r = await call('POST', '/flash/ask', { port, line: cmd, wait: ms / 1000 }, ms + 10000);
-        said(r.said);
+        said(r.said);                                 // what the board said since this line: the clue when it did not answer
+        if (r.error) throw new Error(r.error);
         return r.answer;
     }
 
@@ -255,20 +262,22 @@ function serverLane(log) {
 
         async reopen(onWaiting) {
             await call('POST', '/flash/close', { port }).catch(() => {});
-            const until = Date.now() + COME_BACK;
+            const until = Date.now() + COME_BACK, deadline = Date.now() + GIVE_UP;
             let warned = false;
             for (;;) {
+                if (stopped) throw new Error(CLOSED);
                 try { await ask('show', 5000); return; }
                 catch (e) {
                     log(`(not yet: ${e.message})`);
+                    if (Date.now() > deadline) throw new Error(GAVE_UP);
                     if (!warned && Date.now() > until) { warned = true; onWaiting?.(); }
-                    await sleep(1000);
+                    await sleep(2000);                // a missing port fails at once: stay under the write limit
                 }
             }
         },
 
         ask,
-        close: () => call('POST', '/flash/close', { port }).catch(() => {}),
+        close: () => { stopped = true; return call('POST', '/flash/close', { port }).catch(() => {}); },
     };
 }
 
@@ -289,7 +298,8 @@ export function openFlash(onDone) {
     const status = text => { const el = body.querySelector('#flash-status'); if (el) el.textContent = text; };
     const lanes = { browser: webSerialLane(log), server: serverLane(log) };
     let lane = lanes.browser.available() ? lanes.browser : lanes.server;
-    let chip = { family: '', text: '', mac: '' }, board = null, given = null, button = null, known = null;
+    let chip = { family: '', text: '', mac: '' }, board = null, given = null, button = null, known = null, devices = [];
+    const free = base => { let n = base, i = 2; while (devices.some(d => d.id === n)) n = `${base}-${i++}`; return n; };   // a name no device has
 
     // the modal has no close event: when it leaves the page, let the port go
     const gone = new MutationObserver(() => { if (!modal.element.isConnected) { gone.disconnect(); hold(false); lane.close(); } });
@@ -325,22 +335,25 @@ export function openFlash(onDone) {
             <details style="margin-top:6px"><summary class="setting-help" style="cursor:pointer">Details: what the flasher and the board said</summary>
             <pre id="flash-log" style="max-height:140px;overflow:auto;font-size:0.75em;opacity:0.7;margin:6px 0 0;white-space:pre-wrap"></pre></details>`;
         body.querySelector('#flash-log').textContent = said.slice(-20).join('\n') + (said.length ? '\n' : '');
-        if (foot) {
-            button = document.createElement('button');
-            button.className = 'btn btn-primary';
-            button.textContent = foot.text;
-            footer.prepend(button);
-            button.addEventListener('click', async () => {
-                button.disabled = true;
-                try { await foot.run(); } catch (e) {
-                    hold(false);
-                    status(e.message);
-                    const d = body.querySelector('details'); if (d) d.open = true;      // the chatter explains an error
-                    showToast(e.message, 'error'); button.disabled = false;
-                }
-            });
-        }
+        if (foot) offer(foot);
         return body;
+    };
+    const offer = foot => {
+        button = document.createElement('button');
+        button.className = 'btn btn-primary';
+        button.textContent = foot.text;
+        footer.prepend(button);
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            try { await foot.run(); } catch (e) {
+                hold(false);
+                status(e.message);
+                const d = body.querySelector('details'); if (d) d.open = true;      // the chatter explains an error
+                showToast(e.message, 'error');
+                if (button) button.disabled = false;
+                else offer({ text: 'Try again', run: foot.run });                    // the step had moved to a screen with no button
+            }
+        });
     };
     const bar = (pct, text) => {
         const el = body.querySelector('#flash-bar');
@@ -401,9 +414,8 @@ export function openFlash(onDone) {
         screen(`Found an ${esc(chip.family)}`, '<p class="setting-help">Reading the firmware list...</p>');
         const fw = await call('GET', '/firmware');
         known = null;
-        if (chip.mac) {
-            try { known = ((await call('GET', '')).devices || []).find(d => d.fingerprint === chip.mac) || null; } catch { /* the list is a nicety here */ }
-        }
+        try { devices = (await call('GET', '')).devices || []; } catch { devices = []; /* the list is a nicety here */ }
+        if (chip.mac) known = devices.find(d => d.fingerprint === chip.mac) || null;
         const fit = fw.boards.filter(b => family(b.chipFamily) === chip.family);
         if (!fit.length) {
             // nothing to offer: say why, and let the source be fixed right here
@@ -469,7 +481,7 @@ export function openFlash(onDone) {
         screen('Name it and give it the WiFi', `
             <div class="settings-grid">
                 <div class="setting-row"><div class="setting-label"><label>Name</label><div class="setting-help">What Sapphire calls it.</div></div>
-                    <div class="setting-input"><input type="text" id="fl-name" value="${esc(known?.id || board.id)}" maxlength="33"></div></div>
+                    <div class="setting-input"><input type="text" id="fl-name" value="${esc(known?.id || free(board.id))}" maxlength="33"></div></div>
                 <div class="setting-row"><div class="setting-label"><label>WiFi</label><div class="setting-help">${names.length ? 'What the board can see. ' : ''}Type one it cannot see yet.</div></div>
                     <div class="setting-input">${names.length ? `<select id="fl-pick">${names.map(n => `<option>${esc(n)}</option>`).join('')}<option value="">Other network...</option></select>` : ''}
                         <input type="text" id="fl-ssid" placeholder="network name" ${names.length ? 'style="display:none;margin-top:6px"' : ''}></div></div>
@@ -497,7 +509,25 @@ export function openFlash(onDone) {
         if (!ssid) fail('Which WiFi?');
         if (!sapphire) fail("Where is Sapphire? Her address is needed.");
         hold(true);
-        given = await call('POST', '/provision', { label: name, driver: 'satellite', sapphire, mac: chip.mac });
+        // Sapphire's side first. A device keeps its keys until this board calls in with the new ones, so
+        // nothing here can break a working device. A name in use by a board she cannot prove is this one
+        // is taken over only when asked.
+        const ask = { label: name, driver: 'satellite', sapphire, mac: chip.mac };
+        try {
+            given = await call('POST', '/provision', ask);
+        } catch (e) {
+            if (!/cannot tell whether this is the same board/.test(e.message)) throw e;
+            hold(false);
+            const yes = await showDangerConfirm({
+                title: `Replace ${name}?`,
+                warnings: [`'${name}' is already a device, and Sapphire cannot tell whether this is the same board.`,
+                           'If it is another board, the one she has now stops working when this one calls in.'],
+                buttonLabel: 'Replace',
+            });
+            if (!yes) fail('Give the board another name, then Finish.');
+            hold(true);
+            given = await call('POST', '/provision', { ...ask, replace: true });
+        }
         const said = await lane.ask('setup ' + JSON.stringify({
             name: given.id, wifi_ssid: ssid, wifi_password: pass,
             key: given.token, voice_key: given.voice_key, sapphire: given.sapphire, cert: given.cert || '',

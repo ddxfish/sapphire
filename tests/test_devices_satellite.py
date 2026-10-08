@@ -479,6 +479,16 @@ def test_play_is_the_door_core_speaks_through_as_her_voice_is_made(board):
         sat.play(b'OggS-three', 'audio/ogg', DEV, CFG, KEY)
 
 
+def test_a_board_stating_its_format_loosely_still_gets_its_seconds(board):
+    """A Pi says rate "16000" and no channels: wanted() forgives that, so
+    the arithmetic after fit() must too (it once did string maths)."""
+    loose = dict(BOARD, plays={"type": "audio/wav", "rate": "16000"})
+    with patch.dict(REAL, {('GET', '/health'): loose}), \
+         patch.object(voice, 'fit', return_value=(b'\0' * (44 + 32000), 'audio/wav')):
+        sat._about.clear()
+        assert sat.play(b'OggS', 'audio/ogg', DEV, CFG, KEY) == {'ok': True, 'seconds': 1.0}
+
+
 def test_setup_is_what_a_satellite_needs_before_it_can_work():
     """Add Device asks for these and nothing else; the rest keep their defaults."""
     assert [f['key'] for f in sat.SPEC['config_schema'] if f.get('setup')] == ['url', 'token', 'voice_key']

@@ -109,14 +109,70 @@ def test_provision_makes_a_row_with_no_address_and_two_keys(rig):
     assert core._part_secrets('kitchen-pocket', 'board').get('token') == keys['token']
 
 
-def test_provision_again_is_the_same_device_with_fresh_keys(rig):
-    row, first = core.provision('pocket', 'board')
+def test_provision_again_keeps_the_old_keys_until_the_board_calls_in_with_the_new(rig):
+    """Flashing a board again: the device keeps working on its old keys
+    while the new ones wait. A setup that fails costs nothing; one that
+    succeeds proves itself when the board calls in (voice.key_ok)."""
+    from core.devices import voice
+    row, first = core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:01')
     core.learned('pocket', '192.168.1.40')
-    row2, second = core.provision('pocket', 'board')
+    row2, second = core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:01')
     assert row2['id'] == row['id'] and list(core.rows()) == ['pocket']
     assert second['token'] != first['token']
-    assert core._part_secrets('pocket', 'board').get('voice_key') == second['voice_key']
-    assert core.get('pocket')['parts'][0]['config']['url'] == 'http://192.168.1.40'   # the address it had is kept
+    assert core._part_secrets('pocket', 'board').get('voice_key') == first['voice_key']      # still the old ones
+    assert core.promote('pocket', 'not-a-key') is False and core.promote('pocket', first['voice_key']) is False
+    assert core._part_secrets('pocket', 'board').get('voice_key') == first['voice_key']
+    # the board calls in with the new key: that is the moment they become its keys
+    with patch.object(voice, '_talk_part', lambda row: row['parts'][0]):
+        assert voice.key_ok('pocket', first['voice_key']) is True
+        assert voice.key_ok('pocket', second['voice_key']) is True
+        assert voice.key_ok('pocket', first['voice_key']) is False
+    assert core._part_secrets('pocket', 'board').get('token') == second['token']
+    assert core.get('pocket')['parts'][0]['config']['url'] == 'http://192.168.1.40'   # the same board: address kept
+    assert 'pocket' not in core._pending
+    # minted keys that no board ever brings are forgotten
+    core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:01')
+    core._pending['pocket']['ts'] -= core.PENDING_FOR + 1
+    assert core.promote('pocket', core._pending['pocket']['keys']['voice_key']) is False
+    assert 'pocket' not in core._pending
+
+
+def test_a_known_board_given_a_new_name_is_renamed_when_it_calls_in(rig):
+    row, first = core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:01')
+    core.learned('pocket', '192.168.1.40')
+    row2, second = core.provision('hall', 'board', mac='aa:bb:cc:dd:ee:01')
+    assert row2['id'] == 'hall' and list(core.rows()) == ['pocket']               # not yet
+    assert core.promote('hall', second['voice_key']) is True
+    assert list(core.rows()) == ['hall'] and core.get('hall')['fingerprint'] == 'aa:bb:cc:dd:ee:01'
+    assert core._part_secrets('hall', 'board').get('token') == second['token']
+    assert core.get('hall')['parts'][0]['config']['url'] == 'http://192.168.1.40'
+    core.add('lamp1', '', 'board', {'url': ''})
+    with pytest.raises(core.DeviceError, match="is the device 'hall'"):          # a name another device has
+        core.provision('lamp1', 'board', mac='aa:bb:cc:dd:ee:01')
+
+
+def test_a_name_in_use_by_a_board_that_cannot_be_proven_needs_replace(rig):
+    """A row made by hand, or a board whose id could not be read: the name
+    may be taken over only when the page says so. The old board then loses
+    its keys and its address when the new one calls in."""
+    core.add('pocket', '', 'board', {'url': 'http://192.168.1.40', 'token': 'old-t', 'voice_key': 'old-v'})
+    with pytest.raises(core.DeviceError, match=core.REPLACE_NEEDED):
+        core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:02')
+    with pytest.raises(core.DeviceError, match=core.REPLACE_NEEDED):
+        core.provision('pocket', 'board')                                           # no mac read either
+    assert core._part_secrets('pocket', 'board').get('token') == 'old-t'
+    row, keys = core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:02', replace=True)
+    assert core._part_secrets('pocket', 'board').get('token') == 'old-t'              # until it calls in
+    assert core.promote('pocket', keys['voice_key']) is True
+    assert core._part_secrets('pocket', 'board').get('token') == keys['token']
+    assert core.get('pocket')['fingerprint'] == 'aa:bb:cc:dd:ee:02'
+    assert core.get('pocket')['parts'][0]['config']['url'] == ''                      # another board: learned afresh
+    core.learned('pocket', '192.168.1.77')
+    assert core.get('pocket')['parts'][0]['config']['url'] == 'http://192.168.1.77'
+    # removing the device forgets what was minted for it
+    core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:02')
+    core.remove('pocket')
+    assert core._pending == {}
 
 
 def test_provision_refuses_bad_names_and_other_kinds(rig):
@@ -128,6 +184,59 @@ def test_provision_refuses_bad_names_and_other_kinds(rig):
         core.provision('lamp1', 'board')
 
 
+# --- one bad key, one plugin per row -----------------------------------------------
+
+HORN = {'label': 'Fake horn', 'module': 'horn_driver.py', 'capabilities': ['speaker'], 'config_schema': SCHEMA}
+HORN_MOD = 'plugins.fakeplug.horn_driver'
+
+
+def test_one_unreadable_secret_leaves_only_that_device_out(rig):
+    """A key this machine cannot read (the salt changed, user/ restored on
+    another box) takes that device out of her voice, her list and the backup
+    targets: never every device."""
+    import core.devices.registry as reg
+    horn = _driver(HORN_MOD, rig.told)
+    horn.play = lambda *a: {'ok': True}
+    sys.modules[HORN_MOD] = horn
+    assert reg.register_driver('horn', HORN, 'fakeplug')
+    try:
+        core._unreadable.clear()
+        for name in ('good', 'bad'):
+            core.add(name, '', 'horn', {'url': f'http://10.0.0.{len(name)}', 'token': 't', 'voice_key': 'v'})
+            core.add(name + '-lamp', '', 'board', {'url': 'http://10.0.0.7', 'token': 't', 'voice_key': 'v'})
+        real = rig.sec.resolve
+
+        def resolve(device_id):
+            if device_id.startswith('bad'):
+                raise RuntimeError('the salt is gone')
+            return real(device_id)
+
+        with patch.object(rig.sec, 'resolve', resolve):
+            assert core.speaker('good') is not None and core.speaker('bad') is None
+            assert [b['id'] for _, b, _, _ in core.speakers(online=False)] == ['good']
+            assert [b['id'] for _, b, _, _ in core.doors('light', 'apply', online=False)] == ['good-lamp']
+            assert [d['id'] for d in core.fleet()] == ['bad', 'bad-lamp', 'good', 'good-lamp']   # listed, not blind
+            assert 'bad' in core.list_text()[0]
+            assert core._unreadable == {('bad', 'horn'), ('bad-lamp', 'board')}   # said once each
+    finally:
+        sys.modules.pop(HORN_MOD, None)
+
+
+def test_a_row_keeps_the_plugin_it_was_set_up_with(rig):
+    """Driver ids are first come, first served. A row made with one plugin's
+    driver is never handed to another plugin that took the same id later."""
+    core.add('lamp1', '', 'lamp', {'url': 'http://10.0.0.5'})
+    row = core.get('lamp1')
+    assert row['parts'][0]['plugin'] == 'fakeplug'
+    assert core._driver('lamp', 'fakeplug')[1]['plugin_name'] == 'fakeplug'
+    assert core._driver('lamp', '')[1]['plugin_name'] == 'fakeplug'           # a row from before plugins were kept
+    with pytest.raises(core.DeviceError, match='set up with the otherplug'):
+        core._driver('lamp', 'otherplug')
+    row['parts'][0]['plugin'] = 'otherplug'
+    caps = core.describe(row)
+    assert caps and 'set up with the otherplug' in caps[0]['error']            # the page says so; nothing runs
+
+
 # --- learned: the address comes from the board's own call --------------------------
 
 def test_learned_fills_an_empty_address_and_tells_the_board(rig):
@@ -137,14 +246,42 @@ def test_learned_fills_an_empty_address_and_tells_the_board(rig):
     assert rig.told == [('pocket', 'http://192.168.1.40')]          # apply() ran, with the address it can use now
 
 
-def test_learned_follows_a_new_lease_and_keeps_scheme_and_port(rig):
+def test_learned_follows_a_new_lease_only_once_the_old_address_stops_answering(rig):
+    """While the keeper still reaches the device where it is, a call from
+    elsewhere is not believed: a typed address behind a gateway stays, and
+    someone else holding its key cannot pull her traffic their way. Two
+    missed probes later, a real move is followed, scheme and port kept."""
     core.add('pi', '', 'board', {'url': 'https://192.168.1.50:8090', 'token': 'k', 'voice_key': 'v'})
-    core.learned('pi', '192.168.1.51')
+    looked = []
+    with patch.object(health, 'look', looked.append):
+        core.learned('pi', '192.168.1.51')
+        assert core.get('pi')['parts'][0]['config']['url'] == 'https://192.168.1.50:8090'
+        assert looked == ['pi'] and core._declined['pi'][0] == '192.168.1.51'
+        core.learned('pi', '192.168.1.51')                              # asked again only after a while
+        assert looked == ['pi']
+        health.told('pi', {'online': False, 'parts': []})
+        core._declined.clear()
+        core.learned('pi', '192.168.1.51')                              # one miss is not gone yet
+        assert core.get('pi')['parts'][0]['config']['url'] == 'https://192.168.1.50:8090' and looked == ['pi', 'pi']
+        health.told('pi', {'online': False, 'parts': []})
+        core._declined.clear()
+        core.learned('pi', '192.168.1.51')
     assert core.get('pi')['parts'][0]['config']['url'] == 'https://192.168.1.51:8090'
+    assert health.reached('pi')                                         # the new address starts with a clean slate
+    # a typed address that answers is never clobbered, however often the board calls from elsewhere
+    core.update('pi', parts={'board': {'url': 'https://192.168.1.60:8090'}})
+    health.told('pi', {'online': True, 'parts': []})
+    core.learned('pi', '192.168.1.51')
+    assert core.get('pi')['parts'][0]['config']['url'] == 'https://192.168.1.60:8090'
+    # an address it never had is learned at once
+    core.update('pi', parts={'board': {'url': ''}})
+    core.learned('pi', '192.168.1.52')
+    assert core.get('pi')['parts'][0]['config']['url'] == 'http://192.168.1.52'
 
 
 def test_learned_ignores_the_same_host_cheaply_and_never_believes_the_internet(rig):
     core.provision('pocket', 'board')
+    health.told('pocket', {'online': False, 'parts': []}); health.told('pocket', {'online': False, 'parts': []})
     core.learned('pocket', '8.8.8.8')
     assert core.get('pocket')['parts'][0]['config']['url'] == ''
     core.learned('pocket', '192.168.1.40')
@@ -289,6 +426,48 @@ def test_url_source_refuses_strange_redirects_and_big_parts(fw):
             assert not list((fw / 'cache' / 'pocket' / '0.2.0').glob('*.partial'))
 
 
+def test_a_source_url_ends_with_a_slash_and_a_folder_is_left_alone():
+    with patch('config.DEVICE_FIRMWARE_SOURCE', 'https://example.test/fw/releases/latest/download', create=True):
+        assert firmware.source() == 'https://example.test/fw/releases/latest/download/'
+    with patch('config.DEVICE_FIRMWARE_SOURCE', '/srv/firmware', create=True):
+        assert firmware.source() == '/srv/firmware'
+
+
+def test_latest_download_hops_once_on_github_then_to_the_asset_host(fw):
+    """releases/latest/download/x is a 302 to the tagged URL on github.com,
+    which is a 302 to objects.githubusercontent.com. A hop anywhere else, or
+    a third hop, is refused."""
+    src = _index(fw / 'web')
+    hops = {'https://example.test/fw/pocket/app.bin': 'https://example.test/fw/releases/download/v0.2.0/app.bin',
+            'https://example.test/fw/releases/download/v0.2.0/app.bin': 'https://objects.githubusercontent.com/x'}
+
+    def get(url, **kw):
+        if url in hops:
+            return Resp(302, headers={'Location': hops[url]})
+        if url.startswith('https://objects.githubusercontent.com/'):
+            return Resp(200, (src / 'pocket' / 'app.bin').read_bytes())
+        p = src / url.replace('https://example.test/fw/', '')
+        return Resp(200, p.read_bytes()) if p.is_file() else Resp(404)
+
+    with patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), patch.object(firmware.net, 'get', get):
+        firmware.index()
+        assert firmware.part('pocket', 'app.bin').read_bytes().startswith(b'\xe9')
+    firmware._recent = (0.0, None)
+    for path in [fw / 'cache' / 'pocket' / '0.2.0' / 'app.bin']:
+        path.unlink()
+    with patch.dict(hops, {'https://example.test/fw/releases/download/v0.2.0/app.bin': 'https://evil.test/x'}), \
+         patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), patch.object(firmware.net, 'get', get):
+        firmware.index()
+        with pytest.raises(firmware.FirmwareError, match='redirect'):
+            firmware.part('pocket', 'app.bin')
+    firmware._recent = (0.0, None)
+    with patch.dict(hops, {'https://objects.githubusercontent.com/x': 'https://objects.githubusercontent.com/y'}), \
+         patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), patch.object(firmware.net, 'get', get):
+        firmware.index()
+        with pytest.raises(firmware.FirmwareError, match='HTTP 302'):
+            firmware.part('pocket', 'app.bin')
+
+
 # --- the door --------------------------------------------------------------------------
 
 def test_provision_door_hands_the_board_everything_it_needs(rig):
@@ -322,11 +501,14 @@ def test_the_user_may_say_where_sapphire_is(rig):
          patch('core.ssl_utils.cert_pem', lambda: ''):
         out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': '192.168.0.69:8073/'})
         assert out['sapphire'] == 'https://192.168.0.69:8073'
-        out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': 'http://sapphire-box:8073'})
-        assert out['sapphire'] == 'http://sapphire-box:8073'
+        with pytest.raises(core.DeviceError, match=core.REPLACE_NEEDED):            # the name is taken, no proof
+            routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': 'http://sapphire-box:8073'})
+        out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': 'http://sapphire-box:8073',
+                                       'replace': True})
+        assert out['sapphire'] == 'http://sapphire-box:8073' and out['id'] == 'pocket'
         for bad in ('https://sapphire.example.com:8073', 'ftp://192.168.0.1', 'https://8.8.8.8'):
             with pytest.raises(core.DeviceError):
-                routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': bad})
+                routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': bad, 'replace': True})
 
 
 def test_local_ips_skips_tunnels_bridges_and_loopback():
@@ -369,20 +551,20 @@ def test_a_board_keeps_its_name_and_a_name_keeps_its_board(rig):
     assert row['fingerprint'] == 'aa:bb:cc:dd:ee:01'
     assert core.public(core.get('pocket'))['fingerprint'] == 'aa:bb:cc:dd:ee:01'
     assert routes.list_devices()['devices'][0]['fingerprint'] == 'aa:bb:cc:dd:ee:01'
-    # the same board under another name: refused, named
-    with pytest.raises(core.DeviceError, match="already the device 'pocket'"):
-        core.provision('hall', 'board', mac='aabbccddee01')
     # another board claiming this name: refused
     with pytest.raises(core.DeviceError, match='different board'):
         core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:02')
-    # the same board again, same name: fine, keys fresh, fingerprint kept
+    # the same board again, same name: fine, keys pending, fingerprint kept
     row2, keys = core.provision('pocket', 'board', mac='aa:bb:cc:dd:ee:01')
     assert row2['fingerprint'] == 'aa:bb:cc:dd:ee:01' and list(core.rows()) == ['pocket']
-    # a device added by hand (no fingerprint) takes the first board that claims it
+    # a device added by hand (no fingerprint): the page must say replace (above); the board that
+    # then calls in is its board from then on
     core.add('lamp1', '', 'board', {'url': ''})
-    assert core.provision('lamp1', 'board', mac='aa:bb:cc:dd:ee:03')[0]['fingerprint'] == 'aa:bb:cc:dd:ee:03'
-    # no mac: nothing is claimed or checked
-    assert core.provision('pocket', 'board')[0]['fingerprint'] == 'aa:bb:cc:dd:ee:01'
+    row3, keys3 = core.provision('lamp1', 'board', mac='aa:bb:cc:dd:ee:03', replace=True)
+    assert not core.get('lamp1').get('fingerprint')
+    assert core.promote('lamp1', keys3['voice_key']) and core.get('lamp1')['fingerprint'] == 'aa:bb:cc:dd:ee:03'
+    # the same board, no mac read this time: still that device, nothing claimed or checked
+    assert core.provision('pocket', 'board', replace=True)[0]['fingerprint'] == 'aa:bb:cc:dd:ee:01'
     assert core._mac('junk') == '' and core._mac('AA-BB-CC-DD-EE-FF') == 'aa:bb:cc:dd:ee:ff'
 
 
@@ -516,6 +698,8 @@ class FakeSerial:
             self.lines = [b'I (12) wifi: joined\r\n', b'>> {"name": "pocket", "ip": "192.168.0.5"}\r\n']
         elif line.startswith('setup '):
             self.lines = [b'>> {"ok": true}\r\n']
+        elif line == 'mute':
+            self.lines = [b'I (40) main: busy\r\n']                 # chatter, never an answer
         else:
             self.lines = [b'>> {"error": "commands: show"}\r\n']
 
@@ -535,6 +719,8 @@ def test_the_console_boots_the_program_and_stays_open(lane, monkeypatch):
     assert con.s.signals[:4] == [('dtr', False), ('rts', False), ('rts', True), ('rts', False)]   # run mode, never the loader
     assert flasher.ask(lane.port, 'setup {}', 5)['answer'] == {'ok': True}
     assert FakeSerial.opened == [lane.port]                          # opened once: a second open would reset the board
+    got = flasher.ask(lane.port, 'mute', 0.05)                       # no answer: the error and the chatter since THIS line
+    assert got['answer'] is None and 'did not answer "mute"' in got['error'] and got['said'] == ['I (40) main: busy']
     with pytest.raises(flasher.FlashError, match='did not answer'):
         con.ask('x', 0.0)                                            # no time to answer: the plain error
     flasher.close(lane.port)
@@ -624,6 +810,39 @@ def test_update_is_the_owners_and_dangerous():
     try:
         a = sat.describe({'id': 'pocket'}, {})['firmware']['actions']['update']
         assert a['owner'] is True and 'restarts' in a['danger']
+        assert a['wait'] == sat.UPDATE_WAIT == 300                         # the page's button waits that long
         assert 'firmware' not in sat.describe({'id': 'pi2'}, {})            # a Pi says no `has`: no tab, no offer
     finally:
         sat._about.pop('pocket', None)
+
+
+def test_slow_actions_say_how_long_and_the_page_hears_it(rig):
+    """A driver's `wait` reaches the page through describe(), clamped;
+    nothing a driver forgets or garbles becomes a long request."""
+    assert core._seconds(300) == 300 and core._seconds('45') == 45
+    assert core._seconds(None) == 0 and core._seconds('soon') == 0 and core._seconds(-5) == 0
+    assert core._seconds(10 ** 6) == 900
+    mod = sys.modules[MOD]
+    mod.describe = lambda device, config: {'light': {'label': 'Light', 'help': '', 'actions': {
+        'glow': {'help': 'slow fade', 'wait': 120}, 'off': {'help': ''}}}}
+    core.add('l1', '', 'board', {'url': 'http://10.0.0.5', 'token': 't', 'voice_key': 'v'})
+    acts = core.describe(core.get('l1'))[0]['actions']
+    assert acts['glow']['wait'] == 120 and acts['off']['wait'] == 0
+
+
+def test_a_page_action_on_firmware_or_power_makes_the_keeper_look_again(rig):
+    import core.devices.registry as reg
+    plug = _driver('plugins.fakeplug.plug_driver', rig.told)
+    plug.describe = lambda device, config: {'light': {'label': 'Light', 'help': '', 'actions': {'off': {'help': ''}}},
+                                            'power': {'label': 'Power', 'help': '', 'actions': {'restart': {'help': ''}}}}
+    sys.modules['plugins.fakeplug.plug_driver'] = plug
+    assert reg.register_driver('plug', dict(BOARD, module='plug_driver.py', capabilities=['light', 'power']), 'fakeplug')
+    try:
+        core.add('p1', '', 'plug', {'url': 'http://10.0.0.5', 'token': 't', 'voice_key': 'v'})
+        poked = []
+        with patch.object(health, 'poke', poked.append):
+            assert core.run('p1', 'light', 'off', '', owner=True)[1] and poked == []       # a light: nothing to re-read
+            assert core.run('p1', 'power', 'restart', '', owner=True)[1] and poked == ['p1']
+            assert core.run('p1', 'power', 'restart', '')[1] and poked == ['p1']            # hers: the keeper's own clock
+    finally:
+        sys.modules.pop('plugins.fakeplug.plug_driver', None)

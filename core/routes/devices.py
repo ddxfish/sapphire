@@ -159,7 +159,8 @@ def provision_device(body):
     e = _engine()
     sapphire = _sapphire_url(body.get("sapphire"))
     row, keys = e.provision(body.get("label"), body.get("driver") or "satellite",
-                            location=body.get("location") or '', mac=body.get("mac") or '')
+                            location=body.get("location") or '', mac=body.get("mac") or '',
+                            replace=body.get("replace") is True)
     return {"device": _view(row), "id": row["id"], **keys, "sapphire": sapphire, "cert": cert_pem()}
 
 

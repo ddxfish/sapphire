@@ -357,7 +357,7 @@ def describe(device, config):
     told = {
         'speaker': {'label': 'Speaker', 'help': 'speak in that room', 'actions': {
             'say': {'help': 'say it out loud there, in your voice', 'example': 'Dinner is ready',
-                    'values': '<text>'},
+                    'values': '<text>', 'wait': SPEAK_WAIT},
             'stop': {'help': 'stop what you are saying there', 'example': '', 'values': '(no value)'},
             'sound': {'help': 'play a stored sound. No value lists them', 'example': '',
                       'values': '[name]'},
@@ -366,7 +366,7 @@ def describe(device, config):
         }},
         'mic': {'label': 'Mic', 'help': 'hear that room', 'actions': {
             'listen': {'help': 'longest wait in seconds, ends when they stop talking', 'example': '10',
-                       'values': '[seconds]'},
+                       'values': '[seconds]', 'wait': 60 + 12},
             'gain': {'help': 'the microphones\' gain in dB; no value reads it. A board without the door says so',
                      'example': '36', 'values': '[0-37.5 | up | down]'},
             'agc': {'help': 'automatic gain control on the board; the board restarts to apply it',
@@ -405,14 +405,14 @@ def describe(device, config):
         'picture': {'help': 'an image on the whole screen until a tap, or seconds= (60 if left out). '
                             'An image handle like img:ab12 (the receipt any image tool gives you), doc:N from the '
                             'library, or last = the newest image in this chat. A landscape image is turned sideways',
-                    'example': 'last seconds=120', 'values': '<img:id | doc:N | last> [seconds=60]'},
+                    'example': 'last seconds=120', 'values': '<img:id | doc:N | last> [seconds=60]', 'wait': PICTURE_WAIT},
     }}
     told['keyboard'] = {'label': 'Keyboard', 'help': 'what is typed on it lands in your chat; your reply is shown on its screen',
                         'actions': {}}
     if config.get('camera', True):
         told['camera'] = {'label': 'Camera', 'help': 'see that room', 'actions': {
             'look': {'help': 'take one picture and see it. The ring warns the room first',
-                     'example': ''},
+                     'example': '', 'wait': LOOK_WAIT},
         }}
     told['storage'] = {'label': 'Backup', 'help': 'sealed copies of her memory on its card', 'actions': {
         'backup': {'help': 'back everything up onto its card now, sealed with the backup password',
@@ -421,7 +421,7 @@ def describe(device, config):
     }}
     if 'format' in _can(device):
         told['storage']['actions']['format'] = {
-            'help': 'wipe the card and format it FAT32', 'example': '', 'owner': True,
+            'help': 'wipe the card and format it FAT32', 'example': '', 'owner': True, 'wait': STORE_WAIT,
             'danger': f"Formats the card in {device['id']}. Every backup on it is erased."}
     if 'firmware' in _has(device):             # two program slots: a board says so; a Pi never does
         told['firmware'] = {'label': 'Firmware', 'help': "the board's program, sent over the air from the firmware "
@@ -435,7 +435,7 @@ def describe(device, config):
             told['firmware']['actions']['update'] = {
                 'help': "install the newest program the source has for this board, then restart onto it. "
                         "A program that fails to run rolls back by itself. 'again' installs the same version once more",
-                'example': '', 'values': "(no value) | again", 'owner': True,
+                'example': '', 'values': "(no value) | again", 'owner': True, 'wait': UPDATE_WAIT,
                 'danger': f"Replaces the program on {device['id']} and restarts it. The board is away for a "
                           f"minute. If the new program does not run, the old one comes back on its own."}
     return told
@@ -584,7 +584,8 @@ def play(audio, kind, device, config, secrets):
         audio, kind = voice.fit(audio, kind, plays)
         if audio is None:
             raise Unfit(kind)
-        seconds = round(max(0, len(audio) - 44) / (plays['rate'] * plays['channels'] * 2), 2)
+        want = voice.wanted(plays)            # the format fit() made: as stated, checked (a rate may arrive as text)
+        seconds = round(max(0, len(audio) - 44) / (want['rate'] * want['channels'] * 2), 2)
         r = _call('POST', '/audio/speak', config, secrets, timeout=SPEAK_WAIT, data=audio,
                   headers={'Content-Type': kind})
     else:

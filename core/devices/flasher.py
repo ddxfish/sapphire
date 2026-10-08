@@ -242,6 +242,7 @@ class _Console:
     def ask(self, line, wait=15.0):
         import json
         self.used = time.time()
+        self.said = []                         # what the board says from this line on
         self.s.reset_input_buffer()
         self.s.write((line + '\n').encode('utf-8'))
         self.s.flush()
@@ -270,7 +271,8 @@ class _Console:
 
 def ask(port, line, wait=15.0):
     """One console line to the board on `port`, opened (and the board
-    booted) if it is not open yet. Returns {'answer': ..., 'said': [...]}."""
+    booted) if it is not open yet. Returns {'answer': ..., 'said': [...]},
+    or {'answer': None, 'error', 'said'} when the board did not answer."""
     import serial
     _no_access(port)
     with _lock:
@@ -285,7 +287,9 @@ def ask(port, line, wait=15.0):
     except serial.SerialException as e:
         _drop_console(port)
         raise FlashError(f"The port went away ({e}). A board with native USB comes back after its reset; ask again.")
-    return {'answer': answer, 'said': list(con.said[-20:])}
+    except FlashError as e:                    # no answer: the chatter is the one clue, so it travels with the error
+        return {'answer': None, 'error': str(e), 'said': list(con.said)}
+    return {'answer': answer, 'said': list(con.said)}
 
 
 def close(port):

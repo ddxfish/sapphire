@@ -43,6 +43,7 @@ _PATH = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(/[A-Za-z0-9][A-Za-z0-9._-]
 _ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,32}$')
 _VERSION = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$')
 _REDIRECT_OK = ('.githubusercontent.com',)     # a release asset is a 302 to objects.githubusercontent.com
+HOPS = 2                          # releases/latest/download/x: 302 to the tagged URL on the same host, then to the asset host
 _lock = threading.Lock()
 _recent = (0.0, None)             # (when, {id: board})
 
@@ -53,7 +54,8 @@ class FirmwareError(Exception):
 
 def source():
     import config
-    return str(getattr(config, 'DEVICE_FIRMWARE_SOURCE', '') or '').strip()
+    s = str(getattr(config, 'DEVICE_FIRMWARE_SOURCE', '') or '').strip()
+    return s + '/' if _is_url(s) and not s.endswith('/') else s      # a folder: urljoin keeps its last segment
 
 
 def _is_url(s):
@@ -71,12 +73,16 @@ def _safe_path(path):
 
 def _fetch(url, limit, into=None):
     """Bytes from a URL on the wan lane, at most `limit`, or written to
-    `into`. One redirect is followed, and only to a GitHub asset host."""
+    `into`. Redirects are followed HOPS deep, each one https and either on
+    the source's own host or to a GitHub asset host."""
     r = net.get(url, stream=True, timeout=FETCH_WAIT, allow_redirects=False)
-    if r.status_code in (301, 302, 303, 307, 308):
-        to = r.headers.get('Location', '')
+    mine = (urlsplit(url).hostname or '').lower()
+    for _ in range(HOPS):
+        if r.status_code not in (301, 302, 303, 307, 308):
+            break
+        to = urljoin(url, r.headers.get('Location', ''))
         host = (urlsplit(to).hostname or '').lower()
-        if not to.startswith('https://') or not host.endswith(_REDIRECT_OK):
+        if not to.startswith('https://') or not (host == mine or host.endswith(_REDIRECT_OK)):
             raise FirmwareError(f"{url} redirects somewhere I do not follow ({host or 'nowhere'}).")
         r = net.get(to, stream=True, timeout=FETCH_WAIT, allow_redirects=False)
     if r.status_code != 200:

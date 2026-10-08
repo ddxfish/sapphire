@@ -188,7 +188,7 @@ Fields land on the tab of the driver's first capability. Add `"capability": "sou
 
 `example` is the value she would pass, not the whole call. Core builds the call. Every example must run exactly as written.
 
-Two optional flags on an action: `"owner": true` keeps it for the person at the Devices page only (she never sees it in her help, and `run()` refuses her); `"danger": "Formats the card. Every backup on it is erased."` makes the page ask for I UNDERSTAND before its Try button runs, with those words. Use both for anything that destroys data.
+Two optional flags on an action: `"owner": true` keeps it for the person at the Devices page only (she never sees it in her help, and `run()` refuses her); `"danger": "Formats the card. Every backup on it is erased."` makes the page ask for I UNDERSTAND before its Try button runs, with those words. Use both for anything that destroys data. A third, `"wait": 300`, is the seconds a slow action may take (a firmware update, a long recording): the page's Try button waits that long instead of its usual 30 s, so a slow success is never shown as a timeout. Up to 900.
 
 `describe` may return fewer capabilities than the manifest lists. A gadget that reports only a light gets only a Light tab.
 
@@ -575,7 +575,7 @@ These work in any plugin's settings schema.
 ## Reference for AI
 
 - Manifest: `capabilities.devices: [{driver, label?, icon?, module, capabilities[], config_schema[]?, locked_by_default[]?, presence?}]`. Registered by the loader into `core/devices/registry.py`; unregistered on unload. Bad declarations are skipped with a log line, never a failed load.
-- Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example, values?, owner?, danger?}}}}`, `status(device, config, secrets) -> {online, detail, readings?, has?}`, optional `apply(device, config, secrets)` (after a save; raise `DeviceError` to be heard), `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`.
+- Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example, values?, owner?, danger?, wait?}}}}`, `status(device, config, secrets) -> {online, detail, readings?, has?}`, optional `apply(device, config, secrets)` (after a save; raise `DeviceError` to be heard), `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`.
 - Engine: `core/devices/engine.py`, loaded on first use. Tools: `functions/devices.py`. Rows in `user/plugin_state/devices.json` under key `devices`: `{id, label, location, enabled, created, locked: [capability], parts: [{driver, plugin, config}]}`. `locked` = what she may not use; only capabilities in `engine.LOCKABLE` can be locked; `engine.run(..., owner=True)` is the user's own button and passes the lock. Secrets in `core/devices/secret_store.py` under `<driver>.<field>`.
 - The engine re-checks that the owning plugin is enabled and loaded on every call and drops cached driver modules when the registry generation changes.
 - Hosted (managed) installs: the tools refuse, the routes answer 404, the tab is hidden.

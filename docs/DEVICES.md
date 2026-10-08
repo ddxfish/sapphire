@@ -264,7 +264,13 @@ up away from its WiFi stays "waiting for the board" until it gets home.
 
 A board already running Sapphire's firmware can have its name, WiFi or
 Sapphire's address changed the same way, without reinstalling: the link
-under the board cards.
+under the board cards. A device that already exists keeps its keys, its
+name and its address until the board calls in with the new ones, so a
+setup that fails halfway leaves it working as it was; a known board given
+a new name is that device renamed when it calls in. A name in use by a
+board Sapphire cannot prove is this one (a device added by hand, or a
+board whose id could not be read) is taken over only after the page asks:
+the board that has that name now stops working when this one calls in.
 
 **Updates, over the air.** After that first install the cable is never
 needed again: a board with two program slots says `firmware` and gets a
@@ -307,7 +313,7 @@ Add one with **+ Add Device**, type **Satellite**:
 
 | Field | What to enter |
 |---|---|
-| Address | Where the satellite listens, like `http://192.168.1.100:8090`. Empty = learned the first time it calls in; it follows the satellite when its address changes |
+| Address | Where the satellite listens, like `http://192.168.1.100:8090`. Empty = learned the first time it calls in; it follows the satellite when its address changes, but only once the old address stops answering: an address you typed that works is never overwritten |
 | Key Sapphire sends | The satellite's own key |
 | Has a camera | Turn off for a satellite with no camera. Sapphire is then not offered one |
 | Talks in chat | The chat its questions land in. Empty means the last chat used. A name means always that chat |

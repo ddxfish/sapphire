@@ -138,9 +138,23 @@ Sapphire's address is HTTPS with her own certificate, for example
 so the address it calls from is where it lives: Sapphire writes that into
 the device's `url` when the device has none (a board set up from the
 browser) or when the host changed (a new DHCP lease), keeping the scheme and
-port it had. Only an address on the local network is believed. A board
+port it had. Only an address on the local network is believed, and a device
+that still answers the health keeper at the address it has is not moved:
+the keeper is asked to look again, and the new address is taken once two
+probes in a row have missed (about a minute). So an address typed behind a
+gateway or a proxy stays, and a caller that only holds the board's key
+cannot draw Sapphire's traffic its way while the board is up. A board
 therefore never needs its address typed, and a board that moves is
 followed. Drivers opt in with `learns_address` in their SPEC.
+
+**New keys take effect when the board brings them.** Setting a board up
+again (`POST /api/devices/provision` for a name that exists) mints keys
+that wait, in memory, for 15 minutes: the device keeps working on its old
+ones. The first call that carries the new key (`voice.key_ok` →
+`engine.promote`) makes them the device's keys, renames the device when
+the board was given a new name, and records the board's id as its
+fingerprint. A name held by a board that cannot be proven to be this one
+needs `replace: true`, which the page asks for.
 
 **Setting a board up.** Sapphire's own firmware takes its settings over
 its USB console, one line in and one `>> {json}` line back: `setup {json}`

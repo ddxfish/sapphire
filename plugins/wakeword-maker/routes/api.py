@@ -833,7 +833,9 @@ def mics(**_):
     try:
         from core.devices import engine
         for d in engine.fleet():
-            if 'mic' in (d.get('caps') or []) and not d.get('every'):
+            # a cap reads "mic", "mic (locked)" (she may not; the user may) or "mic (driver off)"
+            caps = {c.partition(' ')[0]: c.partition(' ')[2] for c in (d.get('caps') or [])}
+            if 'mic' in caps and caps['mic'] != '(driver off)' and not d.get('every'):
                 out.append({'id': d['id'], 'location': d.get('location', ''), 'online': d.get('online'), 'format': _wake_format(d['id'])})
     except Exception as e:
         logger.debug(f"[WWM] mics: {e}")
@@ -849,16 +851,16 @@ def mic_settings(device, body=None, query=None, settings=None, **_):
     out = {}
     try:
         if body and body.get('gain') is not None:
-            told, ok = engine.run(device, 'mic', 'gain', str(body['gain']))
+            told, ok = engine.run(device, 'mic', 'gain', str(body['gain']), owner=True)
             if not ok:
                 return {'error': told}, 400
             out['told'] = told
         if body and body.get('agc') is not None:
-            told, ok = engine.run(device, 'mic', 'agc', 'on' if body['agc'] in (True, 'on', 1, '1') else 'off')
+            told, ok = engine.run(device, 'mic', 'agc', 'on' if body['agc'] in (True, 'on', 1, '1') else 'off', owner=True)
             if not ok:
                 return {'error': told}, 400
             out['told'] = told
-        told, ok = engine.run(device, 'mic', 'gain', '')
+        told, ok = engine.run(device, 'mic', 'gain', '', owner=True)
     except Exception as e:
         return {'error': str(e)}, 502
     import re as _re

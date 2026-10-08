@@ -226,6 +226,11 @@ def _driver(driver_id, plugin_hint=''):
         who = plugin_hint or driver_id
         raise DeviceError(f"The '{driver_id}' driver is not loaded. Enable the "
                           f"{who} plugin in Settings > Plugins.")
+    if plugin_hint and spec['plugin_name'] != plugin_hint:
+        # a row keeps the plugin it was set up with: another plugin taking the
+        # same driver id must never be handed this device's secrets
+        raise DeviceError(f"This device was set up with the {plugin_hint} plugin's '{driver_id}' "
+                          f"driver; the one loaded now is {spec['plugin_name']}'s. It stays untouched.")
     if spec['plugin_name'] == _registry().CORE:       # ships inside core: always there
         try:
             return importlib.import_module(f"core.devices.drivers.{driver_id}"), spec
@@ -626,6 +631,7 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     for driver_id, ops in pending:
         failed += _apply_secrets(target, driver_id, ops)
     _seen_from.pop(device_id, None)               # a typed address, or a new name: learn afresh
+    _declined.pop(device_id, None)
     if target != device_id:
         _health().rename(device_id, target)
     else:
@@ -640,7 +646,7 @@ def _mac(text):
     return ':'.join(hexes[i:i + 2] for i in range(0, 12, 2)) if len(hexes) == 12 else ''
 
 
-def provision(label, driver_id, location='', mac=''):
+def provision(label, driver_id, location='', mac='', replace=False):
     """A board about to be set up from the browser (the Devices page's
     flasher): its name and the two keys it will carry. A new name is a new
     row with NO address: that is learned when the board calls in. A name in
@@ -648,6 +654,12 @@ def provision(label, driver_id, location='', mac=''):
     `mac` is the chip's own id, read over USB: it is kept as the device's
     fingerprint, so two boards are never mixed up (a board that is already
     some device keeps that name; a name cannot be taken by a second board).
+    A device that exists keeps its keys, its name and its address until the
+    board calls in with the new ones (promote): a setup that fails leaves it
+    working. A board that is already some device, given a new name, is that
+    device renamed when it calls in. A name in use by a board this one cannot
+    be proven to be (no fingerprint on either side) needs replace=True: the
+    page asks first, since that board stops working.
     Returns (row, {'token', 'voice_key'})."""
     import secrets as rand
     driver_id = _slug(driver_id)
@@ -656,31 +668,78 @@ def provision(label, driver_id, location='', mac=''):
     if not ID_RE.fullmatch(device_id) or device_id in RESERVED:
         raise DeviceError("Give the board a name: letters and digits, up to 33 characters.")
     table = rows()
-    if mac:
-        other = next((r for r in table.values() if r.get('fingerprint') == mac and r['id'] != device_id), None)
-        if other:
-            raise DeviceError(f"This board is already the device '{other['id']}'. Use that name, or remove "
-                              f"'{other['id']}' in {PAGE} first.")
     keys = {'token': rand.token_urlsafe(24), 'voice_key': rand.token_urlsafe(24)}
-    if device_id in table:
-        old = table[device_id]
-        if not _part(old, driver_id):
-            raise DeviceError(f"'{device_id}' is a different kind of device. Pick another name.")
-        if mac and old.get('fingerprint') and old['fingerprint'] != mac:
-            raise DeviceError(f"'{device_id}' is a different board (id {old['fingerprint']}). Pick another "
-                              f"name, or remove '{device_id}' in {PAGE} first.")
-        row, failed = update(device_id, parts={driver_id: keys})
-    else:
+    mine = next((r for r in table.values() if mac and r.get('fingerprint') == mac), None)
+    if mine and mine['id'] != device_id and device_id in table:
+        raise DeviceError(f"This board is the device '{mine['id']}', and '{device_id}' is another device. "
+                          f"Keep its name, pick a free one, or remove '{device_id}' in {PAGE} first.")
+    source = mine or table.get(device_id)
+    if source is None:
         row, failed = add(device_id, label, driver_id, dict(keys, url=''), location=location)
-    if failed:
-        raise DeviceError("The board's keys could not be stored: " + ", ".join(failed) + ".")
-    if mac and row.get('fingerprint') != mac:
-        def step(table):
-            if row['id'] in table:
-                table[row['id']]['fingerprint'] = mac
-        _write(step)
-        row['fingerprint'] = mac
-    return row, keys
+        if failed:
+            raise DeviceError("The board's keys could not be stored: " + ", ".join(failed) + ".")
+        if mac:
+            def step(table):
+                if row['id'] in table:
+                    table[row['id']]['fingerprint'] = mac
+            _write(step)
+            row['fingerprint'] = mac
+        return row, keys
+    if not _part(source, driver_id):
+        raise DeviceError(f"'{source['id']}' is a different kind of device. Pick another name.")
+    if not mine:                                  # the name is taken; is it this board?
+        if mac and source.get('fingerprint'):     # both known and different: never
+            raise DeviceError(f"'{device_id}' is a different board (id {source['fingerprint']}). Pick another "
+                              f"name, or remove '{device_id}' in {PAGE} first.")
+        if not replace:
+            raise DeviceError(f"'{device_id}' {REPLACE_NEEDED}. Give this board another name, or replace "
+                              f"'{device_id}' with it: its current board then stops working.")
+    _prune_pending()
+    _pending[device_id] = {'from': source['id'], 'driver': driver_id, 'keys': keys, 'mac': mac, 'ts': time.time()}
+    logger.info(f"[DEVICES] {source['id']}: new keys minted" + (f", to be '{device_id}'" if device_id != source['id'] else '')
+                + "; they take effect when the board calls in")
+    return dict(source, id=device_id), keys
+
+
+def _prune_pending():
+    now = time.time()
+    for k in [k for k, p in _pending.items() if now - p['ts'] > PENDING_FOR]:
+        _pending.pop(k, None)
+
+
+def promote(device_id, presented):
+    """A board calling in with a key that is not the stored one: when it is
+    the key provision() minted for this name, the device takes its new keys
+    now, and its new name, and the board's id becomes its fingerprint. A
+    different board than the one the device had loses the old address, so
+    this call teaches the new one. True when that happened. Never raises."""
+    import hmac
+    device_id = _slug(device_id)
+    _prune_pending()
+    p = _pending.get(device_id)
+    if not p or not presented or not hmac.compare_digest(str(presented).encode(), p['keys']['voice_key'].encode()):
+        return False
+    try:
+        if p['from'] != device_id:
+            update(p['from'], new_id=device_id)
+        row = get(device_id)
+        config = dict(p['keys'])
+        if p['mac'] and row.get('fingerprint') != p['mac']:
+            config['url'] = ''                    # another board: where it lives is learned from this call
+        _, failed = update(device_id, parts={p['driver']: config})
+        if failed:
+            raise DeviceError("its keys could not be stored: " + ", ".join(failed))
+        if p['mac'] and row.get('fingerprint') != p['mac']:
+            def step(table):
+                if device_id in table:
+                    table[device_id]['fingerprint'] = p['mac']
+            _write(step)
+        _pending.pop(device_id, None)
+        logger.info(f"[DEVICES] {device_id}: the board called in with its new keys; they are its keys now")
+        return True
+    except DeviceError as e:
+        logger.warning(f"[DEVICES] {device_id}: the board called in with its new keys, but {e}")
+        return False
 
 
 def learned(device_id, host):
@@ -688,7 +747,10 @@ def learned(device_id, host):
     where it lives. Each part whose driver `learns_address` takes it as its
     url - one it never had (a board set up from the browser), or one whose
     host changed (a new DHCP lease). The scheme and port it had are kept.
-    Only an address on this network is believed. Never raises."""
+    Only an address on this network is believed, and only for a device that
+    does not answer at the address it has: while the health keeper reaches
+    it there, a caller from elsewhere - a typed address behind a gateway, or
+    someone else with its key - is not followed. Never raises."""
     from urllib.parse import urlsplit
     from core import net
     try:
@@ -696,24 +758,35 @@ def learned(device_id, host):
         device_id = _slug(device_id)
         if not host or _seen_from.get(device_id) == host:     # a screen pulls many times a second
             return
+        was, when = _declined.get(device_id, ('', 0.0))
+        if was == host and time.monotonic() - when < DECLINE_FOR:
+            return
         if net.classify(host) != 'lan':
             return
-        _seen_from[device_id] = host
-        if ':' in host and not host.startswith('['):
-            host = f'[{host}]'                    # an IPv6 literal in a URL
+        literal = f'[{host}]' if ':' in host and not host.startswith('[') else host    # an IPv6 literal in a URL
         row = rows().get(device_id)
         if not row:
             return
-        changes = {}
+        changes, kept = {}, []
         for part in row.get('parts', []):
             spec = _registry().get_driver(part.get('driver')) or {}
             if not spec.get('learns_address'):
                 continue
             old = str((part.get('config') or {}).get('url') or '')
             p = urlsplit(old) if old else None
-            new = f"{p.scheme if p and p.scheme else 'http'}://{host}" + (f":{p.port}" if p and p.port else '')
-            if new != old:
+            new = f"{p.scheme if p and p.scheme else 'http'}://{literal}" + (f":{p.port}" if p and p.port else '')
+            if new == old:
+                continue
+            if old and _health().reached(device_id):
+                kept.append(old)
+            else:
                 changes[part['driver']] = new
+        if kept:
+            _declined[device_id] = (host, time.monotonic())
+            _health().look(device_id)             # is it still there? asked now, so a real move is followed soon
+            logger.info(f"[DEVICES] {row['id']}: called from {host}, but it still answers at {kept[0]}: not followed")
+            return
+        _seen_from[device_id] = host
         if not changes:
             return
 
@@ -734,6 +807,11 @@ def learned(device_id, host):
 
 
 _seen_from = {}                # device id -> the host it last called from
+_declined = {}                 # device id -> (host not followed, when): asked again after a while
+DECLINE_FOR = 30               # seconds before a host that was not followed is weighed again
+_pending = {}                  # device id (the name the board will carry) -> what provision() minted for it
+PENDING_FOR = 15 * 60          # seconds a board has to call in with its new keys before they are forgotten
+REPLACE_NEEDED = "is already a device, and I cannot tell whether this is the same board"
 
 
 def _tell_later(device_id):
@@ -748,6 +826,9 @@ def remove(device_id):
     _write(lambda t: t.pop(row['id'], None))
     _secrets().delete(row['id'])
     _seen_from.pop(row['id'], None)
+    _declined.pop(row['id'], None)
+    for k in [k for k, p in _pending.items() if row['id'] in (k, p['from'])]:
+        _pending.pop(k, None)
     _health().forget(row['id'])
     _changed()
     return row
@@ -826,12 +907,23 @@ def describe(row):
                                         # (run() refuses). danger: the page asks for
                                         # I UNDERSTAND first, with these words.
                                         'owner': bool(a.get('owner')),
-                                        'danger': str(a.get('danger') or '')[:200]}
+                                        'danger': str(a.get('danger') or '')[:200],
+                                        # wait: seconds the action may take; the page's
+                                        # button waits that long (a 300 s update is not a
+                                        # 30 s request, 2026-10-07)
+                                        'wait': _seconds(a.get('wait'))}
             out.append({'capability': cap, 'label': str(info.get('label') or cap),
                         'help': str(info.get('help') or '')[:120],
                         'driver': part['driver'], 'actions': actions, 'error': '',
                         'lockable': cap in LOCKABLE, 'locked': cap in shut})
     return out
+
+
+def _seconds(v, most=900):
+    try:
+        return max(0, min(int(v or 0), most))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _brief(row):
@@ -1078,7 +1170,9 @@ def speaker(device_id):
         except DeviceError:
             continue
         if 'speaker' in capabilities(part, spec) and callable(getattr(mod, 'play', None)):
-            return mod, _brief(row), dict(part.get('config') or {}), _part_secrets(row['id'], part['driver'])
+            secrets = _secrets_or_none(row, part)
+            if secrets is not None:
+                return mod, _brief(row), dict(part.get('config') or {}), secrets
     return None
 
 
@@ -1102,9 +1196,27 @@ def doors(capability, hook, online=True):
             except DeviceError:
                 continue
             if capability in capabilities(part, spec) and callable(getattr(mod, hook, None)):
-                out.append((mod, _brief(row), dict(part.get('config') or {}),
-                            _part_secrets(row['id'], part['driver'])))
+                secrets = _secrets_or_none(row, part)
+                if secrets is not None:
+                    out.append((mod, _brief(row), dict(part.get('config') or {}), secrets))
     return out
+
+
+_unreadable = set()           # (device, driver) already said to have secrets this machine cannot read
+
+
+def _secrets_or_none(row, part):
+    """This part's secrets, or None when they cannot be read here (said
+    once in the log; the Devices page shows it on the device). One bad key
+    must never blind the fleet: her list, her voice, the backup targets."""
+    try:
+        return _part_secrets(row['id'], part['driver'])
+    except DeviceError as e:
+        key = (row['id'], part['driver'])
+        if key not in _unreadable:
+            _unreadable.add(key)
+            logger.warning(f"[DEVICES] {row['id']} is left out: {e}")
+        return None
 
 
 def speakers(online=True):
@@ -1187,6 +1299,8 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
         told, ok = mod.run(_brief(row), cap_name, act, '' if value is None else str(value),
                            dict(part.get('config') or {}), secrets,
                            _call_tool_for(spec['plugin_name'], spec.get('uses_tools') or ()))
+        if ok and owner and cap_name in ('firmware', 'power', 'storage'):
+            _health().poke(row['id'])         # the board changed under the page: its strip should say so soon
         return _result(told, secrets), bool(ok)
     except DeviceError as e:
         return str(e), False
