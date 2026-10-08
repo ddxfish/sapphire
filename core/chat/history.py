@@ -764,6 +764,26 @@ class ConversationHistory:
                 del msg["tool_calls"]
                 msg.pop("thinking_raw", None)
 
+        # The mirror belt: a tool RESULT that answers no call, or a second
+        # result for one call id. Stored rows can carry these (two lists
+        # saving one chat on one watermark, 2026-10-08: three agents spawned,
+        # three copies of the tool cycle) and the provider then refuses the
+        # whole chat - 400 "each tool_use must have a single result" - on
+        # every turn until the rows are edited. The view sends each result
+        # once (the first) and none without a call; the rows stay as stored.
+        kept, open_ids = [], set()
+        for m in msgs:
+            if m.get("role") == "tool":
+                tid = m.get("tool_call_id", "")
+                if tid not in open_ids:
+                    continue
+                open_ids.discard(tid)
+            else:
+                open_ids = ({tc.get("id", "") for tc in (m.get("tool_calls") or [])}
+                            if m.get("role") == "assistant" else set())
+            kept.append(m)
+        msgs = kept
+
         # Drop assistant messages that ended up with no tool_calls AND no
         # content. Without this, the orphan strip above produces an empty-
         # content assistant; Claude/Anthropic providers (claude.py:715,
@@ -1987,7 +2007,15 @@ class ChatSessionManager:
                 f"chat degraded — read-only until repaired ('{eff_name}')")
 
         msgs = eff_chat.messages
-        state = self._rows_state.get(eff_name)
+        # The watermark belongs to the LIST that saves, not to the chat name:
+        # the active singleton's lives in _rows_state[name]; an override's
+        # (a by-name turn, an agent's carrier) rides on its own history object.
+        # One shared entry per name let a carrier's fresh store read overwrite
+        # the active lane's count mid-tool-cycle; the next save then absorbed
+        # its OWN rows as "foreign" and inserted them again - three agents
+        # spawned at once, three copies of the tool cycle, provider 400
+        # "multiple tool_result blocks with id" (server Sapph, 2026-10-08).
+        state = getattr(eff_chat, '_rows_state', None) if is_override else self._rows_state.get(eff_name)
         now = datetime.now().isoformat()
         # Vaulted (Phase 2): probed once per save; rows + settings of a
         # vaulted chat encrypt on the way to disk. _enc_value RAISES when
@@ -2060,18 +2088,23 @@ class ChatSessionManager:
             # happened — silent divergence, and the heal could resurrect
             # deleted rows. _convert_chat_to_rows already demonstrates
             # this ordering.
-            self._rows_state[eff_name] = {"offset": offset, "count": len(msgs)}
+            fresh = {"offset": offset, "count": len(msgs)}
+            if is_override:
+                eff_chat._rows_state = fresh
+            else:
+                self._rows_state[eff_name] = fresh
             eff_chat._needs_full_resync = False
         elif len(msgs) > state["count"]:
-            # Heal before inserting: a background append (cron/agent →
-            # append_messages_to_chat on a NON-active chat) lands rows at
-            # MAX(seq)+1 without touching this watermark — the active-chat
-            # append path syncs it, the override lane cannot (ContextVar
-            # isolation). Inserting at offset+count would PK-collide with
-            # those rows, and since the in-memory list never shrinks, every
-            # later save of a live override stream would fail identically.
-            # Absorb the foreign rows into the in-memory list ahead of the
-            # unsaved tail instead: both writers survive, in order.
+            # Heal before inserting: ANOTHER list wrote this chat since our
+            # watermark - a background append (cron/agent → append_messages_
+            # to_chat), a by-name turn's override while this is the active
+            # lane, or the active lane while this is the override. Each list
+            # keeps its own watermark, so rows past ours are truly someone
+            # else's. Inserting at offset+count would PK-collide with them,
+            # and since the in-memory list never shrinks, every later save
+            # would fail identically. Absorb the foreign rows into the
+            # in-memory list ahead of the unsaved tail instead: both writers
+            # survive, in order.
             expected_next = state["offset"] + state["count"]
             store_next = conn.execute(
                 "SELECT COALESCE(MAX(seq) + 1, 0) FROM chat_messages "
@@ -4163,10 +4196,12 @@ class ChatSessionManager:
             return None
         hist = ConversationHistory(max_history=self.max_history)
         hist.messages = msgs
-        if state is not None:
-            # Same values _load_chat would set for this store; harmless if the
-            # chat is also the active one (driver lane watching its call).
-            self._rows_state[chat_name] = state
+        # THIS list's watermark, on the list (never _rows_state[name]: that is
+        # the active lane's, and overwriting it from a fresh read while the
+        # active lane was mid-save made its own rows look foreign - duplicated
+        # on the next save; 2026-10-08). The override's first save is
+        # append-only; rows the active lane adds meanwhile are absorbed.
+        hist._rows_state = state
         return {"chat": chat_name, "settings": settings,
                 "system_prompt": None, "tools": None, "history": hist}
 
@@ -4199,8 +4234,12 @@ class ChatSessionManager:
         try:
             msgs, state, skips = self._read_store_messages(chat_name)
             hist.messages = msgs or []
+            # on the carrier's own list - see make_stream_session. Every agent
+            # thread builds one of these while the spawning turn is still
+            # saving its tool results; writing the shared entry here was the
+            # "9 tool calls for 3 agents" duplication (2026-10-08).
             if msgs is not None and state is not None:
-                self._rows_state[chat_name] = state
+                hist._rows_state = state
             if skips and skips.get("skipped"):
                 self._rows_degraded[chat_name] = {**skips, "at": datetime.now().isoformat()}
         except Exception as e:

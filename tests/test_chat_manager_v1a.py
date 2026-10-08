@@ -308,3 +308,85 @@ class TestReplaceMessagesDigest:
             expected_count=1, expected_digest=fresh)
         assert ok, err
         assert mgr.export_chat("comp")["messages"][0]["content"] == "summary"
+
+
+class TestWatermarkBelongsToTheList:
+    """Server Sapph 2026-10-08: three agents spawned in one turn → nine tool
+    calls in history → provider 400 "each tool_use must have a single result".
+    Every agent thread seeds a carrier (make_agent_override) from a fresh store
+    read and used to write the chat's SHARED watermark with it; when that read
+    straddled the parent's save of a tool result, the parent's next save found
+    its own row past the (stale) watermark, absorbed it as foreign and inserted
+    it again. The watermark now rides on the list that saves."""
+
+    def _spawn_turn(self, mgr):
+        mgr.create_chat("desk")
+        assert mgr.set_active_chat("desk")
+        mgr.add_user_message("spawn three agents")
+        mgr.add_assistant_with_tool_calls("", [
+            {"id": f"t{i}", "type": "function", "function": {"name": "agent_spawn", "arguments": "{}"}}
+            for i in range(3)])
+
+    def test_a_carrier_seeded_between_two_parent_saves_duplicates_nothing(self, chat_env):
+        mgr = chat_env()
+        self._spawn_turn(mgr)
+        shared = mgr._rows_state["desk"]
+        # the carrier reads the store, the parent saves, the carrier finishes seeding
+        msgs, state, _ = mgr._read_store_messages("desk")
+        mgr.add_tool_result("t0", "agent_spawn", "ok 0")
+        with patch.object(mgr, "_read_store_messages", return_value=(msgs, state, None)):
+            ov = mgr.make_agent_override("desk")
+        assert mgr._rows_state["desk"] is shared, "a carrier never writes the active lane's watermark"
+        assert ov["history"]._rows_state == state, "...it keeps its own"
+        mgr.add_tool_result("t1", "agent_spawn", "ok 1")
+        mgr.add_tool_result("t2", "agent_spawn", "ok 2")
+        ids = [m.get("tool_call_id") for m in mgr.export_chat("desk")["messages"] if m.get("role") == "tool"]
+        assert ids == ["t0", "t1", "t2"]
+
+    def test_a_by_name_turn_and_the_active_lane_interleave_without_loss_or_doubles(self, chat_env):
+        """The report turn that follows a spawn runs by name (cadence.run_turn →
+        make_stream_session) on the ACTIVE chat: two lists, one store. Each keeps
+        its own watermark; whoever saves second absorbs the other's rows."""
+        from core.chat import stream_brain
+        mgr = chat_env()
+        self._spawn_turn(mgr)
+        mgr.add_tool_result("t0", "agent_spawn", "ok 0")
+        sess = mgr.make_stream_session("desk")
+        assert "desk" in mgr._rows_state and sess["history"]._rows_state is not mgr._rows_state["desk"]
+        tok = stream_brain.set_override(sess)
+        try:
+            mgr.add_user_message("[Blue (agent) — report; not typed by the user]\nall done")
+            mgr.add_assistant_final("Thanks, Blue.")
+        finally:
+            stream_brain.reset_override(tok)
+        mgr.add_tool_result("t1", "agent_spawn", "late result")      # the active lane saves after the override did
+        stored = mgr.export_chat("desk")["messages"]
+        roles = [m["role"] for m in stored]
+        assert roles == ["user", "assistant", "tool", "user", "assistant", "tool"], roles
+        assert [m.get("tool_call_id") for m in stored if m["role"] == "tool"] == ["t0", "t1"]
+        assert len(mgr.get_messages()) == 6, "the active list absorbed the override's two rows"
+
+    def test_the_llm_view_sends_each_tool_result_once_even_when_the_rows_carry_doubles(self):
+        """The belt for a chat whose rows already hold the damage (server Sapph's):
+        the provider sees each result once, orphan results never, and the
+        stored rows are untouched."""
+        from core.chat.history import ConversationHistory
+        h = ConversationHistory(max_history=0)
+        h.messages = [
+            {"role": "user", "content": "spawn"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "a", "type": "function", "function": {"name": "agent_spawn", "arguments": "{}"}},
+                {"id": "b", "type": "function", "function": {"name": "agent_spawn", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "a", "name": "agent_spawn", "content": "first a"},
+            {"role": "tool", "tool_call_id": "a", "name": "agent_spawn", "content": "dup a"},
+            {"role": "tool", "tool_call_id": "b", "name": "agent_spawn", "content": "b"},
+            {"role": "tool", "tool_call_id": "zzz", "name": "agent_spawn", "content": "answers no call"},
+            {"role": "assistant", "content": "both away"},
+            {"role": "tool", "tool_call_id": "a", "name": "agent_spawn", "content": "stray after the cycle"},
+            {"role": "user", "content": "ok"},
+        ]
+        view = h.get_messages_for_llm(reserved_tokens=0, provider="claude")
+        tools = [(m["tool_call_id"], m["content"]) for m in view if m["role"] == "tool"]
+        assert tools == [("a", "first a"), ("b", "b")]
+        assert [m["role"] for m in view] == ["user", "assistant", "tool", "tool", "assistant", "user"]
+        assert len(h.messages) == 9, "the belt edits the view, never the rows"

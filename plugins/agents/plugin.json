@@ -28,7 +28,14 @@
                         "type": "string",
                         "label": "Persona",
                         "default": "agent",
-                        "help": "'agent' = lean worker with no data scopes · 'self' = this chat's persona identity only · a persona name = that persona in full"
+                        "help": "'agent' = lean worker with no data scopes · 'self' = this chat's persona with her own memory (see memory) and nothing else · a persona name = that persona in full"
+                    },
+                    {
+                        "key": "memory",
+                        "type": "string",
+                        "label": "Memory (self only)",
+                        "default": "read-only",
+                        "help": "prompt='self' only: false = identity alone · 'read-only' = search and read_self on this chat's memory scope · 'full' = save/update/delete too. Never a channel scope (email, bitcoin, calendar, chat apps)."
                     }
                 ],
                 "names": [

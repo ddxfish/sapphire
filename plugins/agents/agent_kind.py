@@ -87,6 +87,42 @@ _LEAN_AGENT = {
 }
 
 
+# Her memory, as tools (Mind Palace). A `self` agent gets the READ set by
+# default - it can read her sheet (read_self pulls memories per sheet item)
+# and search - and the WRITE set only when spawned with memory='full'. Every
+# other data scope (knowledge, people, goals) and every channel scope (email,
+# bitcoin, gcal, telegram, discord) stays closed for `self`: H1's hazard was
+# the whole bundle riding into a background worker silently (Krem, 2026-10-08).
+MEMORY_READ_TOOLS = ('search_memory', 'get_recent_memories', 'list_entities', 'read_self', 'read_ledger')
+MEMORY_WRITE_TOOLS = ('save_memory', 'update_memory', 'delete_memory', 'update_self')
+_MEMORY_MODES = {'none': 'none', 'false': 'none', 'off': 'none', 'no': 'none',
+                 'read': 'read', 'read-only': 'read', 'readonly': 'read', 'read_only': 'read',
+                 'full': 'full', 'true': 'full', 'write': 'full', 'yes': 'full'}
+
+
+def _memory_mode(value, default='read'):
+    """'none' | 'read' | 'full' from what she passed, or None when it means nothing."""
+    if value is None or value == '':
+        return default
+    if value is False:
+        return 'none'
+    if value is True:
+        return 'full'
+    return _MEMORY_MODES.get(str(value).strip().lower())
+
+
+def _chat_memory_scope(chat_name):
+    """The spawning chat's own memory scope - the only one a `self` agent can
+    have (never an argument: nothing she passes names a scope)."""
+    try:
+        from core.api_fastapi import get_system
+        sm = get_system().llm_chat.session_manager
+        s = (sm.read_chat_settings(chat_name) or {}) if chat_name else sm.get_chat_settings()
+        return s.get('memory_scope') or None
+    except Exception:
+        return None
+
+
 class Agent(BaseAgent):
     """One mission through ExecutionContext on a background thread."""
 
@@ -98,14 +134,24 @@ class Agent(BaseAgent):
         # tools and the agent would run a silent, useless job.
         self._toolset = o.get('toolset') or ps.get('default_toolset') or 'default'
         # 'agent' is the lean default; 'self' = this chat's persona identity
-        # only (H1 2026-04-22: scopes STRIPPED); a persona name = full inherit.
+        # with her memory as tools (read by default, `memory` says how much);
+        # every other scope STRIPPED (H1 2026-04-22). A persona name = full inherit.
         # `or 'agent'` so '' and None both land on the default.
         requested = o.get('prompt') or 'agent'
         self._inherit_scopes = True
+        self._memory = 'none'
         if requested == 'self':
             requested = _current_chat_persona(self.chat) or 'agent'
             self._inherit_scopes = False
-            logger.info(f"[agents] prompt='self' resolved to '{requested}'")
+            self._memory = _memory_mode(o.get('memory'))
+            if self._memory is None:
+                from core.agents.engine import AgentError
+                raise AgentError(f"memory must be false, 'read-only' or 'full', not {o.get('memory')!r}.")
+            logger.info(f"[agents] prompt='self' resolved to '{requested}' (memory: {self._memory})")
+        elif o.get('memory') not in (None, ''):
+            from core.agents.engine import AgentError
+            raise AgentError("`memory` is for prompt='self' only: 'agent' has no memory by design, "
+                             "and a persona name already brings its own.")
         self._prompt = requested
         # a roster name -> provider:model, case-insensitive
         model_arg = str(o.get('model') or '')
@@ -140,10 +186,23 @@ class Agent(BaseAgent):
 
         # only the scope keys ride; voice/spice don't apply to a background agent
         scope_settings = {k: v for k, v in persona_settings.items() if k.endswith('_scope')}
-        if not self._inherit_scopes and scope_settings:
-            logger.info(f"[agents] prompt='self' - dropping inherited scope settings from "
-                        f"'{self._prompt}' persona ({', '.join(scope_settings.keys())})")
+        tool_rule = {}
+        if not self._inherit_scopes:
+            if scope_settings:
+                logger.info(f"[agents] prompt='self' - dropping inherited scope settings from "
+                            f"'{self._prompt}' persona ({', '.join(scope_settings.keys())})")
             scope_settings = {}
+            # her memory, and only hers: the spawning chat's scope, as tools.
+            # The toolset's own memory tools come OFF first so 'read' means
+            # read whatever the toolset said; 'none' leaves none at all.
+            tool_rule['drop_tools'] = list(MEMORY_READ_TOOLS + MEMORY_WRITE_TOOLS)
+            scope = _chat_memory_scope(self.chat) if self._memory != 'none' else None
+            if scope and scope != 'none':
+                scope_settings['memory_scope'] = scope
+                tool_rule['add_tools'] = list(MEMORY_READ_TOOLS if self._memory == 'read'
+                                              else MEMORY_READ_TOOLS + MEMORY_WRITE_TOOLS)
+            elif self._memory != 'none':
+                logger.info(f"[agents] prompt='self' memory={self._memory}: the chat has no memory scope - none given")
 
         # persona names and prompt-file names are two namespaces: resolve the
         # file through the persona's `prompt` field (silent voice loss otherwise)
@@ -158,6 +217,7 @@ class Agent(BaseAgent):
             'max_parallel_tools': 3,
             'inject_datetime': True,
             **scope_settings,
+            **tool_rule,
         }
         if self.privacy:
             # the same carrier the continuity executor uses (Phase 0):

@@ -36,7 +36,16 @@ Behind the scenes she has **four tools** — the same grammar as devices: list, 
 
 Common spawn options: `name` (a workspace or session *directory* name — not what the agent is
 called), `model`, `context` (extra material appended to the mission). Each kind adds its own —
-`llm`: `toolset`, `prompt`; `claude_code`: `mode` (project / plugin / core), `capabilities`, `effort`.
+`llm`: `toolset`, `prompt`, `memory`; `claude_code`: `mode` (project / plugin / core), `capabilities`, `effort`.
+
+**Who an `llm` agent is** (`prompt`): `agent` is the lean worker — no data scopes at all. A persona
+*name* is that persona in full, every scope it has. **`self`** is this chat's persona as *herself*:
+her identity, her **memory** (the spawning chat's own memory scope — nothing she passes can name
+another), and nothing else — goals, knowledge, people and every channel scope (email, bitcoin,
+calendar, chat apps) stay closed to a background worker. `memory` says how much of it: `read-only`
+(the default — `search_memory`, `read_self` and friends) · `full` (save / update / delete too) ·
+`false` (identity alone). `memory` is refused on any other prompt: `agent` has none by design and a
+persona name already brings its own.
 
 ## How she hears from them: the inbox
 
@@ -201,7 +210,7 @@ TOOLS (core, all chat-local):
 - agent_spawn(kind, mission, options?) — start; agent_spawn(kind) = that kind's screen. options: name (directory, not the agent's name), model, context + the kind's own
 - agent_action(agent, action?, value?) — answer <letter|label|text> · say <text> (idle/resting only) · stop; no action = what it takes now
 
-KINDS: llm (local-capable; options toolset, prompt: 'agent' lean default | 'self' identity only | a persona name) · claude_code (cloud, conversational; options mode project|plugin|core, capabilities, effort)
+KINDS: llm (local-capable; options toolset, prompt: 'agent' lean default | 'self' = her, with her memory (memory: read-only default | full | false) | a persona name, memory: self only) · claude_code (cloud, conversational; options mode project|plugin|core, capabilities, effort)
 
 RULES:
 - A question arrives in chat as `[Agent X (kind) — asks; not typed by the user]` with lettered options. Answer it; or leave it pending while you ask the user — it waits 10 min.

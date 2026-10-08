@@ -260,8 +260,11 @@ class ExecutionContext:
         extra_toolsets = self.task_settings.get("extra_toolsets") or []
         # ONE rule, in the manager (broadsword H12) — same names the live
         # setter enables (hidden tools included in the rule), then the mode
-        # filter + settings gate, no mutation.
-        tools = self.fm.resolve_tools(toolset_name, extra_toolsets)
+        # filter + settings gate, no mutation. add_tools/drop_tools: single
+        # names a task adds or withholds (a `self` agent's memory tools).
+        tools = self.fm.resolve_tools(toolset_name, extra_toolsets,
+                                      add_tools=self.task_settings.get("add_tools"),
+                                      drop_tools=self.task_settings.get("drop_tools"))
         logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools or [])} tools")
         return tools
 

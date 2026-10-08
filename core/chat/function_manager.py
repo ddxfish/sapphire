@@ -1110,18 +1110,23 @@ class FunctionManager:
                 logger.warning(f"extra_toolsets '{name}' union failed: {e}")
         return out
 
-    def resolve_tools(self, toolset_name, extra_toolsets=None):
+    def resolve_tools(self, toolset_name, extra_toolsets=None, add_tools=None, drop_tools=None):
         """READ-ONLY tool schemas for a toolset setting + extras: the same
         names as the live setter would enable, then the mode filter and the
         settings gate. None when nothing resolves. Used by every lane that
-        must not mutate the manager (stream-brain chats, ExecutionContext)."""
-        if (not toolset_name or toolset_name == "none") and not extra_toolsets:
+        must not mutate the manager (stream-brain chats, ExecutionContext).
+        add_tools / drop_tools: function NAMES unioned on / taken off the set
+        before the filters - a lane's own rule about single tools (a `self`
+        agent's memory: read tools yes, write tools no; 2026-10-08)."""
+        if (not toolset_name or toolset_name == "none") and not extra_toolsets and not add_tools:
             return None
         names, _label, dangling = self.resolve_tool_names([toolset_name] if toolset_name else ["none"])
         if dangling:
             logger.warning(f"resolve_tools: toolset '{dangling}' does not exist — no tools")
         want = set(names)
         want |= self._extra_names(extra_toolsets, want)
+        want |= set(add_tools or ())
+        want -= set(drop_tools or ())
         tools = [t for t in self.all_possible_tools if t['function']['name'] in want]
         tools = self._apply_settings_gate(self._apply_mode_filter(tools))
         return tools or None

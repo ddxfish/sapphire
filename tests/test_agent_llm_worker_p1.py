@@ -160,14 +160,18 @@ def test_toolset_and_resolved_model_reach_the_context_with_the_safety_caps(kind,
 
 def test_self_means_identity_only_scopes_stripped(kind, monkeypatch):
     """H1 2026-04-22: prompt='self' inherits the chat's persona IDENTITY but
-    not its data scopes - 'self' used to bring the whole bundle silently."""
+    not its data scopes - 'self' used to bring the whole bundle silently.
+    2026-10-08: her MEMORY rides again (the chat's scope, read tools by
+    default - see the memory tests below); goals, knowledge, people and every
+    channel scope still never do."""
     captured = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'personal', 'goal_scope': 'mine'}})
     monkeypatch.setattr(kind, '_current_chat_persona', lambda chat=None: 'sapphire')
+    monkeypatch.setattr(kind, '_chat_memory_scope', lambda chat=None: 'personal')
     a = kind.Agent(_row(prompt='self'), _Engine())
     assert a._prompt == 'sapphire' and a._inherit_scopes is False
     a.run('test')
     assert captured.get('prompt') == 'sapphire'
-    assert not [k for k in captured if k.endswith('_scope')]
+    assert [k for k in captured if k.endswith('_scope')] == ['memory_scope']
     # an explicit persona name keeps full inherit
     captured2 = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'personal'}})
     kind.Agent(_row(prompt='sapphire'), _Engine()).run('test')
@@ -222,3 +226,58 @@ def test_the_result_is_reported_stripped_and_degradation_becomes_a_warning(kind,
     a = kind.Agent(_row(prompt='agent'), eng)
     a.run('test')
     assert eng.reports == ['the answer'] and a.warning == 'tool loop exhausted'
+
+
+# --- `self` and her memory (Krem, 2026-10-08) ----------------------------------------
+
+def _self_agent(kind, monkeypatch, memory=None, chat_scope='personal'):
+    captured = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'persona-wide',
+                                                   'email_scope': 'inbox', 'bitcoin_scope': 'wallet'}})
+    monkeypatch.setattr(kind, '_current_chat_persona', lambda chat=None: 'sapphire')
+    monkeypatch.setattr(kind, '_chat_memory_scope', lambda chat=None: chat_scope)
+    opts = {'prompt': 'self'} if memory is None else {'prompt': 'self', 'memory': memory}
+    kind.Agent(_row(**opts), _Engine()).run('test')
+    return captured
+
+
+def test_self_reads_her_memory_by_default_and_nothing_else(kind, monkeypatch):
+    """read_self pulls memories per sheet item: without the scope a `self`
+    agent could not read her own sheet. The scope is the CHAT's (never an
+    argument), the write tools are withheld, channels never ride."""
+    c = _self_agent(kind, monkeypatch)
+    assert c['memory_scope'] == 'personal', "the spawning chat's scope, not the persona's"
+    assert [k for k in c if k.endswith('_scope')] == ['memory_scope']
+    assert set(c['add_tools']) == set(kind.MEMORY_READ_TOOLS)
+    assert set(c['drop_tools']) == set(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+    assert 'save_memory' not in c['add_tools'] and 'read_self' in c['add_tools']
+
+
+def test_self_memory_full_adds_the_write_tools(kind, monkeypatch):
+    c = _self_agent(kind, monkeypatch, memory='full')
+    assert set(c['add_tools']) == set(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+    assert c['memory_scope'] == 'personal'
+
+
+def test_self_memory_false_is_identity_only_with_no_memory_tools(kind, monkeypatch):
+    for v in (False, 'false', 'none'):
+        c = _self_agent(kind, monkeypatch, memory=v)
+        assert not [k for k in c if k.endswith('_scope')]
+        assert 'add_tools' not in c and set(c['drop_tools']) == set(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+
+
+def test_self_in_a_chat_without_a_memory_scope_gets_none(kind, monkeypatch):
+    c = _self_agent(kind, monkeypatch, memory='full', chat_scope='none')
+    assert 'memory_scope' not in c and 'add_tools' not in c
+
+
+def test_memory_is_refused_off_self_and_when_misspelt(kind, monkeypatch):
+    from core.agents.engine import AgentError
+    _capture(monkeypatch, None)
+    with pytest.raises(AgentError, match="prompt='self' only"):
+        kind.Agent(_row(prompt='agent', memory='full'), _Engine())
+    with pytest.raises(AgentError, match="prompt='self' only"):
+        kind.Agent(_row(prompt='sapphire', memory='read-only'), _Engine())
+    monkeypatch.setattr(kind, '_current_chat_persona', lambda chat=None: 'sapphire')
+    with pytest.raises(AgentError, match="read-only"):
+        kind.Agent(_row(prompt='self', memory='sometimes'), _Engine())
+    assert kind._memory_mode(None) == 'read' and kind._memory_mode(True) == 'full' and kind._memory_mode('READ_ONLY') == 'read'

@@ -427,7 +427,10 @@ def test_stream_session_seed_is_raw_and_first_save_appends(tmp_path):
     assert sess is not None
     seed = sess['history'].messages
     assert seed[0]['content'][1]['type'] == 'image', "seed must be the raw store, not the LLM view"
-    assert sm._rows_state['story_x'] == {"offset": 0, "count": 2}
+    # the watermark rides on the override's OWN list (2026-10-08): the shared
+    # _rows_state[name] is the active lane's and is never written from a seed
+    assert sess['history']._rows_state == {"offset": 0, "count": 2}
+    assert 'story_x' not in sm._rows_state
     from core.chat import stream_brain
     tok = stream_brain.set_override(sess)
     try:
@@ -438,7 +441,7 @@ def test_stream_session_seed_is_raw_and_first_save_appends(tmp_path):
     data = sm.export_chat('story_x')
     assert [m['role'] for m in data['messages']] == ['user', 'assistant', 'user', 'assistant']
     assert data['messages'][0]['content'][1]['type'] == 'image', "image row must survive the override save"
-    assert sm._rows_state['story_x'] == {"offset": 0, "count": 4}
+    assert sess['history']._rows_state == {"offset": 0, "count": 4}
 
 
 def test_stream_session_refuses_chat_with_unreadable_rows(tmp_path):

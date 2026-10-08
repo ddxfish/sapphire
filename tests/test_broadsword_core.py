@@ -309,11 +309,19 @@ def test_h12_resolver_applies_the_hidden_rule_everywhere():
         assert names == {"a"}
         assert fm.resolve_tools("none") is None
         assert fm.resolve_tools("ghost") is None
+        # add_tools / drop_tools: single names on or off BEFORE the filters (a
+        # `self` agent's memory: read tools yes, write tools no; 2026-10-08)
+        names = {t["function"]["name"] for t in fm.resolve_tools("all", drop_tools=["b"])}
+        assert names == {"a", "c"}
+        names = {t["function"]["name"] for t in fm.resolve_tools("none", add_tools=["c"])}
+        assert names == {"c"}
+        names = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=["b", "c"], drop_tools=["a", "c"])}
+        assert names == {"b"}
 
 
 def test_h12_mirrors_are_delegates():
     assert "self.function_manager.resolve_tools(toolset_name, extra_toolsets)" in _src("core/chat/chat.py")
-    assert "self.fm.resolve_tools(toolset_name, extra_toolsets)" in _src("core/continuity/execution_context.py")
+    assert "self.fm.resolve_tools(toolset_name, extra_toolsets," in _src("core/continuity/execution_context.py")
     for rel in ("core/chat/chat.py", "core/continuity/execution_context.py"):
         assert "def _fn_names(name)" not in _src(rel)
 
