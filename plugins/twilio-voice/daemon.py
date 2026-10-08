@@ -733,19 +733,31 @@ def _report_back(system, origin_chat, report):
         # toolset and scopes, run when the chat is free - it used to run on the
         # continuity executor beside a live turn and could lose its transcript.
         from core.chat import inbox
-        item = inbox.put(origin_chat, inbox.Item(
-            text=report, source='twilio', lane='later', coalesce=False,
-            on_drop=lambda why: (logger.warning(f"[TWILIO] report-back dropped ({why}); "
-                                                "writing plain record instead"), _fallback())))
+        item = inbox.Item(text=report, source='twilio', lane='later', coalesce=False)
 
+        def _on_drop(why):
+            # The inbox is the one writer. A drop it made for PRIVACY (queued
+            # while the chat was private, public now) or a SEALED/GONE chat is
+            # final - writing the transcript in by hand defeated the ratchet
+            # (privacy scout, 2026-10-07). Stale, removed, a restart, an
+            # unreachable run: the plain record is right.
+            if item.drop_kind in ('privacy', 'sealed', 'gone'):
+                logger.info(f"[TWILIO] report-back not written ({why}): the inbox's drop is final")
+                return
+            logger.warning(f"[TWILIO] report-back dropped ({why}); writing plain record instead")
+            _fallback()
+        item.on_drop = _on_drop
+        inbox.put(origin_chat, item)
+        # A turn that FAILS (provider hiccup) already left the record: the inbox
+        # runs text items with keep_prompt, so the report row stays in history
+        # beside the error. The old watcher wrote it a second time (seam
+        # scout, 2026-10-07: report / error / report).
         def _watch():
-            # A turn that fails (provider hiccup) still leaves the record.
             try:
                 item.reply.result()
             except Exception as e:
                 if 'dropped' not in str(e):
-                    logger.warning(f"[TWILIO] report-back turn errored ({e}); writing plain record instead")
-                    _fallback()
+                    logger.warning(f"[TWILIO] report-back turn errored ({e}); the report row is in the chat, her reply is not")
         threading.Thread(target=_watch, daemon=True, name="twilio-report").start()
     except Exception as e:
         logger.warning(f"[TWILIO] report-back turn failed ({e}); falling back to plain write")

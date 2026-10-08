@@ -63,7 +63,7 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 |--------|----------|---------|
 | POST | `/api/chat` | Send message, get response |
 | POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409**. Optional `chat` in the body addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed → 409, missing → 404. `continue_from` (an assistant turn's timestamp) resumes the chat's last reply in place: no user row is sent or saved, the row is edited on success and untouched on Stop |
-| POST | `/api/chat/attach` | Rejoin the live turn on a chat after losing the feed (`{chat?, since?}`). Turns are server-owned: the engine runs on its own thread and a viewer leaving never ends it. Replays the turn's ring exact-once after `since` (every SSE line carries `seq`), then follows live in the same wire format — text only, audio is never replayed. **204** = no live turn on that chat; 404 unknown chat; 409 sealed chat |
+| POST | `/api/chat/attach` | Rejoin a turn after losing the feed (`{ticket?, chat?, since?, audio?}`). Turns are server-owned: the engine runs on its own thread and a viewer leaving never ends it. By **ticket** (the stream's first line names it): still queued → **202** `{state:"queued", position}`; live or just finished → replays the ring exact-once after `since` (every SSE line carries `seq`, first line `{type:"attached", audio}`), then follows live; **204** = it ran and is gone; 404 unknown ticket (a restart); 409 sealed chat. `audio: true` asks to hear her — granted only while nothing has been spoken yet. By chat alone: **204** = no live turn; 404 unknown chat; 409 sealed |
 | POST | `/api/cancel` | Cancel active stream (`?chat=` scopes to one chat) |
 | GET | `/api/events` | SSE event stream (real-time UI updates) |
 | GET | `/api/history` | Get chat message history (`?chat=` reads a chat by name; absent = active) |
@@ -719,7 +719,7 @@ KEY ENDPOINTS:
 CHAT FLOW:
 1. POST /api/chat or /api/chat/stream with {"text": "message", "chat": "optional chat name"} — `chat` names the target chat; the active chat runs as before, another chat runs pinned to its own stored settings (never the active pointer)
 2. Response streams as SSE events (content, tool_pending, tool_start, tool_end, reload)
-3. POST /api/cancel (?chat= to scope) to abort; a second stream on the same busy chat returns 409. Turns are server-owned: dropping the SSE socket does NOT cancel — POST /api/chat/attach {chat?, since?} rejoins the live turn (every line carries `seq`; 204 = it already finished)
+3. POST /api/cancel (?chat= to scope) to abort; a second stream on a busy chat WAITS its turn — the body says `queued` and closes, the bus says `inbox_ticket {ticket, state}` when it starts. Turns are server-owned: dropping the SSE socket does NOT cancel — POST /api/chat/attach {ticket, since?} rejoins your turn (every line carries `seq`; 202 still queued, 204 = it already finished)
 4. GET /api/history?chat=<name> reads any chat by name; GET /api/chats?kind=game&slim=1 lists game/story sessions with trimmed settings; POST /api/chats {"name", "settings"} stamps settings at birth (private_chat refused there — use the vault flip)
 
 PLUGIN MANAGEMENT:

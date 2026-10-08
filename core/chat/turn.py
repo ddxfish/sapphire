@@ -82,6 +82,27 @@ class Viewer:
                 return
             yield ev
 
+    def events(self, keepalive_s=15.0):
+        """Iterate with a heartbeat: None after `keepalive_s` of silence, so a
+        wire can prove it is alive through a long tool call (a phone whose
+        socket died quietly never errors - the tab's stall watchdog needs
+        something to miss; 2026-10-08)."""
+        last = time.monotonic()
+        while True:
+            try:
+                ev = self._q.get(timeout=0.5)
+            except queue.Empty:
+                if self._closed:
+                    return
+                if time.monotonic() - last >= keepalive_s:
+                    last = time.monotonic()
+                    yield None
+                continue
+            if ev is _END:
+                return
+            last = time.monotonic()
+            yield ev
+
 
 class Turn:
     def __init__(self, stream, gen, on_end=None, label='turn'):
@@ -291,3 +312,28 @@ class Turn:
     def viewers(self):
         with self._lock:
             return len(self._viewers)
+
+    @property
+    def audio_started(self):
+        """Has her voice already gone out on this turn? A late listener then
+        speaks the finished reply once instead of hearing a tail with no head."""
+        return bool(getattr(getattr(self.stream, 'tts_pump', None), '_stream_started', False))
+
+    def mute_unless_heard(self, grace_s):
+        """A turn started with no listener (its send said `queued` and closed;
+        the owner follows by ticket): give the tab `grace_s` to attach an audio
+        viewer, then mute her voice - she keeps writing, nothing is synthesized
+        for a locked phone. A tab that attaches later speaks the reply once."""
+        def check():
+            with self._lock:
+                deaf = (not self.done.is_set() and not getattr(self.stream, 'llm_done', False)
+                        and not any(v.audio for v in self._viewers))
+            if deaf:
+                try:
+                    self.stream.stop_tts()
+                    logger.info(f"[TURN] {self.label}: no listener after {grace_s:g}s — voice muted, she keeps writing")
+                except Exception:
+                    pass
+        t = threading.Timer(grace_s, check)
+        t.daemon = True
+        t.start()

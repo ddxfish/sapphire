@@ -87,8 +87,10 @@ def test_live_turn_wire_copy_drops_the_marker():
     src = (ROOT / 'core' / 'chat' / 'chat.py').read_text(encoding='utf-8')
     build = src[src.index('def _build_base_messages'):]
     build = build[:build.index('\n    def ', 10)]
-    assert 'attachments.strip(user_input)' in build
-    assert build.index('attachments.strip(user_input)') < build.index('count_tokens(user_input)')
+    # the ONE marker list (core/ui_markers.py) strips here too - FILES, GALLERY,
+    # ASK and <<IMG>> alike (seam scout, 2026-10-07: this seam stripped FILES only)
+    assert "user_input = UI_MARKER_RE.sub('', user_input).strip()" in build
+    assert build.index("UI_MARKER_RE.sub('', user_input)") < build.index('count_tokens(user_input)')
 
 
 def test_one_files_renderer():

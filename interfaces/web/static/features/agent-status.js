@@ -85,7 +85,8 @@ function renderPills() {
             pill.querySelector('.agent-x').addEventListener('click', async (e) => {
                 e.stopPropagation();
                 try {
-                    await fetchWithTimeout(`/api/agents/${id}/dismiss`, { method: 'POST' });
+                    await fetchWithTimeout(`/api/agents/${id}/dismiss`, { method: 'POST', headers: csrfHeaders(),
+                                           body: JSON.stringify({ chat: agent.chat_name || getActiveChat() }) });
                 } catch (err) {
                     console.warn('[Agents] dismiss failed:', err);
                 }
@@ -250,11 +251,13 @@ async function openQuestionCard(pill, agent) {
     } catch (err) { console.warn('[Agents] question fetch failed:', err); }
     const card = cardAt(pill);
     if (!q) { card.innerHTML = `<div class="acp-title">${esc(agent.name)} is not asking anything right now.</div>`; return; }
-    const answer = async (value) => {
+    const answer = async (value, questionId = q?.id || '') => {
         if (!value?.trim()) return;
         try {
+            // the question's id rides along: an answer to a fork that already
+            // expired is refused instead of landing on the agent's NEXT question
             await fetchWithTimeout(`/api/agents/${encodeURIComponent(agent.id)}/answer`, {
-                method: 'POST', headers: csrfHeaders(), body: JSON.stringify({ chat, value }) }, 8000);
+                method: 'POST', headers: csrfHeaders(), body: JSON.stringify({ chat, value, question: questionId || '' }) }, 8000);
             agent.status = 'running';
             renderPills();
         } catch (err) { console.warn('[Agents] answer failed:', err); }
@@ -270,7 +273,7 @@ async function openQuestionCard(pill, agent) {
         ? normalizeAsk({ questions: q.questions.map(x => ({ ...x, multi_select: x.multiSelect ?? x.multi_select })) })
         : [];
     if (qs.length) {
-        buildAskCards([qs], answer).forEach(el => card.appendChild(el));
+        buildAskCards([{ id: q.id || '', questions: qs }], answer).forEach(el => card.appendChild(el));
         return;
     }
     // a free-text question (no options): one box

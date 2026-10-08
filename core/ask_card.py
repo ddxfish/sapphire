@@ -20,8 +20,12 @@ as the same card one day: 1-4 questions, 2-6 options each.
 """
 import json
 import re
+import uuid
 
-MARKER_RE = re.compile(r'<!--ASK:\{[^\n]*\}-->[ \t]*\n?')
+# Non-greedy to the first `}-->`: two markers on one line used to be eaten as
+# one (and the prose between them with it). Safe because _clean keeps `-->`
+# out of every field (second scout wave, 2026-10-08).
+MARKER_RE = re.compile(r'<!--ASK:\{.*?\}-->[ \t]*\n?')
 MAX_QUESTIONS = 4
 MAX_OPTIONS = 6
 _LIMITS = {'question': 300, 'header': 16, 'label': 80, 'description': 200}
@@ -33,8 +37,18 @@ def _clean(value, key):
     return text[:_LIMITS[key]]
 
 
-def normalize(questions):
-    """The card's payload from a tool's `questions` argument.
+def _flag(v):
+    # local models send "false" as a string; the truthy string drew a multi-select
+    if isinstance(v, str):
+        return v.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(v)
+
+
+def normalize(questions, card_id=None):
+    """The card's payload from a tool's `questions` argument: {id, questions}.
+    `id` names THIS card - the answer message echoes it in its header line, and
+    that is what locks the card (not "some user row followed it": an agent's
+    report is a user row too, and locked cards nobody had answered).
     Raises ValueError with a message the model can act on."""
     if isinstance(questions, str):
         try:
@@ -84,14 +98,22 @@ def normalize(questions):
         header = _clean(q.get('header'), 'header')
         if header:
             item['header'] = header
-        if q.get('multi_select'):
+        if _flag(q.get('multi_select')):
             item['multi_select'] = True
         out.append(item)
-    return {'questions': out}
+    cid = re.sub(r'[^A-Za-z0-9]', '', str(card_id or ''))[:16] or uuid.uuid4().hex[:8]
+    return {'id': cid, 'questions': out}
 
 
-def marker(questions) -> str:
-    return '<!--ASK:' + json.dumps(normalize(questions), ensure_ascii=False) + '-->'
+def marker(questions, card_id=None) -> str:
+    return '<!--ASK:' + json.dumps(normalize(questions, card_id), ensure_ascii=False) + '-->'
+
+
+def answer_who(card_id) -> str:
+    """The `who` of the answer's header line - `[Question card <id> (ask_user) —
+    what the user clicked; not typed by the user]` - built with inbox.header
+    so every not-typed door reads the same. The id is what the browser matches."""
+    return f"Question card {card_id}"
 
 
 def strip(text):

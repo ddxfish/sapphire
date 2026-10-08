@@ -424,7 +424,9 @@ def test_attach_by_ticket_finds_this_tabs_turn_whatever_runs_on_the_chat(client,
     r = c.post('/api/chat/attach', json={'chat': 'trinity', 'since': 4, 'ticket': 'tk-live'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
     lines = [l for l in r.text.split('\n') if l.startswith('data: ')]
-    assert '"text": "world"' in lines[0] and lines[-1] == 'data: {"done": true, "ephemeral": false, "seq": 8}'
+    # the first line says whether this viewer hears her (owner follow, 2026-10-08); then the ring
+    assert lines[0] == 'data: {"type": "attached", "audio": false, "seq": 8}'
+    assert '"text": "world"' in lines[1] and lines[-1] == 'data: {"done": true, "ephemeral": false, "seq": 8}'
     other.attach.assert_not_called()
     # finished while the tab was away: the ring still replays the tail it missed
     route._ticket_note('tk-done', chat='trinity', turn=mine, ended=time.monotonic())
@@ -435,20 +437,44 @@ def test_attach_by_ticket_finds_this_tabs_turn_whatever_runs_on_the_chat(client,
     assert c.post('/api/chat/attach', json={'ticket': 'tk-gone'}, headers={'X-CSRF-Token': csrf}).status_code == 204
     # never heard of it (a restart)
     assert c.post('/api/chat/attach', json={'ticket': 'tk-nope'}, headers={'X-CSRF-Token': csrf}).status_code == 404
-    # still queued: the body re-sends `queued` for it and waits (dropped here, so the body ends)
+    # still queued: 202 + position, and the body CLOSES - no socket is held for a
+    # waiting turn; the tab follows the bus (2026-10-08)
     from core.chat import inbox
     item = inbox.Item(run=lambda: None, source='web', lane='now')
-    started = cf.Future()
-    route._ticket_note('tk-queued', chat='trinity', item=item, started=started)
-    threading.Timer(0.4, lambda: item.reply.set_exception(RuntimeError('dropped: taken back'))).start()
+    route._ticket_note('tk-queued', chat='trinity', item=item, started=cf.Future())
     r = c.post('/api/chat/attach', json={'ticket': 'tk-queued'}, headers={'X-CSRF-Token': csrf})
-    assert r.status_code == 200 and '"type": "ticket"' in r.text and '"type": "queued"' in r.text
-    assert 'taken back' in r.text                      # dropped while the tab watched: it hears why
+    assert r.status_code == 202 and r.json()['state'] == 'queued'
     # dropped before the tab came back: nothing to attach to
     gone = inbox.Item(run=lambda: None, source='web', lane='now')
     gone.reply.set_exception(RuntimeError('dropped'))
     route._ticket_note('tk-dropped', chat='trinity', item=gone, started=cf.Future())
     assert c.post('/api/chat/attach', json={'ticket': 'tk-dropped'}, headers={'X-CSRF-Token': csrf}).status_code == 204
+
+
+def test_owner_follow_hears_her_only_before_her_voice_started(client, mock_system):
+    """The owner tab asks to HEAR the turn it follows (audio=true). Granted while
+    nothing has been spoken; once the pump started, the tab gets text only and
+    speaks the finished reply once - a tail with no head is worse than a whole."""
+    from core.routes import chat as route
+    c, csrf = client
+    sm = mock_system.llm_chat.session_manager
+    sm.is_chat_hidden.return_value = False
+    sm.read_chat_settings.return_value = {}
+    live = Turn(_mock_stream([]), iter([]), label='t')      # not started: still "live" for attach
+    live.stream.tts_pump = MagicMock(_stream_started=False)
+    route._ticket_note('tk-hear', chat='trinity', turn=live)
+    v_calls = []
+    real_attach = live.attach
+    live.attach = lambda since=None, audio=False: (v_calls.append(audio), real_attach(since=since, audio=audio))[1]
+    threading.Timer(0.2, live.start).start()
+    r = c.post('/api/chat/attach', json={'ticket': 'tk-hear', 'since': 0, 'audio': True}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200 and '"type": "attached", "audio": true' in r.text and v_calls == [True]
+    spoken = Turn(_mock_stream([]), iter([]), label='t2')
+    spoken.stream.tts_pump = MagicMock(_stream_started=True)
+    route._ticket_note('tk-late', chat='trinity', turn=spoken)
+    threading.Timer(0.2, spoken.start).start()
+    r = c.post('/api/chat/attach', json={'ticket': 'tk-late', 'since': 0, 'audio': True}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200 and '"type": "attached", "audio": false' in r.text
 
 
 # ─── client contracts (source tripwires) ────────────────────────────────────
@@ -463,15 +489,23 @@ def test_client_treats_a_dead_feed_as_lost_not_finished():
     assert 'gotContent ? finishTurn()' not in api           # H6: EOF-before-done is not success
     assert '_feedLost(' in api and 'export const attachTurn' in api
     assert "handlers.lastSeq = data.seq" in api
+    # a silent wire is a dead wire: the reader cancels itself past STALL_MS (iOS
+    # half-dead fetch, 2026-10-08) and the server heartbeats every live viewer
+    assert 'const STALL_MS = 45000' in api and 'stall = setTimeout(() => { try { reader.cancel(); }' in api
+    from pathlib import Path
+    route = (Path(__file__).resolve().parents[1] / 'core' / 'routes' / 'chat.py').read_text(encoding='utf-8')
+    assert route.count('for event in viewer.events(KEEPALIVE_S):') == 2
     sh = _src('handlers/send-handlers.js')
-    assert "from '../features/viewer.js'" in sh and 'e.feedLost && !viewer' in sh
-    # the reattach is by TICKET (2026-10-07): the stream's first line names it
-    assert 'ticket: myTicket, chat: myChat' in sh and "onTicket: (ticket, chat) =>" in sh
+    # the OWNER follows its own ticket (2026-10-08) - no viewer hand-off, no
+    # dead send arming the live slot: the stream's first line names the ticket,
+    # a lost feed calls ctl.follow(), and release() is the one place anything
+    # is given back, gated on still owning the slot
+    assert 'features/viewer.js' not in sh and 'becomeViewer' not in sh
+    assert "onTicket: (ticket, chat) =>" in sh and 'pending.set(ticket, ctl)' in sh
+    assert "if (ctl.state !== 'done') { ctl.state = 'lost'; ctl.follow(); }" in sh
+    assert "api.attachTurn(ctl.chat, ctl.lastSeq ?? 0, h, ctl.ticket," in sh
+    assert 'if (ctl.armed && ownsLive())' in sh and "await gone('unknown')" in sh
     assert "if (data.type === 'ticket')" in api and 'ticket: ticket || null' in api
-    vw = _src('features/viewer.js')
-    assert 'api.attachTurn(chat, lastSeq, h, ticket)' in vw and "giveUp('unknown')" in vw
-    # the live slot is OWNED (2026-10-07): a turn clears it only while it still holds it
-    assert 'if (armed && ownsLive())' in sh and 'if (!viewer) setProc(false)' in sh
     chat = _src('chat.js')
     assert "document.getElementById('streaming-message')" in chat   # refresh hold
     assert chat.count('e.feedLost') == 2                             # regen + continue lanes

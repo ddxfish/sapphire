@@ -1,28 +1,36 @@
 // shared/ask-marker.js — the ONE question-card renderer (2026-10-07). The ask_user
 // tool's result carries one marker line, built by core/ask_card.py:
-//   <!--ASK:{"questions":[{"question":"…","header":"…","multi_select":false,
+//   <!--ASK:{"id":"a1b2c3d4","questions":[{"question":"…","header":"…","multi_select":false,
 //                          "options":[{"label":"…","description":"…"}]}]}-->
 // It draws as a card in her bubble: a title row (with an × to dismiss), a tab
 // per question, the options one per line, a type-your-own box, Send. The picks
 // go out as the USER'S next message through the normal send path
 // (sapphire:ask_answer → triggerSendWithText), so they queue in the inbox like
 // anything typed. Like every door that isn't the user typing, the message leads
-// with the inbox header line (core/chat/inbox.py `header`):
-//   [Question card (ask_user) — what the user clicked; not typed by the user]
+// with the inbox header line (core/chat/inbox.py `header`), naming THIS card:
+//   [Question card a1b2c3d4 (ask_user) — what the user clicked; not typed by the user]
 //   Question? → Answer            (one line per question)
-// After Send (or when any user message follows it) the card LOCKS and folds to
-// its title; open it again to flip through the tabs and see the picks — Send
-// never fires twice. On a history reload the picks are read back out of the
-// user message that answered it. Sibling of files-marker.js; the marker is
-// UI-only (core strips the model's copy).
+// The card LOCKS and folds to its title when its answer is sent, or when the
+// person types something else after it; open it again to flip through the tabs
+// and see the picks — Send never fires twice. On a history reload the picks are
+// read back out of the message that carries the card's id. A machine row (an
+// agent's report, a MIDI take - every door that leads with `not typed by the
+// user`) never locks a card: the inbox runs those right after her turn, and
+// "a user row followed" locked cards nobody had answered (race scout,
+// 2026-10-07). Sibling of files-marker.js; the marker is UI-only (core strips
+// the model's copy).
 
-export const ASK_RE = /<!--ASK:(\{[^\n]*\})-->[ \t]*\n?/;
+export const ASK_RE = /<!--ASK:(\{.*?\})-->[ \t]*\n?/;
 const ASK_RE_ALL = new RegExp(ASK_RE.source, 'g');
 const MAX_Q = 4, MAX_OPT = 6;
-export const ANSWER_HEADER = '[Question card (ask_user) — what the user clicked; not typed by the user]';
+export const answerHeader = (id) => `[Question card ${id} (ask_user) — what the user clicked; not typed by the user]`;
+const MACHINE_ROW_RE = /^\s*\[[^\]\n]*; not typed by the user\]/;   // the inbox header: a door, not a person
+export const isMachineRow = (text) => MACHINE_ROW_RE.test(text || '');
 const ARROW = ' → ';
 
 function str(v, max) { return typeof v === 'string' ? v.trim().slice(0, max) : ''; }
+
+export const askId = (raw) => String((raw && typeof raw === 'object' && raw.id) || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 16);
 
 export function normalizeAsk(raw) {
     const list = (raw && typeof raw === 'object' && Array.isArray(raw.questions)) ? raw.questions : [];
@@ -40,15 +48,16 @@ export function normalizeAsk(raw) {
     }).filter(Boolean);
 }
 
-// → { cards: [[question…]], text } — text has every marker removed.
+// → { cards: [{id, questions}], text } — text has every marker removed.
 export function parseAskMarker(text) {
     const src = text || '';
     if (typeof src !== 'string' || !src.includes('<!--ASK:')) return { cards: [], text: src };
     const cards = [];
     for (const m of src.matchAll(ASK_RE_ALL)) {
         try {
-            const qs = normalizeAsk(JSON.parse(m[1]));
-            if (qs.length) cards.push(qs);
+            const raw = JSON.parse(m[1]);
+            const qs = normalizeAsk(raw);
+            if (qs.length) cards.push({ id: askId(raw), questions: qs });
         } catch (e) { console.warn('[Ask] bad marker JSON:', e); }
     }
     return { cards, text: src.replace(ASK_RE_ALL, '').trimEnd() };
@@ -78,11 +87,13 @@ function el(tag, cls, text) {
 }
 
 // One card. answers[i] = string | string[] | undefined. The controller is kept
-// on the element (card._ask) for the lock pass. `onSubmit(text)`, when given,
-// takes the `Question → Answer` lines instead of the chat send (the agent pill's
-// card answers the agent through its route - one card renderer, two doors).
-function buildCard(questions, onSubmit = null) {
+// on the element (card._ask) for the lock pass. `onSubmit(text, id)`, when
+// given, takes the `Question → Answer` lines instead of the chat send (the
+// agent pill's card answers the agent through its route - one card renderer,
+// two doors; `id` is the agent's question id there, so a stale answer is refused).
+function buildCard(questions, onSubmit = null, id = '') {
     const card = el('div', 'ask-card');
+    if (id) card.dataset.askId = id;
     const answers = questions.map(() => undefined);
     const needsSend = questions.length > 1 || questions.some(q => q.multi);
     let cur = 0, locked = false, state = 'open';          // open | answered | dismissed
@@ -204,8 +215,8 @@ function buildCard(questions, onSubmit = null) {
         if (needsSend && !allAnswered()) { renderTabs(); return; }
         const lines = questions.map((_, i) => line(i)).join('\n');
         lock('answered');
-        if (onSubmit) { onSubmit(lines); return; }
-        document.dispatchEvent(new CustomEvent('sapphire:ask_answer', { detail: { text: ANSWER_HEADER + '\n' + lines } }));
+        if (onSubmit) { onSubmit(lines, id); return; }
+        document.dispatchEvent(new CustomEvent('sapphire:ask_answer', { detail: { text: answerHeader(id) + '\n' + lines, id } }));
     };
 
     other.addEventListener('keydown', e => {
@@ -230,6 +241,7 @@ function buildCard(questions, onSubmit = null) {
     card.addEventListener('click', e => e.stopPropagation());
 
     card._ask = {
+        id,
         questions,
         lock,
         // the picks a sent message holds, re-applied to a reloaded card
@@ -244,8 +256,13 @@ function buildCard(questions, onSubmit = null) {
     return card;
 }
 
+// cards: [{id, questions}] (a parsed marker) or [[question…]] (no id).
 export function buildAskCards(cards, onSubmit = null) {
-    return (cards || []).map(qs => (qs && qs.length) ? buildCard(qs, onSubmit) : null).filter(Boolean);
+    return (cards || []).map(c => {
+        const qs = Array.isArray(c) ? c : (c && c.questions);
+        const id = Array.isArray(c) ? '' : String((c && c.id) || '');
+        return (qs && qs.length) ? buildCard(qs, onSubmit, id) : null;
+    }).filter(Boolean);
 }
 
 export function lockCard(card) {
@@ -253,20 +270,28 @@ export function lockCard(card) {
     else card.classList.add('locked');
 }
 
-// A card is answerable only until the user speaks again: lock every card that
-// has a user message after it, reading the picks back out of the first one.
-// Runs after a history render and after a user message is added (ui.js). A
-// card in the final assistant message stays live.
+// A card locks when ITS answer was sent (a user row carrying the card's id:
+// the picks are read back out of it) or when the person typed something else
+// after it (they moved on). Machine rows - the inbox header's `not typed by
+// the user` - are skipped: an agent's report right after her turn is not the
+// user answering. Runs after a history render and after a user message is
+// added (ui.js). A card nothing was said after stays live.
 export function lockAnsweredAskCards(root) {
     const cards = (root || document).querySelectorAll('.ask-card:not(.locked)');
     for (const card of cards) {
         const msg = card.closest('.message');
         if (!msg) continue;
+        const id = card.dataset.askId || '';
         for (let sib = msg.nextElementSibling; sib; sib = sib.nextElementSibling) {
             const user = sib.matches('.message.user') ? sib : sib.querySelector?.('.message.user');
             if (!user) continue;
             const text = (user.querySelector?.('.message-content') || user).textContent || '';
-            if (card._ask) card._ask.applyAnswers(text); else lockCard(card);
+            if (id && text.includes(`Question card ${id} `)) {
+                if (card._ask) card._ask.applyAnswers(text); else lockCard(card);
+                break;
+            }
+            if (isMachineRow(text)) continue;          // a door spoke, not the person
+            lockCard(card);                            // the person moved on
             break;
         }
     }

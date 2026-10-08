@@ -439,3 +439,132 @@ def test_privacy_rolls_downhill_a_message_queued_while_private_never_runs_public
         privacy['desk'] = True
         inbox.kick('desk')
         assert _wait(lambda: item2.reply.done()) and eng.calls
+
+
+def test_a_privacy_reading_that_failed_at_put_never_arms_the_drop(fast, monkeypatch):
+    """A sqlite hiccup at put() read as 'private' (fail closed) and the ratchet
+    then DROPPED a typed turn as 'queued while private' once the chat read
+    public again - fail-closed plus rolls-downhill failed by dropping (seam
+    scout, 2026-10-07). The stamp has three states now; only a known-private
+    reading arms the drop."""
+    from types import SimpleNamespace
+    state = {'raise': True}
+
+    def read(c):
+        if state['raise']:
+            raise RuntimeError('database is locked')
+        return {'private_chat': False}
+    sm = SimpleNamespace(is_chat_hidden=lambda c: False, read_chat_settings=read, chat_exists=lambda c: True)
+    monkeypatch.setattr(inbox, '_system', lambda: SimpleNamespace(llm_chat=SimpleNamespace(session_manager=sm)))
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)
+    eng = Engine()
+    with patch('core.cadence.run_turn', eng):
+        item = inbox.put('desk', inbox.Item(text='typed during a hiccup', lane='later', source='web'))
+        assert item.private_at_put is None                 # unknown, not private
+        state['raise'] = False                             # the database is back, the chat is public
+        monkeypatch.setattr(inbox, '_idle_hint', lambda c: True)
+        inbox.kick('desk')
+        assert _wait(lambda: item.reply.done()) and eng.calls, 'the typed turn was dropped by a false ratchet'
+        item.reply.result()
+        # and a known-private item whose chat is UNREADABLE at run time is not
+        # read as "public now" either: it holds (the gate judges), it is not dropped
+        state['raise'] = False
+        sm.read_chat_settings = lambda c: {'private_chat': True}
+        item2 = inbox.put('desk', inbox.Item(text='private words', lane='later', source='web'))
+        assert item2.private_at_put is True
+        assert inbox._chat_private('desk') is True
+
+
+def test_a_database_that_cannot_be_read_at_run_time_holds_the_item(fast, monkeypatch):
+    """The put-time hold (chat_exists raises → hold) was undone at run time:
+    run_turn read None for 'can't read right now' and 'gone' alike, raised
+    Unreachable, and the inbox dropped the report (seam scout, 2026-10-07).
+    Unreadable is its own error now and the item is pushed back and retried."""
+    from core import cadence
+    from types import SimpleNamespace
+    monkeypatch.setattr(inbox, 'BACKOFF_MIN', 0.05)
+    monkeypatch.setattr(inbox, 'BACKOFF_MAX', 0.05)
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: True)
+    calls = []
+
+    def run_turn(chat, text, **kw):
+        calls.append(text)
+        if len(calls) < 3:
+            raise cadence.Unreadable("chat 'desk' can't be read right now")
+        return 'ran'
+    with patch('core.cadence.run_turn', run_turn):
+        item = inbox.put('desk', inbox.Item(text='agent report', lane='later', source='agent:llm'))
+        assert _wait(lambda: item.reply.done(), 5)
+        assert item.reply.result() == 'ran' and len(calls) == 3        # held and retried, never dropped
+    # the organ tells the two apart: a read error is Unreadable, gone/sealed is Unreachable
+    sm = SimpleNamespace(chat_exists=lambda c: (_ for _ in ()).throw(RuntimeError('locked')),
+                         get_settings_for=lambda c: None)
+    monkeypatch.setattr(cadence, '_system', SimpleNamespace(llm_chat=SimpleNamespace(session_manager=sm)))
+    with pytest.raises(cadence.Unreadable):
+        cadence.run_turn('desk', 'x')
+    sm.chat_exists = lambda c: False
+    with pytest.raises(cadence.Unreachable):
+        cadence.run_turn('desk', 'x')
+
+
+def test_shutdown_drops_every_waiting_item_with_its_on_drop(fast, monkeypatch):
+    """A graceful restart used to just die on what waited: twilio's plain-write
+    fallback never ran, MCP waiters timed out (day-ruiner scout, 2026-10-07)."""
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)      # nothing runs: her turn never ends
+    dropped = []
+    a = inbox.put('desk', inbox.Item(text='call transcript', lane='later', source='twilio',
+                                    on_drop=lambda why: dropped.append(('desk', why))))
+    b = inbox.put('den', inbox.Item(text='a take', lane='later', source='midi',
+                                   on_drop=lambda why: dropped.append(('den', why))))
+    assert inbox.shutdown() == 2
+    assert sorted(dropped) == [('den', 'Sapphire is restarting'), ('desk', 'Sapphire is restarting')]
+    assert a.reply.done() and b.reply.done() and inbox.peek('desk') == []
+
+
+def test_a_sealed_chat_holds_a_machines_item_and_refuses_a_persons_turn(fast, monkeypatch):
+    """A Claude Code session in a vaulted chat ran past the idle-lock; its
+    report hit `sealed` → InboxRefused → lost, while the log said "kept on the
+    row" (chaos scout, 2026-10-07). Rows are metadata-only and the content
+    store refuses a hidden chat: the only place the report can live is HERE,
+    until the unlock. A person's typed turn is still refused - they are there."""
+    from types import SimpleNamespace
+    hidden = {'desk': True}
+    sm = SimpleNamespace(is_chat_hidden=lambda c: hidden.get(c, False),
+                         read_chat_settings=lambda c: None if hidden.get(c) else {'private_chat': False},
+                         chat_exists=lambda c: True, get_settings_for=lambda c: None if hidden.get(c) else {})
+    monkeypatch.setattr(inbox, '_system', lambda: SimpleNamespace(llm_chat=SimpleNamespace(session_manager=sm)))
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: True)
+    monkeypatch.setattr(inbox, 'BACKOFF_MAX', 0.05)
+    with pytest.raises(inbox.InboxRefused, match='sealed'):
+        inbox.put('desk', inbox.Item(run=lambda: 'typed', source='web', lane='now'))
+    eng = Engine()
+    with patch('core.cadence.run_turn', eng):
+        item = inbox.put('desk', inbox.Item(text='the agent report', lane='later', source='agent:claude_code'))
+        time.sleep(0.4)
+        assert not item.reply.done() and inbox.peek('desk'), 'the report was dropped instead of held'
+        hidden['desk'] = False                           # the vault unlocks
+        inbox.kick('desk')
+        assert _wait(lambda: item.reply.done(), 5) and eng.calls and 'the agent report' in eng.calls[0]['text']
+
+
+def test_drops_are_typed_so_a_door_can_tell_privacy_from_stale(fast, monkeypatch):
+    """The twilio door wrote a PRIVACY-dropped transcript into the (now public)
+    chat by hand - the inbox said no and the door did it anyway (privacy scout,
+    2026-10-07). on_drop now sees WHY on the item."""
+    kinds = []
+    it = inbox.put('desk', inbox.Item(text='x', lane='later', source='twilio',
+                                     on_drop=lambda why: kinds.append(it.drop_kind)))
+    assert inbox.drop('desk', it.ticket) and kinds == ['removed']
+    monkeypatch.setattr(inbox, '_idle_hint', lambda c: False)
+    it2 = inbox.put('desk', inbox.Item(text='y', lane='later', source='twilio', ttl=0.01,
+                                      on_drop=lambda why: kinds.append(it2.drop_kind)))
+    time.sleep(0.05)
+    inbox._expire(inbox._chat('desk'))
+    assert kinds[-1] == 'stale'
+    it3 = inbox.put('desk', inbox.Item(text='z', lane='later', source='twilio',
+                                      on_drop=lambda why: kinds.append(it3.drop_kind)))
+    inbox.drop_chat('desk', 'Sapphire is restarting', 'restart')
+    assert kinds[-1] == 'restart'
+    src = (__import__('pathlib').Path(__file__).resolve().parent.parent / 'plugins' / 'twilio-voice' / 'daemon.py').read_text(encoding='utf-8')
+    assert "if item.drop_kind in ('privacy', 'sealed', 'gone'):" in src
+    assert '_fallback()' not in src.split('def _watch():')[1].split('threading.Thread')[0], 'a failed turn is not re-written'

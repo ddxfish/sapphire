@@ -3,6 +3,7 @@
 # module, the store, the session manager, the inbox and the event bus.
 import json
 import time
+import threading
 
 import pytest
 
@@ -204,7 +205,8 @@ def test_recently_finished_elsewhere_never_names_a_private_chats_agent(agent_wor
     w.mgr._agents[priv['id']].finish_with_result('ok')
     assert w.wait_for(lambda: not w.mgr._agents)
     text, _ = w.mgr.list_text('desk')
-    assert "Spark (probe) done in 'other'" in text or "Alpha (probe) done in 'other'" in text
+    # name, kind, status - and NOT the other chat's name (it goes to this chat's provider)
+    assert "(probe) done" in text and "'other'" not in text
     assert 'vault' not in text and 'private work' not in text and 'public work' not in text
 
 
@@ -300,6 +302,62 @@ def test_say_wakes_a_stopped_or_failed_row_that_still_has_a_session(agent_world)
     [x for x in w.mgr._agents.values() if x.name == 'Spark'][0].finish()
 
 
+def test_stop_then_say_cannot_fork_the_session_while_the_thread_winds_down(agent_world):
+    """She stops Forge and says the next thing in the same breath. The old
+    dismiss evicted the object at once; `say` saw no live agent, found the
+    token and revived a SECOND CLI on the same session, and when the first
+    thread finally ended it wrote 'stopped' over the new row and evicted the
+    new agent - an invisible session nobody could stop (chaos scout,
+    2026-10-07). Now the object stays registered until its thread ends."""
+    w = agent_world
+    r = w.mgr.spawn('talker', 'build it', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.resume_token = 'sess-9'
+    hold = threading.Event()
+    real_finish = a.finish
+    a.finish = lambda: None                              # the thread does not end yet: a CLI winding down
+    a._gate.wait = lambda timeout=None: hold.wait(timeout)   # run() blocks on our gate instead
+    text, ok = w.mgr.action_text('desk', 'Spark', 'stop', '')
+    assert ok and a.status == 'stopped'
+    text, ok = w.mgr.action_text('desk', 'Spark', 'say', 'and now this')
+    assert not ok and 'winding down' in text
+    assert w.mgr._agents.get(r['id']) is a               # still the one incarnation
+    hold.set()                                           # the thread ends
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    assert w.mgr._row(r['id'])['status'] == 'stopped'
+    text, ok = w.mgr.action_text('desk', 'Spark', 'say', 'and now this')
+    assert ok and 'woke' in text                         # one session, one process
+    a2 = w.mgr._agents[r['id']]
+    assert a2 is not a
+    # a superseded thread's late finished() never touches the newer row
+    w.mgr.finished(a)
+    assert w.mgr._agents.get(r['id']) is a2 and w.mgr._row(r['id'])['status'] == 'running'
+    a2.finish()
+
+
+def test_an_agent_that_ends_without_a_word_tells_the_chat(agent_world, monkeypatch):
+    """The llm kind returns '' when its tool loop runs out or the context
+    overflows: report('') stored nothing, status was 'done', nobody was told
+    (chaos scout, 2026-10-07). The engine says so now."""
+    from core.chat import inbox
+    w = agent_world
+    told = []
+    monkeypatch.setattr(inbox, 'tell', lambda chat, text, **k: told.append((chat, text)) or 'tk')
+    r = w.mgr.spawn('probe', 'research it', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.warning = 'tool loop exhausted (10 rounds)'
+    a.finish_with_result('')
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    assert told and 'finished without an answer' in told[-1][1] and 'tool loop exhausted' in told[-1][1]
+    # one that did report is left alone
+    told.clear()
+    r = w.mgr.spawn('probe', 'research it', chat='desk')
+    a = w.mgr._agents[r['id']]
+    a.finish_with_result('here is the answer')
+    assert w.wait_for(lambda: r['id'] not in w.mgr._agents)
+    assert len(told) == 1 and 'here is the answer' in told[0][1]
+
+
 def test_a_wake_keeps_the_options_but_drops_context_and_cannot_happen_twice(agent_world):
     w = agent_world
     r = w.mgr.spawn('talker', 'build it', chat='desk', options={'context': 'long private notes'})
@@ -356,7 +414,10 @@ def test_an_answered_question_withdraws_its_queued_turn(agent_world, monkeypatch
     a = w.mgr._agents[r['id']]
     assert w.wait_for(lambda: a.pending_question is not None)
     text, ok = w.mgr.action_text('desk', a.name, 'answer', 'tea')
-    assert ok and dropped and dropped[0][:2] == ('desk', 'tkt-1')
+    assert ok
+    # the withdraw runs on the agent's own thread once the question settles (any
+    # path: answered, stopped, timed out) - so it always has the ticket in hand
+    assert w.wait_for(lambda: dropped) and dropped[0][:2] == ('desk', 'tkt-1')
     a.finish()
 
 
@@ -476,3 +537,60 @@ def test_a_multi_question_answer_in_the_cards_format_lands_per_question():
     got = _map_answers(qs, '{"Framework?": "FastAPI", "Tests?": "my own runner"}')
     assert got == {'Framework?': 'FastAPI', 'Tests?': 'my own runner'}
     assert _map_answers(qs, 'b') == {'Framework?': 'Flask', 'Tests?': 'unittest'}     # one letter still answers all
+    # the ONE-question card (the common fork) posts the same line shape: the
+    # agent must get 'Red', not 'Which color? → Red' as free text (two scouts, 2026-10-07)
+    one = [{'question': 'Which color?', 'options': [{'label': 'Red'}, {'label': 'Blue'}]}]
+    assert _map_answers(one, 'Which color? → Red') == {'Which color?': 'Red'}
+    assert _map_answers(one, 'Which color? → b') == {'Which color?': 'Blue'}
+    assert _map_answers(one, 'Red') == {'Which color?': 'Red'}
+    multi = [{'question': 'Which?', 'options': [{'label': 'A'}, {'label': 'B'}], 'multiSelect': True}]
+    assert _map_answers(multi, 'Which? → A, B') == {'Which?': ['A', 'B']}
+
+
+def test_a_late_answer_never_lands_on_the_next_question(agent_world):
+    """A fork left ten minutes: the agent takes the default and asks something
+    else; the user's answer to the FIRST question arrives now. With the
+    question's id (the card knows it) the engine refuses it instead of picking
+    that option on the second question (chaos scout, 2026-10-07)."""
+    from core.agents.base import Agent
+    w = agent_world
+    a = Agent.__new__(Agent)
+    a._status_lock, a._question_lock, a._question, a._engine = threading.Lock(), threading.Lock(), None, w.mgr
+    a._status = 'running'
+    a.name, a.kind = 'Spark', 'llm'
+    a.event = lambda *x, **k: None
+    a._withdraw = lambda *x, **k: None
+    a._cancelled = threading.Event()
+    qs = [{'question': 'Which DB?', 'options': [{'label': 'SQLite'}, {'label': 'Postgres'}]}]
+    with a._question_lock:
+        a._question = {'id': 'q2', 'questions': qs, 'event': threading.Event(), 'answer': None}
+    text, ok = a.answer('b', question_id='q1')
+    assert not ok and 'expired' in text and a._question is not None
+    text, ok = a.answer('b', question_id='q2')
+    assert ok and a._question is None
+
+
+def test_engine_state_lives_in_a_core_namespace_no_plugin_card_can_purge(agent_world):
+    """'Purge data' on the Agents plugin card wiped every kind's missions and
+    reports (Claude Code sessions included) and the engine wrote its in-memory
+    rows straight back (chaos scout, 2026-10-07). The store is core-owned now,
+    and not `agents-*` either: the purge sweeps a plugin's `{name}-*` siblings."""
+    from core.agents import engine
+    assert engine.STORE == 'core-agents' and engine.LEGACY_STORE == 'agents'
+    assert not engine.STORE.startswith(('agents-', 'agents_'))
+    assert engine.SETTINGS_PLUGIN == 'agents'            # the plugin's own settings stay its own
+
+
+def test_legacy_rows_move_to_the_core_store_once(agent_world, monkeypatch):
+    from core.agents import engine
+    from types import SimpleNamespace
+    w = agent_world
+    legacy = {'rows': [{'id': 'old1', 'name': 'Spark', 'kind': 'talker', 'chat': 'desk', 'status': 'resting',
+                        'started': time.time(), 'ended': time.time(), 'resume_token': 's', 'privacy': False}]}
+    monkeypatch.setattr(engine, '_legacy_store', lambda: SimpleNamespace(
+        get=lambda k, d=None: legacy.get(k, d), save=lambda k, v: legacy.__setitem__(k, v)))
+    w.store.pop('rows', None)
+    w.mgr._rows = None
+    rows = w.mgr._load_rows()
+    assert [r['id'] for r in rows] == ['old1'] and legacy['rows'] == []      # moved, not copied
+    assert w.store['rows'][0]['id'] == 'old1'

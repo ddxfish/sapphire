@@ -78,14 +78,21 @@ class Agent(BaseAgent):
         super().__init__(row, engine)
         h = _helpers()
         o = self.options
-        self.mode = str(o.get('mode') or 'project').strip().lower()
+        # mode is metadata a wake needs (the cwd the session resumes in): it
+        # rides the row beside wsname, not only the stored options
+        self.mode = str(row.get('mode') or o.get('mode') or 'project').strip().lower()
         if self.mode not in ('project', 'plugin', 'core'):
             self.mode = 'project'
         # The workspace name sticks to the ROW once chosen: a wake passes the
         # say text as the mission, and re-deriving the name from it moved a
         # project-mode session into a fresh empty folder (two scouts, 2026-10-07).
+        # Without a `name` option it is minted from the agent's own name and id
+        # - NEVER from the mission: a slug of its first words landed in the
+        # metadata file, a directory name and a replayed event, three places
+        # the vault never touches (privacy scout, 2026-10-07).
         self.wsname = (str(row.get('wsname') or '').strip()
-                       or h._safe_dir_name(o.get('name') or '', default='') or h._slugify(self.mission))
+                       or h._safe_dir_name(o.get('name') or '', default='')
+                       or h._safe_dir_name(f"{self.name}-{str(self.id)[:8]}", default='project'))
         if o.get('context'):
             self.mission = f"{self.mission}\n\n---\n\nContext:\n{o['context']}"
         self._say_q = queue.Queue()
@@ -104,7 +111,7 @@ class Agent(BaseAgent):
             return                                   # stopped before it began: no CLI is ever spawned
         settings = _settings()
         self.workspace = self._workspace(settings)
-        self.remember(wsname=self.wsname)            # the row keeps the name a wake must reuse
+        self.remember(wsname=self.wsname, mode=self.mode)   # the row keeps what a wake must reuse
         self._prepare_workspace(settings)
         options = self._options(sdk, settings)
         self.event('note', f"{self.mode} mode in {self.workspace}" + (' (resumed)' if self.resume_token else ''))
@@ -218,9 +225,17 @@ class Agent(BaseAgent):
                         # auto mode's classifier said no to these; the director was not
                         # asked (by rule) - but should know what was refused
                         tail = f"\n\n[not allowed by the permission classifier: {denied}]" + tail
+                    # The report is the FINAL message (msg.result), not every
+                    # narration line of the turn ("Let me check…", "Now the
+                    # tests…"): with keep_prompt the report row is permanent in
+                    # her history and re-enters her context every turn (chaos
+                    # scout, 2026-10-07). The narration is in the transcript
+                    # ring, where agent_peek shows it; it is the body only when
+                    # the CLI gave no result text.
+                    final = (msg.result or '').strip() or body
                     if self.mode == 'plugin':
-                        body = (body or msg.result or '') + self._plugin_check()
-                    self.report((body or msg.result or '(no text)') + tail)
+                        final = (final or '') + self._plugin_check()
+                    self.report((final or '(no text)') + tail)
                     if self.mode == 'project':
                         self._workspace_ready()
 
@@ -259,6 +274,10 @@ class Agent(BaseAgent):
                 message="No answer from the director in time; choose the safe default and continue.")
         if isinstance(answers, str):
             answers = {q.get('question', ''): answers for q in questions}
+        # the CLI's answers are strings per question: a multi-select pick list
+        # goes as "A, B" (chaos scout, 2026-10-07)
+        answers = {k: (', '.join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v))
+                   for k, v in dict(answers).items()}
         return sdk.PermissionResultAllow(updated_input={'questions': questions, 'answers': answers})
 
     # --- setup ------------------------------------------------------------------------
@@ -283,7 +302,7 @@ class Agent(BaseAgent):
                                    f"Pick a unique name, or say() to the agent that built it.")
             os.makedirs(ws, exist_ok=True)
         else:
-            ws, err = h._resolve_workspace(settings, self.wsname or 'project')
+            ws, err = h._resolve_workspace(settings, self.wsname or 'project', mode=self.mode, root=_ROOT)
             if err:
                 raise RuntimeError(err)
         err = h._sanity_check(ws, mode=self.mode, root=_ROOT)
@@ -310,10 +329,15 @@ class Agent(BaseAgent):
     def _options(self, sdk, settings):
         h = _helpers()
         clean = h._clean_env()
-        env = {k: '' for k in ('CONDA_PREFIX', 'CONDA_DEFAULT_ENV', 'CONDA_PROMPT_MODIFIER', 'CONDA_SHLVL',
-                               'CONDA_PYTHON_EXE', 'CONDA_EXE', 'VIRTUAL_ENV', 'UV_VIRTUALENV')}
-        env['PATH'] = clean.get('PATH', '')
-        env['ANTHROPIC_API_KEY'] = ''              # the login, never an inherited key
+        # The SDK LAYS `env` OVER os.environ, it does not replace it (verified
+        # in 0.2.163): every variable of Sapphire's process reached the CLI and
+        # every Bash call it made - a SOCKS proxy's `socks5h://user:pass@…`, a
+        # systemd unit's secrets - one `env` away from a tool result bound for
+        # Anthropic (privacy scout, 2026-10-07; Krem's V5). So the CLI gets an
+        # ALLOWLIST (h.CLI_ENV_KEEP), and everything else in the process
+        # environment is blanked by name - the SDK removes only keys it finds
+        # in `env`. ANTHROPIC_API_KEY is blanked there too: the login, never a key.
+        env = h._cli_env()
         cli_path = None
         wanted = str(settings.get('claude_binary') or '').strip().strip('"').strip("'")   # Explorer's "Copy as path" quotes
         if wanted:
@@ -346,7 +370,11 @@ class Agent(BaseAgent):
                 if os.path.isdir(ref):
                     add_dirs.append(ref)
         model = str(self.options.get('model') or settings.get('model') or '').strip() or None
-        effort = str(self.options.get('effort') or settings.get('effort') or '').strip() or None
+        effort = str(self.options.get('effort') or settings.get('effort') or '').strip().lower() or None
+        if effort not in (None, 'low', 'medium', 'high', 'xhigh', 'max'):
+            # the SDK types it as a Literal: a stray value ("High", "2") failed every session
+            self.event('note', f"effort {effort!r} is not one of low/medium/high/xhigh/max - using the default")
+            effort = None
         try:
             budget = float(settings.get('max_budget_usd') or 0) or None
         except (TypeError, ValueError):

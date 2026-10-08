@@ -39,6 +39,9 @@ DRAINER_IDLE_EXIT_S = 10.0    # an empty inbox lets its thread go
 BACKOFF_MIN, BACKOFF_MAX = 0.1, 2.0   # after ChatBusy: a typed turn won the race
 
 
+_HOLD = 'hold'                # _refusal: not refused, not runnable yet - the item waits (a sealed chat's machine item)
+
+
 class InboxRefused(Exception):
     """put() said no, with a reason fit to show."""
 
@@ -58,6 +61,14 @@ class Item:
     stream_speech: bool = False
     on_start: Optional[Callable[[], None]] = None   # the item is about to run (a device shows 'thinking')
     on_drop: Optional[Callable[[str], None]] = None  # the item was dropped, with why
+    # WHY it was dropped, typed, set before on_drop runs: 'removed' (× / drop()),
+    # 'stale' (ttl), 'gone' (chat deleted), 'sealed' (a person's turn on a
+    # vault-locked chat), 'privacy' (the ratchet or a door's gate said no),
+    # 'unreachable' (run-time), 'restart'. A door's fallback must read it: the
+    # twilio door wrote a PRIVACY-dropped report into the chat by hand - the
+    # inbox said "this must not run public" and the door did it anyway
+    # (privacy scout, 2026-10-07).
+    drop_kind: str = 'dropped'
     reply: Future = field(default_factory=Future)   # her text, or the exception, when it ran
     ticket: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     ctx: Optional[contextvars.Context] = None       # the put-time context the turn runs under
@@ -79,8 +90,12 @@ class Item:
     # Privacy rolls downhill (Krem): anything queued while its chat was PRIVATE
     # never runs public. Set by put(); checked the moment the item is about to
     # run. The other direction (public → private) needs nothing: the turn reads
-    # the chat's privacy when it runs and goes local.
-    private_at_put: bool = False
+    # the chat's privacy when it runs and goes local. THREE states: True (known
+    # private - arms the drop), False (known public), None (the setting could
+    # not be read at put - a sqlite hiccup; it must not arm the drop, or a typed
+    # turn is thrown away with a false "queued while private"; second scout
+    # wave, 2026-10-08).
+    private_at_put: Optional[bool] = False
 
     def __post_init__(self):
         if not self.fold_key and self.coalesce and self.run is None:
@@ -134,11 +149,11 @@ def put(chat, item):
         raise InboxRefused('The inbox needs a chat name.')
     if not isinstance(item, Item):
         raise TypeError('put() takes an Item')
-    why = _refusal(chat)
-    if why:
-        raise InboxRefused(why)
     if item.lane not in ('now', 'later'):
         raise InboxRefused(f"lane must be 'now' or 'later', not {item.lane!r}")
+    why = _refusal(chat, item.lane)
+    if why and why is not _HOLD:
+        raise InboxRefused(why)
     if item.run is None and not (item.text or '').strip():
         raise InboxRefused('An item needs text or a run().')
     if item.ctx is None:
@@ -222,13 +237,13 @@ def drop(chat, ticket, why='dropped'):
                 break
     if gone is None:
         return False
-    _dropped(gone, why)
+    _dropped(gone, why, 'removed')
     _changed(c)
     return True
 
 
-def drop_chat(chat, why='chat gone'):
-    """The chat was deleted or sealed: everything waiting on it is dropped."""
+def drop_chat(chat, why='chat gone', kind='gone'):
+    """The chat was deleted: everything waiting on it is dropped."""
     c = _chats.get(str(chat or '').strip())
     if c is None:
         return 0
@@ -237,10 +252,26 @@ def drop_chat(chat, why='chat gone'):
         c.now_q.clear()
         c.later_q.clear()
     for it in items:
-        _dropped(it, why)
+        _dropped(it, why, kind)
     if items:
         _changed(c)
     return len(items)
+
+
+def shutdown(why='Sapphire is restarting'):
+    """Every chat's waiting items are dropped WITH their on_drop, so each door
+    leaves its own record (twilio writes its transcript by hand, a web ticket
+    tells its tab, an MCP waiter hears the exception now instead of timing
+    out). Before this the process just died on them - nothing fired, nothing
+    logged (day-ruiner scout, 2026-10-07). Returns how many were dropped."""
+    with _lock:
+        chats = list(_chats.values())
+    n = 0
+    for c in chats:
+        n += drop_chat(c.name, why, 'restart')
+    if n:
+        logger.info(f"[INBOX] shutdown: {n} waiting item(s) dropped with notice")
+    return n
 
 
 def rename_chat(old, new):
@@ -324,18 +355,23 @@ def _system():
         return None
 
 
-def _refusal(chat):
-    """Why `chat` cannot take an item right now, or ''. Missing and sealed
-    chats refuse here; the sealed-while-active corner is closed by run_turn's
-    own reachability check before it publishes anything (so nothing leaks as
-    a turn), and _run drops the item on that refusal."""
+def _refusal(chat, lane='now'):
+    """Why `chat` cannot take an item right now, or ''. A missing chat refuses
+    every lane. A SEALED chat (vault locked) refuses a person's `now` turn -
+    they are there, the text goes back in their box - but HOLDS a machine's
+    `later` item: an agent's report into a chat that sealed while it ran has
+    nowhere else to live (rows are metadata-only; the content store refuses a
+    hidden chat), so it waits in memory for the unlock instead of vanishing
+    with a log line that said it was kept (chaos scout, 2026-10-07). Krem's
+    ruling: machine doors wait, never drop. The sealed-while-active corner is
+    closed by run_turn's own reachability check before it publishes anything."""
     system = _system()
     if system is None:
         return ''                                  # before boot: the drainer holds items until cadence is up
     try:
         sm = system.llm_chat.session_manager
         if sm.is_chat_hidden(chat) is True:        # only an explicit True hides
-            return f"The chat '{chat}' is sealed."
+            return f"The chat '{chat}' is sealed." if lane == 'now' else _HOLD
         if sm.read_chat_settings(chat) is None:
             # None is also what a locked database or a sealed-while-active
             # corner reads as; only a chat that is GONE is refused here. A
@@ -351,15 +387,19 @@ def _refusal(chat):
 
 
 def _chat_private(chat):
-    """The chat's privacy right now. Unreadable counts as private (fail closed)."""
+    """The chat's privacy right now: True / False / None (could not be read -
+    sealed, gone, or a database hiccup). Callers that GATE treat None as
+    private (fail closed); the put-time stamp keeps it as "unknown"."""
     system = _system()
     if system is None:
         return False                               # before boot nothing runs anyway
     try:
         s = system.llm_chat.session_manager.read_chat_settings(chat)
     except Exception:
-        return True
-    return s is None or bool(s.get('private_chat'))
+        return None
+    if s is None:
+        return None
+    return bool(s.get('private_chat'))
 
 
 def _refuse_self_wait(chat):
@@ -380,12 +420,21 @@ def _changed(c):
         from core.event_bus import publish
         with c.lock:
             n = len(c.now_q) + len(c.later_q)
+        # a sealed chat's name never rides the bus (every tab hears it)
+        system = _system()
+        if system is not None:
+            try:
+                if system.llm_chat.session_manager.is_chat_hidden(c.name) is True:
+                    return
+            except Exception:
+                return
         publish('inbox_changed', {'chat': c.name, 'depth': n}, ephemeral=True)
     except Exception as e:
         logger.debug(f"[INBOX] inbox_changed not published: {e}")
 
 
-def _dropped(it, why):
+def _dropped(it, why, kind='dropped'):
+    it.drop_kind = kind
     if not it.reply.done():
         it.reply.set_exception(RuntimeError(f"dropped: {why}"))
     if it.on_drop:
@@ -393,7 +442,7 @@ def _dropped(it, why):
             it.on_drop(why)
         except Exception as e:
             logger.warning(f"[INBOX] on_drop for {it.source} failed: {e}")
-    logger.info(f"[INBOX] '{it.source}' item {it.ticket} dropped: {why}")
+    logger.info(f"[INBOX] '{it.source}' item {it.ticket} dropped ({kind})")   # the `why` names the chat: the waiter hears it, the log does not
 
 
 def _idle_hint(c):
@@ -463,7 +512,7 @@ def _expire(c):
                     q.remove(it)
                     stale.append(it)
     for it in stale:
-        _dropped(it, f'stale after {it.ttl:.0f}s')
+        _dropped(it, f'stale after {it.ttl:.0f}s', 'stale')
     if stale:
         _changed(c)
 
@@ -477,7 +526,7 @@ def _drain(c):
     try:
         _drain_loop(c)
     except BaseException as e:            # noqa: BLE001 - the thread is ending either way
-        logger.error(f"[INBOX] drainer for '{c.name}' died: {type(e).__name__}: {e}")
+        logger.error(f"[INBOX] a drainer died: {type(e).__name__}: {e}")
         raise
     finally:
         restart = False
@@ -531,7 +580,7 @@ def _drain_loop(c):
             hinted_since = hinted_since or time.monotonic()
             if time.monotonic() - hinted_since < HINT_MAX_S:
                 continue
-            logger.warning(f"[INBOX] '{c.name}': idle hint stuck for {HINT_MAX_S:.0f}s - trying anyway")
+            logger.warning(f"[INBOX] idle hint stuck for {HINT_MAX_S:.0f}s - trying anyway")
         hinted_since = None
         with c.lock:
             picked = _pick(c)
@@ -550,16 +599,22 @@ def _drain_loop(c):
                     for it in reversed(picked):
                         c.later_q.appendleft(it)
                     picked = _pick(c)
-        why = _refusal(c.name)
+        items = picked if isinstance(picked, list) else [picked]
+        why = _refusal(c.name, 'later' if all(it.lane == 'later' for it in items) else 'now')
+        if why is _HOLD:
+            _push_back(c, picked)                   # sealed: a machine's item waits for the unlock
+            time.sleep(min(BACKOFF_MAX, 2.0))
+            continue
         if why:
-            for it in (picked if isinstance(picked, list) else [picked]):
-                _dropped(it, why)
+            for it in items:
+                _dropped(it, why, 'sealed' if 'sealed' in why else 'gone')
             _changed(c)
             continue
         picked = _gated(c, picked)                  # each door's own run-time rule
         if picked is None:
             _changed(c)
             continue
+        _changed(c)                                 # the chip counts what WAITS - the picked item runs now
         try:
             _run(c, picked)
             backoff = BACKOFF_MIN
@@ -583,9 +638,9 @@ def _gated(c, picked):
     public_now = None
     for it in items:
         why = ''
-        if it.private_at_put:
+        if it.private_at_put is True:
             if public_now is None:
-                public_now = not _chat_private(c.name)
+                public_now = _chat_private(c.name) is False      # unreadable now = not known public: hold the drop
             if public_now:
                 why = (f"queued while '{c.name}' was private; the chat is public now, so it did not run "
                        f"- say it again if you mean it to")
@@ -596,9 +651,17 @@ def _gated(c, picked):
                 why = f"gate check failed: {e}"
         if why:
             for x in items:
-                _dropped(x, why)
+                _dropped(x, why, 'privacy')
             return None
     return picked
+
+
+def _is_unreadable(e):
+    try:
+        from core import cadence
+        return isinstance(e, cadence.Unreadable)
+    except Exception:
+        return False
 
 
 def _is_unreachable(e):
@@ -633,17 +696,19 @@ def _run(c, picked):
     except ChatBusy:
         raise _Busy()
     except Exception as e:
-        # Only the chat being gone/sealed/unreadable drops the item (a typed
-        # check: cadence.Unreachable, or this inbox's own refusal). Anything
-        # else is a FAILED turn - its waiter hears the error, the log says so.
+        if _is_unreadable(e):
+            raise _Busy()            # the database can't be read right now: hold the item, try again
+        # Only the chat being gone/sealed drops the item (a typed check:
+        # cadence.Unreachable, or this inbox's own refusal). Anything else is
+        # a FAILED turn - its waiter hears the error, the log says so.
         unreachable = isinstance(e, InboxRefused) or _is_unreachable(e)
         for it in items:
             if unreachable:
-                _dropped(it, str(e))
+                _dropped(it, str(e), 'unreachable')
             elif not it.reply.done():
                 it.reply.set_exception(e)
         if not unreachable:
-            logger.warning(f"[INBOX] '{c.name}': turn for {first.source} failed: {e}")
+            logger.warning(f"[INBOX] turn for {first.source} failed: {type(e).__name__}")
         return
     for it in items:
         if not it.reply.done():

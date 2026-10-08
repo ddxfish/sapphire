@@ -52,12 +52,12 @@ globalThis.CustomEvent = class { constructor(type, init) { this.type = type; thi
 globalThis.document = { createElement: t => new El(t), dispatchEvent: ev => { sent.push(ev); return true; } };
 globalThis.console = { ...console, warn: () => {} };
 
-const { ASK_RE, ANSWER_HEADER, normalizeAsk, parseAskMarker, parseAnswers, buildAskCards, lockCard, lockAnsweredAskCards } =
+const { ASK_RE, answerHeader, isMachineRow, normalizeAsk, parseAskMarker, parseAnswers, buildAskCards, lockCard, lockAnsweredAskCards } =
     await import('../../interfaces/web/static/shared/ask-marker.js');
 
 let passed = 0;
 function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
-const mark = qs => '<!--ASK:' + JSON.stringify({ questions: qs }) + '-->';
+const mark = (qs, id = 'c0ffee01') => '<!--ASK:' + JSON.stringify({ id, questions: qs }) + '-->';
 const byCls = (root, c) => root.querySelectorAll('.' + c);
 const opts = card => byCls(card, 'ask-opt');
 const tabs = card => byCls(card, 'ask-tab');
@@ -65,8 +65,9 @@ const other = card => byCls(card, 'ask-other')[0];
 const sendBtn = card => byCls(card, 'ask-send')[0];
 const title = card => byCls(card, 'ask-title')[0];
 const xBtn = card => byCls(card, 'ask-x')[0];
-const HEAD = ANSWER_HEADER + '\n';
-ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSWER_HEADER), 'header follows the inbox header grammar');
+const HEAD = answerHeader('c0ffee01') + '\n';
+ok(/^\[Question card c0ffee01 \(ask_user\) \u2014 .*; not typed by the user\]$/.test(answerHeader('c0ffee01')), 'header follows the inbox header grammar and names the card');
+ok(isMachineRow(HEAD + 'x') && isMachineRow('  [Agent Spark (claude_code) \u2014 reports; not typed by the user]\nhi') && !isMachineRow('[not a header] hi') && !isMachineRow('hello'), 'machine rows are the inbox header');
 
 // ── parse ────────────────────────────────────────────────────────────────────
 {
@@ -74,9 +75,11 @@ ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSW
         options: [{ label: 'Blue', description: 'calm' }, 'Red', { label: 'Red' }, { nope: 1 }] }]);
     const r = parseAskMarker(text);
     ok(r.text === 'Card shown.', 'marker stripped from shown text');
-    ok(r.cards.length === 1 && r.cards[0][0].question === 'Fav color?', 'one card, one question');
-    ok(r.cards[0][0].options.map(o => o.label).join() === 'Blue,Red,Red', 'string options accepted, junk dropped');
-    ok(r.cards[0][0].options[0].description === 'calm' && r.cards[0][0].header === 'Color', 'description + header kept');
+    ok(r.cards.length === 1 && r.cards[0].id === 'c0ffee01' && r.cards[0].questions[0].question === 'Fav color?', 'one card with its id, one question');
+    ok(r.cards[0].questions[0].options.map(o => o.label).join() === 'Blue,Red,Red', 'string options accepted, junk dropped');
+    ok(r.cards[0].questions[0].options[0].description === 'calm' && r.cards[0].questions[0].header === 'Color', 'description + header kept');
+    const twoOnOneLine = parseAskMarker('a ' + mark([{ question: 'Q1?', options: ['x', 'y'] }], 'aaaa') + ' between ' + mark([{ question: 'Q2?', options: ['x', 'y'] }], 'bbbb') + ' z');
+    ok(twoOnOneLine.cards.length === 2 && twoOnOneLine.text === 'a between z', 'two markers on one line: two cards, the prose between them kept');
     ok(parseAskMarker('plain').cards.length === 0 && parseAskMarker(null).text === '', 'no marker / null safe');
     const list = [{ type: 'text', text: 'x' }];
     ok(parseAskMarker(list).text === list, 'non-string content passes through');
@@ -85,6 +88,7 @@ ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSW
     ok(normalizeAsk({ questions: [{ question: 'q', options: ['a'] }] }).length === 0, 'one option is no question');
     ok(normalizeAsk({ questions: Array(6).fill({ question: 'q', options: ['a', 'b'] }) }).length === 4, 'four questions max');
     ok(ASK_RE.test('<!--ASK:{}-->') && !ASK_RE.test('<!--ASK:[]-->'), 'only ASK with an object body');
+    ok(parseAskMarker(mark([{ question: 'q', options: ['a', 'b'] }], 'bad id!')).cards[0].id === 'badid', 'ids are alphanumeric');
 }
 
 // ── one question, single-select: a click sends ───────────────────────────────
@@ -187,7 +191,7 @@ ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSW
 // ── parseAnswers: the sent message read back ─────────────────────────────────
 {
     const qs = parseAskMarker(mark([{ question: 'Color?', options: ['Blue', 'Red'] },
-        { question: 'Toppings?', options: ['Ham', 'Corn'], multi_select: true }, { question: 'Snack?', options: ['Chips', 'Fruit'] }])).cards[0];
+        { question: 'Toppings?', options: ['Ham', 'Corn'], multi_select: true }, { question: 'Snack?', options: ['Chips', 'Fruit'] }])).cards[0].questions;
     const a = parseAnswers(qs, HEAD + 'Color? \u2192 Blue\nToppings? \u2192 Corn, pineapple\nSnack? \u2192 Fruit');
     ok(a[0] === 'Blue' && a[2] === 'Fruit', 'single answers read back');
     ok(Array.isArray(a[1]) && a[1].join('|') === 'Corn|pineapple', 'multi answers split');
@@ -221,14 +225,33 @@ ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSW
     ok(other(card1).value === 'a goat', 'the typed answer is shown');
     ok(card2.classList.contains('locked') && title(card2).textContent === 'Color \u00b7 Pet', 'a card answered in free text locks without a tick');
     ok(!card3.classList.contains('locked'), 'the card in the last message stays live');
-    mk('assistant');                                  // her next turn (an agent report, say) does not lock it
+    mk('assistant');                                  // her next turn does not lock it
     lockAnsweredAskCards(chat);
     ok(!card3.classList.contains('locked'), 'another assistant message does not lock it');
+    // an agent's report lands as a user row right after her turn (the inbox runs
+    // it the moment she ends) - a door spoke, not the person: the card stays live
+    mk('user', null, '[Agent Spark (claude_code) \u2014 reports (2m in); not typed by the user]\nAll tests pass.');
+    mk('assistant');
+    lockAnsweredAskCards(chat);
+    ok(!card3.classList.contains('locked'), 'a machine row (agent report) does not lock it');
+    // another card's answer is a machine row too - and not THIS card's id
+    mk('user', null, answerHeader('other001') + '\nColor? \u2192 Blue\nPet? \u2192 Dog');
+    lockAnsweredAskCards(chat);
+    ok(!card3.classList.contains('locked'), "another card's answer does not lock it");
     mk('user', null, 'hi');
     lockAnsweredAskCards(chat);
-    ok(card3.classList.contains('locked'), 'the user speaking locks it');
+    ok(card3.classList.contains('locked') && title(card3).textContent === 'Color \u00b7 Pet', 'the person typing something else locks it, no tick');
     lockCard(card3);
     ok(card3.classList.contains('locked'), 'lockCard is idempotent');
+    // the answer carries the card's id: a reload matches by it even with rows between
+    const card4 = two();
+    mk('assistant', card4);
+    mk('user', null, '[Agent Spark (claude_code) \u2014 asks; not typed by the user]\nWhich DB?');
+    mk('assistant');
+    mk('user', null, HEAD + 'Color? \u2192 Blue\nPet? \u2192 Cat');
+    lockAnsweredAskCards(chat);
+    ok(card4.classList.contains('locked') && title(card4).textContent === 'Color \u00b7 Pet \u2713', 'the answer is found past a machine row, by id');
+    ok(card4.dataset.askId === 'c0ffee01', 'the card knows its id');
 }
 
 // ── onSubmit: the agent pill's card answers through its route, not the chat ──
@@ -236,12 +259,15 @@ ok(/^\[Question card \(ask_user\) \u2014 .*; not typed by the user\]$/.test(ANSW
     sent.length = 0;
     const got = [];
     const qs = parseAskMarker(mark([{ question: 'Framework?', header: 'Framework', options: ['FastAPI', 'Flask'] },
-                                    { question: 'Tests?', options: ['pytest', 'unittest'] }])).cards[0];
-    const [card] = buildAskCards([qs], text => got.push(text));
+                                    { question: 'Tests?', options: ['pytest', 'unittest'] }])).cards[0].questions;
+    const ids = [];
+    const [card] = buildAskCards([{ id: 'q-77', questions: qs }], (text, id) => { got.push(text); ids.push(id); });
     opts(card)[1].fire('click');                      // Flask → next tab
     opts(card)[0].fire('click');                      // pytest
     sendBtn(card).fire('click');
     ok(got.length === 1 && got[0] === 'Framework? \u2192 Flask\nTests? \u2192 pytest', 'per-question lines go to onSubmit');
+    ok(ids[0] === 'q-77', 'with the question id (a stale answer is refused server-side)');
+    ok(buildAskCards([qs]).length === 1, 'a bare question list still builds (no id)');
     ok(sent.length === 0, 'and nothing is sent as a chat message');
     ok(card.classList.contains('locked'), 'the card locks all the same');
 }

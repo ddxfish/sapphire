@@ -222,10 +222,10 @@ ONE TURN PER CHAT:
 
 SERVER-OWNED TURNS (core/chat/turn.py, 2026-09-15):
 - The engine runs on its own server thread; every HTTP body is a VIEWER of it. A viewer leaving (phone lock, tab sleep, proxy timeout) never ends the turn — only POST /api/cancel does
-- Every SSE line carries `seq`. POST /api/chat/attach {chat?, since?} replays the turn's ring exact-once after `since`, then follows live on the same wire format; 204 = no live turn (refresh history), 404 unknown chat, 409 sealed chat
+- Every SSE line carries `seq`. The stream's first line is the turn's `ticket`; a send on a busy chat gets `queued` and the body CLOSES (no socket is held while a turn waits — six held sockets hit the browser's per-host cap). The bus says `inbox_ticket {ticket, state: started|merged|dropped}` and the owning tab follows by ticket. POST /api/chat/attach {ticket, since?, audio?} replays the turn's ring exact-once after `since`, then follows live on the same wire format (first line `attached {audio}`); 202 = still queued, 204 = it ran and is gone (refresh history), 404 unknown ticket (a restart), 409 sealed chat. By chat alone: 204 = no live turn, 404 unknown chat
 - Ring holds ~256KB of text; past it the viewer gets a `resync` event and repaints from history before streaming the remainder
-- Reattached feeds are text-only — audio is never replayed; the client speaks the finished reply once if TTS is on
-- Client: features/viewer.js (backoff 1s→15s, six tries), api.js attachTurn
+- A reattached feed hears her only if nothing has been spoken yet on the turn (`attached: audio=true`); otherwise it is text-only and the client speaks the finished reply once if TTS is on. Every live wire heartbeats (`: keepalive`, 15 s); a reader silent for 45 s cancels itself and the owner follows its ticket (iOS keeps a dead fetch pending forever)
+- Client: handlers/send-handlers.js — one owner per send (`pending` by ticket, `follow()` with backoff 1s→15s), api.js attachTurn
 
 MESSAGE ACTIONS (per-message toolbar):
 - 🗑️ delete-from-here, 🔄 regenerate, ▶️ continue (last assistant row only), ✏️ edit, 🔊 replay TTS

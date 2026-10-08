@@ -8,7 +8,7 @@ from pathlib import Path
 
 _IS_WINDOWS = sys.platform == 'win32'
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from core.auth import require_login
 from core.api_fastapi import get_system
@@ -93,14 +93,22 @@ async def agent_providers(_=Depends(require_login)):
 
 
 @router.post("/api/agents/{agent_id}/dismiss")
-async def dismiss_agent(agent_id: str, _=Depends(require_login)):
+async def dismiss_agent(agent_id: str, request: Request, _=Depends(require_login)):
+    """The pill's ×. Chat-local like every other agent door (privacy scout,
+    2026-10-07: this one took any id from any chat and returned the report);
+    {chat} in the body, the active chat when absent. Answers status only."""
     system = get_system()
     if not hasattr(system, 'agent_manager'):
         raise HTTPException(404, "Agent system not available")
-    result = system.agent_manager.dismiss(agent_id)
-    if 'error' in result:
-        raise HTTPException(404, result['error'])
-    return result
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    chat = _chat_or_404(system, (body or {}).get('chat') or '')
+    text, ok = system.agent_manager.action_text(chat, agent_id, 'stop', '')
+    if not ok:
+        raise HTTPException(404, text)
+    return {"id": agent_id, "status": "dismissed", "message": text}
 
 
 # --- Agents v2 (tmp/agents-v2.md §3.7): kinds, spawn, and the per-agent doors.
@@ -127,6 +135,7 @@ def _chat_or_404(system, chat):
 class AgentBody(BaseModel):
     chat: str
     value: str = ''
+    question: str = ''      # answer: the question's id (the card knows it) - a stale one is refused
 
 
 class SpawnBody(BaseModel):
@@ -232,7 +241,7 @@ async def agent_answer(agent_id: str, req: AgentBody, _=Depends(require_login)):
     system = get_system()
     mgr = _mgr()
     chat = _chat_or_404(system, req.chat)
-    text, ok = mgr.action_text(chat, agent_id, 'answer', req.value)
+    text, ok = mgr.action_text(chat, agent_id, 'answer', req.value, question=(req.question or None))
     if not ok:
         raise HTTPException(400, text)
     return {"message": text}

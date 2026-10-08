@@ -489,6 +489,14 @@ export const renderHistory = (hist) => {
         if (!key || key !== historyKey(hist[keep])) break;
         keep++;
     }
+    // The in-flight OVERLAY (2026-10-08): a send still waiting in the chat's
+    // inbox is a pulsing user bubble with a ticket and no key - the server has
+    // no row for it yet (the row is written when its turn runs). "No key means
+    // stale" deleted it, × and all, every time the turn ahead reached llm_done
+    // (race scout, 2026-10-07). Those bubbles are lifted out here and put back
+    // after the server's rows, where they belong: nothing persisted comes
+    // after a turn that has not run.
+    const inflight = existing.slice(keep).filter(el => el.classList.contains('queued') && el.dataset.ticket);
     // INVARIANT: no layout reads between this removal and the re-append below.
     // A forced layout here would clamp scrollTop to 0 → the scroll listener
     // reads it as a user scroll-up → sticky reader stranded at the top (D1#11).
@@ -509,6 +517,7 @@ export const renderHistory = (hist) => {
         if (el) el.dataset.key = key;
         chat.appendChild(clone);
     }
+    for (const el of inflight) chat.appendChild(el);   // the queued sends, still in line
     lockAnsweredAskCards(chat);     // only a card nothing was said after stays live
 
     updateToolbars();   // re-derives index / Continue / trash counts on the kept rows too

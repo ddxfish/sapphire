@@ -4210,8 +4210,11 @@ class ChatSessionManager:
             self._rows_degraded[chat_name] = {
                 "skipped": 1, "causes": {"decrypt": 0, "parse": 0, "read_error": 1},
                 "at": datetime.now().isoformat()}
+        # `agent`: this carrier is an AGENT'S run - nothing it says is persisted
+        # into the chat (the engine delivers its report), so a tool that draws
+        # in the chat (ask_user) has no surface here and must say so (2026-10-08)
         return {"chat": chat_name, "settings": settings,
-                "system_prompt": "", "tools": None, "history": hist}
+                "system_prompt": "", "tools": None, "history": hist, "agent": True}
 
     def make_ephemeral_override(self, task_settings: Optional[Dict[str, Any]] = None,
                                 privacy_required: bool = False) -> Dict[str, Any]:

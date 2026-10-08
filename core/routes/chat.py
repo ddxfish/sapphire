@@ -186,6 +186,18 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     text_in, prefill_in, skip_in = data['text'], prefill, skip_user_message
     images_in, files_in, cont_in = images, files, continue_from
     payload = {'text': text_in, 'images': images or [], 'files': files or [], 'started': started}
+    # The socket and the turn's head viewer (2026-10-08, second scout wave):
+    # a send that has to WAIT does not hold its socket open while it waits -
+    # every waiting send held an HTTP/1.1 connection, and six of them (two
+    # tabs' event buses + a live turn + three queued sends) hit the browser's
+    # per-host cap: Stop and × stalled, a seventh send never left. The
+    # response says `queued` and CLOSES; the tab follows its ticket when the
+    # bus says the turn started. So the head viewer (audio=True, the one that
+    # hears her) is attached only while this socket is still here to read
+    # it - `sock` decides that under one lock, in whichever order the drainer
+    # and the response reach it.
+    sock = {'waiting': True, 'taken': False}
+    sock_lock = _threading.Lock()
 
     def _body(others=()):
         # `others`: typed turns that stood in line behind this one and fold
@@ -230,14 +242,21 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             system.llm_chat.end_stream(sid, active_chat)
             system.web_active_dec()
             for t in [ticket_box.get('ticket')] + [o.ticket for o in others]:
-                _ticket_note(t, ended=time.monotonic())
+                _ticket_note(t, ended=time.monotonic(), item=None)
 
         try:
             gen = stream.chat_stream(text_all, prefill=prefill_in, skip_user_message=skip_in,
                                      images=images_all or None, files=files_all or None, continue_from=cont_in)
             turn = Turn(stream, gen, on_end=_release, label=f"web:{active_chat}")
-            viewer = turn.attach(audio=True)   # BEFORE start: a fast engine must not outrun its first viewer
+            with sock_lock:
+                # BEFORE start: a fast engine must not outrun its first viewer.
+                # No socket waiting → no head viewer: the owner tab attaches by
+                # ticket (audio and all) and nothing fills a queue nobody reads.
+                viewer = turn.attach(audio=True) if sock['waiting'] else None
+                sock['taken'] = viewer is not None
             turn.start()
+            if viewer is None:
+                turn.mute_unless_heard(LISTEN_GRACE_S)   # a locked phone: she writes, nobody hears - don't synthesize for the wall
         except Exception as e:
             _release()
             started.set_exception(e)
@@ -245,25 +264,37 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                 (o.payload or {}).get('started', _cf.Future()).set_exception(e)
             raise
         for t in [ticket_box.get('ticket')] + [o.ticket for o in others]:
-            _ticket_note(t, chat=chat_key, turn=turn)
+            _ticket_note(t, chat=chat_key, turn=turn, item=None)
         started.set_result((turn, viewer))
         for o in others:
             (o.payload or {}).get('started', _cf.Future()).set_result(('merged', turn))
+        # The bus tells the tabs whose sockets have closed: the owner follows
+        # its ticket (only when no socket took the head viewer - a socket that
+        # did is already streaming it), a folded sender's bubble goes solid.
+        # Tickets only - never a chat name on a wire every tab hears (privacy
+        # scout, 2026-10-07).
+        if viewer is None:
+            _ticket_event(ticket_box.get('ticket'), 'started')
+        for o in others:
+            _ticket_event(o.ticket, 'merged')
         turn.done.wait()          # the inbox's one-runner rule: hold the lane until this turn ends
         return None
 
     ticket_box = {}
-    try:
-        # fold_key 'web': typed turns standing together fold (people with people,
-        # never with a satellite's question or a machine's report)
-        item = inbox.put(chat_key, inbox.Item(run=_body, run_folded=_body, fold_key='web' if not (cont_in or prefill_in or skip_in) else '',
-                                              source='web', lane='now', payload=payload))
-    except inbox.InboxRefused as e:
-        logger.info(f"[CHAT-STREAM] inbox refused a typed turn on '{chat_key}': {e}")
-        return JSONResponse({"error": str(e)}, status_code=409)
+    # fold_key 'web': typed turns standing together fold (people with people,
+    # never with a satellite's question or a machine's report)
+    item = inbox.Item(run=_body, run_folded=_body, fold_key='web' if not (cont_in or prefill_in or skip_in) else '',
+                      source='web', lane='now', payload=payload)
     ticket_box['ticket'] = item.ticket
+    item.on_drop = lambda why: _ticket_dropped(item.ticket, why)    # × on the bubble, a sealed chat, a restart
     _ticket_note(item.ticket, chat=chat_key, item=item, started=started)
-    return _queued_viewer_response(item, started, chat_key)
+    try:
+        inbox.put(chat_key, item)
+    except inbox.InboxRefused as e:
+        logger.info(f"[CHAT-STREAM] inbox refused a typed turn: {e}")
+        _ticket_note(item.ticket, ended=time.monotonic(), item=None)
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return _turn_response(item, started, chat_key, sock, sock_lock)
 
 
 # ─── tickets: a typed turn's identity across a dropped socket ────────────────
@@ -275,6 +306,9 @@ import threading as _tl
 _TICKETS = {}                     # ticket -> {'chat', 'item', 'started', 'turn', 'ended'}
 _TICKETS_LOCK = _tl.Lock()
 TICKET_KEEP_S = 180.0             # a finished ticket answers 'finished' this long, then is forgotten
+START_WAIT_S = 0.25               # a send's socket waits this long for its turn to start before it says `queued` and closes
+LISTEN_GRACE_S = 4.0              # a turn started with no socket: how long she waits for a listener before muting her voice
+KEEPALIVE_S = 15.0                # a live wire proves itself this often through a silent tool call (the tab's stall watchdog is 45 s)
 
 
 def _ticket_note(ticket, **fields):
@@ -293,6 +327,25 @@ def _ticket_lookup(ticket):
     with _TICKETS_LOCK:
         e = _TICKETS.get(ticket)
         return dict(e) if e else None
+
+
+def _ticket_event(ticket, state, reason=''):
+    """`inbox_ticket` on the event bus: a send whose socket closed on `queued`
+    learns its fate here - started (follow it), merged (the bubble goes solid),
+    dropped (the text goes back in the box). Ephemeral, ticket only."""
+    if not ticket:
+        return
+    try:
+        publish('inbox_ticket', {'ticket': ticket, 'state': state, 'reason': reason}, ephemeral=True)
+    except Exception as e:
+        logger.debug(f"[CHAT-STREAM] inbox_ticket not published: {e}")
+
+
+def _ticket_dropped(ticket, why):
+    # A dropped item never ran: close its note (the payload - text, pasted
+    # images - must not sit in memory for the process lifetime) and tell the tab.
+    _ticket_note(ticket, ended=time.monotonic(), item=None)
+    _ticket_event(ticket, 'dropped', why)
 
 
 def _sse_line(event):
@@ -333,60 +386,66 @@ def _sse_line(event):
     return f"data: {json.dumps(out)}\n\n"
 
 
-def _queued_viewer_response(item, started, chat_key, since=None, own_viewer=False):
-    """SSE body for a typed turn that may be waiting in the chat's inbox: the
-    turn's `ticket` first (its identity if this socket dies), a `queued` event
-    when it does not start within a breath (position, so the bubble can pulse
-    and carry a ×), keepalive comments while it waits, then the turn's events
-    over its viewer. A dropped item (× on the bubble, the chat deleted) ends
-    the body with `queued_dropped`. own_viewer: a reattaching tab - it attaches
-    its own viewer to the turn (`since` its last seq) instead of the one the
-    first socket got."""
+def _turn_response(item, started, chat_key, sock, sock_lock):
+    """SSE body for a typed turn: the turn's `ticket` first (its identity if
+    this socket dies), then either the turn's events over its head viewer
+    (it started within a breath) or ONE `queued` event (position, so the bubble
+    can pulse and carry a ×) and the body CLOSES - the tab follows its ticket
+    through the bus (`inbox_ticket`) and /api/chat/attach. A send dropped or
+    folded within the breath hears `queued_dropped` / `merged` here; later,
+    from the bus. No socket is held while a turn waits (2026-10-08)."""
     from core.chat import inbox
-    KEEPALIVE_S = 15.0
 
     def generate():
         turn = viewer = None
         try:
             yield f"data: {json.dumps({'type': 'ticket', 'ticket': item.ticket, 'chat': chat_key})}\n\n"
-            deadline = time.monotonic() + 0.25
+            deadline = time.monotonic() + START_WAIT_S
             while not started.done() and not item.reply.done() and time.monotonic() < deadline:
                 time.sleep(0.02)
-            if not started.done() and not item.reply.done():
+            with sock_lock:
+                taken = sock['taken']
+                if not taken:
+                    sock['waiting'] = False      # from here the drainer attaches no head viewer for us
+            if not taken:
+                if item.reply.done() and not started.done():
+                    # dropped before it ran: say why, and the browser puts the text back
+                    why = 'dropped'
+                    try:
+                        item.reply.result(timeout=0)
+                    except Exception as e:
+                        why = str(e)
+                    yield f"data: {json.dumps({'type': 'queued_dropped', 'reason': why})}\n\n"
+                    return
+                if started.done():
+                    # the drainer ran us in the gap with no socket waiting (folded, or
+                    # started just past the breath): the bus already said so - follow it
+                    try:
+                        turn, _ = started.result()
+                    except Exception as e:
+                        yield f"data: {json.dumps({'error': str(e) or type(e).__name__})}\n\n"
+                        return
+                    if turn == 'merged':
+                        yield f"data: {json.dumps({'type': 'merged'})}\n\n"
+                        turn = None
+                        return
+                    turn = None
                 yield f"data: {json.dumps({'type': 'queued', 'ticket': item.ticket, 'chat': chat_key, 'position': inbox.position(chat_key, item.ticket)})}\n\n"
-                last = time.monotonic()
-                while not started.done() and not item.reply.done():
-                    time.sleep(0.1)
-                    if time.monotonic() - last > KEEPALIVE_S:
-                        last = time.monotonic()
-                        yield ": keepalive\n\n"
-            if not started.done():
-                # dropped before it ran: say why, and the browser puts the text back
-                why = 'dropped'
-                try:
-                    item.reply.result(timeout=0)
-                except Exception as e:
-                    why = str(e)
-                yield f"data: {json.dumps({'type': 'queued_dropped', 'reason': why})}\n\n"
                 return
             try:
-                turn, viewer = started.result()
+                turn, viewer = started.result()     # taken: the drainer is setting this right now
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e) or type(e).__name__})}\n\n"
                 return
             if turn == 'merged':
                 # folded into the turn ahead of it: that response streams the reply
-                # (a reattaching tab follows the merged turn itself instead)
-                merged_turn = viewer
-                if own_viewer and merged_turn is not None and not merged_turn.done.is_set():
-                    turn, viewer = merged_turn, merged_turn.attach(since=since, audio=False)
-                else:
-                    yield f"data: {json.dumps({'type': 'merged'})}\n\n"
-                    turn = viewer = None
-                    return
-            elif own_viewer:
-                viewer = turn.attach(since=since, audio=False)
-            for event in viewer:
+                yield f"data: {json.dumps({'type': 'merged'})}\n\n"
+                turn = viewer = None
+                return
+            for event in viewer.events(KEEPALIVE_S):
+                if event is None:
+                    yield ": keepalive\n\n"
+                    continue
                 line = _sse_line(event)
                 if line:
                     yield line
@@ -435,11 +494,17 @@ async def handle_queue_drop(request: Request, _=Depends(require_login), system=D
     return {"dropped": inbox.drop(chat, ticket, 'removed from the queue')}
 
 
-def _viewer_response(turn, viewer):
-    """SSE body over one viewer. Its finally only detaches — the turn goes on."""
+def _viewer_response(turn, viewer, first=None):
+    """SSE body over one viewer. Its finally only detaches — the turn goes on.
+    `first`: a line before the ring (`attached`: whether this viewer hears)."""
     def generate():
         try:
-            for event in viewer:
+            if first:
+                yield f"data: {json.dumps(first)}\n\n"
+            for event in viewer.events(KEEPALIVE_S):
+                if event is None:
+                    yield ": keepalive\n\n"
+                    continue
                 line = _sse_line(event)
                 if line:
                     yield line
@@ -483,14 +548,26 @@ async def handle_chat_attach(request: Request, _=Depends(require_login), system=
             return JSONResponse({"error": "That message is not known here any more (a restart, or long ago)."}, status_code=404)
         if e.get('chat') and _sm.is_chat_hidden(e['chat']):
             return JSONResponse({"error": "That chat is sealed in a locked vault."}, status_code=409)
+        if e.get('chat') and _sm.read_chat_settings(e['chat']) is None:
+            return Response(status_code=204)              # the chat is gone; so is anything to replay
         turn = e.get('turn')
         if turn is not None:
-            # live, or just finished: the ring replays what this tab missed, exact-once
-            logger.info(f"[CHAT-ATTACH] viewer rejoining its turn {ticket} since seq {since}")
-            return _viewer_response(turn, turn.attach(since=since, audio=False))
-        if turn is None and e.get('item') is not None and e.get('started') is not None and not e['item'].reply.done():
-            logger.info(f"[CHAT-ATTACH] viewer rejoining its QUEUED turn {ticket}")
-            return _queued_viewer_response(e['item'], e['started'], e['chat'], since=since, own_viewer=True)
+            # Live, or just finished: the ring replays what this tab missed,
+            # exact-once. `audio`: the OWNER following its own turn asks to
+            # hear it (2026-10-08) - granted only while nothing has been
+            # spoken yet; past that the tab speaks the finished reply once
+            # instead of hearing a tail with no head. `attached` says which.
+            want_audio = bool(data.get('audio')) and not turn.done.is_set()
+            hears = want_audio and not turn.audio_started
+            logger.info(f"[CHAT-ATTACH] viewer rejoining its turn {ticket} since seq {since}{' (hears)' if hears else ''}")
+            return _viewer_response(turn, turn.attach(since=since, audio=hears),
+                                    first={'type': 'attached', 'audio': hears, 'seq': turn.seq})
+        item = e.get('item')
+        if item is not None and not item.reply.done():
+            # still in line: no socket is held for a waiting turn (the tab
+            # follows the bus; this answer is its check-in)
+            from core.chat import inbox
+            return JSONResponse({"state": "queued", "position": inbox.position(e.get('chat'), ticket)}, status_code=202)
         return Response(status_code=204)                  # it ran (or was dropped) while the tab was away
     if chat:
         if _sm.is_chat_hidden(chat):

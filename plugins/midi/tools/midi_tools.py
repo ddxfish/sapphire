@@ -2,7 +2,7 @@
 # Any synth found by its ALSA port name; what a synth calls its voices and how its
 # effects switch comes from a profile (synths.py) — the FM-1 ships as the first.
 # Regular chat tools. Listening never blocks her turn: the take is recorded on a
-# thread and handed back through core.cadence.fire_once as a new turn on the chat
+# thread and handed back through the chat's inbox (core.chat.inbox.tell) as a new turn on the chat
 # that asked, the same server-side door the wake word and the phone use.
 import logging
 import sys

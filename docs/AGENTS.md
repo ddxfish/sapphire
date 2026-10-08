@@ -45,7 +45,7 @@ turn engine. If she is mid-message, the item waits until her message truly ends 
 included) and then runs as its own turn — in the chat it was queued on, even if you switched chats
 meanwhile. Each machine return gets her own reply (only your typed turns fold). The report's row
 stays in history even if you stop her reply. A question answered before its turn came up (from the
-pill, say) is withdrawn from the line. Nothing is dropped and no browser needs to be open; the
+pill, say) is withdrawn from the line. A machine's item waits through a busy chat, a locked database and even a locked vault (held until the unlock); it is dropped only when the chat is gone, when it was queued while the chat was private and the chat went public (privacy rolls downhill), or on a restart. No browser needs to be open; the
 queue's cap applies to machine items only — a typed or spoken turn is never refused.
 
 What you see in the chat:
@@ -102,9 +102,12 @@ report, a satellite's question, a Discord message, a MIDI take each get her own 
 
 A Sapphire **restart** (even a graceful one) puts a conversational agent with a session to
 `resting`, and `say` resumes it with the same workspace. A `failed` or `stopped` agent that still
-has a session can be woken the same way; one without a session cannot. An agent that fails before
-it ever reported (its setup, a missing SDK) still tells the chat `[Spark failed: …]`. Names are
-never reused while an agent of that name is live or resting.
+has a session can be woken the same way; one without a session cannot — and not while it is still
+winding down: `stop` then `say` in the same breath answers "still winding down", never a second
+process on the same session. An agent that fails before it ever reported (its setup, a missing SDK)
+still tells the chat `[Spark failed: …]`; one that finishes with no answer at all (a tool loop that
+ran out, an empty reply) says `[Spark finished without an answer: …]`. Names are never reused while
+an agent of that name is live or resting.
 
 The pill bar above the chat input shows them: yellow running, **purple pulsing waiting**, teal
 idle, green done (amber if the run degraded to a placeholder), red failed. A finished pill
@@ -141,6 +144,12 @@ agent's transcript notes it.
 Core mode can see what you can see: it runs at the Sapphire root with your Claude Code login and
 settings. Project and plugin modes load only the workspace's own CLAUDE.md, no user-level settings
 or MCP servers.
+
+**Environment.** The CLI gets an allowlist of Sapphire's environment (PATH, HOME, the locale, the
+terminal, temp dirs, its own `CLAUDE_*` knobs); everything else — a SOCKS proxy's credentials, a
+service unit's secrets, any provider key — is blanked before the session starts. Its workspace is
+named after the agent (`forge-1a2b3c4d`), never after the mission's words. Its report is the
+session's final message; the narration of the turn stays in the transcript (`agent_peek`).
 
 ## Privacy
 

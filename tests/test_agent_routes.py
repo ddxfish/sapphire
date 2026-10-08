@@ -71,23 +71,32 @@ def test_get_agents_status_missing_agent_manager(client, mock_system):
 
 # ─── /api/agents/{id}/dismiss ────────────────────────────────────────────────
 
-def test_dismiss_agent_route_delegates_to_manager(client, mock_system):
-    """[REGRESSION_GUARD] Route dismiss goes through manager.dismiss, which
-    shares the same cancel path as shutdown — ensures subprocess kills fire."""
+def test_dismiss_agent_route_is_chat_local_and_returns_no_report(client, mock_system):
+    """[REGRESSION_GUARD] The pill's × goes through the same chat-local door as
+    `stop` (action_text) - it used to take any id from any chat, stop it, and
+    hand back the agent's report (privacy scout, 2026-10-07)."""
     c, csrf = client
-    mock_system.agent_manager.dismiss.return_value = {
-        'name': 'Alpha', 'status': 'dismissed', 'last_result': None,
-    }
-    r = c.post('/api/agents/aaa111/dismiss', headers={'X-CSRF-Token': csrf})
+    sm = mock_system.llm_chat.session_manager
+    sm.is_chat_hidden.return_value = False
+    sm.read_chat_settings.return_value = {}
+    mock_system.agent_manager.action_text.return_value = ('Alpha stopped.', True)
+    r = c.post('/api/agents/aaa111/dismiss', json={'chat': 'desk'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
-    assert r.json()['status'] == 'dismissed'
-    mock_system.agent_manager.dismiss.assert_called_once_with('aaa111')
+    assert r.json()['status'] == 'dismissed' and 'last_result' not in r.json()
+    mock_system.agent_manager.action_text.assert_called_once_with('desk', 'aaa111', 'stop', '')
+    mock_system.agent_manager.dismiss.assert_not_called()
+    # a hidden chat is a 404 like a missing one
+    sm.is_chat_hidden.return_value = True
+    assert c.post('/api/agents/aaa111/dismiss', json={'chat': 'secret'}, headers={'X-CSRF-Token': csrf}).status_code == 404
 
 
 def test_dismiss_agent_unknown_id_returns_404(client, mock_system):
     c, csrf = client
-    mock_system.agent_manager.dismiss.return_value = {'error': 'Agent aaa not found.'}
-    r = c.post('/api/agents/nonexistent/dismiss', headers={'X-CSRF-Token': csrf})
+    sm = mock_system.llm_chat.session_manager
+    sm.is_chat_hidden.return_value = False
+    sm.read_chat_settings.return_value = {}
+    mock_system.agent_manager.action_text.return_value = ('No agent named nonexistent here.', False)
+    r = c.post('/api/agents/nonexistent/dismiss', json={'chat': 'desk'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 404
 
 

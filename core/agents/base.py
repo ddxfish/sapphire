@@ -59,6 +59,7 @@ class Agent:
         self._question = None                          # {'id', 'text' | 'questions', 'event', 'answer', 'asked_at', 'ticket'}
         self._question_lock = threading.Lock()
         self._reported = False                         # report() ran: the chat heard from this agent
+        self.chat_heard = False                        # a report with words reached the chat (engine.report_out)
 
     # --- status ---------------------------------------------------------------
 
@@ -181,6 +182,9 @@ class Agent:
             return None
         got = q['event'].wait(timeout)
         with self._question_lock:
+            # read the event, not `got`: an answer that landed between the wait
+            # timing out and this lock is an answer, not a timeout
+            got = got or q['event'].is_set()
             answer = q['answer'] if got else None
             if self._question is q:
                 self._question = None
@@ -188,7 +192,10 @@ class Agent:
             self.status = 'running'
         if not got:
             self.event('note', 'no answer from the director in time')
-            self._withdraw(q, 'no answer in time')
+        # settled by any path (answered, stopped, timed out): the queued
+        # "Agent X asks" turn is moot - withdraw it here, once, with the ticket
+        # in hand (an answer from the pill could land before the ticket was)
+        self._withdraw(q, 'answered' if got else 'no answer in time')
         return answer
 
     def _withdraw(self, q, why):
@@ -200,12 +207,18 @@ class Agent:
             except Exception as e:
                 logger.debug(f"Agent {self.name}: withdraw failed: {e}")
 
-    def answer(self, value):
-        """The director's answer (agent_action answer). (text, ok)."""
+    def answer(self, value, question_id=None):
+        """The director's answer (agent_action answer). (text, ok). `question_id`
+        (the card knows it): an answer to a question that already expired must
+        not land on the NEXT one - a fork left ten minutes, the agent took the
+        default and asked something else, and the late 'b' picked b there."""
         with self._question_lock:
             q = self._question
             if q is None:
                 return f"{self.name} has no question pending.", False
+            if question_id and q.get('id') != question_id:
+                return (f"That question expired ({self.name} went on with the default); "
+                        f"it is asking something else now - agent_peek it.", False)
             if q.get('questions'):
                 q['answer'] = _map_answers(q['questions'], value)
             else:
@@ -213,7 +226,6 @@ class Agent:
             self._question = None
             q['event'].set()
         self.event('answer', value if isinstance(value, str) else str(value))
-        self._withdraw(q, 'answered')
         return f"Answered {self.name}.", True
 
     def _end_question(self, answer):
@@ -337,7 +349,10 @@ def _map_answers(questions, value):
     question - a letter (a/b/c) or an option label picks that option, anything
     else is free text. A list answers the questions in order."""
     out = {}
-    if isinstance(value, str) and len(questions) > 1:
+    if isinstance(value, str):
+        # the card posts `Question → Answer` lines whatever the count - the
+        # one-question fork (the common case) used to reach the agent as the
+        # whole line in free text (two scouts, 2026-10-07)
         parsed = _parse_per_question(questions, value)
         if parsed is not None:
             value = parsed

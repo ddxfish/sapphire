@@ -30,13 +30,22 @@ from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
-STORE = 'agents'                 # plugin_state file and plugin_chat_data owner
+# The engine's state is CORE state: its own plugin_state file and its own
+# plugin_chat_data owner, in a namespace no plugin card can purge. It used to
+# squat in the `agents` plugin's namespace - "Purge data" on that card wiped
+# every kind's missions, options and reports (Claude Code sessions included)
+# and the engine then wrote its in-memory rows straight back (chaos scout,
+# 2026-10-07). Not `agents-*`: the purge sweeps a plugin's `{name}-*` siblings.
+STORE = 'core-agents'            # plugin_state file and plugin_chat_data owner
+LEGACY_STORE = 'agents'          # where rows and content lived before 2026-10-08; read through, migrated once
+SETTINGS_PLUGIN = 'agents'       # the Agents plugin's settings (max concurrent, roster) stay its own
 ROWS_KEEP = 60                   # rows kept; the oldest terminal ones go first
 ROWS_TTL_S = 7 * 86400           # a terminal row older than this is forgotten
 RECENT_S = 86400                 # "recently finished elsewhere" window
 EVENT_THROTTLE_S = 1.0           # agent_event at most this often per agent
 DEFAULT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo']
 LIVE = ('pending', 'running', 'waiting', 'idle')
+TERMINAL = ('done', 'failed', 'stopped', 'lost')   # mirrors core.agents.base.TERMINAL (imported lazily there)
 KIND_ENUM = 10                   # kinds named as an enum in the tool schema when this few
 
 
@@ -64,6 +73,11 @@ def _store():
     return plugin_loader.get_plugin_state(STORE)
 
 
+def _legacy_store():
+    from core.plugin_loader import plugin_loader
+    return plugin_loader.get_plugin_state(LEGACY_STORE)
+
+
 def _registry():
     from core.agents import registry
     return registry
@@ -77,7 +91,7 @@ def _plugin_info(name):
 def _settings():
     try:
         from core.plugin_loader import plugin_loader
-        return plugin_loader.get_plugin_settings(STORE) or {}
+        return plugin_loader.get_plugin_settings(SETTINGS_PLUGIN) or {}
     except Exception:
         return {}
 
@@ -175,6 +189,17 @@ class AgentManager:
             logger.warning(f"[AGENTS] rows unreadable, starting empty: {e}")
             rows = []
         changed = False
+        if not rows:
+            # one-time move out of the Agents plugin's namespace (2026-10-08)
+            try:
+                old = _legacy_store()
+                legacy = old.get('rows', []) or []
+                if legacy:
+                    rows, changed = list(legacy), True
+                    old.save('rows', [])
+                    logger.info(f"[AGENTS] {len(rows)} row(s) moved to the core store")
+            except Exception as e:
+                logger.debug(f"[AGENTS] legacy rows not read: {e}")
         for r in rows:
             # a restart: nothing that was live survived. A conversational kind
             # with a session to pick up rests; the rest are lost.
@@ -228,7 +253,8 @@ class AgentManager:
         if sm is None or not chat:
             return
         try:
-            cur = sm.plugin_data_get(STORE, chat, f'agent:{agent_id}', default={}) or {}
+            cur = (sm.plugin_data_get(STORE, chat, f'agent:{agent_id}', default={})
+                   or sm.plugin_data_get(LEGACY_STORE, chat, f'agent:{agent_id}', default={}) or {})
             cur.update(fields)
             sm.plugin_data_put(STORE, chat, f'agent:{agent_id}', cur)
         except Exception as e:
@@ -239,7 +265,8 @@ class AgentManager:
         if sm is None or not chat:
             return {}
         try:
-            return sm.plugin_data_get(STORE, chat, f'agent:{agent_id}', default={}) or {}
+            return (sm.plugin_data_get(STORE, chat, f'agent:{agent_id}', default={})
+                    or sm.plugin_data_get(LEGACY_STORE, chat, f'agent:{agent_id}', default={}) or {})
         except Exception:
             return {}
 
@@ -447,7 +474,8 @@ class AgentManager:
         summary = agent.pending_question or {}
         self._row_update(agent.id, status='waiting')
         self._content_put(agent.chat, agent.id, pending_question=summary)
-        publish(Events.AGENT_WAITING, {'id': agent.id, 'name': agent.name, 'chat_name': agent.chat}, ephemeral=True)
+        if not self._hidden(agent.chat):
+            publish(Events.AGENT_WAITING, {'id': agent.id, 'name': agent.name, 'chat_name': agent.chat}, ephemeral=True)
         if not agent.chat:
             return None
         text = _question_text(agent, summary)
@@ -474,19 +502,31 @@ class AgentManager:
         self._content_put(agent.chat, agent.id, last_report=text, pending_question=None)
         if not agent.chat or not text:
             return
+        agent.chat_heard = True
         spec = _registry().get_kind(agent.kind) or {}
         what = f"reports ({_fmt(agent.elapsed)} in)" if spec.get('conversational') else f"done in {_fmt(agent.elapsed)}"
         try:
             inbox.tell(agent.chat, text, source=f'agent:{agent.kind}', coalesce=False,
                        header_line=inbox.header(f'Agent {agent.name}', agent.kind, what))
         except inbox.InboxRefused as e:
-            logger.warning(f"[AGENTS] {agent.name}: report kept on the row, chat refused it: {e}")
+            # only a chat that is GONE refuses a machine's report now (a sealed
+            # one holds it until the unlock); nothing is kept anywhere
+            logger.warning(f"[AGENTS] {agent.name}: report lost, the chat refused it: {e}")
+
+    def _hidden(self, chat):
+        sm = _sm()
+        try:
+            return sm is not None and sm.is_chat_hidden(chat) is True
+        except Exception:
+            return True
 
     def event_out(self, agent, kind):
         now = time.monotonic()
         if kind not in ('ask', 'answer') and now - self._last_event_at.get(agent.id, 0) < EVENT_THROTTLE_S:
             return
         self._last_event_at[agent.id] = now
+        if self._hidden(agent.chat):
+            return                     # a sealed chat's agent: its name stays off a wire every tab hears
         publish(Events.AGENT_EVENT, {'id': agent.id, 'kind': kind, 'chat_name': agent.chat,
                                      'tool_count': agent.tool_count}, ephemeral=True)
 
@@ -497,6 +537,14 @@ class AgentManager:
         if self._shutting_down and status == 'stopped' and agent.resume_token and self._is_conversational(agent):
             status = 'resting'       # the process is ending, not the session: `say` resumes it after the restart
         with self._lock:
+            # Incarnation fence (chaos scout, 2026-10-07): an agent stays in
+            # `_agents` until ITS thread ends, so a `say` right after a `stop`
+            # cannot revive a second CLI on the same session while the first is
+            # still winding down - and a thread that was superseded anyway (a
+            # newer object owns the id) writes nothing over the newer row.
+            if self._agents.get(agent.id) is not agent:
+                logger.info(f"Agent {agent.name} ({agent.id}): an earlier incarnation ended ({status}); the row is the newer one's")
+                return
             self._row_update(agent.id, status=status, ended=_now(), resume_token=agent.resume_token)
             if status not in LIVE:
                 self._agents.pop(agent.id, None)
@@ -508,11 +556,21 @@ class AgentManager:
                 self.report_out(agent, f"[{agent.name} failed: {_short(agent.error or 'unknown error', 300)}]")
             except Exception as e:
                 logger.debug(f"[AGENTS] failure report for {agent.name} not sent: {e}")
-        publish(Events.AGENT_COMPLETED, {
-            'id': agent.id, 'name': agent.name, 'status': status, 'elapsed': agent.elapsed,
-            'warning': agent.warning, 'error': (agent.error or '')[:200] or None,
-            'agent_type': agent.kind, 'chat_name': agent.chat,
-        }, ephemeral=True)
+        elif status == 'done' and not agent.chat_heard and agent.chat:
+            # it ended without a word (the llm kind's tool loop ran out, the
+            # context overflowed, an empty reply): she said "it reports back when
+            # done" and nothing was coming (chaos scout, 2026-10-07)
+            why = agent.warning or 'it produced no answer'
+            try:
+                self.report_out(agent, f"[{agent.name} finished without an answer: {_short(why, 300)}]")
+            except Exception as e:
+                logger.debug(f"[AGENTS] empty-finish notice for {agent.name} not sent: {e}")
+        if not self._hidden(agent.chat):
+            publish(Events.AGENT_COMPLETED, {
+                'id': agent.id, 'name': agent.name, 'status': status, 'elapsed': agent.elapsed,
+                'warning': agent.warning, 'error': (agent.error or '')[:200] or None,
+                'agent_type': agent.kind, 'chat_name': agent.chat,
+            }, ephemeral=True)
         logger.info(f"Agent {agent.name} ({agent.id}) {status} after {agent.elapsed}s")
 
     def resting(self, agent):
@@ -583,7 +641,12 @@ class AgentManager:
 
     def dismiss(self, agent_id):
         with self._lock:
-            a = self._agents.pop(agent_id, None)
+            a = self._agents.get(agent_id)
+            # a finished object still lingering (its thread is gone) leaves now;
+            # a LIVE one stays registered until finished() - its thread is still
+            # winding the CLI down, and `say` must see it (incarnation fence)
+            if a is not None and a.status not in LIVE:
+                self._agents.pop(agent_id, None)
         if a is None:
             row = self._row(agent_id)
             if row is None:
@@ -703,7 +766,9 @@ class AgentManager:
                     continue
             except Exception:
                 continue
-            out.append(f"{r.get('name')} ({r.get('kind')}) {r.get('status')} in '{r.get('chat')}'")
+            # name, kind, status - never the other chat's NAME (docs/AGENTS.md
+            # promises as much, and this text goes to this chat's provider)
+            out.append(f"{r.get('name')} ({r.get('kind')}) {r.get('status')}")
         return out[:8]
 
     def peek_text(self, chat, name, what=''):
@@ -780,13 +845,13 @@ class AgentManager:
         lines.append(f"Example: agent_spawn({spec['kind']!r}, 'what to do', {_example_options(spec)})")
         return '\n'.join(lines)
 
-    def action_text(self, chat, name, action, value):
+    def action_text(self, chat, name, action, value, question=None):
         try:
-            return self._action_text(chat, name, action, value)
+            return self._action_text(chat, name, action, value, question)
         except AgentError as e:
             return str(e), False
 
-    def _action_text(self, chat, name, action, value):
+    def _action_text(self, chat, name, action, value, question=None):
         agent, row = self._resolve(chat, name)
         action = str(action or '').strip().lower()
         who = agent.name if agent else row['name']
@@ -800,7 +865,7 @@ class AgentManager:
             self._gate(spec, chat, row, what='answered')
             if value is None or str(value).strip() == '':
                 return "answer needs a value: a letter (a/b), an option label, or your words.", False
-            return agent.answer(value if isinstance(value, (dict, list)) else str(value))
+            return agent.answer(value if isinstance(value, (dict, list)) else str(value), question_id=question)
         if action == 'say':
             text = str(value or '').strip()
             if not text:
@@ -820,6 +885,10 @@ class AgentManager:
             self._gate(spec, chat, row, what='spoken to')
             if agent.status in ('running', 'waiting'):
                 return (f"{who} is still working ({agent.progress()}) — wait, answer its question, or stop it.", False)
+            if agent.status in TERMINAL:
+                # stopped (or failed) but its thread has not ended yet: waking the
+                # session now would run two CLIs on it (chaos scout, 2026-10-07)
+                return f"{who} is still winding down — a moment, then say it again.", False
             return agent.say(text)
         if action == 'stop':
             if agent is None:
@@ -841,6 +910,8 @@ class AgentManager:
         elif row.get('status') == 'resting':
             acts.append(('say <text>', 'wake it with a follow-up turn'))
             acts.append(('stop', 'forget it'))
+        elif row.get('resume_token') and row.get('status') in ('stopped', 'failed'):
+            acts.append(('say <text>', f"wake it ({row.get('status')}, its session is still there)"))
         return acts
 
 

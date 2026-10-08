@@ -611,12 +611,14 @@ class LLMChat:
                 messages.insert(1, {"role": "system", "content": dynamic_context, "_dynamic": True})
             return messages
 
-        # A FILES marker in the turn's own text (a plugin's turn that hands
-        # the user a player: core/attachments.py) is the browser's, not hers.
-        # History keeps it; this turn's wire copy drops it, as replay does.
-        if user_input and '<!--FILES:' in user_input:
-            from core import attachments
-            user_input = attachments.strip(user_input)
+        # A UI marker in the turn's own text (a plugin's turn that hands the
+        # user a player - FILES, GALLERY, ASK, <<IMG>>: core/ui_markers.py) is
+        # the browser's, not hers. History keeps it; this turn's wire copy
+        # drops it, as replay does - the ONE list, here too (seam scout, 2026-10-07).
+        if user_input:
+            from core.ui_markers import has_marker, UI_MARKER_RE
+            if has_marker(user_input):
+                user_input = UI_MARKER_RE.sub('', user_input).strip()
 
         # Receipts for pasted images (the store's img: handles) ride the wire
         # text too, so she can hand THIS turn's image to any image tool.
@@ -778,8 +780,11 @@ class LLMChat:
             return inbox.turn(chat_name, lambda: self._chat_turn(user_input, on_event, chat_name),
                               source='voice', lane='now')
         except inbox.InboxRefused as e:
-            logger.warning(f"chat: inbox refused the turn on '{chat_name}': {e}")
-            return self._chat_turn(user_input, on_event)
+            # the chat cannot take it (sealed, gone, or this is her own turn
+            # asking to wait on itself): say so - running it unqueued on the
+            # pointer bypassed the very refusal (seam scout, 2026-10-07)
+            logger.warning(f"chat: inbox refused the turn: {type(e).__name__}")
+            return str(e)
 
     def _chat_turn(self, user_input, on_event=None, queued_on=None):
         """The blocking turn itself (see chat()). Raises ChatBusy when the

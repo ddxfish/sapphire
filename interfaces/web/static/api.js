@@ -190,7 +190,14 @@ const processSSEData = (data, handlers) => {
         return {};
     }
     if (data.type === 'queued') {
+        // the server says this and CLOSES (2026-10-08): no socket is held
+        // while a turn waits - the tab follows its ticket through the bus
         if (handlers.onQueued) handlers.onQueued(data.ticket, data.position, data.chat);
+        return { shouldReturn: true };
+    }
+    if (data.type === 'attached') {
+        // first line of a reattach: whether THIS viewer hears her (owner follow)
+        if (handlers.onAttached) handlers.onAttached(data);
         return {};
     }
     if (data.type === 'queued_dropped') {
@@ -316,9 +323,21 @@ const _isNetworkDeath = (e) => e instanceof TypeError && /network|fetch|load fai
 // faults mid-tail finalizes the audio queue so the mic ⏹ can't stick.
 // 2026-09-08, record tmp/llm-done-split-plan.md.
 // ---------------------------------------------------------------------------
+// A wire that goes silent for STALL_MS is DEAD, whatever the socket says: iOS
+// keeps a half-dead fetch pending without ever erroring (phone lock), so the
+// server heartbeats every live wire (`: keepalive`, 15 s) and the reader
+// cancels itself when nothing - not even a heartbeat - arrives. The cancel
+// surfaces as a lost feed, and the owner follows its ticket (2026-10-08).
+const STALL_MS = 45000;
+
 const _readTurn = async (reader, handlers, onTurnDone, onError) => {
     const decoder = new TextDecoder();
     let buffer = '', gotContent = false, turnDone = false, tailId = null;
+    let stall = null;
+    const armStall = () => {
+        clearTimeout(stall);
+        stall = setTimeout(() => { try { reader.cancel(); } catch {} }, STALL_MS);
+    };
     const finishTurn = (data = {}) => {
         if (turnDone) return;
         turnDone = true;
@@ -332,6 +351,7 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
     handlers.onDone = (_ephemeral, data) => finishTurn(data);
     try {
         while (true) {
+            armStall();
             const { done, value } = await reader.read();
             if (done) {
                 if (turnDone) { endTail(); return; }   // tail closed without `done`
@@ -399,6 +419,7 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
         onError(e.name === 'AbortError' ? new Error('Cancelled')
                 : _isNetworkDeath(e) ? _feedLost(e.message) : e);
     } finally {
+        clearTimeout(stall);
         try { await reader.cancel(); } catch {}
     }
 };
@@ -466,11 +487,15 @@ export const streamChatContinue = (timestamp, onChunk, onComplete, onError, sign
 // server was unreachable (retry). Text only: audio is never replayed, so the
 // completion reports ttsStreamed=false and the caller speaks the reply once.
 // `ticket`: this tab's own turn (from the stream's first line). With it the
-// server answers for THAT turn - still queued (the body re-sends `queued` and
-// waits), live (attach `since`), finished (204), unknown (404 → `unknown`). By
-// chat alone it attached to whatever ran on the chat - another turn's as often
-// as not once the inbox ran turns back to back (race scout, 2026-10-07).
-export const attachTurn = async (chat, since, handlers, ticket = null) => {
+// server answers for THAT turn - still queued (202 → `queued`, no socket is
+// held; the tab follows the bus), live (attach `since`), finished (204),
+// unknown (404 → `unknown`). By chat alone it attached to whatever ran on the
+// chat - another turn's as often as not once the inbox ran turns back to back
+// (race scout, 2026-10-07). `audio`: the owner following its own turn asks to
+// hear her; the server grants it only while nothing has been spoken yet and
+// says so on the `attached` line - otherwise the completion reports
+// ttsStreamed=false and the caller speaks the finished reply once.
+export const attachTurn = async (chat, since, handlers, ticket = null, { audio = false, signal = null } = {}) => {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
     let res;
     try {
@@ -478,27 +503,35 @@ export const attachTurn = async (chat, since, handlers, ticket = null) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
             body: JSON.stringify({ chat: chat || null, since: typeof since === 'number' ? since : null,
-                                   ticket: ticket || null })
+                                   ticket: ticket || null, audio: !!audio }),
+            signal
         });
     } catch (e) {
+        if (e.name === 'AbortError') return { live: null, cancelled: true };   // the owner's own Stop
         return { live: null, error: e };
     }
     if (res.status === 204) return { live: false };
+    if (res.status === 202) {
+        const q = await res.json().catch(() => ({}));
+        return { live: null, queued: true, position: q.position || 1 };
+    }
     if (res.status === 404 && ticket) return { live: null, unknown: true };
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         return { live: null, error: new Error(err.error || `HTTP ${res.status}`) };
     }
+    let hears = false;
     const h = {
         ...handlers,
         mute: true,
+        onAttached: (d) => { hears = !!d.audio; h.mute = !hears; handlers.onAttached?.(d); },
         onChunk: _wrapChunkWithAvatarScan(handlers.onChunk),
         onReload: () => setTimeout(() => window.location.reload(), 500),
     };
     h.onLegacyChunk = h.onChunk;
     await new Promise((settle) => {
         _readTurn(res.body.getReader(), h,
-                  (ephemeral, meta) => { handlers.onComplete(ephemeral, { ...(meta || {}), ttsStreamed: false }); settle(); },
+                  (ephemeral, meta) => { handlers.onComplete(ephemeral, { ...(meta || {}), ttsStreamed: hears && !!(meta || {}).ttsStreamed }); settle(); },
                   (e, code) => { handlers.onError(e, code, h.lastSeq); settle(); })
             .finally(settle);
     });

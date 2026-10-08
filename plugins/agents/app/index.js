@@ -159,8 +159,25 @@ function renderMain() {
         ? `Inbox: ${inbox.length} waiting — ${inbox.map(i => `${i.source} (${i.lane}, ${Math.round(i.age)}s)`).join(' · ')}`
         : '';
     const cards = root.querySelector('.ag-cards');
-    cards.innerHTML = d.agents.length ? d.agents.map(cardHtml).join('') : '<div class="ag-empty">No agents running in this chat.</div>';
-    for (const a of d.agents) wireCard(cards.querySelector(`[data-id="${a.id}"]`), a);
+    // Reconcile by agent id: a card whose status, progress line and pending
+    // question are unchanged is KEPT - the 4 s poll (and every agent_event)
+    // used to rebuild the whole list, wiping picks on a half-answered question
+    // card, text in the Say box and the open transcript (race scout, 2026-10-07).
+    const sig = a => JSON.stringify([a.status, a.progress || '', a.pending_question?.id || '', a.report_head || '', (a.events || []).length]);
+    const old = new Map(Array.from(cards.querySelectorAll('.ag-card[data-id]')).map(el => [el.dataset.id, el]));
+    const next = document.createDocumentFragment();
+    for (const a of d.agents) {
+        const prev = old.get(a.id);
+        if (prev && prev.dataset.sig === sig(a)) { next.appendChild(prev); continue; }
+        const tpl = document.createElement('template');
+        tpl.innerHTML = cardHtml(a).trim();
+        const el = tpl.content.firstElementChild;
+        el.dataset.sig = sig(a);
+        wireCard(el, a);
+        next.appendChild(el);
+    }
+    cards.replaceChildren(next);
+    if (!d.agents.length) cards.innerHTML = '<div class="ag-empty">No agents running in this chat.</div>';
     const rows = root.querySelector('.ag-rowsbox');
     rows.innerHTML = d.rows?.length ? `
       <details class="ag-rows" ${d.agents.length ? '' : 'open'}><summary>${d.rows.length} earlier</summary>
@@ -218,19 +235,20 @@ function wireCard(el, a) {
     const slot = el.querySelector('[data-ask-slot]');
     if (slot && a.pending_question?.questions) {
         const qs = normalizeAsk({ questions: a.pending_question.questions.map(x => ({ ...x, multi_select: x.multiSelect ?? x.multi_select })) });
-        buildAskCards([qs], lines => action(a.name, 'answer', lines)).forEach(c => slot.appendChild(c));
+        buildAskCards([{ id: a.pending_question.id || '', questions: qs }],
+                      (lines, qid) => action(a.name, 'answer', lines, qid)).forEach(c => slot.appendChild(c));
     }
-    el.querySelector('[data-answer-btn]')?.addEventListener('click', () => action(a.name, 'answer', el.querySelector('[data-answer-text]').value));
+    el.querySelector('[data-answer-btn]')?.addEventListener('click', () => action(a.name, 'answer', el.querySelector('[data-answer-text]').value, a.pending_question?.id || ''));
     el.querySelector('[data-say-btn]')?.addEventListener('click', () => action(a.name, 'say', el.querySelector('[data-say]').value));
     el.querySelector('[data-stop]')?.addEventListener('click', () => action(a.name, 'stop', ''));
     el.querySelector('[data-toggle-tr]')?.addEventListener('click', () => { const t = el.querySelector('.ag-tr'); t.hidden = !t.hidden; });
 }
 
-async function action(agent, act, value) {
+async function action(agent, act, value, question = '') {
     if (!state.selected) return;
     if ((act === 'answer' || act === 'say') && !String(value || '').trim()) { toast(`${act} needs a value`); return; }
     try {
-        const r = await post(`${API}/${encodeURIComponent(agent)}/${act}`, { chat: state.selected, value: value || '' });
+        const r = await post(`${API}/${encodeURIComponent(agent)}/${act}`, { chat: state.selected, value: value || '', question: question || '' });
         toast(r.message || 'ok');
     } catch (e) { toast(e.message); }
     load(state.selected);

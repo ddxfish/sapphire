@@ -47,6 +47,11 @@ _records = {}                   # chat -> dict
 _system = None
 
 
+class Unreadable(RuntimeError):
+    """The chat exists but its row cannot be read at this moment (a locked
+    database, a WAL hiccup): the caller holds the turn and tries again."""
+
+
 class Unreachable(RuntimeError):
     """run_turn's chat is missing, sealed or unreadable. A TYPE, so the inbox
     drops the item on exactly this and treats every other failure (a provider's
@@ -260,9 +265,18 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
     sm = llm.session_manager
     # Reachable first, before anything is published: a missing, sealed or
     # unreadable chat used to get its text sent over SSE as VOICE_TURN_START
-    # and only THEN refused inside chat_stream (scout C, 2026-10-06).
-    if sm.get_settings_for(chat) is None:
-        raise Unreachable(f"chat '{chat}' isn't reachable (missing, sealed or unreadable)")
+    # and only THEN refused inside chat_stream (scout C, 2026-10-06). Gone or
+    # sealed is Unreachable (the item is dropped); a database that cannot be
+    # read RIGHT NOW is Unreadable (the item is held and tried again) - the
+    # inbox's put-time hold was undone here by the same None for both (second
+    # scout wave, 2026-10-08).
+    exists_fn = getattr(sm, 'chat_exists', None)
+    try:
+        exists = exists_fn(chat) if exists_fn is not None else True
+    except Exception as e:
+        raise Unreadable(f"chat '{chat}' can't be read right now ({type(e).__name__})")
+    if not exists or sm.get_settings_for(chat) is None:
+        raise Unreachable(f"chat '{chat}' isn't reachable (missing or sealed)")
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
     sentences = 0                         # tts_chunk events this turn made
     parts, cancelled, errored, overthought = [], False, None, False

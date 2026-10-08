@@ -631,8 +631,9 @@ function initEventBus() {
         console.log('[EventBus] AI typing ended');
         if (_mirrored()) {
             ui.hideStatus(); setProc(false);
-            // A bubble left live by a tab that lost its feed (features/
-            // viewer.js) finalizes here so the refresh below can paint the row.
+            // A bubble left live by a regen/continue lane that lost its feed
+            // finalizes here so the refresh below can paint the row (a typed
+            // send follows its own ticket instead - send-handlers.js).
             if (document.getElementById('streaming-message')) ui.detachStreaming();
         }
         debouncedRefresh();

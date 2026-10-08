@@ -17,6 +17,7 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import json
+import time
 import pytest
 
 from core.chat.chat import LLMChat, ChatBusy
@@ -110,18 +111,24 @@ def test_simultaneous_exclusive_sends_exactly_one_wins(llm):
 
 # ─── route-level ────────────────────────────────────────────────────────────
 
-def test_stream_route_queues_when_busy_then_streams(client, mock_system, monkeypatch):
+def test_stream_route_queues_when_busy_closes_and_the_tab_follows_by_ticket(client, mock_system, monkeypatch):
     """Inbox (2026-10-06, wave I-2): a typed turn on a busy chat is no longer
-    bounced with a 409 - it waits its turn. The body opens with a `queued`
-    event (ticket, position) and carries the turn's events once begin_stream
-    lets it in."""
+    bounced with a 409 - it waits its turn. The body opens with the ticket, says
+    `queued` (position) and CLOSES (2026-10-08: no socket is held while a turn
+    waits - six held sockets hit the browser's per-host cap). When the turn
+    starts the bus says so by ticket, and /api/chat/attach by ticket replays
+    it from the start."""
     from core.chat import inbox
+    from core.routes import chat as route
     monkeypatch.setattr(inbox, 'BACKOFF_MIN', 0.2)     # the wait must outlast the route's 0.25 s grace
     monkeypatch.setattr(inbox, 'BACKOFF_MAX', 0.2)
+    bus = []
+    monkeypatch.setattr(route, 'publish', lambda name, data=None, **kw: bus.append((name, data, kw)))
     c, csrf = client
     stream = MagicMock()
     stream.cancel_flag = False
     stream.ephemeral = False
+    stream.llm_done = False
     stream.chat_stream.return_value = iter([
         {"type": "content", "text": "later"},
         {"type": "final", "text": "later", "cancelled": False, "error": False},
@@ -131,14 +138,31 @@ def test_stream_route_queues_when_busy_then_streams(client, mock_system, monkeyp
                                                      ChatBusy('trinity'), (stream, 'sid1', 'trinity')]
     mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
     mock_system.llm_chat.session_manager.is_chat_hidden.return_value = False
+    mock_system.llm_chat.session_manager.read_chat_settings.return_value = {}
     r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
     lines = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ')]
-    # the turn's identity first (a dropped socket reattaches by it), then the queue
+    # the turn's identity first (a dropped socket reattaches by it), then the queue - and nothing else
     assert lines[0]['type'] == 'ticket' and lines[0]['ticket']
     assert lines[1]['type'] == 'queued' and lines[1]['ticket'] == lines[0]['ticket'] and lines[1]['position'] == 1
-    assert any(l.get('type') == 'content' and l.get('text') == 'later' for l in lines)
-    assert lines[-1].get('done') is True
+    assert len(lines) == 2
+    ticket = lines[0]['ticket']
+    # the drainer runs it; the bus names the ticket (never the chat) when it starts
+    deadline = time.time() + 5
+    while time.time() < deadline and not any(n == 'inbox_ticket' and d.get('state') == 'started' for n, d, _ in bus):
+        time.sleep(0.05)
+    started = [d for n, d, kw in bus if n == 'inbox_ticket' and d.get('state') == 'started']
+    assert started and started[0]['ticket'] == ticket and 'chat' not in started[0]
+    assert all(kw.get('ephemeral') for n, d, kw in bus if n == 'inbox_ticket')
+    # the owner follows: the ring replays from the start (no head viewer was attached for a closed socket)
+    e = route._ticket_lookup(ticket)
+    assert e['turn'] is not None and e['turn'].done.wait(5)
+    r = c.post('/api/chat/attach', json={'ticket': ticket, 'since': 0}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200
+    follow = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ')]
+    assert follow[0]['type'] == 'attached'
+    assert any(l.get('type') == 'content' and l.get('text') == 'later' for l in follow)
+    assert follow[-1].get('done') is True
     assert mock_system.llm_chat.begin_stream.call_count == 4
 
 

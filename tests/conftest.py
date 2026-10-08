@@ -146,6 +146,11 @@ def _agents_store_in_memory(monkeypatch):
     store = {}
     monkeypatch.setattr(engine, '_store', lambda: SimpleNamespace(
         get=lambda k, d=None: store.get(k, d), save=lambda k, v: store.__setitem__(k, v)))
+    # the one-time migration out of the Agents plugin's namespace must never
+    # read (or empty) the REAL legacy file from a test either
+    legacy = {}
+    monkeypatch.setattr(engine, '_legacy_store', lambda: SimpleNamespace(
+        get=lambda k, d=None: legacy.get(k, d), save=lambda k, v: legacy.__setitem__(k, v)))
     yield
 
 

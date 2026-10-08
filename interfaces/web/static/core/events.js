@@ -113,7 +113,7 @@ export function bindAllEvents() {
     // it rides the normal send path, so it queues in the inbox like typed text.
     document.addEventListener('sapphire:ask_answer', e => {
         const text = e.detail?.text;
-        if (text) triggerSendWithText(text);
+        if (text) triggerSendWithText(text, { card: true });   // its own send: the draft and staged files stay
     });
 }
 

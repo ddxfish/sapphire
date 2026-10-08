@@ -1276,6 +1276,8 @@ class VoiceChatSystem:
             # (KillMode=control-group) and the unit hangs in stop-sigterm.
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
             ("live turns", self._drain_live_turns),
+            # what still WAITS in the chats' inboxes is dropped with notice (each door's on_drop fires)
+            ("inbox", lambda: __import__('core.chat.inbox', fromlist=['shutdown']).shutdown()),
             # before the plugins go: their drivers let go of what they started
             ("device presence", lambda: __import__('core.devices.presence', fromlist=['stop']).stop()),
             ("device health", lambda: __import__('core.devices.health', fromlist=['stop']).stop()),

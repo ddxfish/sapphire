@@ -39,7 +39,7 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // would destroy the edit textarea and the unsaved text in it. The editor's
     // exit path replays it (takeHeldRefresh).
     // Same hold for a live bubble (a turn streaming, or one whose tab lost its
-    // feed — features/viewer.js): the reconnect resync and SERVER_RESTARTED
+    // feed — the owner follows its ticket, send-handlers.js): the reconnect resync and SERVER_RESTARTED
     // call refresh() straight, and renderHistory would delete the bubble she
     // is still filling. 2026-09-15.
     if (document.querySelector('#chat-container .message.editing')
@@ -352,7 +352,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     // Server-owned turn: the reply keeps coming server-side.
                     // Hand the button to the mirror (main.js) and let the
                     // end-of-turn refresh paint the saved row. (The Send lane
-                    // reattaches live — features/viewer.js; regen/continue
+                    // follows its ticket — send-handlers.js; regen/continue
                     // reconcile at the end. 2026-09-15.)
                     viewer = true;
                     releaseOwnership();

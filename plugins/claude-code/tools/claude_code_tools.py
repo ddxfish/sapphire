@@ -81,14 +81,23 @@ def _validate_plugin(workspace):
             tmp_path = manifest_path + '.tmp'
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_path, manifest_path)
+            # the core retry: Defender / an indexer holding plugin.json made a
+            # bare os.replace raise, the fix silently stayed in memory, and the
+            # loader then read the string manifest character by character
+            # (windows scout, 2026-10-07)
+            from core.fs_utils import replace_with_retry
+            replace_with_retry(Path(tmp_path), Path(manifest_path))
             logger.info(f"[claude-code] Auto-fixed manifest: tools string -> list")
             results['manifest_auto_fixed'] = True
-        except Exception:
+        except Exception as e:
             try:
                 os.remove(tmp_path)
             except Exception:
                 pass
+            # the on-disk manifest still says a string: the pass must FAIL, not
+            # hand the loader an in-memory fix it will never see
+            results['manifest_tools_list'] = False
+            logger.warning(f"[claude-code] manifest auto-fix failed: {e}")
 
     # 2. Declared files exist
     all_files_ok = True
@@ -267,6 +276,35 @@ def _build_plugin_addendum(plugin_name, description, capabilities=None, context=
     return '\n'.join(parts)
 
 
+# What the Claude Code CLI may inherit from Sapphire's process environment
+# (plugins/claude-code/agent_kind.py _options): the shell basics, the locale,
+# the terminal, temp dirs, and its own CLAUDE_* knobs. Nothing else - no proxy
+# credentials, no provider keys, no unit secrets (privacy scout, 2026-10-07).
+CLI_ENV_KEEP = frozenset({
+    'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'LANG', 'LANGUAGE', 'TZ',
+    'TMPDIR', 'TMP', 'TEMP', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+    # Windows
+    'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'PATHEXT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
+    'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'COMPUTERNAME',
+})
+CLI_ENV_KEEP_PREFIXES = ('LC_', 'CLAUDE_')
+
+
+def _cli_env():
+    """The environment the CLI subprocess gets - the SDK lays it OVER
+    os.environ (verified in 0.2.163), so every variable NOT on the allowlist
+    is blanked by name and the allowlisted ones come from the cleaned copy."""
+    clean = _clean_env()
+    env = {k: '' for k in os.environ if k not in CLI_ENV_KEEP and not k.startswith(CLI_ENV_KEEP_PREFIXES)}
+    for k in CLI_ENV_KEEP:
+        if k in clean:
+            env[k] = clean[k]
+    env['PATH'] = clean.get('PATH', '')
+    env['ANTHROPIC_API_KEY'] = ''              # the login, never an inherited key
+    return env
+
+
 def _clean_env():
     env = os.environ.copy()
     for key in ['CONDA_PREFIX', 'CONDA_DEFAULT_ENV', 'CONDA_PROMPT_MODIFIER',
@@ -298,7 +336,22 @@ def _resolve_claude_executable(env, name='claude'):
     absolute path to Popen sidesteps the issue. 2026-05-14.
     """
     path_env = env.get('PATH', '')
-    resolved = shutil.which(name or 'claude', path=path_env) or (shutil.which('claude', path=path_env) if name != 'claude' else None)
+    name = name or 'claude'
+    if _IS_WINDOWS:
+        # The Agent SDK REFUSES a .cmd/.bat shim (the npm layout) as the CLI
+        # path (BatBadBut class) - and `which('claude')` returns exactly that
+        # shim first. Probe the native .exe first and never hand back a batch
+        # file (windows scout, 2026-10-07).
+        stem = name[:-4] if name.lower().endswith(('.cmd', '.bat')) else name
+        candidates = [stem if stem.lower().endswith('.exe') else stem + '.exe', stem, name]
+        hits = [r for r in (shutil.which(c, path=path_env) for c in dict.fromkeys(candidates)) if r]
+        resolved = next((r for r in hits if not r.lower().endswith(('.cmd', '.bat'))), None)
+        if not resolved and hits:
+            return None, (f"'{name}' on PATH is an npm batch shim (claude.cmd), which the Claude Agent SDK "
+                          f"refuses to run. Leave the Claude Code binary setting EMPTY to use the CLI bundled "
+                          f"with the SDK, or install the native build: irm https://claude.ai/install.ps1 | iex")
+    else:
+        resolved = shutil.which(name, path=path_env) or (shutil.which('claude', path=path_env) if name != 'claude' else None)
     if resolved:
         logger.info(f"[claude-code] Resolved claude -> {resolved}")
         return resolved, None
@@ -312,12 +365,12 @@ def _resolve_claude_executable(env, name='claude'):
     hints = []
     if _IS_WINDOWS:
         hints.append(
-            "Windows: npm-installed claude.cmd lives in %APPDATA%\\npm\\ — confirm "
-            "that directory is on PATH for the user running Sapphire."
+            "Windows: the simplest fix is to leave the Claude Code binary setting EMPTY - the SDK's "
+            "bundled claude.exe is used. The npm `claude.cmd` shim cannot be used as the binary."
         )
         hints.append(
-            "If using the native installer, claude.exe is usually under "
-            "%LOCALAPPDATA%\\Programs\\Anthropic\\ or similar."
+            "If you want your own install, use the native build (irm https://claude.ai/install.ps1 | iex) "
+            "and point the setting at claude.exe."
         )
     else:
         hints.append(
@@ -338,8 +391,8 @@ def _resolve_claude_executable(env, name='claude'):
         diag += f"  PATHEXT: {pathext}\n"
     diag += "\n".join("  Hint: " + h for h in hints)
     diag += (
-        "\n  Install: npm install -g @anthropic-ai/claude-code "
-        "(or use the official native installer)"
+        "\n  Install: the SDK bundles the CLI (leave the setting empty); or the official native "
+        "installer; `npm install -g @anthropic-ai/claude-code` also works on Linux/macOS"
     )
     logger.warning(f"[claude-code] {diag}")
     return None, diag
@@ -370,9 +423,13 @@ def _safe_dir_name(text, default='project'):
     return _unreserved(cleaned) if cleaned else default
 
 
-def _resolve_workspace(settings, project_name):
-    base = settings.get('workspace_dir', '~/claude-workspaces')
-    base_path = Path(os.path.expanduser(base)).resolve()
+def _resolve_workspace(settings, project_name, mode='project', root=None):
+    # %USERPROFILE% and friends (the Windows habit) as well as ~; and the
+    # safety check runs BEFORE the directory is made - a refused path used to
+    # be created first, littering `<root>/%USERPROFILE%/…` inside the repo
+    # (windows scout, 2026-10-07)
+    base = settings.get('workspace_dir') or '~/claude-workspaces'
+    base_path = Path(os.path.expandvars(os.path.expanduser(str(base)))).resolve()
     safe = _safe_dir_name(project_name)
     workspace_path = (base_path / safe).resolve()
     # Defense-in-depth: reject any escape from base even if _safe_dir_name is somehow bypassed
@@ -381,6 +438,9 @@ def _resolve_workspace(settings, project_name):
     except ValueError:
         return None, f"Invalid project name (path escape rejected): {project_name!r}"
     workspace = str(workspace_path)
+    err = _sanity_check(workspace, mode=mode, root=root)
+    if err:
+        return None, err
     try:
         os.makedirs(workspace, exist_ok=True)
     except OSError as e:
@@ -454,11 +514,13 @@ def _publish_workspace_ready(project_name, workspace):
         else:
             return  # Nothing runnable
 
+        # ephemeral: no replay past a vault lock (the name is the agent's now,
+        # not the mission's - but a replayed event is still a leak class)
         publish(Events.WORKSPACE_READY, {
             'project': project_name,
             'type': project_type,
             'url': f'/workspace/{project_name}/index.html' if has_html else None,
-        })
+        }, ephemeral=True)
     except Exception as e:
         logger.warning(f"[claude-code] Could not publish workspace_ready: {e}")
 
@@ -585,12 +647,15 @@ def _sanity_check(workspace_path, mode='project', root=None):
     tree and outside any Python environment; plugin mode lives in
     user/plugins; core mode IS the Sapphire root (`root` overrides the
     module's own, for a caller that knows better)."""
-    ws = str(Path(workspace_path).resolve())
-    root = str(Path(root or _SAPPHIRE_ROOT).resolve())
-    user_plugins = os.path.join(root, 'user', 'plugins')
-    if mode == 'project' and ws.startswith(root):
+    ws_path = Path(workspace_path).resolve()
+    root_path = Path(root or _SAPPHIRE_ROOT).resolve()
+    ws, root = str(ws_path), str(root_path)
+    user_plugins = root_path / 'user' / 'plugins'
+    # path-aware, not a string prefix: `…/sapphire-work` is a SIBLING of
+    # `…/sapphire`, not inside it (two scouts, 2026-10-07)
+    if mode == 'project' and ws_path.is_relative_to(root_path):
         return f"SAFETY: Workspace '{ws}' is inside Sapphire's project directory. Use an external directory."
-    if mode == 'plugin' and not ws.startswith(user_plugins):
+    if mode == 'plugin' and not ws_path.is_relative_to(user_plugins):
         return f"SAFETY: a plugin workspace must live under user/plugins, not '{ws}'."
     if mode == 'core' and ws != root:
         return f"SAFETY: core mode runs at the Sapphire root, not '{ws}'."
