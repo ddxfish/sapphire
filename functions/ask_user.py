@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '❓'
+TOOL_CATEGORY = 'agents'
 AVAILABLE_FUNCTIONS = ['ask_user']
 
 TOOLS = [
@@ -20,14 +21,10 @@ TOOLS = [
         "function": {
             "name": "ask_user",
             "description": (
-                "Show the user a question card: clickable options plus a type-your-own box, right in the "
-                "chat. For a choice that is genuinely theirs - a fork, a preference, a confirmation with "
-                "real alternatives. Up to 4 questions per card (they appear as tabs and come back "
-                "together), 2-6 options each. Their picks arrive as their NEXT message, led by the line "
-                "`[Question card <id> (ask_user) — what the user clicked; not typed by the user]` then one "
-                "`Question? → Answer` line per question. So: ask in your own words, call this, then END "
-                "your turn (one short line after is fine) - do not wait or re-ask. The user may also dismiss "
-                "the card or just type. On voice there is no screen: say the options aloud."
+                "Show the user a question card: clickable options plus a type-your-own box. For a choice that is "
+                "genuinely theirs. Up to 4 questions (tabs), 2-6 options each. Their picks arrive as their next "
+                "message, so ask, call this, then end your turn - do not wait or re-ask. They may dismiss it or just "
+                "type. On voice, say the options aloud."
             ),
             "parameters": {
                 "type": "object",
@@ -36,27 +33,27 @@ TOOLS = [
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 4,
-                        "description": "The questions, in order.",
+                        "description": "The questions, in order",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "question": {"type": "string", "description": "The question, a full sentence."},
-                                "header": {"type": "string", "description": "Tab label, 1-2 words (e.g. 'Color')."},
+                                "question": {"type": "string", "description": "Full sentence"},
+                                "header": {"type": "string", "description": "Tab label, 1-2 words"},
                                 "options": {
                                     "type": "array",
                                     "minItems": 2,
                                     "maxItems": 6,
-                                    "description": "2-6 choices. A 'type your own' box is always added.",
+                                    "description": "2-6 choices; a type-your-own box is always added",
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "label": {"type": "string", "description": "The choice, 1-5 words."},
+                                            "label": {"type": "string", "description": "1-5 words"},
                                             "description": {"type": "string", "description": "What picking it means (optional)."}
                                         },
                                         "required": ["label"]
                                     }
                                 },
-                                "multi_select": {"type": "boolean", "description": "Several may be picked (default false)."}
+                                "multi_select": {"type": "boolean", "description": "Several may be picked (default false)"}
                             },
                             "required": ["question", "options"]
                         }

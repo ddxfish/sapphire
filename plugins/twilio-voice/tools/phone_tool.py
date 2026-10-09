@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📞'
+TOOL_CATEGORY = 'comms'
 AVAILABLE_FUNCTIONS = [
     'phone_call',
 ]
@@ -22,51 +23,48 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "function": {
             "name": "phone_call",
             "description": (
-                "Place a real phone call to a whitelisted contact. The call is a live "
-                "voice conversation — when they answer, you'll be talking with them. "
-                "Call with NO recipient_id first to see who you can call and which "
-                "models are available. By default the call runs in its own side chat "
-                "and reports back here when it ends; set ephemeral=false to run it in "
-                "THIS chat instead."
+                "Place a live voice call to a whitelisted contact. No arguments = the menu of contacts and models. "
+                "Runs in a side chat and reports back when it ends."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "recipient_id": {
                         "type": "integer",
-                        "description": "Contact id from the menu (call with no arguments to see it)",
+                        "description": "Contact id from the menu",
                     },
                     "goal": {
                         "type": "string",
-                        "description": "What the call is for — you'll see this during the call (e.g. 'wake Krem up gently', 'order a large pepperoni pizza for delivery')",
+                        "description": "What the call is for; you see it during the call",
                     },
                     "ephemeral": {
                         "type": "boolean",
-                        "description": "true (default): run the call in a throwaway side chat and report back. false: run it in the current chat.",
+                        "description": "true (default) = side chat, reports back. false = this chat.",
                     },
                     "opening_line": {
                         "type": "string",
-                        "description": "Your first words, spoken the moment they answer (e.g. \"Hey! It's Sapphire.\"). Omit to stay quiet and let them speak first — better when calling businesses.",
+                        "description": "First words when they answer. Omit to let them speak first (best for businesses).",
                     },
                     "model": {
                         "type": "string",
-                        "description": "LLM for the call, by name from the menu (e.g. a fast non-thinking model — phone latency matters). Omit for the number's default.",
+                        "description": "Model from the menu; fast non-thinking is best. Omit for the default.",
                     },
                     "memory": {
                         "type": "boolean",
-                        "description": "false (default): the call runs memory-isolated. true: your memory scopes travel with you onto the call (use when the call needs what you know).",
+                        "description": "true = your memory scopes come along. Default false (isolated).",
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "Optional prompt/persona name for the call's side chat (ephemeral mode only).",
+                        "description": "Persona for the side chat (ephemeral only)",
                     },
                     "max_minutes": {
                         "type": "number",
-                        "description": "Hard call-duration cap in minutes (default 10, carrier-enforced).",
+                        "description": "Call cap in minutes (default 10)",
                     },
                 },
                 "required": [],

@@ -66,8 +66,19 @@ def execute(function_name, arguments, config, plugin_settings=None, credentials=
 | `EMOJI` | str | Display icon |
 | `AVAILABLE_FUNCTIONS` | list | Function names this file provides |
 | `TOOLS` | list | OpenAI-compatible function schemas |
+| `TOOL_CATEGORY` | str | The category of every tool in this file (one of the twelve below, or your plugin's own name). A tool overrides with its own `"category"` flag. Missing → your plugin's name: your tools stand alone as a group, asked for by name |
 | `execute()` | function | Dispatcher — returns `(message, success)` |
 | `get_tools()` | function | *Optional.* Returns `TOOLS`-shaped schemas built from current settings — enables [dynamic descriptions](#dynamic-tool-descriptions) |
+
+**Categories** — the words an agent's toolset is made of (`toolset: 'web, files'`), the groups of the
+Toolsets picker, and the scope a tool needs: `web` · `memory` · `knowledge` · `people` · `goals` ·
+`files` · `system` · `devices` · `comms` · `media` · `meta_danger` · `agents`. `memory`, `knowledge`,
+`people` and `goals` tools need that scope; a lane that closed it (an agent with `memory_scope: none`)
+sheds them instead of carrying tools that answer "scope disabled". A tool in any other category is
+assumed to need the ONE scope its plugin registered, if it registered exactly one (an `email` tool
+needs `email_scope`). `meta_danger` is for tools that change *Sapphire herself* — prompt, voice,
+model, toolset, scene — the name is the warning. Pick the plain truth; a plugin that fits nowhere
+uses its own name (`bitcoin`, `wordpress` do).
 
 ### Manifest Declaration
 
@@ -88,6 +99,8 @@ Inside each tool's schema dict:
 | `is_local` | bool/str | — (unset) | Locality declaration: `True` = touches only this machine or the LAN, `"endpoint"` = calls an external API, `False` = network required. **This flag gates private chats**: in a private chat only `is_local: True` tools run; `False`/`"endpoint"` are refused with a message to the AI, and an *unset* flag is refused too unless the user opts in (Settings > Privacy → allow unflagged tools). Declare it honestly on every tool |
 | `network` | bool | `false` | UI labeling: marks the tool as network-dependent so toolset lists and system status can show a "network tools" indicator. Informational — it doesn't block or route anything |
 | `hidden` | bool | `false` | Hide from the Toolsets UI and from `all`/module/custom selection. The tool still registers and executes; a saved toolset that names it resolves it normally. For internal verbs (e.g. gated sub-agent tools) that would clutter the picker |
+| `category` | str | the file's `TOOL_CATEGORY` | This tool's category when it differs from the file's (`run_command` is `system` in a `files` file) |
+| `writes` | bool | `false` | The tool changes something — saves, deletes, sends, runs, acts. Readers leave it off. A `self` agent with read-only memory gets the `memory` category's readers and not its writers; this flag is how it tells |
 
 ```python
 TOOLS = [{
@@ -397,6 +410,7 @@ Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](.
 - Files for the user: `from core import attachments`; append `attachments.marker(title, [{url, name}, ...])` to the result text. URLs must be the plugin's own routes (`/api/plugin/<name>/...`, else `ValueError`); audio renders a player, every file a download button; max 12; UI-only (stripped from the model's copy). Also valid in the text of a turn the plugin starts through the inbox.
 - Starting a turn yourself: `from core.chat import inbox; inbox.tell(chat, text, source='my-plugin', header_line=inbox.header('My plugin', kind, what), speak=None|'browser'|'speakers', on_drop=fn)` — waits its turn (busy, locked, sealed alike), own reply (no folding); dropped only for gone / privacy-downhill / ttl / removed / restart, with `item.drop_kind` saying which. `inbox.ask(...)` returns her reply. Missing chat → `inbox.InboxRefused`. `core.cadence.fire_once` raises `ChatBusy` instead of waiting — only for a result that goes stale.
 - Schema flags: `is_local` `True|False|"endpoint"` gates PRIVATE chats only (True runs; False/"endpoint" refused; unset refused unless `PRIVATE_ALLOW_UNFLAGGED_TOOLS`); `network: true` = UI "network tools" labeling only; `hidden: true` = out of the Toolsets picker but still registered and callable. No flag routes traffic.
+- Tool metadata: file-level `TOOL_CATEGORY = 'web'` (one of web, memory, knowledge, people, goals, files, system, devices, comms, media, meta_danger, agents — or the plugin's own name; missing = the plugin's name), per-tool `"category"` override, per-tool `"writes": True` on anything that changes state or acts. A category resolves like a toolset word (an agent's `toolset: 'web, files'`, `extra_toolsets`), groups the Toolsets picker, and names the scope its tools need (memory/knowledge/people/goals by category; any other tool = the one scope its plugin registered). `FunctionManager.tool_meta(name)`, `categories()`, `tools_in_category(cat, writes=None)`, `tool_scope(name)`; `resolve_tools(..., closed_scopes={...})` sheds tools whose scope is closed.
 - Networking: `from core import net` — `net.get/post/put/delete/request(url, ...)` (requests-shaped), `net.session_for(url)` (pooled, lane-fixed), `net.wan_session()` (WAN lane, browser profile). Host classification is syntactic, never resolves DNS: LAN = loopback / RFC1918 / link-local / `*.local` / `*.lan` / `*.home.arpa` / single-label names / registered direct hosts → direct, redirects refused by default; WAN = everything else → proxy env when SOCKS is on. Register LAN FQDNs: `core.socks_proxy.register_direct_hosts(zero_arg_callable, owner=plugin_name)`; keyed by owner (replace-on-reregister), auto-unregistered on plugin unload.
 - `get_tools()` live refresh: re-run on settings save; only `description`/`parameters` update in place; tool names never change; add/remove needs a reload. Keep a static `TOOLS` fallback.
 - PluginState (`plugin_loader.get_plugin_state(name)`): `get/save/delete/all/clear`; thread-safe; backed by `user/plugin_state/{name}.json`.

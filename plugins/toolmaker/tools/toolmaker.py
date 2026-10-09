@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001f6e0\ufe0f'
+TOOL_CATEGORY = 'meta_danger'
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 _USER_PLUGINS = _PROJECT_ROOT / "user" / "plugins"
 
@@ -56,10 +57,11 @@ from core.code_validator import validate_code
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "tool_load",
-            "description": "Activate newly saved tools. Discovers and loads the plugin live — no restart needed.",
+            "description": "Load newly saved tools live, no restart.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -72,13 +74,13 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "tool_read",
-            "description": "Read a custom tool's source code. Call without name to list all AI-created plugins.",
+            "description": "Read a custom tool's source. No name = list AI-created plugins.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Plugin name (without .py). Omit to list all AI-created plugins."
+                        "description": "Without .py"
                     }
                 },
                 "required": []
@@ -87,20 +89,22 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "tool_save",
-            "description": "Create or update a custom tool plugin. Validates code before saving. After saving, call tool_load to activate. IMPORTANT: call search_help_docs(\"TOOLMAKER\") first for the required format and template.",
+            "description": "Create or update a custom tool plugin; the code is validated. Then call tool_load. FIRST call "
+                           "search_help_docs(\"TOOLMAKER\") for the required format.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Plugin name — alphanumeric and underscores only, no .py"
+                        "description": "Letters, digits and underscores, no .py"
                     },
                     "code": {
                         "type": "string",
-                        "description": "Complete Python source code for the tool module"
+                        "description": "Complete Python source of the tool module"
                     }
                 },
                 "required": ["name", "code"]

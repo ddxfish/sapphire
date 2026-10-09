@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001F310'  # globe
+TOOL_CATEGORY = 'wordpress'
 
 PLUGIN_NAME = 'wordpress'
 WP_API = '/wp-json/wp/v2'
@@ -39,83 +40,86 @@ _PIN_HELP = ("Required only for destructive actions (permanent delete, user dele
 TOOLS = [
     {"type": "function", "is_local": False, "network": True, "function": {
         "name": "wp_get_blog",
-        "description": "List blog posts (no id) or read one full post (with id). Use search to find posts by keyword. Lists are paginated and lean.",
+        "description": "List blog posts, or read one in full with id.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "Post id to read in full. Omit to list."},
-            "search": {"type": "string", "description": "Keyword filter when listing (matches title/content)."},
-            "page": {"type": "integer", "description": "Page number when listing (50 per page)."}
+            "id": {"type": "string", "description": "Omit to list"},
+            "search": {"type": "string", "description": "Keyword filter for the list (title/content)"},
+            "page": {"type": "integer", "description": "List page (50 per page)"}
         }, "required": []}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_create_blog",
-        "description": "Create a blog post (no id) or update an existing one (with id). Content is HTML or plain text. Not destructive - revisions are kept.",
+        "description": "Create a blog post, or update one with id. Revisions are kept.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "Post id to update. Omit to create a new post."},
-            "title": {"type": "string", "description": "Post title."},
-            "content": {"type": "string", "description": "Post body (HTML or plain text)."},
-            "status": {"type": "string", "description": "'draft' (default) or 'publish'."},
-            "category": {"type": "string", "description": "Category name to file the post under (see the Categories line at the top of wp_get_blog). Optional."}
+            "id": {"type": "string", "description": "Omit to create"},
+            "title": {"type": "string"},
+            "content": {"type": "string", "description": "HTML or plain text"},
+            "status": {"type": "string", "description": "'draft' (default) or 'publish'"},
+            "category": {"type": "string", "description": "Category name (wp_get_blog lists them at the top)"}
         }, "required": []}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_delete_blog",
-        "description": "Delete a blog post. Default sends it to Trash (recoverable). force=true permanently deletes it and requires the PIN.",
+        "description": "Delete a blog post: to Trash by default (recoverable). force=true is permanent and needs the PIN.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "Post id to delete."},
-            "force": {"type": "boolean", "description": "true = permanent (requires PIN). false/omitted = Trash (recoverable)."},
+            "id": {"type": "string"},
+            "force": {"type": "boolean"},
             "pin": {"type": "string", "description": _PIN_HELP}
         }, "required": ["id"]}}},
     {"type": "function", "is_local": False, "network": True, "function": {
         "name": "wp_get_page",
-        "description": "List pages (no id) or read one full page (with id). Use search to find pages by keyword. Lists are paginated and lean.",
+        "description": "List pages, or read one in full with id.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "Page id to read in full. Omit to list pages."},
-            "search": {"type": "string", "description": "Keyword filter when listing (matches title/content)."},
-            "page": {"type": "integer", "description": "Page number when listing (50 per page)."}
+            "id": {"type": "string", "description": "Omit to list"},
+            "search": {"type": "string", "description": "Keyword filter for the list (title/content)"},
+            "page": {"type": "integer", "description": "List page (50 per page)"}
         }, "required": []}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_create_page",
-        "description": "Create a page (no id) or update an existing one (with id). Content is HTML or plain text. Note: overwriting a page built with a page-builder flattens its layout - prefer this for plain pages.",
+        "description": "Create a page, or update one with id. Overwriting a page-builder page flattens its layout - use this"
+                       " for plain pages.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "Page id to update. Omit to create a new page."},
-            "title": {"type": "string", "description": "Page title."},
-            "content": {"type": "string", "description": "Page body (HTML or plain text)."},
-            "status": {"type": "string", "description": "'draft' (default) or 'publish'."}
+            "id": {"type": "string", "description": "Omit to create"},
+            "title": {"type": "string"},
+            "content": {"type": "string", "description": "HTML or plain text"},
+            "status": {"type": "string", "description": "'draft' (default) or 'publish'"}
         }, "required": []}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_delete_page",
-        "description": "Delete a page. Default sends it to Trash (recoverable). force=true permanently deletes it and requires the PIN.",
+        "description": "Delete a page: to Trash by default (recoverable). force=true is permanent and needs the PIN.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "Page id to delete."},
-            "force": {"type": "boolean", "description": "true = permanent (requires PIN). false/omitted = Trash (recoverable)."},
+            "id": {"type": "string"},
+            "force": {"type": "boolean"},
             "pin": {"type": "string", "description": _PIN_HELP}
         }, "required": ["id"]}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_settings",
-        "description": "List site settings (no args) or change one (name + value). Changing a setting requires the PIN. The site URL and admin email are protected and cannot be changed here.",
+        "description": "List site settings, or change one (name + value; needs the PIN). Site URL and admin email cannot be "
+                       "changed here.",
         "parameters": {"type": "object", "properties": {
-            "name": {"type": "string", "description": "Setting name to change (e.g. 'title', 'description'). Omit to list all settings."},
-            "value": {"type": "string", "description": "New value for the setting."},
+            "name": {"type": "string", "description": "e.g. 'title', 'description'. Omit to list."},
+            "value": {"type": "string"},
             "pin": {"type": "string", "description": _PIN_HELP}
         }, "required": []}}},
     {"type": "function", "is_local": False, "network": True, "function": {
         "name": "wp_get_user",
-        "description": "List users (no args) or find users by keyword (search). Shows id, name, email, roles. Use search to find a user among thousands.",
+        "description": "List users (id, name, email, roles), or find some with search.",
         "parameters": {"type": "object", "properties": {
-            "search": {"type": "string", "description": "Keyword filter - matches name, login, and email. The way to find a user among thousands."},
-            "page": {"type": "integer", "description": "Page number (100 per page)."}
+            "search": {"type": "string", "description": "Matches name, login and email"},
+            "page": {"type": "integer", "description": "100 per page"}
         }, "required": []}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_delete_user",
-        "description": "Permanently delete a user (e.g. a spam account). Their content is reassigned to admin. Permanent (no Trash) - requires the PIN.",
+        "description": "Permanently delete a user (e.g. a spam account); their content goes to admin. No Trash - needs the "
+                       "PIN.",
         "parameters": {"type": "object", "properties": {
-            "id": {"type": "string", "description": "User id to delete (from wp_get_user)."},
+            "id": {"type": "string", "description": "From wp_get_user"},
             "pin": {"type": "string", "description": _PIN_HELP}
         }, "required": ["id"]}}},
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "wp_plugin",
-        "description": "List installed plugins (no args) or enable/disable one (action + id). Toggling a plugin can change site behavior and requires the PIN.",
+        "description": "List installed plugins, or enable/disable one (needs the PIN).",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "description": "'enable' or 'disable'. Omit to list plugins."},
-            "id": {"type": "string", "description": "Plugin file id from the list (e.g. 'akismet/akismet')."},
+            "action": {"type": "string", "description": "'enable' or 'disable'. Omit to list."},
+            "id": {"type": "string", "description": "Plugin file id from the list, e.g. 'akismet/akismet'"},
             "pin": {"type": "string", "description": _PIN_HELP}
         }, "required": []}}},
 ]

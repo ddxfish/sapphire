@@ -815,23 +815,23 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         enabled = set(function_manager.get_enabled_function_names())
         modules = {}
         for module_name, module_info in function_manager.function_modules.items():
-            functions = []
             for tool in module_info['tools']:
                 func_name = tool['function']['name']
                 if func_name in hidden_functions:
                     continue
-                functions.append({
+                # one group per tool CATEGORY (mirrors /api/functions, 2026-10-08)
+                meta = function_manager.tool_meta(func_name) or {}
+                key = meta.get('category') or module_info.get('group') or module_name
+                slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
+                slot["functions"].append({
                     "name": func_name,
                     "description": tool['function'].get('description', ''),
                     "enabled": func_name in enabled,
-                    "is_network": func_name in network_functions
+                    "is_network": func_name in network_functions,
+                    "writes": bool(meta.get('writes')),
                 })
-            # Same GROUP → one display group (mirrors /api/functions)
-            key = module_info.get('group') or module_name
-            slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
-            slot["functions"].extend(functions)
-            slot["count"] += len(functions)
-            slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
+                slot["count"] += 1
+                slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
 
         # Prompts data
         from core import prompt_packs

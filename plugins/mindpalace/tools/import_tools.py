@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📦'
+TOOL_CATEGORY = 'memory'
 GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 AVAILABLE_FUNCTIONS = ['import_v2']
@@ -37,16 +38,13 @@ AVAILABLE_FUNCTIONS = ['import_v2']
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "import_v2",
             "description": (
-                "Copy the classic memory system's data into the mind palace layers. "
-                "Memories → events layer, people → entities layer, knowledge → knowledge "
-                "layer, goals → goals layer. Copies ALL scopes (including global). The old DBs are opened "
-                "read-only and are never modified — they remain the switch-back path. "
-                "Safe to re-run: already-imported rows are skipped (idempotent), so a "
-                "second run copies zero duplicates."
+                "Copy the classic memory system's data (memories, people, knowledge, goals) into the mind palace, ALL"
+                " scopes. The old DBs are read-only and untouched. Safe to re-run: imported rows are skipped."
             ),
             "parameters": {
                 "type": "object",
@@ -54,7 +52,7 @@ TOOLS = [
                     "what": {
                         "type": "string",
                         "enum": ["memories", "people", "knowledge", "goals", "all"],
-                        "description": "Which store(s) to import. Default: all.",
+                        "description": "Default all",
                         "default": "all"
                     }
                 }

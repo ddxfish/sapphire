@@ -278,6 +278,7 @@ same way, and core knows what to do with them.
 |---|---|---|
 | `power` | `restart`, `shutdown`, `sleep` | A "Sapphire may use this" switch |
 | `camera` | `look` | Pictures reach her eyes. The same switch |
+| `ptz` | `move`, `zoom`, `goto`, `stop` | The same switch. A camera that turns: answer a move with the new view |
 | `screen` | `look` | The same |
 | `mic` | `listen` | The same switch. With `chat` and `voice_key` fields, wake word questions |
 | `speaker` | `say` | Her answers are spoken there |

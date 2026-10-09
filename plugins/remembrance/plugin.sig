@@ -9,8 +9,8 @@
     "routes/manage.py": "sha256:e1fde660e96b5beabc49b50f999fdc845fdf6516ecc7fa9998a7f97d1d8e8c04",
     "schedule.py": "sha256:f60f884331b3346a3c48e51020e661f6746a9abbe910fa608a2446f3bbbda0ff",
     "tests/test_ops.py": "sha256:b035aeee6c9418dbc01e287124db10b73442bea12ba96dcc49b876c770d189fd",
-    "tools/remembrance.py": "sha256:f60f6976747be8e750021b7c43512ac571999cc5aa83af7aedfd725ad74e2f69",
+    "tools/remembrance.py": "sha256:6fff64782d5a820b9b0179d8e5b75d372eb873244f8a22d9cdf65e9b125e16e0",
     "web/index.js": "sha256:c2efaa2535adc8ba9d6211a8f06f34cf0844a557fe0b29b8bd1c6213cbdd2f53"
   },
-  "signature": "DnWw8A2+2m+eTOovIUJVio0BqB+Gb0nQIxSw0wUtxkFlV1hgwezjmTMryxZq0VHVkTQSCCl6q9HKy981fHYPBw=="
+  "signature": "MeYDADLFkErSMdaFhiQfk3Vvmy32av370hf1f7DPtelcDMjuFW6/di1Jg/t6YYbRHWXXysG4FfaN0ltkYnssBA=="
 }

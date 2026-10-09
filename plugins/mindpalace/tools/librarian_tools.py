@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🧹'
+TOOL_CATEGORY = 'memory'
 GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 MAX_PARTS = 10
@@ -47,21 +48,19 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "atomize_memory",
             "description": (
-                "Librarian verb: split one tangled multi-concept memory into "
-                "single-concept parts. The original is retired (hidden, kept, "
-                "recoverable); each part becomes its own searchable memory with "
-                "its own connections. Only works on memories in the current "
-                "librarian pass."
+                "Librarian verb: split one multi-concept memory into single-concept parts. The original is retired "
+                "(recoverable). Current-pass memories only."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "memory_id": {"type": "integer", "description": "The [id] of the memory to split."},
+                    "memory_id": {"type": "integer"},
                     "parts": {
                         "type": "array", "items": {"type": "string"},
                         "description": f"2-{MAX_PARTS} single-concept replacements, each under {PART_MAX_CHARS} chars."
@@ -73,24 +72,22 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "merge_memories",
             "description": (
-                "Librarian verb: fold two or more entries that record the SAME "
-                "thing into one memory. The merged memory keeps the earliest "
-                "date and its connections; the originals are retired (hidden, "
-                "kept, recoverable). Refused in code unless the entries measure "
-                "as true near-duplicates. Only works on memories in the current "
-                "pass (near-duplicates flagged in the pass are included)."
+                "Librarian verb: fold entries that record the SAME thing into one memory; it keeps the earliest date "
+                "and the connections, and the originals are retired (recoverable). Refused unless they measure as "
+                "near-duplicates. Current-pass memories only."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_ids": {
                         "type": "array", "items": {"type": "integer"},
-                        "description": "2-10 [id]s that say the same thing."
+                        "description": "2-10 [id]s"
                     },
                     "content": {
                         "type": "string",
@@ -107,23 +104,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "keep_separate",
             "description": (
-                "Dedup-pass verb: this group measures similar but the entries "
-                "are genuinely DIFFERENT memories — file the group as judged "
-                "and keep every one as it is. One call per group; nothing "
-                "changes but the verdict. Only works on memories in the "
-                "current pass."
+                "Dedup-pass verb: this group measures similar but the memories are genuinely DIFFERENT - file the "
+                "verdict and keep each as is. One call per group."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_ids": {
                         "type": "array", "items": {"type": "integer"},
-                        "description": "The [id]s of the group to keep apart."
+                        "description": "The group's [id]s"
                     }
                 },
                 "required": ["memory_ids"]
@@ -132,32 +127,26 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "promote_memory",
             "description": (
-                "Librarian verb: COPY a memory's content onto an entity (a "
-                "fact about a person/place/thing). The original event stays "
-                "where it is — promotion adds, never moves. Identity-worthy "
-                "memories belong on your sheet instead: update_self during "
-                "the self pass. Only works on memories in the current pass."
+                "Librarian verb: COPY a memory's content onto an entity as a fact; the original stays. "
+                "Identity-worthy memories go on your sheet instead (update_self). Current-pass memories only."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "memory_id": {"type": "integer", "description": "The [id] of the source memory."},
-                    "layer": {"type": "string", "enum": ["entities"],
-                              "description": "Destination layer."},
+                    "memory_id": {"type": "integer"},
+                    "layer": {"type": "string", "enum": ["entities"]},
                     "entity": {"type": "string",
-                               "description": "Entity name — required when layer=entities."},
+                               "description": "Entity name (required when layer=entities)"},
                     "kind": {"type": "string",
-                             "description": ("Optional entity category: person | place | "
-                                             "thing | event | other. Only applies when a "
-                                             "NEW entity is created — an existing entity "
-                                             "keeps its kind.")},
+                             "description": ("person | place | thing | event | other. Only used when a NEW entity is created.")},
                     "content": {"type": "string",
-                                "description": "Optional reworded version. Omit to copy verbatim."}
+                                "description": "Reworded version. Omit to copy verbatim."}
                 },
                 "required": ["memory_id", "layer"]
             }
@@ -165,21 +154,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "prune_memory",
             "description": (
-                "Librarian verb: retire a memory that no longer needs remembering. "
-                "SOFT — it disappears from search and recall but stays in the "
-                "archive, reversible. Refuses favorites and core memories, always. "
-                "Only works on memories in the current pass."
+                "Librarian verb: retire a memory that no longer needs remembering. Soft: gone from search and recall,"
+                " kept in the archive, reversible. Favorites and core memories are refused. Current-pass memories "
+                "only."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "memory_id": {"type": "integer", "description": "The [id] to retire."},
-                    "reason": {"type": "string", "description": "One short line: why (kept in the archive)."}
+                    "memory_id": {"type": "integer"},
+                    "reason": {"type": "string", "description": "One short line"}
                 },
                 "required": ["memory_id"]
             }
@@ -187,34 +176,29 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "set_links",
             "description": (
-                "Link-pass verb: connect the memories in this pass to the "
-                "existing people/places/things they're about — ONE call "
-                "covers every [id] in the message. Creates graph edges the "
-                "spider can walk; entities must already exist (linking never "
-                "creates). A memory that needs no connection gets an empty "
-                "entities list — that verdict is filed too."
+                "Link-pass verb: connect the memories in this pass to the existing people/places/things they are "
+                "about; ONE call covers every [id]. Linking never creates an entity. No connection needed = an empty "
+                "list, still filed."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entries": {
                         "type": "array",
-                        "description": "One entry per presented [id].",
+                        "description": "One per presented [id]",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "memory_id": {"type": "integer",
-                                              "description": "The [id]."},
+                                "memory_id": {"type": "integer"},
                                 "entities": {"type": "array",
                                              "items": {"type": "string"},
-                                             "description": ("Existing entity names "
-                                                             "to connect; [] = no "
-                                                             "connection needed.")}
+                                             "description": ("Existing entity names; [] = none needed")}
                             },
                             "required": ["memory_id", "entities"]
                         }
@@ -226,18 +210,12 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "run_librarian",
             "description": (
-                "Start a librarian pass over your own memory (current scope). "
-                "Passes are single-purpose: 'sort' reviews your oldest "
-                "unprocessed memories (mark/split/promote/retire); 'dates' "
-                "files date mentions as real calendar dates (feeds your "
-                "Upcoming view); 'link' connects memories to the people/"
-                "places/things they name; 'dedup' folds measured near-"
-                "duplicates. Daily caps apply per pass kind. Your mind, "
-                "your shelves."
+                "Start a librarian pass over your memory (current scope). Daily caps apply per pass."
             ),
             "parameters": {
                 "type": "object",
@@ -245,12 +223,13 @@ TOOLS = [
                     "what": {
                         "type": "string",
                         "enum": ["all", "self"],
-                        "description": "'all' = events + self layers (default). 'self' = just the self layer. Sort pass only."
+                        "description": "Sort pass only: 'all' = events + self layers (default), 'self' = the self layer"
                     },
                     "pass": {
                         "type": "string",
                         "enum": ["sort", "dates", "link", "dedup"],
-                        "description": "'sort' (default) reviews memories; 'dates' dates them; 'link' connects them; 'dedup' folds duplicates."
+                        "description": "sort (default) = review oldest unprocessed memories; dates = file date mentions as calendar dates; "
+                                       "link = connect memories to the people/places/things they name; dedup = fold near-duplicates"
                     }
                 }
             }
@@ -258,35 +237,30 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "set_event_dates",
             "description": (
-                "Temporal-pass verb: file resolved dates for the memories in "
-                "this pass — ONE call covers every [id] in the message. For "
-                "each entry give every date/time the memory's text refers to "
-                "as ISO strings at the precision the text supports (YYYY, "
-                "YYYY-MM-DD, or YYYY-MM-DDTHH:MM), resolved against that "
-                "memory's own saved date. A memory with no real date "
-                "reference gets an empty dates list — that verdict is filed "
-                "too."
+                "Temporal-pass verb: file dates for the memories in this pass; ONE call covers every [id]. Give every"
+                " date/time a memory's text refers to as ISO at the precision the text supports (YYYY, YYYY-MM-DD or "
+                "YYYY-MM-DDTHH:MM), resolved against that memory's saved date. No real date = an empty list, still "
+                "filed."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entries": {
                         "type": "array",
-                        "description": "One entry per presented [id].",
+                        "description": "One per presented [id]",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "memory_id": {"type": "integer",
-                                              "description": "The [id]."},
+                                "memory_id": {"type": "integer"},
                                 "dates": {"type": "array",
                                           "items": {"type": "string"},
-                                          "description": ("ISO dates/times; "
-                                                          "[] = no real date.")}
+                                          "description": ("ISO; [] = no real date")}
                             },
                             "required": ["memory_id", "dates"]
                         }
@@ -298,31 +272,26 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "mark_processed",
             "description": (
-                "Librarian verb: this memory is fine as it is — file it as "
-                "reviewed and move on. Optionally rate how much it matters: "
-                "rated memories surface more easily when connections are "
-                "walked. Only works on memories in the current pass."
+                "Librarian verb: this memory is fine as is - file it as reviewed. Current-pass memories only."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "memory_id": {"type": "integer", "description": "The [id] to file as done."},
+                    "memory_id": {"type": "integer"},
                     "importance": {
                         "type": "number",
-                        "description": ("Optional 0.0-1.0: how much this memory matters. "
-                                        "0.9+ marks a core memory — it never fades and "
-                                        "refuses pruning forever. Omit to leave unrated.")
+                        "description": ("0.0-1.0, how much it matters; rated memories surface more easily. 0.9+ = core memory, never fades or"
+                                        " prunes. Omit to leave unrated.")
                     },
                     "favorite": {
                         "type": "boolean",
-                        "description": ("Optional: true marks this a favorite (never fades, "
-                                        "refuses pruning). Granting only — favorites cannot "
-                                        "be cleared from here. Omit to leave as is.")
+                        "description": ("true = favorite (never fades or prunes). Cannot be cleared from here.")
                     }
                 },
                 "required": ["memory_id"]

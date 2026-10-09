@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🖥️'
+TOOL_CATEGORY = 'devices'
 AVAILABLE_FUNCTIONS = ['get_screenshot']
 
 TOOLS = [
@@ -52,13 +53,8 @@ TOOLS = [
         "function": {
             "name": "get_screenshot",
             "description": (
-                "Capture the screen so you can see what's on it. "
-                "source='local' (default) grabs the Sapphire host machine's full screen silently. "
-                "source='user' opens a 'share your screen' prompt in the user's browser — they "
-                "pick a screen/window and that frame is returned. "
-                "Use 'user' when Sapphire runs on a different machine than the user, or when local "
-                "capture isn't available; use 'local' to see the host's own screen. "
-                "Call when the user asks you to look at their screen, a window, or an on-screen error."
+                "Capture the screen so you can see it. Use when the user asks you to look at their screen, a window "
+                "or an on-screen error."
             ),
             "parameters": {
                 "type": "object",
@@ -66,7 +62,8 @@ TOOLS = [
                     "source": {
                         "type": "string",
                         "enum": ["local", "user"],
-                        "description": "local = capture the Sapphire host's screen automatically (default); user = prompt the user's browser to share its screen"
+                        "description": "local (default) = the Sapphire host's screen, silently. user = their browser asks them to share a "
+                                       "screen; use it when they are on another machine."
                     }
                 },
                 "required": []

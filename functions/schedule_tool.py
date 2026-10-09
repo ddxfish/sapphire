@@ -12,29 +12,28 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = "\u23F0"
+TOOL_CATEGORY = 'agents'
 
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "schedule_task",
             "description": (
-                "Schedule a future task for yourself.\n"
-                "  time='5pm' or '17:00' — one-shot (auto-deletes after firing)\n"
-                "  time='0 17 * * *' — cron (recurring)\n"
-                "description becomes the prompt you'll receive when it fires."
+                "Schedule a future task for yourself. time='5pm' or '17:00' = one-shot; '0 17 * * *' = cron, "
+                "recurring. description is the prompt you receive when it fires."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Prompt future-you will receive. Be specific."
+                        "description": "Be specific"
                     },
                     "time": {
-                        "type": "string",
-                        "description": "One-shot ('5pm', '17:00', '1700', '2:30pm') or cron ('0 17 * * *', '30 9 * * 1-5')"
+                        "type": "string"
                     }
                 },
                 "required": ["description", "time"]

@@ -60,8 +60,8 @@
     "tests/test_story_vault_gate.py": "sha256:d52ffb3dc15fdd4581242847f0a354566ac071e2cf5a0896ac26c36cd6e1719f",
     "tests/test_tool_fence.py": "sha256:546729f75067b1cc302e4cfdac702d9a602d17bc8dda7b25ac40f26b1568f1cc",
     "tests/test_vault_gates_p3.py": "sha256:10a7a5d77b31b3f5e31ac1f53e2ccc38d7278535c8922a8cac4d94ca008c7fbe",
-    "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
-    "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
+    "tools/story_info.py": "sha256:a8a036ae2c3b309c1d646e545b49b4f2bd55451d342f261aec2de41db1cf3850",
+    "tools/story_tools.py": "sha256:364e3e3cdb5f190485f7512424111031cceb4a2cf356477af150871609cbd0ed"
   },
-  "signature": "Z2gwuKz64agiogc8kgKTWEtgwYoHpC4qasx09C4MNjM8hjkdJlnkJ/yLlIzwE9guvLRLpZfC4tLsvJz69zxrBg=="
+  "signature": "eC/fRbYh7/duLun1dcYYuXffs2uFzTpwWXe+0AmDeE/lQtrkxMFgqQjO9Rp7Rw0Oov4bFXCJfPUUOioSJksxBA=="
 }

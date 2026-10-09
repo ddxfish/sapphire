@@ -1,0 +1,85 @@
+{
+  "name": "ipcam",
+  "short_display_name": "IP Cameras",
+  "version": "0.1.0",
+  "description": "Network cameras that speak ONVIF: Sapphire sees through them, and turns and zooms the ones that can move. Adds the device type for Settings > Devices.",
+  "author": "sapphire",
+  "icon": "📹",
+  "url": "https://sapphireblue.dev",
+  "priority": 150,
+  "default_enabled": true,
+  "settingsUI": "none",
+  "capabilities": {
+    "devices": [
+      {
+        "driver": "ipcam",
+        "label": "IP camera (ONVIF)",
+        "icon": "📹",
+        "module": "device_driver.py",
+        "capabilities": [
+          "camera",
+          "ptz"
+        ],
+        "config_schema": [
+          {
+            "key": "host",
+            "type": "string",
+            "label": "Address",
+            "placeholder": "192.168.0.60",
+            "help": "The camera's address on your network. ONVIF has to be switched on in the camera's own settings.",
+            "tab": "Status",
+            "setup": true
+          },
+          {
+            "key": "user",
+            "type": "string",
+            "label": "User",
+            "default": "admin",
+            "tab": "Status",
+            "setup": true
+          },
+          {
+            "key": "password",
+            "type": "string",
+            "widget": "password",
+            "secret": true,
+            "label": "Password",
+            "help": "Stored scrambled. Never shown again.",
+            "tab": "Status",
+            "setup": true
+          },
+          {
+            "key": "port",
+            "type": "number",
+            "label": "ONVIF port",
+            "default": 0,
+            "min": 0,
+            "max": 65535,
+            "tab": "Status",
+            "help": "0 = found for you when you save. Enter it only if the camera is not found."
+          },
+          {
+            "key": "places",
+            "widget": "rows",
+            "label": "Places",
+            "capability": "ptz",
+            "help": "Names for the views the camera has stored. Point it somewhere with move, store that with save and a number, then give the number a name here. Sapphire goes there by name.",
+            "columns": [
+              {
+                "key": "name",
+                "label": "name",
+                "placeholder": "door"
+              },
+              {
+                "key": "slot",
+                "label": "number",
+                "placeholder": "1"
+              }
+            ],
+            "add_label": "+ Add Place"
+          }
+        ]
+      }
+    ]
+  }
+}

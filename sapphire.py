@@ -1403,6 +1403,8 @@ def run():
         try:
             from core.devices import presence as _presence
             _presence.start()
+            from core.devices import glass as _glass
+            _glass.start()                   # screens follow their chat's name and scene
         except Exception as e:
             logger.error(f"Device presence did not start: {e}", exc_info=True)
         # Is each device reachable: one keeper believes online or offline.

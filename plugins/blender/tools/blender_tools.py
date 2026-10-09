@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001F9CA'  # ice cube
+TOOL_CATEGORY = 'media'
 AVAILABLE_FUNCTIONS = ['blender_scene', 'blender_code', 'blender_see']
 
 _NOT_RUNNING = ("Blender isn't reachable — it's not running, or the Sapphire Link "
@@ -18,17 +19,18 @@ _NOT_RUNNING = ("Blender isn't reachable — it's not running, or the Sapphire L
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "blender_scene",
             "description": (
-                "Scene summary of the running Blender (objects, active, frame, engine). "
-                "Pass object_name for one object's full detail. Orient before changing things."
+                "Summary of the running Blender scene (objects, active, frame, engine). Orient before changing "
+                "things."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "object_name": {"type": "string", "description": "Exact object name for detail instead of the summary."}
+                    "object_name": {"type": "string", "description": "Exact name, for one object's full detail"}
                 },
                 "required": []
             }
@@ -36,18 +38,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "blender_code",
             "description": (
-                "Run Python inside the running Blender — your 3D hands; anything Blender can "
-                "do. bpy and math preloaded, print() comes back, namespace fresh each call. "
-                "Check your work with blender_see."
+                "Run Python inside the running Blender. bpy and math are preloaded, print() comes back, the namespace"
+                " is fresh each call. Check your work with blender_see."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "Python to run in Blender. print() what you want back."}
+                    "code": {"type": "string"}
                 },
                 "required": ["code"]
             }
@@ -59,14 +61,12 @@ TOOLS = [
         "function": {
             "name": "blender_see",
             "description": (
-                "Look at Blender — returns an image you can see. mode='viewport' (default) "
-                "snapshots the 3D viewport; mode='render' truly renders through the scene "
-                "camera (slower). Check your work after blender_code changes."
+                "Look at Blender; returns an image you can see."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "mode": {"type": "string", "enum": ["viewport", "render"], "description": "viewport (default) or render."}
+                    "mode": {"type": "string", "enum": ["viewport", "render"], "description": "viewport (default) = a 3D viewport snapshot; render = a true render through the scene camera, slower"}
                 },
                 "required": []
             }

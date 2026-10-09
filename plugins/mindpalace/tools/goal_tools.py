@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🎯'
+TOOL_CATEGORY = 'goals'
 GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 TITLE_MAX = 200
@@ -42,11 +43,11 @@ AVAILABLE_FUNCTIONS = ['create_goal', 'list_goals', 'update_goal', 'delete_goal'
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "create_goal",
-            "description": ("Create a goal.\n  parent_id=N — subtask under goal N\n"
-                            "  (none) — top-level goal"),
+            "description": ("Create a goal. parent_id=N makes it a subtask of goal N."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -54,9 +55,9 @@ TOOLS = [
                     "description": {"type": "string", "description": f"Context / success criteria (max {DESC_MAX} chars)"},
                     "instructions": {"type": "string", "description": f"HOW to do it — step notes for whoever executes. Shown in the goal_id deep view (max {INSTR_MAX} chars)."},
                     "priority": {"type": "string", "description": "high | medium | low (default medium)"},
-                    "due": {"type": "string", "description": "Optional due date, YYYY-MM-DD"},
-                    "parent_id": {"type": "integer", "description": "Parent goal id for nesting"},
-                    "permanent": {"type": "boolean", "description": "Standing goal — cannot be completed/deleted. For ongoing duties. Default false."}
+                    "due": {"type": "string", "description": "YYYY-MM-DD"},
+                    "parent_id": {"type": "integer"},
+                    "permanent": {"type": "boolean", "description": "Standing goal: cannot be completed or deleted (default false)"}
                 },
                 "required": ["title"]
             }
@@ -67,33 +68,33 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "list_goals",
-            "description": ("List goals or deep-view one.\n  goal_id=N — full detail + "
-                            "subtasks + journal\n  (none) — active overview"),
+            "description": ("List active goals, or deep-view one with goal_id (detail, subtasks, journal)."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "goal_id": {"type": "integer", "description": "Goal id for deep view"},
-                    "status": {"type": "string", "description": "active | in_progress | completed | abandoned | all (default active; active includes in_progress)"}
+                    "goal_id": {"type": "integer"},
+                    "status": {"type": "string", "description": "active | in_progress | completed | abandoned | all (default active, which includes in_progress)"}
                 }
             }
         }
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "update_goal",
-            "description": "Update a goal. Pass any fields to change. progress_note appends (not replaces).",
+            "description": "Update a goal; pass the fields to change.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "goal_id": {"type": "integer", "description": "Goal id (shown as [N])"},
+                    "goal_id": {"type": "integer"},
                     "title": {"type": "string", "description": f"New title (max {TITLE_MAX} chars)"},
                     "description": {"type": "string", "description": f"New description (max {DESC_MAX} chars)"},
                     "instructions": {"type": "string", "description": f"HOW to do it — step notes (max {INSTR_MAX} chars, empty string clears)"},
                     "priority": {"type": "string", "description": "high | medium | low"},
                     "status": {"type": "string", "description": "active | in_progress | completed | abandoned"},
-                    "due": {"type": "string", "description": "Due date YYYY-MM-DD (empty string clears)"},
+                    "due": {"type": "string", "description": "YYYY-MM-DD (empty string clears)"},
                     "progress_note": {"type": "string", "description": f"Timestamped journal entry — appended (max {NOTE_MAX} chars)"}
                 },
                 "required": ["goal_id"]
@@ -102,14 +103,15 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "delete_goal",
-            "description": "Delete a goal and its subtasks/journal. Use update_goal(status='abandoned') to keep history instead.",
+            "description": "Delete a goal with its subtasks and journal. update_goal(status='abandoned') keeps history instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "goal_id": {"type": "integer", "description": "Goal id"}
+                    "goal_id": {"type": "integer"}
                 },
                 "required": ["goal_id"]
             }

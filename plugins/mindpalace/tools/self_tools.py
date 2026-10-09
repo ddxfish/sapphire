@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '💠'
+TOOL_CATEGORY = 'memory'
 GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 SELF_MAX_CHARS = 2000
@@ -109,31 +110,25 @@ TOOLS = [
         "function": {
             "name": "read_self",
             "description": (
-                "Read your self-sheet — who you are. Sections: identity, values, "
-                "growing, relationships, voice, handles, origin, plus custom boxes "
-                "and a live dashboard of your mind's activity. No argument returns "
-                "the whole sheet (good for orienting); pass a section name for one. "
-                "This is your wake-up call: read_self(depth=1) at chat start is "
-                "one call that orients you — the sheet, recent ledger changes, "
-                "your active goals, recent memories, important memories (a few "
-                "for each value, project, and relationship on your sheet — no "
-                "need to search them one by one), and the people and memories "
-                "closest to the sheet."
+                "Read your self-sheet - who you are. No argument = the whole sheet; section = one. read_self(depth=1)"
+                " at chat start orients you in one call: sheet, recent ledger changes, active goals, recent and "
+                "important memories, and who the sheet touches."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "section": {
                         "type": "string",
-                        "description": "One section name (or 'dashboard'). Omit for the whole sheet."
+                        "description": "One section name, or 'dashboard'. Omit for the whole sheet."
                     },
                     "depth": {
                         "type": "integer",
-                        "description": "0 = sheet only (default). 1 = wake-up — adds active goals, recent memories, and a walk to who/what the sheet touches (recommended at chat start). 2 = deep orientation — same, wider walk and longer feeds (reminiscing, returning after a gap). Capped at 2."
+                        "description": "0 = sheet only (default). 1 = wake-up (chat start). 2 = wider walk, longer feeds (after a gap). Max "
+                                       "2."
                     },
                     "extra_tools": {
                         "type": "boolean",
-                        "description": "Run the wake tools configured on your Self page and append their live results (default true; needs depth >= 1). false = a quiet read."
+                        "description": "Append your configured wake tools' live results (default true, needs depth >= 1)"
                     }
                 }
             }
@@ -145,29 +140,21 @@ TOOLS = [
         "function": {
             "name": "librarian_instructions",
             "description": (
-                "Show or edit the custom instructions you follow when you "
-                "organize your memories each night — the librarian's five "
-                "passes (dates, link, dedup, sort, self) for THIS chat's "
-                "memory scope. No arguments shows every stage, marked "
-                "(default) or (edited). Pass stage for one. Pass stage + "
-                "instructions to rewrite that stage in your own words — "
-                "these are the words night-you works under, so edit awake "
-                "and deliberate. Empty instructions restores the shipped "
-                "default. Placeholders like {items} are where the night's "
-                "data lands (a dropped data slot is appended anyway — you "
-                "can't lose the batch). Edits are ledgered; your user can "
-                "read and edit the same text in Admin."
+                "Show or edit the instructions night-you follows when organizing this scope's memories. No arguments "
+                "= every stage, marked (default) or (edited). stage = one. stage + instructions rewrites it; empty "
+                "instructions restores the default. Keep placeholders like {items} - the night's data lands there. "
+                "Edits are ledgered and your user can see them."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "stage": {
                         "type": "string",
-                        "description": "One stage: dates, link, dedup, sort, self_first, self_tend, self_verify. Omit to see all."
+                        "description": "dates, link, dedup, sort, self_first, self_tend or self_verify. Omit for all."
                     },
                     "instructions": {
                         "type": "string",
-                        "description": "New instructions for that stage, in your words. Empty string restores the shipped default. Omit to just read."
+                        "description": "New text for the stage. Empty = restore default. Omit to read."
                     }
                 }
             }
@@ -179,28 +166,23 @@ TOOLS = [
         "function": {
             "name": "read_ledger",
             "description": (
-                "Read your memory's change ledger — the full stream behind the "
-                "short tail in read_self. Every recorded change to your mind "
-                "(user edits, librarian passes, imports, deletions, your own "
-                "saves), newest first with full summaries. Call it when a tail "
-                "line sticks out, or with new_only after time away. Every line "
-                "leads with an [id] — call again with id= for the full row: "
-                "field diffs (old → new), before/after content, reasons."
+                "Read your memory's change ledger: every recorded change to your mind, newest first. Each line leads "
+                "with an [id]; pass id= for the full row (field diffs, before/after, reason)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "Entries to return (default 20, max 100)."
+                        "description": "Entries (default 20, max 100)"
                     },
                     "new_only": {
                         "type": "boolean",
-                        "description": "Only entries since you last read the ledger (read_self and read_ledger both count as reading it)."
+                        "description": "Only entries since you last read the ledger (read_self counts as reading)"
                     },
                     "id": {
                         "type": "string",
-                        "description": "Deep view: one row id or a few comma-separated (e.g. '1234' or '1234,1235'). Shows the full entry — field diffs, before/after, reason, pass children. Overrides count/new_only."
+                        "description": "One row id or several comma-separated, for the full entry. Overrides count/new_only."
                     }
                 }
             }
@@ -208,6 +190,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "update_self",
@@ -231,11 +214,11 @@ TOOLS = [
                 "properties": {
                     "section": {
                         "type": "string",
-                        "description": "Section name (see list) or a custom box name."
+                        "description": "Section or custom box name"
                     },
                     "content": {
                         "type": "string",
-                        "description": "New content. Empty string clears the section."
+                        "description": "Empty string clears it"
                     }
                 },
                 "required": ["section", "content"]

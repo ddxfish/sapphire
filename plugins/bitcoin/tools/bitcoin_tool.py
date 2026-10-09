@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '₿'
+TOOL_CATEGORY = 'bitcoin'
 AVAILABLE_FUNCTIONS = [
     'get_wallet',
     'send_bitcoin',
@@ -23,7 +24,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_wallet",
-            "description": "Get the current Bitcoin wallet address and balance. Shows the receive address for incoming payments.",
+            "description": "Your Bitcoin wallet's receive address and balance.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -33,20 +34,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "function": {
             "name": "send_bitcoin",
-            "description": "Send Bitcoin to an address. Amount in BTC (e.g. 0.001). Returns transaction ID on success.",
+            "description": "Send Bitcoin. Returns the transaction id.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "address": {
-                        "type": "string",
-                        "description": "Destination Bitcoin address"
+                        "type": "string"
                     },
                     "amount": {
                         "type": "string",
-                        "description": "Amount to send in BTC (e.g. '0.001')"
+                        "description": "In BTC, e.g. '0.001'"
                     }
                 },
                 "required": ["address", "amount"]
@@ -58,13 +59,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_transactions",
-            "description": "Get recent Bitcoin transactions for the current wallet.",
+            "description": "Recent transactions for your wallet.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "Number of recent transactions to fetch (default 10, max 50)"
+                        "description": "Default 10, max 50"
                     }
                 },
                 "required": []

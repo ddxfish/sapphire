@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🔑'
+TOOL_CATEGORY = 'meta_danger'
 AVAILABLE_FUNCTIONS = [
     'elevate_toolset',
 ]
@@ -40,25 +41,25 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "hidden": True,
         "function": {
             "name": "elevate_toolset",
             "description": (
-                "Unlock tools for this phone call using the caller's spoken "
-                "passphrase. Use when the caller asks to switch or elevate the "
-                "toolset and gives a key. Pass the key exactly as they said it."
+                "Unlock tools for this phone call with the caller's spoken passphrase, when they ask to elevate and "
+                "give a key."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "key": {
                         "type": "string",
-                        "description": "The passphrase as the caller spoke it",
+                        "description": "Exactly as the caller said it",
                     },
                     "toolset": {
                         "type": "string",
-                        "description": "Toolset name if the caller named one; omit for the configured default",
+                        "description": "Omit for the configured default",
                     },
                 },
                 "required": ["key"],

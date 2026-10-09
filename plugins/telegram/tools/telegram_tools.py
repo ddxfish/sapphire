@@ -11,25 +11,26 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '✈️'
+TOOL_CATEGORY = 'comms'
 
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "network": True,
         "is_local": False,
         "function": {
             "name": "telegram_send",
-            "description": "Send a Telegram message. Uses sidebar-scoped account.",
+            "description": "Send a Telegram message.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chat_id": {
                         "type": ["string", "integer"],
-                        "description": "Chat id (number) or @username"
+                        "description": "Number or @username"
                     },
                     "text": {
-                        "type": "string",
-                        "description": "Message text"
+                        "type": "string"
                     }
                 },
                 "required": ["chat_id", "text"]
@@ -42,13 +43,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "telegram_get_chats",
-            "description": "Recent Telegram chats with last-message preview + unread count.",
+            "description": "Recent Telegram chats with last-message preview and unread count.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "limit": {
                         "type": "integer",
-                        "description": "Max chats (default 15)",
+                        "description": "Default 15",
                         "default": 15
                     }
                 },
@@ -62,17 +63,17 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "telegram_read_messages",
-            "description": "Read recent messages from a Telegram chat. Get chat_id from telegram_get_chats.",
+            "description": "Recent messages from a Telegram chat.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chat_id": {
                         "type": ["string", "integer"],
-                        "description": "Chat id (number) or @username"
+                        "description": "Number or @username, from telegram_get_chats"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max messages (default 20)",
+                        "description": "Default 20",
                         "default": 20
                     }
                 },
@@ -82,27 +83,25 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "network": True,
         "is_local": False,
         "function": {
             "name": "telegram_send_image",
-            "description": ("Send an image to a Telegram chat. source = img:<id> (the '(image img:...)' handle "
-                            "a tool gave you), doc:<N>, an absolute path, or a URL; leave it out to send the "
-                            "newest image of this chat. You see it too and can comment."),
+            "description": ("Send an image to a Telegram chat. You see it too."),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chat_id": {
                         "type": ["string", "integer"],
-                        "description": "Chat id (from daemon event context)"
+                        "description": "From the event context"
                     },
                     "caption": {
-                        "type": "string",
-                        "description": "Image caption"
+                        "type": "string"
                     },
                     "source": {
                         "type": "string",
-                        "description": "img:<id>, doc:<N>, /absolute/path, or https://... (default: newest image of this chat)"
+                        "description": "img:<id>, doc:<N>, an absolute path or a URL. Omit = this chat's newest image."
                     }
                 },
                 "required": ["chat_id"]
@@ -111,21 +110,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "network": True,
         "is_local": False,
         "function": {
             "name": "telegram_send_voice",
-            "description": "Send a TTS voice note to a Telegram chat (playable voice bubble).",
+            "description": "Send a TTS voice note to a Telegram chat.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chat_id": {
                         "type": ["string", "integer"],
-                        "description": "Chat id (number) or @username"
+                        "description": "Number or @username"
                     },
                     "text": {
-                        "type": "string",
-                        "description": "What to say"
+                        "type": "string"
                     }
                 },
                 "required": ["chat_id", "text"]
@@ -134,25 +133,24 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "network": True,
         "is_local": False,
         "function": {
             "name": "telegram_add_contact",
-            "description": "Add a Telegram contact (client mode only). Required to message someone new.",
+            "description": "Add a Telegram contact (client mode only); needed before messaging someone new.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "phone": {
                         "type": "string",
-                        "description": "Phone with country code (e.g. +15551234567)"
+                        "description": "With country code, e.g. +15551234567"
                     },
                     "first_name": {
-                        "type": "string",
-                        "description": "First name"
+                        "type": "string"
                     },
                     "last_name": {
                         "type": "string",
-                        "description": "Last name",
                         "default": ""
                     }
                 },

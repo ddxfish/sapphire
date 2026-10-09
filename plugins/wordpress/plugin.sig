@@ -7,8 +7,8 @@
     "routes/manage.py": "sha256:a026fc7f25a21e36b16a625dbd244dc2b6e0096c601dcd48bcccf8c3c27a9ede",
     "tests/test_pin_gate.py": "sha256:8e447de3275ef87a1d1786f513ed437df284714ce621540dd2c897e68c326909",
     "tests/test_wordpress_tools.py": "sha256:a6e75dd6ad0213243d1a4d823463e4078ccd6cd2a3b9267b36a3d5f44114f053",
-    "tools/wordpress.py": "sha256:fe68620611fada8744ed1a0900be52a69e878a2b7759c00d02ca75de558e66d5",
+    "tools/wordpress.py": "sha256:21a6cd92524bd8267c19561f30609e667628cab55c2fc948f363911d801a920e",
     "web/index.js": "sha256:d293f10ea82ec898dd28618d9e7e3358c173545778a6fe543736b20b2ccb3589"
   },
-  "signature": "3ABR2VYXMeeza5/VO7zVdMEVpRzHrmuG+V47+A9Q+Yghi8OjvYDYJ4NZkVvBLwDnq45bxW+nS+DW0n+gYYYKDg=="
+  "signature": "y1cVUwNj0FlEColtVM65ExTDNlwpcfJvY5awcx7wb24hFpnLdkPjGO8S2+RSCI8uQ2pBbYPtNymSBuwdwc4uDQ=="
 }

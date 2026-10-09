@@ -426,10 +426,10 @@ class BaseProvider(ABC):
         Returns:
             Tools in provider-specific format
         """
-        # Strip internal fields that APIs don't accept
-        internal_fields = {'network', 'is_local', 'loop_warn_after', 'loop_warn_message', 'hidden'}
-        cleaned = []
-        for tool in tools:
-            clean_tool = {k: v for k, v in tool.items() if k not in internal_fields}
-            cleaned.append(clean_tool)
-        return cleaned
+        # Only the OpenAI tool spec goes over the wire: `type` and `function`.
+        # Everything else on a tool dict is Sapphire's own metadata beside the
+        # schema (is_local, network, hidden, loop_warn_*, category, writes, and
+        # whatever comes next). A deny-list missed the two newest and a strict
+        # local server (vLLM-style "Extra inputs are not permitted") refused
+        # the whole request - every agent turn, 2026-10-08. Allow-list now.
+        return [{k: v for k, v in tool.items() if k in ('type', 'function')} for tool in tools]

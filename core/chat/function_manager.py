@@ -49,6 +49,19 @@ SCOPE_REGISTRY = {
 }
 
 
+# The twelve tool categories (Krem, 2026-10-08). A tool file names one with
+# TOOL_CATEGORY = '...'; a tool overrides with its own top-level "category".
+# Not listed here → the tool's plugin name (its own group, asked for by name:
+# bitcoin, wordpress) or its module name. `meta_danger` is the label on the
+# tools that change HER - prompt, voice, model, toolset, scene; the name is
+# the warning. CATEGORY_SCOPE: the data scope a category's tools read or
+# write; a lane that closed that scope (an agent with memory_scope none)
+# sheds the whole category instead of carrying tools that answer "disabled".
+CATEGORIES = ('web', 'memory', 'knowledge', 'people', 'goals', 'files', 'system',
+              'devices', 'comms', 'media', 'meta_danger', 'agents')
+CATEGORY_SCOPE = {'memory': 'memory', 'knowledge': 'knowledge', 'people': 'people', 'goals': 'goal'}
+
+
 def set_tool_context(scopes: dict = None, **fields):
     """Set provenance fields for tool executors, dropping falsy values.
     When `scopes` (a snapshot dict from snapshot_scopes) is given, updates it
@@ -286,6 +299,16 @@ class FunctionManager:
         # a saved toolset (that's how the librarian's system toolset reaches
         # its verbs). Never filter the named-toolset path against this set.
         self._hidden_tools = set()
+        # Tool metadata (2026-10-08): function_name -> {category, writes, module,
+        # plugin}. The first thing Sapphire has ever known about a tool beyond
+        # its schema. `category` is one of CATEGORIES (a module's TOOL_CATEGORY,
+        # a tool's own top-level "category"), else the plugin's name, else the
+        # module's. A category resolves like a module name (an agent's
+        # toolset 'web, memory'), carries the scope its tools need (a lane
+        # whose scope is closed sheds them), and `writes` tells a reader from
+        # a writer (a self agent's read-only memory). Lives BESIDE the schema,
+        # like `hidden`/`network`: providers never see it.
+        self._tool_meta = {}
         # Track what was REQUESTED, not reverse-engineered
         self.current_toolset_name = "none"
         # Set when update_enabled_functions() is called with a dangling toolset
@@ -352,6 +375,7 @@ class FunctionManager:
                     settings_gate = getattr(module, 'SETTINGS_GATED', None)
                     emoji = getattr(module, 'EMOJI', '')
                     group = getattr(module, 'GROUP', None)
+                    category = getattr(module, 'TOOL_CATEGORY', None)
 
                     if not tools or not executor:
                         logger.warning(f"Module '{module_name}' missing TOOLS or execute()")
@@ -359,6 +383,7 @@ class FunctionManager:
 
                     if available_functions is not None:
                         tools = [t for t in tools if t['function']['name'] in available_functions]
+                    self._record_tool_meta(tools, module_name, category)
 
                     self.function_modules[module_name] = {
                         'module': module,
@@ -536,6 +561,7 @@ class FunctionManager:
                     group = namespace.get('GROUP')
                     mode_filter = namespace.get('MODE_FILTER')
                     settings_gate = namespace.get('SETTINGS_GATED')
+                    category = namespace.get('TOOL_CATEGORY')
 
                     # Check for function name conflicts BEFORE mutating state.
                     # A collision means mutual exclusivity by design (e.g. the
@@ -572,6 +598,7 @@ class FunctionManager:
                         '_plugin': plugin_name,
                         'get_tools': get_tools_fn,  # settings-aware rebuilder, or None
                     }
+                    self._record_tool_meta(tools, module_name, category, plugin_name)
 
                     # Track per-tool flags (safe — conflict check passed)
                     for tool in tools:
@@ -675,6 +702,7 @@ class FunctionManager:
                     self._loop_warn_map.pop(fname, None)
                     self._function_module_map.pop(fname, None)
                     self._hidden_tools.discard(fname)
+                    self._meta().pop(fname, None)
 
                 self.all_possible_tools = [t for t in self.all_possible_tools
                                            if t['function']['name'] not in func_names]
@@ -882,6 +910,7 @@ class FunctionManager:
                 'emoji': emoji,
                 '_plugin': plugin_name,
             }
+            self._record_tool_meta(tools, module_name, None, plugin_name)
 
             for tool in tools:
                 fname = tool['function']['name']
@@ -937,6 +966,7 @@ class FunctionManager:
                 self._function_module_map.pop(fname, None)
                 self._loop_warn_map.pop(fname, None)
                 self._hidden_tools.discard(fname)
+                self._meta().pop(fname, None)
 
             self.all_possible_tools = [t for t in self.all_possible_tools
                                        if t['function']['name'] not in func_names]
@@ -1055,11 +1085,75 @@ class FunctionManager:
                     t for t in self.all_possible_tools
                     if t['function']['name'] in fn_set)
 
+    # ── tool metadata: category, writes, scope ──────────────────────────────
+    def _record_tool_meta(self, tools, module_name, category=None, plugin_name=''):
+        meta = self.__dict__.setdefault('_tool_meta', {})    # fixtures build the manager bare
+        for tool in tools:
+            if not isinstance(tool, dict) or not isinstance(tool.get('function'), dict):
+                continue
+            name = tool['function'].get('name')
+            if not name:
+                continue
+            cat = str(tool.get('category') or category or plugin_name or module_name)
+            meta[name] = {'category': cat, 'writes': bool(tool.get('writes')),
+                          'module': module_name, 'plugin': plugin_name or ''}
+
+    def _meta(self):
+        return getattr(self, '_tool_meta', None) or {}        # fixtures build the manager bare
+
+    def tool_meta(self, name):
+        return self._meta().get(name)
+
+    def categories(self):
+        """{category: [function names]} for every tool loaded, hidden ones out
+        (a category resolves like a module: stale state never reaches it)."""
+        out = {}
+        for name, m in self._meta().items():
+            if name not in self._hidden_tools:
+                out.setdefault(m['category'], []).append(name)
+        return out
+
+    def tools_in_category(self, category, writes=None):
+        """Function names of one category; writes=False → the readers only,
+        True → the writers only (a self agent's read-only memory)."""
+        return [n for n, m in self._meta().items()
+                if m['category'] == category and n not in self._hidden_tools
+                and (writes is None or m['writes'] is writes)]
+
+    def _group_names(self, name):
+        """A category or a plugin's name → its tool names, or None. The third
+        thing a toolset word can be, after a module and a saved toolset."""
+        if not isinstance(name, str) or not name:
+            return None
+        meta = self._meta()
+        by_cat = [n for n, m in meta.items() if m['category'] == name and n not in self._hidden_tools]
+        if by_cat:
+            return by_cat
+        by_plugin = [n for n, m in meta.items() if m['plugin'] and m['plugin'] == name
+                     and n not in self._hidden_tools]
+        return by_plugin or None
+
+    def tool_scope(self, name):
+        """The data scope `name` needs, or None: its category's (CATEGORY_SCOPE),
+        else the ONE scope its plugin registered (an email tool needs email_scope),
+        else nothing - a web tool works with every scope closed."""
+        m = self._meta().get(name)
+        if not m:
+            return None
+        if m['category'] in CATEGORY_SCOPE:
+            return CATEGORY_SCOPE[m['category']]
+        if m['plugin']:
+            own = [k for k, r in SCOPE_REGISTRY.items() if r.get('plugin') == m['plugin'] and r.get('setting')]
+            if len(own) == 1:
+                return own[0]
+        return None
+
     def resolve_tool_names(self, enabled_names: list) -> tuple:
         """THE toolset name rule — pure, no state touched (broadsword H12).
 
         `enabled_names` is what a chat/task setting carries: ["all"], ["none"],
-        [<module>], [<saved toolset>], [<unknown>] or an ad-hoc function list.
+        [<module>], [<saved toolset>], [<category or plugin>], [<unknown>] or
+        an ad-hoc function list.
         Returns (names, label, dangling):
           names    — function names the selection resolves to
           label    — what current_toolset_name would become
@@ -1084,6 +1178,9 @@ class FunctionManager:
                          if n not in self._hidden_tools], one, None)
             if toolset_manager.toolset_exists(one):
                 return (list(toolset_manager.get_toolset_functions(one)), one, None)
+            group = self._group_names(one)          # a category, or a plugin by name (2026-10-08)
+            if group is not None:
+                return (group, one, None)
             # Single-name input that's NOT a known toolset / module → a dangling
             # reference (deleted toolset, plugin removed, stale chat settings).
             # "none" is safe-by-default; the caller surfaces the bad name.
@@ -1102,15 +1199,18 @@ class FunctionManager:
                                 if n not in self._hidden_tools]
                 elif toolset_manager.toolset_exists(name):
                     fn_names = toolset_manager.get_toolset_functions(name)
+                elif self._group_names(name) is not None:
+                    fn_names = self._group_names(name)
                 else:
-                    logger.warning(f"extra_toolsets: '{name}' is no known module/toolset — skipped")
+                    logger.warning(f"extra_toolsets: '{name}' is no known module/toolset/category — skipped")
                     continue
                 out |= set(fn_names) - have - out
             except Exception as e:
                 logger.warning(f"extra_toolsets '{name}' union failed: {e}")
         return out
 
-    def resolve_tools(self, toolset_name, extra_toolsets=None, add_tools=None, drop_tools=None):
+    def resolve_tools(self, toolset_name, extra_toolsets=None, add_tools=None, drop_tools=None,
+                      closed_scopes=None):
         """READ-ONLY tool schemas for a toolset setting + extras: the same
         names as the live setter would enable, then the mode filter and the
         settings gate. None when nothing resolves. Used by every lane that
@@ -1119,7 +1219,10 @@ class FunctionManager:
         the filters - a lane's own rule about single tools. DROP FIRST: a lane
         that names a tool in both means "whatever the toolset said, THIS one
         is on" (a `self` agent drops every memory tool and adds the read set;
-        add-then-drop erased the adds and the agent ran memory-less, 2026-10-08)."""
+        add-then-drop erased the adds and the agent ran memory-less, 2026-10-08).
+        closed_scopes: scope keys ('memory', 'email', ...) the lane has shut;
+        a tool whose scope (tool_scope) is among them is shed - the lean agent
+        carried nine tools that could only answer "scope disabled"."""
         if (not toolset_name or toolset_name == "none") and not extra_toolsets and not add_tools:
             return None
         names, _label, dangling = self.resolve_tool_names([toolset_name] if toolset_name else ["none"])
@@ -1129,6 +1232,11 @@ class FunctionManager:
         want |= self._extra_names(extra_toolsets, want)
         want -= set(drop_tools or ())
         want |= set(add_tools or ())
+        if closed_scopes:
+            shed = {n for n in want if self.tool_scope(n) in closed_scopes}
+            if shed:
+                logger.info(f"resolve_tools: {len(shed)} tool(s) shed, their scope is closed here: {sorted(shed)}")
+                want -= shed
         tools = [t for t in self.all_possible_tools if t['function']['name'] in want]
         tools = self._apply_settings_gate(self._apply_mode_filter(tools))
         return tools or None

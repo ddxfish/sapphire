@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🌐'
+TOOL_CATEGORY = 'web'
 
 WORK_SEARCH_MAX_RESULTS = 8
 WORK_WEBSITE_MAX_CONTENT = 12000
@@ -35,11 +36,11 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "web_search",
-            "description": "Search the web. Returns titles + URLs. Use get_website to read content.",
+            "description": "Search the web. Returns titles + URLs; get_website reads one.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search phrase"}
+                    "query": {"type": "string"}
                 },
                 "required": ["query"]
             }
@@ -51,15 +52,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_website",
-            "description": ("Fetch full content of a webpage. show_image_urls='true' appends the page's image "
-                            "URLs (alt, size); 'only' returns just that list — hand one to web_view_images(url=) "
-                            "to look at it."),
+            "description": ("Fetch a webpage's full content."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL"},
+                    "url": {"type": "string"},
                     "show_image_urls": {"type": "string", "enum": ["false", "true", "only"],
-                                        "description": "false (default) = text only; true = text + image URLs; only = image URLs alone"}
+                                        "description": "true = also list the page's image URLs; only = just that list (web_view_images(url=) views one)"}
                 },
                 "required": ["url"]
             }
@@ -71,11 +70,11 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_wikipedia",
-            "description": "Wikipedia article summary for a topic.",
+            "description": "Wikipedia article summary.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "topic": {"type": "string", "description": "Topic"}
+                    "topic": {"type": "string"}
                 },
                 "required": ["topic"]
             }
@@ -87,11 +86,11 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "research_topic",
-            "description": "Advanced research. Returns multiple pages of data on a topic.",
+            "description": "Deeper research: several pages of data on a topic.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Topic or question to research"}
+                    "query": {"type": "string"}
                 },
                 "required": ["query"]
             }
@@ -103,12 +102,12 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_site_links",
-            "description": "Internal text links from a webpage (anchor + URL). Explore a site's structure.",
+            "description": "A webpage's internal links (anchor + URL), to explore a site.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL"},
-                    "strip_nav": {"type": "boolean", "description": "Strip header/footer/nav (default true)"}
+                    "url": {"type": "string"},
+                    "strip_nav": {"type": "boolean", "description": "Drop header/footer/nav (default true)"}
                 },
                 "required": ["url"]
             }
@@ -120,21 +119,17 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "web_view_images",
-            "description": ("Search the web for images, or look at one image URL. query + count (default 6, "
-                            "max 12) + page (default 1) → the user gets numbered tiles and you get the same "
-                            "pictures as a numbered contact sheet (view=true, the default; count=1 = the one "
-                            "image). Every hit carries an img: handle = its thumbnail, kept in this chat: "
-                            "memory_view_image(image_id=img:...) to look again, memory_save_image(img:...) to keep it. "
-                            "'full' is the original on its host (bigger, may refuse). url= views one image. "
-                            "Bing answers well-known subjects best — lead with the famous part."),
+            "description": ("Search the web for images, or view one image URL. The user gets numbered tiles; you get the same "
+                            "pictures as a contact sheet. Each hit has an img: handle - memory_view_image(image_id=) to look "
+                            "again, memory_save_image() to keep it. Lead the query with the well-known part."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "What to search for"},
-                    "url": {"type": "string", "description": "An image URL to view instead of searching"},
-                    "count": {"type": "integer", "description": "Results per page, 1-12 (default 6)"},
-                    "page": {"type": "integer", "description": "Page of results, from 1 (default 1) — the next page has new pictures"},
-                    "view": {"type": "boolean", "description": "Look at them yourself (default true; false = tiles for the user only)"}
+                    "query": {"type": "string"},
+                    "url": {"type": "string", "description": "One image URL to view instead of searching"},
+                    "count": {"type": "integer", "description": "1-12 per page (default 6)"},
+                    "page": {"type": "integer", "description": "Results page, from 1"},
+                    "view": {"type": "boolean", "description": "false = tiles for the user only (default true)"}
                 },
                 "required": []
             }

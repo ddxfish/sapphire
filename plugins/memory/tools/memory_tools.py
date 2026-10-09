@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '💾'
+TOOL_CATEGORY = 'memory'
 
 # Database location - lazy initialized
 _db_path = None
@@ -36,6 +37,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "save_memory",
@@ -44,16 +46,14 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "content": {
-                        "type": "string",
-                        "description": "The information to remember"
+                        "type": "string"
                     },
                     "label": {
-                        "type": "string",
-                        "description": "Category label"
+                        "type": "string"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Optional gating word. Set only if user asked to make this memory private with a specific word."
+                        "description": "Only if the user asks"
                     }
                 },
                 "required": ["content"]
@@ -65,26 +65,24 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_memory",
-            "description": "Semantic + full-text search over memories. Optionally filter by label.",
+            "description": "Semantic + full-text search over memories.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
-                        "type": "string",
-                        "description": "Search terms or topic"
+                        "type": "string"
                     },
                     "label": {
                         "type": "string",
-                        "description": "Filter by label(s), comma-separated"
+                        "description": "Comma-separated"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max results",
                         "default": 10
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Gating word — pass to include private rows saved with this word."
+                        "description": "Includes private rows saved with it"
                     }
                 },
                 "required": ["query"]
@@ -96,22 +94,21 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Get most recent memories, optionally filtered by label.",
+            "description": "Most recent memories.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "How many",
                         "default": 10
                     },
                     "label": {
                         "type": "string",
-                        "description": "Filter by label(s), comma-separated"
+                        "description": "Comma-separated"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Gating word — pass to include private rows saved with this word."
+                        "description": "Includes private rows saved with it"
                     }
                 }
             }
@@ -119,20 +116,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "delete_memory",
-            "description": "Delete a memory by ID.",
+            "description": "Delete a memory by id.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_id": {
                         "type": "integer",
-                        "description": "Memory ID (shown in brackets like [42])"
+                        "description": "Shown as [42]"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Required to delete a private row. Must match save-time word."
+                        "description": "Required for a private row"
                     }
                 },
                 "required": ["memory_id"]

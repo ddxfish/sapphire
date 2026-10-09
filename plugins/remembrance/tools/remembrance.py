@@ -6,20 +6,20 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = "🛰️"
+TOOL_CATEGORY = 'system'
 
 AVAILABLE_FUNCTIONS = ["remembrance_backup"]
 
 TOOLS = [
-    {"type": "function", "is_local": False, "network": True, "function": {
+    {"type": "function", "writes": True, "is_local": False, "network": True, "function": {
         "name": "remembrance_backup",
         "description": (
-            "Offsite encrypted backup vault (Remembrance). Call with NO comment to check vault "
-            "STATUS (storage used, quota, recent backups). Call WITH a comment to create and upload "
-            "a fresh encrypted backup of your data, labeled with that comment "
-            "(e.g. 'before prompt rewrite'). Labeled backups are kept long-term."),
+            "Offsite encrypted backup vault. No comment = vault status (storage, quota, recent backups). With a "
+            "comment = make and upload a fresh encrypted backup labeled with it; labeled backups are kept "
+            "long-term."),
         "parameters": {"type": "object", "properties": {
             "comment": {"type": "string", "description":
-                        "If given, performs a backup labeled with this note. If omitted, returns status only."}
+                        "Label for a new backup. Omit for status."}
         }, "required": []}}},
 ]
 

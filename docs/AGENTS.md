@@ -38,6 +38,15 @@ Common spawn options: `name` (a workspace or session *directory* name — not wh
 called), `model`, `context` (extra material appended to the mission). Each kind adds its own —
 `llm`: `toolset`, `prompt`, `memory`; `claude_code`: `mode` (project / plugin / core), `capabilities`, `effort`.
 
+**What an `llm` agent carries** (`toolset`): one word or several — `'web, files'`. Each word is a
+**tool category** (`web`, `memory`, `knowledge`, `people`, `goals`, `files`, `system`, `devices`,
+`comms`, `media`, `meta_danger`, `agents`), a saved toolset from Settings → Toolsets, or a plugin
+by name (`mindpalace`; a few stand alone on purpose — `bitcoin`, `wordpress` — and come only when
+named). `agent_spawn('llm')` with no mission lists the words with what is installed in each. Tools
+whose data scope the agent does not have are shed automatically — the lean `agent` no longer carries
+memory, knowledge or goal tools that could only answer "scope disabled". `meta_danger` is the label on
+the tools that change *her* (prompt, voice, model, toolset, scene); the name is the warning.
+
 **Who an `llm` agent is** (`prompt`): `agent` is the lean worker — no data scopes at all. A persona
 *name* is that persona in full, every scope it has. **`self`** is this chat's persona as *herself*:
 her identity, her **memory** (the spawning chat's own memory scope — nothing she passes can name

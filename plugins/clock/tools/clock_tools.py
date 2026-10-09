@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '⏰'
+TOOL_CATEGORY = 'system'
 
 _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 _PING_WAV = _PLUGIN_DIR / 'ping.wav'
@@ -41,22 +42,23 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_time",
-            "description": "Current date/time plus all active timers, stopwatches, and alarms by name.",
+            "description": "Current date/time plus your active timers, stopwatches and alarms.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "set_timer",
-            "description": "Create or cancel a countdown timer by name. Pings on expiry.",
+            "description": "Create or cancel a named countdown timer. Pings on expiry.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "time": {"type": "string", "description": "Duration like '5m', '30s', '1h 10m'. Required unless delete=true."},
-                    "name": {"type": "string", "description": "Timer name. Reusing replaces."},
-                    "delete": {"type": "boolean", "description": "If true, cancel by name instead. Default false."}
+                    "time": {"type": "string", "description": "e.g. '5m', '30s', '1h 10m'"},
+                    "name": {"type": "string", "description": "Reusing a name replaces it"},
+                    "delete": {"type": "boolean", "description": "true = cancel by name"}
                 },
                 "required": ["name"]
             }
@@ -64,15 +66,16 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "set_stopwatch",
-            "description": "Start a named stopwatch. Subsequent calls show elapsed. delete=true removes.",
+            "description": "Start a named stopwatch; calling again shows elapsed.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Stopwatch name. Reusing returns elapsed."},
-                    "delete": {"type": "boolean", "description": "If true, remove by name. Default false."}
+                    "name": {"type": "string"},
+                    "delete": {"type": "boolean", "description": "true = remove"}
                 },
                 "required": ["name"]
             }
@@ -80,16 +83,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "set_alarm",
-            "description": "Create or cancel a one-shot alarm at a time-of-day. Survives reboot.",
+            "description": "Create or cancel a one-shot alarm at a time of day. Survives reboot.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "time": {"type": "string", "description": "Time of day like '07:00', '2:30pm'. Required unless delete=true."},
-                    "name": {"type": "string", "description": "Alarm name. Reusing replaces."},
-                    "delete": {"type": "boolean", "description": "If true, cancel by name. Default false."}
+                    "time": {"type": "string", "description": "e.g. '07:00', '2:30pm'"},
+                    "name": {"type": "string", "description": "Reusing a name replaces it"},
+                    "delete": {"type": "boolean", "description": "true = cancel by name"}
                 },
                 "required": ["name"]
             }

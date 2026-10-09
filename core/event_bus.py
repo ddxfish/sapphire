@@ -19,6 +19,7 @@ class EventBus:
         self._async_subscribers: Dict[str, tuple] = {}  # sub_id -> (asyncio.Queue, loop)
         self._replay_buffer: deque = deque(maxlen=replay_size)
         self._subscriber_counter = 0
+        self._hooks = {}                 # event type -> (fn, ...): server-side listeners, see on()
         # sub_ids whose asyncio queue overflowed (marked from the loop thread
         # in _async_put; set ops are GIL-atomic). Publish reaps them (N30).
         self._async_overflow = set()
@@ -95,7 +96,26 @@ class EventBus:
             # can't accumulate dead ids.
             self._async_overflow &= set(self._async_subscribers.keys())
 
+        # Server-side listeners (on()): called here, outside the lock. They are
+        # not subscribers: subscriber_count() means "a browser tab is listening".
+        for fn in self._hooks.get(event_type, ()):
+            try:
+                fn(event)
+            except Exception as e:
+                logger.error(f"Listener for {event_type} failed: {e}")
+
         logger.debug(f"Published: {event_type}")
+
+    def on(self, event_types, fn):
+        """Call fn(event) whenever one of these event types is published, on
+        the publisher's thread: fn must return at once (set a flag, wake a
+        worker). For code inside the server that follows events; a browser
+        uses subscribe()."""
+        with self._lock:
+            hooks = dict(self._hooks)
+            for t in event_types:
+                hooks[t] = hooks.get(t, ()) + (fn,)
+            self._hooks = hooks
     
     def _async_put(self, sub_id, aq, event):
         """Runs ON the subscriber's event loop. Catches QueueFull where the

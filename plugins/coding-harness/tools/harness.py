@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001f9f0'
+TOOL_CATEGORY = 'files'
 AVAILABLE_FUNCTIONS = [
     'read_file', 'write_file', 'edit_file',
     'list_files', 'search_files', 'run_command',
@@ -50,13 +51,14 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "read_file",
-            "description": "Read a text file with line numbers. Paths are relative to your working directory. Long files are windowed; the output says how to read more.",
+            "description": "Read a text file with line numbers. Paths are relative to your working directory. Long files are "
+                           "windowed.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path"},
-                    "start_line": {"type": "integer", "description": "First line to show (default 1)"},
-                    "end_line": {"type": "integer", "description": "Last line to show (default start_line+499)"}
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer", "description": "Default 1"},
+                    "end_line": {"type": "integer", "description": "Default start_line+499"}
                 },
                 "required": ["path"]
             }
@@ -64,16 +66,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "write_file",
-            "description": "Create or overwrite a text file. Parent folders are created automatically. Set append=true to add to the end instead of overwriting.",
+            "description": "Create or overwrite a text file; parent folders are created.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path"},
-                    "content": {"type": "string", "description": "Full file content (or text to append)"},
-                    "append": {"type": "boolean", "description": "Append instead of overwrite (default false)"}
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "append": {"type": "boolean", "description": "true = add to the end instead"}
                 },
                 "required": ["path", "content"]
             }
@@ -81,17 +84,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "edit_file",
-            "description": "Replace exact text in a file. old_text must match exactly (same whitespace) and appear once — read_file first and copy it precisely. Set replace_all=true to replace every occurrence.",
+            "description": "Replace exact text in a file. old_text must match exactly and appear once - read_file first.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path"},
-                    "old_text": {"type": "string", "description": "Exact text to replace"},
-                    "new_text": {"type": "string", "description": "Replacement text"},
-                    "replace_all": {"type": "boolean", "description": "Replace all occurrences (default false)"}
+                    "path": {"type": "string"},
+                    "old_text": {"type": "string"},
+                    "new_text": {"type": "string"},
+                    "replace_all": {"type": "boolean", "description": "true = every occurrence"}
                 },
                 "required": ["path", "old_text", "new_text"]
             }
@@ -102,12 +106,12 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "list_files",
-            "description": "List a directory (default: working directory). Give pattern like '**/*.py' to glob-match files recursively.",
+            "description": "List a directory (default: working directory).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Directory to list (default working directory)"},
-                    "pattern": {"type": "string", "description": "Glob pattern, e.g. '*.py' or '**/*.js'"}
+                    "path": {"type": "string"},
+                    "pattern": {"type": "string", "description": "Glob, recursive with **, e.g. '**/*.py'"}
                 },
                 "required": []
             }
@@ -118,14 +122,14 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_files",
-            "description": "Search file contents with a regex. Returns file:line matches with the matching line.",
+            "description": "Search file contents with a regex. Returns file:line matches.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string", "description": "Regex to search for"},
-                    "path": {"type": "string", "description": "Directory to search (default working directory)"},
-                    "glob": {"type": "string", "description": "Only search files matching this name pattern, e.g. '*.py'"},
-                    "max_results": {"type": "integer", "description": "Max matches returned (default 50)"}
+                    "pattern": {"type": "string", "description": "Regex"},
+                    "path": {"type": "string", "description": "Default working directory"},
+                    "glob": {"type": "string", "description": "Only files matching, e.g. '*.py'"},
+                    "max_results": {"type": "integer", "description": "Default 50"}
                 },
                 "required": ["pattern"]
             }
@@ -133,17 +137,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
+        "category": "system",
         "is_local": True,
         "function": {
             "name": "run_command",
-            "description": "Run a shell command. Fresh shell each call — cd doesn't persist, use the cwd param. Prefer $HOME over ~ (quoted ~ goes literal). Every process the command starts is terminated when the call returns — backgrounding with & cannot outlive the call. grep/diff exit 1 = no match, not an error. Long output keeps start + tail.",
+            "description": "Run a shell command. Fresh shell each call: cd does not persist (use cwd), and every process it "
+                           "starts dies when the call returns, even with &. Prefer $HOME over ~. grep/diff exit 1 = no match, "
+                           "not an error. Long output keeps start + tail.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "Shell command"},
-                    "cwd": {"type": "string", "description": "Directory to run in (default working directory)"},
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
                     "timeout": {"type": "integer", "description": "Seconds (default 120)"},
-                    "max_output": {"type": "integer", "description": "Override output char limit for this call"}
+                    "max_output": {"type": "integer", "description": "Output char limit for this call"}
                 },
                 "required": ["command"]
             }

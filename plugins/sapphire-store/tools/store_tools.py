@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🏪'
+TOOL_CATEGORY = 'meta_danger'
 AVAILABLE_FUNCTIONS = ['store_browse', 'store_install']
 
 DEFAULT_STORE_URL = "https://sapphireblue.dev/wp-json/sapphire-store/v1/"
@@ -24,13 +25,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "store_browse",
-            "description": "Browse the Sapphire plugin store.\n  search='X' — query by name/keyword/slug (exact slug = full detail)\n  category='X' — filter\n  (none) — full list",
+            "description": "Browse the Sapphire plugin store. No arguments = the full list.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "search": {
                         "type": "string",
-                        "description": "Name, keyword, or exact slug"
+                        "description": "Name, keyword, or an exact slug for full detail"
                     },
                     "category": {
                         "type": "string",
@@ -48,16 +49,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "function": {
             "name": "store_install",
-            "description": "Install a plugin from the Sapphire Store by its slug. Downloads from GitHub, GitLab, or a direct .zip URL and installs locally. Requires user confirmation before proceeding.",
+            "description": "Install a plugin from the Sapphire Store by slug. The user confirms first.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "slug": {
                         "type": "string",
-                        "description": "The plugin slug to install (from store_browse results)"
+                        "description": "From store_browse"
                     }
                 },
                 "required": ["slug"]

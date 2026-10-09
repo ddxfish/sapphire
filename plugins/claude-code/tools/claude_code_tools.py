@@ -16,21 +16,24 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\u26a1'
+TOOL_CATEGORY = 'meta_danger'
 AVAILABLE_FUNCTIONS = ['activate_plugin']
 
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "activate_plugin",
-            "description": "Activate a plugin after a claude_code agent built it in plugin mode. Runs structural validation, rescans plugins, and enables the new plugin. Call it with the plugin's directory name once the agent reports done.",
+            "description": "Activate a plugin a claude_code agent built in plugin mode: validates, rescans and enables it. Call "
+                           "once the agent reports done.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Plugin name (directory name in user/plugins/)"
+                        "description": "Its directory name in user/plugins/"
                     }
                 },
                 "required": ["name"]

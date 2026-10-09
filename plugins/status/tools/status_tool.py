@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = "📡"
+TOOL_CATEGORY = 'system'
 
 TOOLS = [
     {
@@ -20,11 +21,11 @@ TOOLS = [
                     "detail": {
                         "type": "string",
                         "enum": ["brief", "full"],
-                        "description": "brief=key info + time; full=everything"
+                        "description": "brief = key info + time; full = everything"
                     },
                     "include_errors": {
                         "type": "boolean",
-                        "description": "Include last 20 WARN/ERROR log lines (default false)"
+                        "description": "Last 20 WARN/ERROR log lines (default false)"
                     }
                 },
                 "required": []

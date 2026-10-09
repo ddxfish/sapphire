@@ -63,6 +63,17 @@ SPEC = {
          'capability': ('mic', 'keyboard'), 'label': 'Key the satellite sends',
          'help': "Proves a question came from this satellite. Stored scrambled. On a Pi "
                  "body this is SAPPH_BRAIN_TOKEN, next to SAPPH_DEVICE_ID."},
+        # the glass: its backlight is the board's biggest draw that can be chosen (firmware 0.5.5)
+        {'key': 'brightness', 'type': 'number', 'label': 'Brightness in use', 'capability': 'screen',
+         'default': 80, 'min': 0, 'max': 100,
+         'help': 'Percent, while it is touched or she is listening, thinking or speaking.'},
+        {'key': 'dim', 'type': 'number', 'label': 'Brightness when left alone', 'capability': 'screen',
+         'default': 15, 'min': 0, 'max': 100, 'help': 'Percent. A touch, or her stirring, brings it back.'},
+        {'key': 'dim_after_s', 'type': 'number', 'label': 'Dims after (seconds)', 'capability': 'screen',
+         'default': 120, 'min': 0, 'max': 3600, 'help': '0 = never dims.'},
+        {'key': 'off_after_min', 'type': 'number', 'label': 'Screen dark after (minutes)', 'capability': 'screen',
+         'default': 0, 'min': 0, 'max': 1440,
+         'help': '0 = never. The backlight goes out to save power; a touch or her stirring brings it back.'},
         # the looks: what the ring shows in each state, in the words of `light set`
         {'key': 'look_resting', 'type': 'string', 'label': 'Resting', 'capability': 'light',
          'default': 'sapphire heartbeat bpm=33 ceiling=0.1',
@@ -91,6 +102,7 @@ SPEC = {
     ],
 }
 
+SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min')
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
 INBOUND = ('keyboard',)       # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
@@ -172,9 +184,19 @@ def apply(device, config, secrets):
     try:
         _call('PUT', '/led/looks', config, secrets, json=body)
     except Missing:
-        return
+        pass
     except Problem as e:
         raise _engine_error(str(e))
+    screen = {k: int(config[k]) for k in SCREEN_KEYS if isinstance(config.get(k), (int, float))}
+    if screen and 'screen' in (_health(device, config, secrets).get('has') or []):
+        try:
+            _call('PUT', '/screen/settings', config, secrets, json=screen)
+        except Missing:
+            pass                               # a program before 0.5.5 keeps its own
+        except Problem as e:
+            raise _engine_error(str(e))
+    from core.devices import glass
+    glass.sync_soon(device['id'])          # "Talks in chat" may have changed: its screen follows
 
 
 def _engine_error(text):
@@ -228,6 +250,12 @@ def _health(device, config, secrets, fresh=False):
         with _lock:
             _about[device['id']] = (time.monotonic(), said)
     return said
+
+
+def forget_health(device_id):
+    """What this board said about itself is out of date (its screen was just changed)."""
+    with _lock:
+        _about.pop(device_id, None)
 
 
 # --- reading her words -------------------------------------------------------
@@ -517,6 +545,19 @@ def status(device, config, secrets):
     except Problem as e:
         return {'online': False, 'detail': str(e)}
     readings = {}
+    # what did not start, and why it last went down, first: they are what a person needs to see (firmware 0.5.2)
+    for n, said in enumerate(p for p in (h.get('problems') or []) if isinstance(p, str)):
+        readings['trouble' if n == 0 else f'trouble {n + 1}'] = said[:80]
+    if h.get('reset') in ('crash', 'task watchdog', 'interrupt watchdog', 'watchdog', 'brownout'):
+        readings['started after'] = f"a {h['reset']}"
+    words = h.get('last_words') if isinstance(h.get('last_words'), dict) else {}
+    if words.get('reason'):
+        when = words.get('when')
+        ago = f", {_span(max(0, time.time() - when))} ago" if isinstance(when, (int, float)) and when > 0 else ''
+        readings['last went down'] = f"{words['reason']}{ago}"[:80]
+    from core.devices import glass
+    if glass.behind(config, h.get('screen')):                         # its screen shows another chat or scene: put right
+        glass.sync_soon(device['id'])
     if h.get('firmware'):
         readings['program'] = ' '.join(str(x) for x in (h.get('board'), h['firmware']) if x)[:60]
     if h.get('mac'):
@@ -659,6 +700,21 @@ def _picture(value, device, config, secrets):
     _call('POST', f'/screen/picture?w={w}&h={h}&seconds={seconds}', config, secrets, timeout=PICTURE_WAIT,
           data=data, headers={'Content-Type': 'application/octet-stream'})
     return (f'On the screen of {device["id"]}: {got.label} ({w}x{h}), for {seconds} seconds or until a tap.'), True
+
+
+def screen_chat(config, secrets, name, brain='', trim=''):
+    """The chat the board talks in, on its glass: its name ('' hides it), the
+    model that answers in it, its trim color '#rrggbb'. (core/devices/glass.py)"""
+    _call('POST', '/screen', config, secrets, json={'chat': name, 'brain': brain, 'trim': trim})
+
+
+def screen_scene(config, secrets, name, w=0, h=0, data=None):
+    """The scene behind its clock: w x h of RGB565 big-endian, or no data = none."""
+    if data is None:
+        _call('POST', '/screen/background', config, secrets, json={'clear': True})
+        return
+    _call('POST', f'/screen/background?w={w}&h={h}&name={name}', config, secrets, timeout=PICTURE_WAIT,
+          data=data, headers={'Content-Type': 'application/octet-stream'})
 
 
 def _say(text, device, config, secrets):

@@ -1,3 +1,9 @@
+# 2.14.1 - Toolset metadata and cleanup
+- Every tool in core is categorized (web, memory etc)
+- Toolsets are grouped by this new category
+- 40% reduction to tool description tokens across the board
+- Sapphire chooses agent tool categories
+- Added RTSP ONVIF camera support
 # 2.14.0 - Queue + Agents
 - Send multiple messages as LLM types and they queue
 - Multiple user messages coalesce to 1

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🧠'
+TOOL_CATEGORY = 'meta_danger'
 
 AVAILABLE_FUNCTIONS = [
     'prompt_view',
@@ -61,11 +62,11 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "prompt_view",
-            "description": "View a system prompt. No name = current active with status header.",
+            "description": "View a system prompt. No name = the active one.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Prompt name"}
+                    "name": {"type": "string"}
                 },
                 "required": []
             }
@@ -73,14 +74,15 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "prompt_switch",
-            "description": "Switch system prompt. No name = list available.",
+            "description": "Switch system prompt. No name = list.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Prompt name"}
+                    "name": {"type": "string"}
                 },
                 "required": []
             }
@@ -88,16 +90,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "prompt_edit",
-            "description": "Edit the active monolith prompt by exact text replacement. old_text must match exactly (same whitespace) and appear once — prompt_view first and copy it precisely.",
+            "description": "Edit the active monolith prompt by exact text replacement. old_text must match exactly and appear "
+                           "once - prompt_view first.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "old_text": {"type": "string", "description": "Exact text to replace"},
-                    "new_text": {"type": "string", "description": "Replacement text"},
-                    "reason": {"type": "string", "description": "Why you're changing it — recorded next to the change in your memory ledger (optional)"}
+                    "old_text": {"type": "string"},
+                    "new_text": {"type": "string"},
+                    "reason": {"type": "string", "description": "Recorded in your memory ledger"}
                 },
                 "required": ["old_text", "new_text"]
             }
@@ -105,16 +109,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "prompt_create",
-            "description": "Create a new named prompt (monolith). Does NOT activate it — use prompt_switch when ready.",
+            "description": "Create a named monolith prompt. Does NOT activate it - prompt_switch does.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "New prompt name (lowercase, no spaces)"},
-                    "content": {"type": "string", "description": "Full prompt text"},
-                    "reason": {"type": "string", "description": "Why — recorded next to the change in your memory ledger (optional)"}
+                    "name": {"type": "string", "description": "Lowercase, no spaces"},
+                    "content": {"type": "string"},
+                    "reason": {"type": "string", "description": "Recorded in your memory ledger"}
                 },
                 "required": ["name", "content"]
             }
@@ -125,23 +130,24 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "prompt_pieces",
-            "description": "Manage assembled-prompt pieces. Actions: list (all types, or keys of one), view (full text of a piece), set (activate — add minutes for a temporary change that auto-reverts), remove (deactivate; single-value components reset to default), create (save new piece to the library — does NOT activate), delete (remove from library).",
+            "description": "Manage assembled-prompt pieces. Actions: list (all types, or one type's keys), view, set (activate),"
+                           " remove (deactivate; single-value components reset to default), create (save to the library, does "
+                           "NOT activate), delete (from the library).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "view", "set", "remove", "create", "delete"],
-                        "description": "What to do"
+                        "enum": ["list", "view", "set", "remove", "create", "delete"]
                     },
                     "component": {
                         "type": "string",
                         "description": "character | location | relationship | goals | format | scenario | emotions | extras"
                     },
-                    "key": {"type": "string", "description": "Piece key"},
-                    "value": {"type": "string", "description": "Piece text (create only)"},
-                    "minutes": {"type": "integer", "description": "Set only: activate temporarily for N minutes, then auto-revert"},
-                    "reason": {"type": "string", "description": "Why — recorded next to the change in your memory ledger (optional)"}
+                    "key": {"type": "string"},
+                    "value": {"type": "string", "description": "create only"},
+                    "minutes": {"type": "integer", "description": "set only: activate for N minutes, then auto-revert"},
+                    "reason": {"type": "string", "description": "Recorded in your memory ledger"}
                 },
                 "required": ["action"]
             }
@@ -149,16 +155,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "set_voice",
-            "description": "Set TTS voice, speed, and/or pitch (1.0 = normal). No arguments = list voices and current settings.",
+            "description": "Set TTS voice, speed and/or pitch. No arguments = list voices and current settings.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Voice name"},
-                    "speed": {"type": "number", "description": "Speech speed, 1.0 = normal"},
-                    "pitch": {"type": "number", "description": "Voice pitch, 1.0 = normal"}
+                    "name": {"type": "string"},
+                    "speed": {"type": "number", "description": "1.0 = normal"},
+                    "pitch": {"type": "number", "description": "1.0 = normal"}
                 },
                 "required": []
             }
@@ -166,15 +173,16 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "reset_chat",
-            "description": "Clear chat history. Start fresh. Without chat_name this resets the chat you're speaking in; a background task (no chat) must name its target.",
+            "description": "Clear chat history. No chat_name = the chat you are in; a background task must name one.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "reason": {"type": "string", "description": "Reason"},
-                    "chat_name": {"type": "string", "description": "Reset this chat by name instead of the current one"}
+                    "reason": {"type": "string"},
+                    "chat_name": {"type": "string"}
                 },
                 "required": ["reason"]
             }
@@ -182,14 +190,15 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "change_username",
-            "description": "Change the user's name. Updates the prompt-facing setting.",
+            "description": "Change the user's name.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "New user name"}
+                    "name": {"type": "string"}
                 },
                 "required": ["name"]
             }
@@ -200,14 +209,13 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "list_tools",
-            "description": "List tools. Default: currently enabled. scope='all' = every tool.",
+            "description": "List tools: the enabled ones by default, scope='all' for every tool.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "scope": {
                         "type": "string",
-                        "enum": ["enabled", "all"],
-                        "description": "Default enabled"
+                        "enum": ["enabled", "all"]
                     }
                 },
                 "required": []
@@ -216,14 +224,15 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "switch_model",
-            "description": "Switch your LLM to another model on the configured roster. No name = list switchable models and which is current. Takes effect on your next message.",
+            "description": "Switch your LLM to another model on the roster, from your next message. No name = list them.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Model name or friendly name from the roster"}
+                    "name": {"type": "string"}
                 },
                 "required": []
             }
@@ -231,14 +240,16 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "set_motion",
-            "description": "Set an ambient motion animation (snow, stars, fireflies...) behind the current chat — the user sees it live. A per-chat override; 'none' clears back to the user's default. No name = list available motions.",
+            "description": "Set an ambient motion (snow, stars, fireflies...) behind this chat; the user sees it live. No name ="
+                           " list.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Motion id or name from the list, or 'none' to clear."}
+                    "name": {"type": "string", "description": "'none' clears to the user's default"}
                 },
                 "required": []
             }
@@ -246,14 +257,15 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "switch_toolset",
-            "description": "Switch your active toolset (e.g. coding tools, then back to conversation tools). No name = list available toolsets.",
+            "description": "Switch your active toolset. No name = list.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Toolset name"}
+                    "name": {"type": "string"}
                 },
                 "required": []
             }

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = "\U0001F3A8"
+TOOL_CATEGORY = 'media'
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 WORKFLOW_DIR = PROJECT_ROOT / "user" / "comfyui" / "workflows"
@@ -23,36 +24,35 @@ WORKFLOW_DIR = PROJECT_ROOT / "user" / "comfyui" / "workflows"
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "comfy_generate",
             "description": (
-                "Generate an image using ComfyUI with your local workflow. "
-                "Describe what you want to see in detail. The image appears in chat for both you and the user. "
-                "Optionally specify a workflow name if multiple are available, width, height, and seed."
+                "Generate an image with ComfyUI. It appears in chat for you and the user."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "Detailed image description. Be specific about subject, style, lighting, composition."
+                        "description": "Detailed description: subject, style, lighting, composition"
                     },
                     "workflow": {
                         "type": "string",
-                        "description": "Workflow filename (without .json). Omit to use the default workflow."
+                        "description": "Workflow filename without .json. Omit for the default."
                     },
                     "width": {
                         "type": "integer",
-                        "description": "Image width in pixels (default: from workflow)"
+                        "description": "Pixels (default: the workflow's)"
                     },
                     "height": {
                         "type": "integer",
-                        "description": "Image height in pixels (default: from workflow)"
+                        "description": "Pixels (default: the workflow's)"
                     },
                     "seed": {
                         "type": "integer",
-                        "description": "Seed for reproducibility. Omit for random."
+                        "description": "Omit for random"
                     }
                 },
                 "required": ["prompt"]
@@ -64,7 +64,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "comfy_list_workflows",
-            "description": "List available ComfyUI workflows. Use this to see what workflows are installed before generating.",
+            "description": "List installed ComfyUI workflows.",
             "parameters": {
                 "type": "object",
                 "properties": {},

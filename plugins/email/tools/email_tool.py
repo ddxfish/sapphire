@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📧'
+TOOL_CATEGORY = 'comms'
 AVAILABLE_FUNCTIONS = [
     'get_inbox',
     'read_email',
@@ -48,13 +49,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_inbox",
-            "description": "Latest emails from a folder. Returns names, subjects, dates. Use read_email(index) for full content.",
+            "description": "Latest emails from a folder: names, subjects, dates. read_email(index) for the content.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "How many (default 20, max 50)"
+                        "description": "Default 20, max 50"
                     },
                     "folder": {
                         "type": "string",
@@ -71,13 +72,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "read_email",
-            "description": "Read full email by index from last get_inbox().",
+            "description": "Read an email in full by its index from the last get_inbox.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "index": {
                         "type": "integer",
-                        "description": "Index from get_inbox() (1-based)"
+                        "description": "1-based"
                     }
                 },
                 "required": ["index"]
@@ -86,17 +87,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "function": {
             "name": "archive_emails",
-            "description": "Archive emails by index (from last get_inbox). Moves to Archive — recoverable.",
+            "description": "Archive emails by index from the last get_inbox. Recoverable.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "indices": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "Indices to archive (1-based)"
+                        "description": "1-based"
                     }
                 },
                 "required": ["indices"]
@@ -105,17 +107,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "function": {
             "name": "delete_emails",
-            "description": "Delete emails by index (from last get_inbox). Moves to Trash — recoverable from your mail client.",
+            "description": "Move emails to Trash by index from the last get_inbox. Recoverable.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "indices": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "Indices to delete (1-based)"
+                        "description": "1-based"
                     }
                 },
                 "required": ["indices"]
@@ -127,21 +130,22 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "search_emails",
-            "description": "Search a folder. Give at least one of sender / content / date. Results load like get_inbox — use read_email(index), reply, archive, delete on them.",
+            "description": "Search a folder by at least one of sender / content / date. Results load like get_inbox, so "
+                           "read_email(index), reply, archive and delete work on them.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "sender": {
                         "type": "string",
-                        "description": "Match the sender — name or address, partial ok (e.g. 'fish' matches bigfish@example.com)"
+                        "description": "Name or address, partial ok"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Text to find in the subject or body"
+                        "description": "Text in the subject or body"
                     },
                     "date": {
                         "type": "string",
-                        "description": "Anchor date YYYY-MM-DD — returns ~10 emails on each side of that day"
+                        "description": "YYYY-MM-DD; returns ~10 emails on each side of that day"
                     },
                     "folder": {
                         "type": "string",
@@ -159,28 +163,29 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "function": {
             "name": "forward_email",
-            "description": "Forward an inbox email (by index from get_inbox) to a contact. Body text only — attachments are not carried.",
+            "description": "Forward an inbox email to a contact. Body text only, no attachments.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "index": {
                         "type": "integer",
-                        "description": "Inbox index from get_inbox() (1-based)"
+                        "description": "From get_inbox, 1-based"
                     },
                     "recipient_id": {
                         "type": "integer",
-                        "description": "Contact id from get_recipients()"
+                        "description": "From get_recipients"
                     },
                     "address": {
                         "type": "string",
-                        "description": "Direct email address. Requires allow-all-recipients setting. Not with recipient_id."
+                        "description": "A direct address instead of recipient_id; needs the allow-all-recipients setting"
                     },
                     "note": {
                         "type": "string",
-                        "description": "Optional message added above the forwarded content"
+                        "description": "Message added above the forwarded text"
                     }
                 },
                 "required": ["index"]
@@ -192,7 +197,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_recipients",
-            "description": "Whitelisted email contacts (ids + names, no addresses). Use id with send_email.",
+            "description": "Whitelisted email contacts (ids + names). Use an id with send_email.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -234,6 +239,7 @@ _send_desc = "Send an email. One of recipient_id / reply_to_index / address is r
 
 TOOLS.append({
     "type": "function",
+    "writes": True,
     "is_local": False,
     "function": {
         "name": "send_email",

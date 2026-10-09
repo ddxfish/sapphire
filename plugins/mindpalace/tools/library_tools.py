@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🏛'
+TOOL_CATEGORY = 'knowledge'
 GROUP = 'Mind Palace'
 
 AVAILABLE_FUNCTIONS = ['library', 'read_document', 'memory_view_image',
@@ -40,11 +41,8 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "library",
-            "description": ("Browse the library's card catalog: every category, "
-                            "topic, and document with their descriptions. Use it "
-                            "to see what reference knowledge exists before "
-                            "searching (search_memory layer='knowledge' searches "
-                            "inside the documents)."),
+            "description": ("Browse the library's catalog: every category, topic and document. search_memory(layer='knowledge') "
+                            "searches inside the documents."),
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -53,20 +51,17 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "read_document",
-            "description": ("Read a library document (ids shown as [doc N]).\n"
-                            "  page=N — read sequentially, 5 sections a page\n"
-                            "  around=N — section N with its neighbors "
-                            "(follow a search hit)\n  start/end — explicit "
-                            "section range"),
+            "description": ("Read a library document ([doc N]). page=N reads in order, 5 sections a page; around=N gives section "
+                            "N with its neighbors (follow a search hit); start/end give a range."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "document_id": {"type": "integer", "description": "The [doc N] id"},
-                    "page": {"type": "integer", "description": "Page number, from 1"},
-                    "around": {"type": "integer", "description": "Center section §N, returns N±2"},
-                    "start": {"type": "integer", "description": "First section of a range"},
-                    "end": {"type": "integer", "description": "Last section of a range"},
-                    "private_key": {"type": "string", "description": "Gating word for a private document"}
+                    "document_id": {"type": "integer"},
+                    "page": {"type": "integer", "description": "From 1"},
+                    "around": {"type": "integer"},
+                    "start": {"type": "integer"},
+                    "end": {"type": "integer"},
+                    "private_key": {"type": "string", "description": "For a private document"}
                 },
                 "required": ["document_id"]
             }
@@ -74,65 +69,62 @@ TOOLS = [
     },
     {
         "type": "function",
+        "category": "memory",
         "is_local": True,
         "function": {
             "name": "memory_view_image",
-            "description": ("Look at a remembered picture. query → the library's best matches by what is IN "
-                            "the pictures (count, default 6, max 12) as a numbered contact sheet, each with "
-                            "its [doc N]; document_id → that one library image; image_id → a picture from "
-                            "this chat by its img: handle (one you were shown, one behind a sheet, one the "
-                            "user pasted). The user sees the same picture(s). Keyed library images need "
-                            "private_key."),
+            "description": ("Look at a remembered picture; the user sees it too. query = the library's best matches by what is IN"
+                            " the pictures, as a numbered contact sheet with [doc N] ids. document_id = one library image. "
+                            "image_id = a picture from this chat."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "What to look for — scene, people, place, caption words"},
-                    "count": {"type": "integer", "description": "How many matches, 1-12 (default 6)"},
-                    "document_id": {"type": "integer", "description": "A [doc N] id to view on its own"},
-                    "image_id": {"type": "string", "description": "An img:<id> handle from this chat to look at again"},
-                    "private_key": {"type": "string", "description": "Gate word for keyed images (optional)"}
+                    "query": {"type": "string", "description": "What to look for: scene, people, place, caption words"},
+                    "count": {"type": "integer", "description": "1-12 (default 6)"},
+                    "document_id": {"type": "integer", "description": "A [doc N] id"},
+                    "image_id": {"type": "string", "description": "An img:<id> handle from this chat"},
+                    "private_key": {"type": "string", "description": "For keyed images"}
                 }
             }
         }
     },
     {
         "type": "function",
+        "category": "files",
         "is_local": True,
         "function": {
             "name": "local_view_images",
-            "description": ("Look at image files on this computer. paths = absolute file paths (one → the image; "
-                            "several → a numbered contact sheet). folder = an absolute directory: its images, count "
-                            "a page (default 6), page=N for more; subfolders are listed so you can walk down. The "
-                            "user sees numbered tiles. Every picture gets an img: handle (its thumbnail, kept in "
-                            "this chat); memory_save_image(the path) keeps the full-resolution file."),
+            "description": ("Look at image files on this computer; the user sees numbered tiles. Several paths make a contact "
+                            "sheet. A folder pages through its images and lists subfolders. Each picture gets an img: handle; "
+                            "memory_save_image(the path) keeps the full file."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute file paths"},
-                    "folder": {"type": "string", "description": "Absolute directory to browse"},
-                    "page": {"type": "integer", "description": "Page of the folder, from 1"},
-                    "count": {"type": "integer", "description": "Images per page, 1-12 (default 6)"}
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute"},
+                    "folder": {"type": "string", "description": "Absolute directory"},
+                    "page": {"type": "integer", "description": "Folder page, from 1"},
+                    "count": {"type": "integer", "description": "1-12 per page (default 6)"}
                 }
             }
         }
     },
     {
         "type": "function",
+        "writes": True,
+        "category": "memory",
         "network": True,
         "is_local": False,
         "function": {
             "name": "memory_save_image",
-            "description": ("Keep an image in the library under a topic (Knowledge tab; searchable by "
-                            "pixels and caption; look at it later with memory_view_image(document_id=N)). source = "
-                            "img:<id> (the '(image img:...)' handle a tool gave you), doc:<N>, an absolute "
-                            "path, or an image URL. topic = an existing category/topic name, or a new one."),
+            "description": ("Keep an image in the library under a topic, searchable by pixels and caption. View it later with "
+                            "memory_view_image(document_id=N)."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "source": {"type": "string", "description": "img:<id>, doc:<N>, /absolute/path, or https://..."},
-                    "topic": {"type": "string", "description": "Category or topic name to file it under"},
-                    "caption": {"type": "string", "description": "What it is — becomes the title and the searchable caption"},
-                    "private_key": {"type": "string", "description": "Gate word to keep it private (optional)"}
+                    "source": {"type": "string", "description": "img:<id>, doc:<N>, an absolute path or an image URL"},
+                    "topic": {"type": "string", "description": "Existing or new topic to file it under"},
+                    "caption": {"type": "string", "description": "What it is; becomes the title and searchable caption"},
+                    "private_key": {"type": "string", "description": "Gate word to keep it private"}
                 },
                 "required": ["source", "topic"]
             }

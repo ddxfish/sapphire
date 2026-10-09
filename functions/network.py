@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📡'
+TOOL_CATEGORY = 'system'
 
 AVAILABLE_FUNCTIONS = [
     'get_external_ip',
@@ -27,7 +28,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_external_ip",
-            "description": "Get your external/public IP address as seen by the internet",
+            "description": "Your public IP address",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -40,7 +41,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "check_internet",
-            "description": "Check if internet connection is working",
+            "description": "Check the internet connection",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -58,8 +59,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "url": {
-                        "type": "string",
-                        "description": "URL (e.g. reddit.com)"
+                        "type": "string"
                     }
                 },
                 "required": ["url"]

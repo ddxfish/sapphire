@@ -230,12 +230,27 @@ def test_the_result_is_reported_stripped_and_degradation_becomes_a_warning(kind,
 
 # --- `self` and her memory (Krem, 2026-10-08) ----------------------------------------
 
-def _self_agent(kind, monkeypatch, memory=None, chat_scope='personal'):
+# what the manager's tool metadata would answer for the memory category
+MEM_READ = ['search_memory', 'get_recent_memories', 'list_entities', 'read_self', 'read_ledger']
+MEM_WRITE = ['save_memory', 'update_memory', 'delete_memory', 'update_self']
+
+
+def _fake_fm_meta(monkeypatch):
+    import core.api_fastapi as apifa
+    fm = apifa._system.llm_chat.function_manager
+    fm.tools_in_category = lambda cat, writes=None: (
+        [] if cat != 'memory' else MEM_READ + MEM_WRITE if writes is None else MEM_WRITE if writes else MEM_READ)
+
+
+def _self_agent(kind, monkeypatch, memory=None, chat_scope='personal', toolset=None):
     captured = _capture(monkeypatch, {'settings': {'prompt': 'sapphire', 'memory_scope': 'persona-wide',
                                                    'email_scope': 'inbox', 'bitcoin_scope': 'wallet'}})
+    _fake_fm_meta(monkeypatch)
     monkeypatch.setattr(kind, '_current_chat_persona', lambda chat=None: 'sapphire')
     monkeypatch.setattr(kind, '_chat_memory_scope', lambda chat=None: chat_scope)
     opts = {'prompt': 'self'} if memory is None else {'prompt': 'self', 'memory': memory}
+    if toolset is not None:
+        opts['toolset'] = toolset
     kind.Agent(_row(**opts), _Engine()).run('test')
     return captured
 
@@ -247,14 +262,14 @@ def test_self_reads_her_memory_by_default_and_nothing_else(kind, monkeypatch):
     c = _self_agent(kind, monkeypatch)
     assert c['memory_scope'] == 'personal', "the spawning chat's scope, not the persona's"
     assert [k for k in c if k.endswith('_scope')] == ['memory_scope']
-    assert set(c['add_tools']) == set(kind.MEMORY_READ_TOOLS)
-    assert set(c['drop_tools']) == set(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+    assert set(c['add_tools']) == set(MEM_READ), 'the readers of the memory category, from the metadata'
+    assert set(c['drop_tools']) == set(MEM_WRITE), 'its writers off, whatever the toolset said'
     assert 'save_memory' not in c['add_tools'] and 'read_self' in c['add_tools']
 
 
 def test_self_memory_full_adds_the_write_tools(kind, monkeypatch):
     c = _self_agent(kind, monkeypatch, memory='full')
-    assert set(c['add_tools']) == set(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+    assert set(c['add_tools']) == set(MEM_READ + MEM_WRITE) and 'drop_tools' not in c
     assert c['memory_scope'] == 'personal'
 
 
@@ -262,7 +277,8 @@ def test_self_memory_false_is_identity_only_with_no_memory_tools(kind, monkeypat
     for v in (False, 'false', 'none'):
         c = _self_agent(kind, monkeypatch, memory=v)
         assert not [k for k in c if k.endswith('_scope')]
-        assert 'add_tools' not in c and set(c['drop_tools']) == set(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
+        # no scope, no tool rule: the executor sheds the memory category itself (closed scope)
+        assert 'add_tools' not in c and 'drop_tools' not in c
 
 
 def test_self_in_a_chat_without_a_memory_scope_gets_none(kind, monkeypatch):
@@ -283,24 +299,38 @@ def test_memory_is_refused_off_self_and_when_misspelt(kind, monkeypatch):
     assert kind._memory_mode(None) == 'read' and kind._memory_mode(True) == 'full' and kind._memory_mode('READ_ONLY') == 'read'
 
 
-def test_the_self_memory_rule_through_the_real_resolver(kind):
-    """The meaning test the settings-dict tests missed: the kind drops EVERY
-    memory tool and adds the read set - on the real resolver that must leave
-    the read tools on and the write tools off (add-then-drop left her with a
-    toolset and no memory, dev + server Sapph, 2026-10-08)."""
+def test_the_self_memory_rule_through_the_real_resolver():
+    """The meaning test: on the real resolver, the kind's rule (drop the memory
+    writers, add the readers) leaves the readers on and the writers off, and a
+    closed memory scope sheds the whole category (2026-10-08)."""
     from core.chat.function_manager import FunctionManager
     fm = FunctionManager.__new__(FunctionManager)
-    every = list(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS) + ['web_search', 'get_time']
+    every = MEM_READ + MEM_WRITE + ['web_search', 'get_time']
     fm.all_possible_tools = [{"type": "function", "function": {"name": n, "parameters": {}}} for n in every]
     fm._hidden_tools = set()
     fm.function_modules = {"mod": {"available_functions": ['web_search', 'get_time', 'save_memory', 'search_memory']}}
     fm._mode_filters = {}
     fm._settings_gates = {}
     fm._enabled_tools = []
-    drop = list(kind.MEMORY_READ_TOOLS + kind.MEMORY_WRITE_TOOLS)
-    got = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=list(kind.MEMORY_READ_TOOLS), drop_tools=drop)}
-    assert got == {'web_search', 'get_time', *kind.MEMORY_READ_TOOLS}, got
-    got = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=drop, drop_tools=drop)}
-    assert got == {'web_search', 'get_time', *kind.MEMORY_READ_TOOLS, *kind.MEMORY_WRITE_TOOLS}
-    got = {t["function"]["name"] for t in fm.resolve_tools("mod", drop_tools=drop)}
-    assert got == {'web_search', 'get_time'}
+    fm._tool_meta = {n: {'category': 'memory', 'writes': n in MEM_WRITE, 'module': 'm', 'plugin': 'mindpalace'} for n in MEM_READ + MEM_WRITE}
+    fm._tool_meta.update({'web_search': {'category': 'web', 'writes': False, 'module': 'web', 'plugin': ''},
+                          'get_time': {'category': 'system', 'writes': False, 'module': 'clock', 'plugin': 'clock'}})
+    assert set(fm.tools_in_category('memory', writes=False)) == set(MEM_READ)
+    got = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=fm.tools_in_category('memory', writes=False),
+                                                           drop_tools=fm.tools_in_category('memory', writes=True))}
+    assert got == {'web_search', 'get_time', *MEM_READ}, got
+    got = {t["function"]["name"] for t in fm.resolve_tools("mod", add_tools=fm.tools_in_category('memory'))}
+    assert got == {'web_search', 'get_time', *MEM_READ, *MEM_WRITE}
+    got = {t["function"]["name"] for t in fm.resolve_tools("mod", closed_scopes={'memory'})}
+    assert got == {'web_search', 'get_time'}, 'a closed scope sheds its category'
+
+
+def test_a_toolset_composes_from_words(kind, monkeypatch):
+    """toolset='web, files, mindpalace': the first word is THE toolset, the rest
+    union on (extra_toolsets); a list works the same; one word is as before."""
+    c = _self_agent(kind, monkeypatch, toolset='web, files , mindpalace')
+    assert c['toolset'] == 'web' and c['extra_toolsets'] == ['files', 'mindpalace']
+    c = _self_agent(kind, monkeypatch, toolset=['work', 'memory'])
+    assert c['toolset'] == 'work' and c['extra_toolsets'] == ['memory']
+    c = _self_agent(kind, monkeypatch, toolset='work')
+    assert c['toolset'] == 'work' and 'extra_toolsets' not in c

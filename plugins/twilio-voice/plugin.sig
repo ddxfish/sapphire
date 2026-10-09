@@ -15,10 +15,10 @@
     "tests/test_elevate_key.py": "sha256:93078e2b255d9f97500247c21f5e11d8ebab2272263c3dd3ca2747bac8a01261",
     "tests/test_inbound_isolation.py": "sha256:284b2429ddf30ccc93112bacc058239485d1aa39884773c2190b44db01c9d8b0",
     "tests/test_phone_context.py": "sha256:d9eb6bc75288066f74a47b92039fa340db5cd0bef4d49dd9d59bd28dad63505a",
-    "tools/elevate_tool.py": "sha256:cdc31c3c46b731d145444d028afff6fe530234ab1d619365cb65ee05dbd65d2e",
-    "tools/phone_tool.py": "sha256:8122e3f42b7d715c70b7135f8dc03a1a0630062b0d491830a6eaec8465ac05cc",
+    "tools/elevate_tool.py": "sha256:7e73d380c2fd83e0e2bec86c71e328186b9d6265703450ea6bd295d2ba2eeca5",
+    "tools/phone_tool.py": "sha256:4c9e959413c4051d3a60f8193fcf07d29350380cf832d9ceab4a8062b06fa34d",
     "twilio_source.py": "sha256:7a9a0b6d7c8589a18011b2ccd130275a03c090a70065a3e5ac6f2337666db65d",
     "web/index.js": "sha256:ccc6882ecc8a0d35db67dac0a22c39bc1612db3d9807995cbaa1f6bd480ac70d"
   },
-  "signature": "1y7j5IVPS9yJnJSHM85DOg/Lrnn9ywG9SKpkXy79A8CAabbQd9kx91k1lylQ8trSFqDW/oEorHVo7CuiZ6/JCQ=="
+  "signature": "Hkq21JXgcxicrxl83ARpHvQelZq1PklMH4vymK47tZBXaFAE2gKnDrxVJUYXcPo67zafVdP/hm52LeS09PM4DQ=="
 }

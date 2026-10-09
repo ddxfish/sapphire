@@ -22,13 +22,15 @@ logger = logging.getLogger(__name__)
 # Shared state key — used by both tool and route handler
 WEBCAM_STATE_KEY = '_sapphire_webcam_state'
 
+TOOL_CATEGORY = 'devices'
 TOOLS = [
     {
         "type": "function",
         "is_local": True,
         "function": {
             "name": "capture_webcam",
-            "description": "Capture a photo from the user's webcam/camera. The browser will prompt for camera access if needed. Returns the image for visual analysis. Use this when the user asks you to look at something, see them, or when visual context would help.",
+            "description": "Capture a photo from the user's camera, as an image you can see; the browser may ask them for "
+                           "access. Use when they ask you to look at something or see them.",
             "parameters": {
                 "type": "object",
                 "properties": {},

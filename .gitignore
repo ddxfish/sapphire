@@ -74,3 +74,4 @@ tools/wardrobe/
 
 # Wakeword Maker's data folder (recordings, datasets, models): big, and kept out of backups too
 /wakeword/
+tools/avatar

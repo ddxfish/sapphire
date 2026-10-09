@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001f52d'
+TOOL_CATEGORY = 'agents'
 AVAILABLE_FUNCTIONS = ['agent_list', 'agent_peek', 'agent_spawn', 'agent_action']
 
 TOOLS = [
@@ -29,8 +30,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "agent_list",
-            "description": ("Your agents in this chat - running, waiting on a question, or resting - and the kinds "
-                            "you can spawn. Also what waits in this chat's inbox."),
+            "description": ("Your agents in this chat, the kinds you can spawn, and what waits in this chat's inbox."),
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
@@ -39,14 +39,13 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "agent_peek",
-            "description": ("Look in on one agent without interrupting it: status and progress, its pending question "
-                            "verbatim with the options, the latest transcript lines, the head of its last report. "
-                            "what='report' gives the last report in full; 'transcript' gives more lines."),
+            "description": ("Look in on one agent without interrupting it: status, pending question, latest transcript lines, "
+                            "head of its last report."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "description": "The agent's name, from agent_list"},
-                    "what": {"type": "string", "description": "'report' | 'transcript' | omit for the overview"}
+                    "agent": {"type": "string", "description": "From agent_list"},
+                    "what": {"type": "string", "description": "'report' = the last report in full, 'transcript' = more lines. Omit for the overview."}
                 },
                 "required": ["agent"]
             }
@@ -54,19 +53,23 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "agent_spawn",
-            "description": ("Start a background agent. It works while you keep talking, reports into this chat by "
-                            "itself when done, and asks here if it hits a fork - you answer with agent_action. "
-                            "agent_spawn(kind) alone shows that kind's options. Say WHAT to do, not how."),
+            "description": ("Start a background agent. It works while you keep talking, reports into this chat when done, and "
+                            "asks here at a fork - answer with agent_action. agent_spawn(kind) alone shows that kind's options. "
+                            "Say WHAT to do, not how."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "description": "Which kind of agent"},
-                    "mission": {"type": "string", "description": "The task. Omit to see the kind's options."},
+                    "kind": {"type": "string"},
+                    "mission": {"type": "string", "description": "Omit to see the kind's options"},
                     "options": {"type": "object",
-                                "description": "Optional. Common: name (a workspace/session directory name - NOT what the agent is called; agents are named by the engine), model, context. Plus the kind's own - agent_spawn(kind) lists them."}
+                                "description": ("Optional. Common: name (a workspace directory name, NOT the agent's name), model, context. "
+                                                "agent_spawn(kind) lists the rest. An llm agent's toolset composes from words: web, memory, "
+                                                "knowledge, people, goals, files, system, devices, comms, media, meta_danger, agents - or a saved "
+                                                "toolset or plugin by name, e.g. 'web, files'.")}
                 },
                 "required": ["kind"]
             }
@@ -74,18 +77,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "agent_action",
-            "description": ("Do something to one agent: answer <value> resolves its pending question (a letter like "
-                            "'b', an option label, or your words); say <text> sends a follow-up turn to an agent that "
-                            "is idle or resting; stop ends it. agent_action(agent) alone lists what it takes right now."),
+            "description": ("Act on one agent: answer resolves its pending question; say sends a follow-up turn to an idle or "
+                            "resting agent; stop ends it. agent_action(agent) alone lists what it takes now."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "description": "The agent's name, from agent_list"},
+                    "agent": {"type": "string", "description": "From agent_list"},
                     "action": {"type": "string", "enum": ["answer", "say", "stop"], "description": "Omit for the list"},
-                    "value": {"type": "string", "description": "The answer, or the text to say"}
+                    "value": {"type": "string", "description": "The answer (a letter, an option label or your words), or the text to say"}
                 },
                 "required": ["agent"]
             }

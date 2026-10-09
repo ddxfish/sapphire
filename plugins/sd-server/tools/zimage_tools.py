@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = "\U0001F5BC"  # 🖼️
+TOOL_CATEGORY = 'media'
 
 _DEFAULTS = {
     "api_url": "http://127.0.0.1:7861",
@@ -147,6 +148,7 @@ def _tool_schema(description):
     return [
         {
             "type": "function",
+            "writes": True,
             # Loop guard (core feature): warn after 2 calls in one turn. Top-level
             # flag, read into function_manager and stripped from the wire. ASCII only.
             "loop_warn_after": 2,
@@ -166,13 +168,14 @@ def _tool_schema(description):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "prompt": {"type": "string", "description": "The scene or action to depict (~20 words), using the configured names."},
+                        "prompt": {"type": "string", "description": "The scene or action (~20 words), using the configured names"},
                         "view": {
                             "type": "boolean",
-                            "description": "Whether you see the image yourself (default true). true: you see the full image - richer, but on some models it can pull you into regenerating it repeatedly. false: you get only the text confirmation, no description - cheapest, nothing to second-guess. The user always sees the full image either way."
+                            "description": "true (default) = you see the image. false = text confirmation only; use it if you catch yourself "
+                                           "regenerating. The user always sees it."
                         },
-                        "count": {"type": "integer", "description": "How many images to make. Leave unset (default 1) in almost all cases - only raise it if the user explicitly asks for several."},
-                        "seed": {"type": "integer", "description": "Optional. Pass a seed from a prior result to reproduce that exact image; otherwise leave unset for a fresh one."}
+                        "count": {"type": "integer", "description": "How many (default 1); raise only if the user asks for several"},
+                        "seed": {"type": "integer", "description": "A seed from a prior result reproduces that image. Omit for a fresh one."}
                     },
                     "required": ["prompt"]
                 }

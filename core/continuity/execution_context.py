@@ -119,6 +119,22 @@ def _scrub_inline_images(msg: Dict[str, Any]) -> Dict[str, Any]:
     return {**msg, "content": kept}
 
 
+def closed_scopes(task_settings):
+    """The data scopes a task has shut: every registered scope it did not list,
+    or listed as 'none' - exactly the set _build_scopes force-disables. Flags
+    (private_chat, a bool) are not scopes. The resolver sheds the tools that
+    need one of these (2026-10-08)."""
+    from core.chat.function_manager import SCOPE_REGISTRY
+    closed = set()
+    for key, reg in list(SCOPE_REGISTRY.items()):
+        setting = reg.get('setting')
+        if not setting or isinstance(reg.get('default'), bool):
+            continue
+        if (task_settings or {}).get(setting) in (None, '', 'none'):
+            closed.add(key)
+    return closed
+
+
 class ExecutionContext:
     """Self-contained execution environment for a single task run.
 
@@ -262,9 +278,14 @@ class ExecutionContext:
         # setter enables (hidden tools included in the rule), then the mode
         # filter + settings gate, no mutation. add_tools/drop_tools: single
         # names a task adds or withholds (a `self` agent's memory tools).
+        # closed_scopes: _build_scopes force-disables every registered scope
+        # this task did not list (or listed as 'none'); a tool that needs one
+        # of those could only answer "scope disabled" - it is shed here, so
+        # the lean agent stops carrying nine dead tools (2026-10-08).
         tools = self.fm.resolve_tools(toolset_name, extra_toolsets,
                                       add_tools=self.task_settings.get("add_tools"),
-                                      drop_tools=self.task_settings.get("drop_tools"))
+                                      drop_tools=self.task_settings.get("drop_tools"),
+                                      closed_scopes=closed_scopes(self.task_settings))
         logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools or [])} tools")
         return tools
 

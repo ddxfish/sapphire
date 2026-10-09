@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🎹'
+TOOL_CATEGORY = 'media'
 AVAILABLE_FUNCTIONS = ['midi_play', 'midi_listen', 'midi_sound', 'midi_stop', 'song_save']
 
 FIRST_WAIT = 60      # seconds she waits for the first key
@@ -42,6 +43,7 @@ _NOTATION = ("Notation: tokens separated by spaces. A token is note[:beats], "
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "midi_play",
@@ -52,12 +54,13 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "notes": {"type": "string", "description": "The music, in the notation above."},
-                    "bpm": {"type": "number", "description": "Tempo in beats per minute, 20-400. Default 120."},
-                    "voice": {"type": "integer", "description": "Optional voice number 1-128 to switch to first. See midi_sound for names."},
-                    "velocity": {"type": "integer", "description": "How hard the keys are struck: 1 is a whisper, 127 is full force. Default 90."},
-                    "loop_minutes": {"type": "number", "description": "Repeat the phrase as a backing loop for this many minutes (max 15) so someone can play over it. A loop and a phrase run side by side: start a loop, then play phrases over it. midi_stop ends it."},
-                    "then_listen": {"type": "number", "description": "Your turn, then theirs, in one call: seconds to listen once your phrase ends. It is midi_listen started for you at the right moment, and what they play arrives as a new message the same way. Leave it out when you only want to play. Use midi_listen by itself when you only want to hear them."}
+                    "notes": {"type": "string", "description": "In the notation above"},
+                    "bpm": {"type": "number", "description": "Tempo 20-400 (default 120)"},
+                    "voice": {"type": "integer", "description": "Voice number 1-128 to switch to first"},
+                    "velocity": {"type": "integer", "description": "Key force 1-127 (default 90)"},
+                    "loop_minutes": {"type": "number", "description": "Repeat the phrase as a backing loop for this many minutes (max 15). Phrases play over a running "
+                                                                      "loop; midi_stop ends it."},
+                    "then_listen": {"type": "number", "description": "Seconds to listen once your phrase ends; what they play arrives as a new message. Omit to only play."}
                 },
                 "required": ["notes"]
             }
@@ -79,7 +82,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "seconds": {"type": "number", "description": f"Longest take to record, counted from the first key. Default 30, max {MAX_LISTEN}."},
-                    "bpm": {"type": "number", "description": "Tempo grid, 20-400, used to write down what was played. Defaults to the tempo you last played at."}
+                    "bpm": {"type": "number", "description": "Tempo grid 20-400 for writing down what was played (default: your last tempo)"}
                 },
                 "required": []
             }
@@ -87,22 +90,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "midi_sound",
-            "description": ("Change how the synth sounds: pick a voice, switch an effect, or both. Works while "
-                            "someone is playing, so you can shape the sound under their hands. Voice names are the "
-                            "synth's own when it is one I know (the FM-1), else General MIDI. Effects exist only on "
-                            "synths I know: the FM-1 has filter (type 0-2, cutoff 0-107, q 0-10), reverb (type 0-2, "
-                            "decay, mix), delay (decay, rate, mix), distortion (gain, tone, level), chorus (freq, "
-                            "depth, mix), phaser (freq, depth, mix); levels run 0-100 unless noted."),
+            "description": ("Change how the synth sounds: pick a voice, switch an effect, or both. Works while someone is "
+                            "playing. FM-1 effects: filter (type 0-2, cutoff 0-107, q 0-10), reverb (type 0-2, decay, mix), delay"
+                            " (decay, rate, mix), distortion (gain, tone, level), chorus and phaser (freq, depth, mix). Levels "
+                            "0-100 unless noted."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "voice": {"type": "string", "description": "A voice number 1-128, part of a name like 'piano' or 'bass', or 'list' to see all 128 names. Names are terse synth names such as E.PIANO 1, so a name that misses returns the full list."},
-                    "effect": {"type": "string", "description": "The effect to switch, by name (reverb, delay, ...). voice=\"list\" also names the effects this synth has."},
-                    "on": {"type": "boolean", "description": "Effect on or off. Default true."},
-                    "levels": {"type": "object", "description": "Levels for the effect, e.g. {\"mix\": 60, \"decay\": 40}."}
+                    "voice": {"type": "string", "description": "Number 1-128, part of a name like 'piano', or 'list' for all names and this synth's effects"},
+                    "effect": {"type": "string", "description": "Effect to switch, by name"},
+                    "on": {"type": "boolean", "description": "Effect on or off (default true)"},
+                    "levels": {"type": "object", "description": "Levels for the effect, e.g. {\"mix\": 60, \"decay\": 40}"}
                 },
                 "required": []
             }
@@ -110,15 +112,17 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "midi_stop",
-            "description": "Stop everything of yours on the synth: your phrase, your loop, and any listening in progress. Silences every note.",
+            "description": "Stop everything of yours on the synth: phrase, loop and listening.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "song_save",
@@ -130,11 +134,11 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "description": "The song's name."},
-                    "notes": {"type": "string", "description": "The music, in the notation above. Up to 10 minutes."},
-                    "bpm": {"type": "number", "description": "Tempo in beats per minute, 20-400. Default 120."},
+                    "title": {"type": "string"},
+                    "notes": {"type": "string", "description": "In the notation above. Up to 10 minutes."},
+                    "bpm": {"type": "number", "description": "Tempo 20-400 (default 120)"},
                     "instrument": {"type": "string", "description": "Instrument for the MP3: " + ", ".join(songs.INSTRUMENTS) + ". Or a General MIDI number 1-128. Default piano."},
-                    "velocity": {"type": "integer", "description": "How hard the keys are struck: 1 is a whisper, 127 is full force. Default 90."}
+                    "velocity": {"type": "integer", "description": "Key force 1-127 (default 90)"}
                 },
                 "required": ["title", "notes"]
             }

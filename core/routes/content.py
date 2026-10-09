@@ -566,24 +566,25 @@ async def list_functions(request: Request, _=Depends(require_login), system=Depe
     hidden = function_manager.get_hidden_functions()
     modules = {}
     for module_name, module_info in function_manager.function_modules.items():
-        funcs = []
         for tool in module_info['tools']:
             func_name = tool['function']['name']
             if func_name in hidden:
                 continue
-            funcs.append({
+            # One display group per tool CATEGORY (core/chat/function_manager.py,
+            # 2026-10-08) - the same words an agent's toolset is made of. A
+            # tool without one falls back to its module's GROUP, then the module.
+            meta = function_manager.tool_meta(func_name) or {}
+            key = meta.get('category') or module_info.get('group') or module_name
+            slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
+            slot["functions"].append({
                 "name": func_name,
                 "description": tool['function'].get('description', ''),
                 "enabled": func_name in enabled,
-                "is_network": func_name in network
+                "is_network": func_name in network,
+                "writes": bool(meta.get('writes')),
             })
-        # Modules sharing a declared GROUP merge into one display group
-        # (e.g. the mindpalace tool files present as one "Mind Palace").
-        key = module_info.get('group') or module_name
-        slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
-        slot["functions"].extend(funcs)
-        slot["count"] += len(funcs)
-        slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
+            slot["count"] += 1
+            slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
     return {"modules": modules}
 
 

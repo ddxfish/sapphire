@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🎮'
+TOOL_CATEGORY = 'comms'
 
 _reply_channel_id = ContextVar('discord_reply_channel_id', default=None)
 _reply_message_id = ContextVar('discord_reply_message_id', default=None)
@@ -39,15 +40,14 @@ TOOLS = [
         'function': {
             'name': 'discord_list_channels',
             'description': (
-                'List channels the bot can see, one per line as "#name (id) — server". '
-                'Use this to find a channel name or id before posting or reading; a channel '
-                'from the list can be passed to any other Discord tool as its id or #name.'
+                "List channels the bot can see as \"#name (id) - server\". Any other Discord tool takes the id or "
+                "#name."
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'server': {'type': 'string', 'description': 'Server name or id to filter by (substring match). Omit = every server.'},
-                    'kind': {'type': 'string', 'enum': ['text', 'voice', 'all'], 'description': 'text (default), voice, or all.'},
+                    'server': {'type': 'string', 'description': "Name or id, substring match. Omit for all."},
+                    'kind': {'type': 'string', 'enum': ['text', 'voice', 'all'], 'description': "Default text"},
                 },
                 'required': [],
             },
@@ -59,7 +59,7 @@ TOOLS = [
         'network': True,
         'function': {
             'name': 'discord_get_servers',
-            'description': 'List the servers the bot is in as "name (id)". For channels use discord_list_channels.',
+            'description': "List the servers the bot is in.",
             'parameters': {'type': 'object', 'properties': {}, 'required': []},
         },
     },
@@ -70,15 +70,13 @@ TOOLS = [
         'function': {
             'name': 'discord_read_messages',
             'description': (
-                'Read the last N messages in a Discord channel (1-50, default 20), oldest first, as '
-                '"[message_id] author: text". The message_id feeds discord_add_reaction and '
-                'reply_to_message_id.'
+                "Read a channel's last messages, oldest first, as \"[message_id] author: text\"."
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
-                    'count': {'type': 'integer', 'description': '1-50, default 20.'},
+                    'channel': {'type': 'string', 'description': "Id or #name. Omit = the channel you are replying in."},
+                    'count': {'type': 'integer', 'description': "1-50 (default 20)"},
                 },
                 'required': [],
             },
@@ -86,20 +84,20 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'writes': True,
         'is_local': 'endpoint',
         'network': True,
         'function': {
             'name': 'discord_send_message',
             'description': (
-                'Send a Discord message (long text is split at 1900 chars). Returns the message id. '
-                'Inside a conversation, omit channel to reply where you were spoken to.'
+                "Send a Discord message. Returns the message id."
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
-                    'text': {'type': 'string', 'description': 'The message. Plain text or Discord markdown.'},
-                    'reply_to_message_id': {'type': 'string', 'description': 'Quote-reply to this message id (from discord_read_messages).'},
+                    'channel': {'type': 'string', 'description': "Id or #name. Omit = the channel you are replying in."},
+                    'text': {'type': 'string'},
+                    'reply_to_message_id': {'type': 'string', 'description': "Quote-reply to this message"},
                 },
                 'required': ['text'],
             },
@@ -107,21 +105,20 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'writes': True,
         'is_local': 'endpoint',
         'network': True,
         'function': {
             'name': 'discord_send_image',
             'description': (
-                'Post an image to a Discord channel. source = img:<id> (the "(image img:...)" handle a tool '
-                'gave you), doc:<N> (a library image from your memory), or a URL; omit it to send the newest '
-                'image of this chat. You see the image too and can describe it.'
+                "Post an image to a Discord channel. You see it too."
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
-                    'source': {'type': 'string', 'description': 'img:<id>, doc:<N>, or https://... (default: newest image of this chat).'},
-                    'caption': {'type': 'string', 'description': 'Text posted with the image.'},
+                    'channel': {'type': 'string', 'description': "Channel id or #name. Omit = the channel you are replying in."},
+                    'source': {'type': 'string', 'description': "img:<id>, doc:<N> or a URL. Omit = this chat's newest image."},
+                    'caption': {'type': 'string', 'description': "Text posted with the image"},
                 },
                 'required': [],
             },
@@ -129,16 +126,17 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'writes': True,
         'is_local': 'endpoint',
         'network': True,
         'function': {
             'name': 'discord_send_gif',
-            'description': 'Send a GIF by search query or by URL. Returns the message id. Needs a GIF API key in Media settings for searches.',
+            'description': "Send a GIF. Searching needs a GIF API key in Media settings.",
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string', 'description': 'A search query ("happy dance") or a direct GIF URL.'},
-                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
+                    'query': {'type': 'string', 'description': "Search words or a direct GIF URL"},
+                    'channel': {'type': 'string', 'description': "Id or #name. Omit = the channel you are replying in."},
                 },
                 'required': ['query'],
             },
@@ -146,15 +144,16 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'writes': True,
         'is_local': 'endpoint',
         'network': True,
         'function': {
             'name': 'discord_join_voice',
-            'description': 'Join a Discord voice channel and hold a spoken conversation there. Pass the VOICE channel name or id (see discord_list_channels kind=voice).',
+            'description': "Join a Discord voice channel and talk there.",
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string', 'description': 'Voice channel name or numeric id.'},
+                    'channel': {'type': 'string', 'description': "Voice channel name or id"},
                 },
                 'required': ['channel'],
             },
@@ -162,15 +161,16 @@ TOOLS = [
     },
     {
         'type': 'function',
+        'writes': True,
         'is_local': 'endpoint',
         'network': True,
         'function': {
             'name': 'discord_leave_voice',
-            'description': 'Leave a Discord voice channel. Omit channel to leave every voice channel you are in.',
+            'description': "Leave a Discord voice channel.",
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'channel': {'type': 'string', 'description': 'Voice channel name or numeric id. Omit = all.'},
+                    'channel': {'type': 'string', 'description': "Omit = all"},
                 },
                 'required': [],
             },
@@ -182,13 +182,13 @@ TOOLS = [
         'network': True,
         'function': {
             'name': 'discord_add_reaction',
-            'description': 'Add an emoji reaction to a message. Inside a conversation, omit message_id to react to the message you are replying to.',
+            'description': "React to a message with an emoji.",
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'emoji': {'type': 'string', 'description': 'A unicode emoji, e.g. 🔥.'},
-                    'channel': {'type': 'string', 'description': 'Numeric channel id or #channel-name. Omit = the channel you are replying in.'},
-                    'message_id': {'type': 'string', 'description': 'Numeric message id (from discord_read_messages). Omit = the message being replied to.'},
+                    'emoji': {'type': 'string', 'description': "A unicode emoji"},
+                    'channel': {'type': 'string', 'description': "Id or #name. Omit = the channel you are replying in."},
+                    'message_id': {'type': 'string', 'description': "Omit = the message you are replying to"},
                 },
                 'required': ['emoji'],
             },
@@ -201,24 +201,20 @@ TOOLS = [
         'function': {
             'name': 'discord_remind',
             'description': (
-                '"Remind me…" → call this; a reminder exists ONLY after it answers "Reminder #N set" — '
-                'never claim one is set otherwise. When due the bot posts "@them Reminder: <text>" in '
-                'this channel. action=add with text= and either delay= '
-                '("2h", "30m", "1d 2h") or at= ("18:30", local time; tomorrow if already past). '
-                'action=list shows their pending reminders; action=cancel removes one by id= or every '
-                'one whose text contains text=. Inside a Discord conversation everything is about the '
-                "asker; from the operator's chat pass user= (id) and channel= for add."
+                "Set, list or cancel a Discord reminder. A reminder exists ONLY after this answers \"Reminder #N set\" "
+                "- never claim one otherwise. When due, the bot pings them in this channel. In a Discord conversation"
+                " it is about the asker; from the operator's chat pass user= and channel=."
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'action': {'type': 'string', 'enum': ['add', 'list', 'cancel'], 'description': 'What to do.'},
-                    'text': {'type': 'string', 'description': 'What to remind them of (add), or text to match (cancel).'},
-                    'delay': {'type': 'string', 'description': 'How long from now: "2h", "45m", "1d 2h", "90 minutes".'},
-                    'at': {'type': 'string', 'description': 'A clock time HH:MM (local); used when delay is empty.'},
-                    'id': {'type': 'integer', 'description': 'Reminder id to cancel (from list).'},
-                    'user': {'type': 'string', 'description': "Discord user id — operator's chat only."},
-                    'channel': {'type': 'string', 'description': "Channel id to post in — operator's chat only (add)."},
+                    'action': {'type': 'string', 'enum': ['add', 'list', 'cancel']},
+                    'text': {'type': 'string', 'description': "What to remind (add), or text to match (cancel)"},
+                    'delay': {'type': 'string', 'description': "From now: \"2h\", \"45m\", \"1d 2h\""},
+                    'at': {'type': 'string', 'description': "Clock time HH:MM, local; tomorrow if already past. Used when delay is empty."},
+                    'id': {'type': 'integer', 'description': "Reminder id to cancel"},
+                    'user': {'type': 'string', 'description': "Discord user id (operator's chat only)"},
+                    'channel': {'type': 'string', 'description': "Channel id to post in (operator's chat only)"},
                 },
                 'required': ['action'],
             },

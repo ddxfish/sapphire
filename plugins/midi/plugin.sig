@@ -18,7 +18,7 @@
     "tests/test_keyboard.py": "sha256:10c01c14758f5b56f5b9f477cb93979e54f6cc94864b41ba1a2798228876d35f",
     "tests/test_synth_driver.py": "sha256:0f79a5e0fb5532ab7f869635cfdae70638e22cee814c29ff987a99ff417700b8",
     "tests/test_tap.py": "sha256:33abf8e0d55befa21b96cefcea2944593ebd4556d2c7f85d2a7ccbbf9380f04c",
-    "tools/midi_tools.py": "sha256:bf91e2a523e3ea03bf4d0cd4603a7a375e18f76e12fb53716276647a41106780"
+    "tools/midi_tools.py": "sha256:d48ba8afa704b4f71fd9f0236a573bc9eafb1420e2cdb4e87325154c90e45f69"
   },
-  "signature": "WEt8YfK4L/ZnFrlbs2DliEofodgggoGU5WKH1Wf9mC3puq+9DlJOtZbKlFLTFbPrkwkmEZEO5mXZgnacYg7KDg=="
+  "signature": "6ps+bfIXXEKXmVnUqykh9Ka8V/E5zlai2SGgPb4CxawZuA+B1XIOGYZ4QGF2aqeINn9ZcIBteiUQ2SQwjtwfBQ=="
 }

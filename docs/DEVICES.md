@@ -9,6 +9,7 @@ Sapphire itself.
 | Satellite | Sapphire | A room box with mic, speaker, light and camera: a Raspberry Pi, an ESP32 board |
 | SSH machine | the SSH plugin | Any machine you can log in to |
 | WiFi gadget | the gadget plugin | A small board with a light, a screen, a button |
+| IP camera (ONVIF) | the IP Cameras plugin | A network camera she sees through, and turns and zooms when it can move |
 | Hardware synth, MIDI keyboard | the MIDI plugin | Instruments she plays and hears |
 
 Any plugin can bring more types. A type appears when its plugin is enabled.

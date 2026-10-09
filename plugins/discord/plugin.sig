@@ -82,7 +82,7 @@
     "tests/test_discord_slash.py": "sha256:fe3d6f09f605e82de15e80ffe3e1dc7bf246aa48eb78d6911b6185374a3038a5",
     "tests/test_discord_streaming_playback.py": "sha256:0eb27b695f438d0940b2946d53e26a8007a60f6b8ebab3689c9ea1280b35e188",
     "tests/test_discord_stt_quality.py": "sha256:a054251186a0a258905bda0c46c35069fb1954d56f41034d271ac161550845d9",
-    "tests/test_discord_tools.py": "sha256:a1b973ad83eea27cfc6e4afd88a3a96e69a893e064fed01854e3bc72364fd8c5",
+    "tests/test_discord_tools.py": "sha256:e68e408a2fe38c7ada0e33fe3d2230576914e0509872b6f232bae22537604fbe",
     "tests/test_discord_transport.py": "sha256:1eb15bd12c4250a775e5a8a1479afe8a9f2e4281dd2287eb0e88527e785bbe20",
     "tests/test_discord_tts_chunks.py": "sha256:84911c7f2bce3e1e589eb63612b71c6c150fb13a5b41c7da02cac4fcb534b1bb",
     "tests/test_discord_voice_sink.py": "sha256:6298801a164bb1b9f4c9b412853d9defdc3bbaa0f2fc1363e10f8678a68aeeff",
@@ -122,7 +122,7 @@
     "tests/test_voice_workers.py": "sha256:be19f7c05f58474bd0ddb26839529001b91a3c32f3d89ad58e2766c6ba8fd29b",
     "tests/test_web_contracts.py": "sha256:a5b4043cd48507fa9aba31800afdcd0b29977ad17704900d18745181a77ee40a",
     "tools/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "tools/discord_tools.py": "sha256:7ab7328e2b8d0d303f11f70c102b5d0541f48afc498862982854ec21786ec907",
+    "tools/discord_tools.py": "sha256:0948369646b82891141b4d635ed8eb15aff6038bc6e54844c8b676f57c5c087b",
     "transport/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "transport/activity_parser.py": "sha256:bb757874d8b1b0e61059e4ffc95e47a5630f77162d0c2c284bc931d01e79a3a1",
     "transport/discord_audio.py": "sha256:236cb7baa138b701ac8c8e7e1ca5a1dcb814d78fc860d1405c8aaa6dad7c304b",
@@ -152,5 +152,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "19Ek1psogbE1eHrnTx/teewFoaJyH1D8H1G409/KNB/aFrZnHGimP8PjNi5i4H8pJE6OoiREF/SErl+faH8FDg=="
+  "signature": "4Y9UnHuw5wkh7qgW2KntQqR8n9KOxII+T8Vh8AvP2ub0cHlwxVENY8RGpyHszSZLzn5YD8cbP3eF6Tr5rPz8Bw=="
 }

@@ -87,14 +87,14 @@ _LEAN_AGENT = {
 }
 
 
-# Her memory, as tools (Mind Palace). A `self` agent gets the READ set by
-# default - it can read her sheet (read_self pulls memories per sheet item)
-# and search - and the WRITE set only when spawned with memory='full'. Every
-# other data scope (knowledge, people, goals) and every channel scope (email,
+# Her memory, as tools. A `self` agent gets the READERS of the `memory`
+# category by default - it can read her sheet (read_self pulls memories per
+# sheet item) and search - and the WRITERS only when spawned with
+# memory='full'. Which tool is which is the tool's own metadata (category +
+# writes, core/chat/function_manager.py), not a list kept here. Every other
+# data scope (knowledge, people, goals) and every channel scope (email,
 # bitcoin, gcal, telegram, discord) stays closed for `self`: H1's hazard was
 # the whole bundle riding into a background worker silently (Krem, 2026-10-08).
-MEMORY_READ_TOOLS = ('search_memory', 'get_recent_memories', 'list_entities', 'read_self', 'read_ledger')
-MEMORY_WRITE_TOOLS = ('save_memory', 'update_memory', 'delete_memory', 'update_self')
 _MEMORY_MODES = {'none': 'none', 'false': 'none', 'off': 'none', 'no': 'none',
                  'read': 'read', 'read-only': 'read', 'readonly': 'read', 'read_only': 'read',
                  'full': 'full', 'true': 'full', 'write': 'full', 'yes': 'full'}
@@ -131,8 +131,16 @@ class Agent(BaseAgent):
         ps = _settings()
         o = self.options
         # `or` (not default=): an explicit toolset='' would resolve to zero
-        # tools and the agent would run a silent, useless job.
-        self._toolset = o.get('toolset') or ps.get('default_toolset') or 'default'
+        # tools and the agent would run a silent, useless job. A list or a
+        # comma string composes: 'web, files, mindpalace' - each word a saved
+        # toolset, a tool category (web, memory, files, ...) or a plugin's
+        # name; the first is THE toolset, the rest union on (2026-10-08).
+        words = o.get('toolset')
+        if isinstance(words, str):
+            words = [w.strip() for w in words.split(',')]
+        words = [str(w).strip() for w in (words or []) if str(w).strip()]
+        self._toolset = (words[0] if words else '') or ps.get('default_toolset') or 'default'
+        self._extra_toolsets = words[1:]
         # 'agent' is the lean default; 'self' = this chat's persona identity
         # with her memory as tools (read by default, `memory` says how much);
         # every other scope STRIPPED (H1 2026-04-22). A persona name = full inherit.
@@ -184,6 +192,9 @@ class Agent(BaseAgent):
             logger.info("[agents] 'agent' persona not seeded - using inline lean defaults")
             persona_settings = dict(_LEAN_AGENT)
 
+        system = get_system()
+        fm = system.llm_chat.function_manager
+
         # only the scope keys ride; voice/spice don't apply to a background agent
         scope_settings = {k: v for k, v in persona_settings.items() if k.endswith('_scope')}
         tool_rule = {}
@@ -193,16 +204,21 @@ class Agent(BaseAgent):
                             f"'{self._prompt}' persona ({', '.join(scope_settings.keys())})")
             scope_settings = {}
             # her memory, and only hers: the spawning chat's scope, as tools.
-            # The toolset's own memory tools come OFF first so 'read' means
-            # read whatever the toolset said; 'none' leaves none at all.
-            tool_rule['drop_tools'] = list(MEMORY_READ_TOOLS + MEMORY_WRITE_TOOLS)
+            # 'none': no scope → the executor sheds the whole memory category
+            # itself. 'read': the scope, the category's readers on, its writers
+            # off whatever the toolset said. 'full': the whole category on.
             scope = _chat_memory_scope(self.chat) if self._memory != 'none' else None
             if scope and scope != 'none':
                 scope_settings['memory_scope'] = scope
-                tool_rule['add_tools'] = list(MEMORY_READ_TOOLS if self._memory == 'read'
-                                              else MEMORY_READ_TOOLS + MEMORY_WRITE_TOOLS)
+                if self._memory == 'read':
+                    tool_rule['drop_tools'] = fm.tools_in_category('memory', writes=True)
+                    tool_rule['add_tools'] = fm.tools_in_category('memory', writes=False)
+                else:
+                    tool_rule['add_tools'] = fm.tools_in_category('memory')
             elif self._memory != 'none':
                 logger.info(f"[agents] prompt='self' memory={self._memory}: the chat has no memory scope - none given")
+        if self._extra_toolsets:
+            tool_rule['extra_toolsets'] = list(self._extra_toolsets)
 
         # persona names and prompt-file names are two namespaces: resolve the
         # file through the persona's `prompt` field (silent voice loss otherwise)
@@ -224,8 +240,6 @@ class Agent(BaseAgent):
             # ExecutionContext gates provider selection AND network tools off it
             task_settings['privacy_required'] = True
 
-        system = get_system()
-        fm = system.llm_chat.function_manager
         te = system.llm_chat.tool_engine
         # cancel_check: a stopped agent ends at its next round instead of
         # burning to max_rounds (E2#4). on_tool: the transcript sees each

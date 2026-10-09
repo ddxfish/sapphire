@@ -23,6 +23,7 @@ DEFAULTS = {
 
 ENABLED = True
 EMOJI = '🏠'
+TOOL_CATEGORY = 'devices'
 AVAILABLE_FUNCTIONS = [
     'ha_list_scenes_and_scripts',
     'ha_activate',
@@ -45,7 +46,7 @@ TOOLS = [
         "is_local": "endpoint",
         "function": {
             "name": "ha_list_scenes_and_scripts",
-            "description": "List all available Home Assistant scenes and scripts. Returns names with type label.",
+            "description": "List Home Assistant scenes and scripts.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -54,16 +55,16 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_activate",
-            "description": "Activate a Home Assistant scene or run a script by name.",
+            "description": "Activate a scene or run a script by name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
-                        "type": "string",
-                        "description": "Scene or script name (e.g., 'movie_night', 'bedtime')"
+                        "type": "string"
                     }
                 },
                 "required": ["name"]
@@ -75,7 +76,7 @@ TOOLS = [
         "is_local": "endpoint",
         "function": {
             "name": "ha_list_areas",
-            "description": "List all available Home Assistant areas/rooms. Use this to find valid area names for ha_area_light and ha_area_color.",
+            "description": "List Home Assistant areas/rooms.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -84,20 +85,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_area_light",
-            "description": "Set brightness for all lights in an area. 0 = off, 100 = full brightness.",
+            "description": "Set brightness for every light in an area.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "area": {
-                        "type": "string",
-                        "description": "Area name (e.g., 'living room', 'bedroom')"
+                        "type": "string"
                     },
                     "brightness": {
                         "type": "integer",
-                        "description": "Brightness 0-100 (0 = off)"
+                        "description": "0-100 (0 = off)"
                     }
                 },
                 "required": ["area", "brightness"]
@@ -106,20 +107,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_area_color",
-            "description": "Set color for all RGB lights in an area.",
+            "description": "Set color for every RGB light in an area.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "area": {
-                        "type": "string",
-                        "description": "Area name"
+                        "type": "string"
                     },
-                    "r": {"type": "integer", "description": "Red 0-255"},
-                    "g": {"type": "integer", "description": "Green 0-255"},
-                    "b": {"type": "integer", "description": "Blue 0-255"}
+                    "r": {"type": "integer", "description": "0-255"},
+                    "g": {"type": "integer", "description": "0-255"},
+                    "b": {"type": "integer", "description": "0-255"}
                 },
                 "required": ["area", "r", "g", "b"]
             }
@@ -130,7 +131,7 @@ TOOLS = [
         "is_local": "endpoint",
         "function": {
             "name": "ha_get_thermostat",
-            "description": "Get current thermostat temperature.",
+            "description": "Current thermostat temperature.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -139,16 +140,16 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_set_thermostat",
-            "description": "Set thermostat target temperature.",
+            "description": "Set the thermostat target.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "temp": {
-                        "type": "number",
-                        "description": "Target temperature"
+                        "type": "number"
                     }
                 },
                 "required": ["temp"]
@@ -160,7 +161,7 @@ TOOLS = [
         "is_local": "endpoint",
         "function": {
             "name": "ha_list_lights_and_switches",
-            "description": "List all available lights and switches with their type.",
+            "description": "List lights and switches.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -169,24 +170,25 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_set_light",
-            "description": "Control a specific light by name. Brightness 0 = off.",
+            "description": "Control one light by name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Light name (friendly name or entity_id)"
+                        "description": "Friendly name or entity_id"
                     },
                     "brightness": {
                         "type": "integer",
-                        "description": "Brightness 0-100 (0 = off)"
+                        "description": "0-100 (0 = off)"
                     },
-                    "r": {"type": "integer", "description": "Optional red 0-255"},
-                    "g": {"type": "integer", "description": "Optional green 0-255"},
-                    "b": {"type": "integer", "description": "Optional blue 0-255"}
+                    "r": {"type": "integer", "description": "0-255"},
+                    "g": {"type": "integer", "description": "0-255"},
+                    "b": {"type": "integer", "description": "0-255"}
                 },
                 "required": ["name", "brightness"]
             }
@@ -194,21 +196,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_set_switch",
-            "description": "Turn a switch on or off by name.",
+            "description": "Turn a switch on or off.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
-                        "type": "string",
-                        "description": "Switch name"
+                        "type": "string"
                     },
                     "state": {
                         "type": "string",
-                        "enum": ["on", "off"],
-                        "description": "Desired state"
+                        "enum": ["on", "off"]
                     }
                 },
                 "required": ["name", "state"]
@@ -217,20 +218,19 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": "endpoint",
         "function": {
             "name": "ha_notify",
-            "description": "Send a notification to the user's phone via Home Assistant mobile app.",
+            "description": "Notify the user's phone through the Home Assistant app.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
-                        "type": "string",
-                        "description": "Notification message body"
+                        "type": "string"
                     },
                     "title": {
-                        "type": "string",
-                        "description": "Optional notification title"
+                        "type": "string"
                     }
                 },
                 "required": ["message"]
@@ -242,7 +242,7 @@ TOOLS = [
         "is_local": "endpoint",
         "function": {
             "name": "ha_house_status",
-            "description": "Get a snapshot of the home status: presence, climate, lights by area, door/window/motion sensors, and active scenes.",
+            "description": "Snapshot of the home: presence, climate, lights by area, door/window/motion sensors, active scenes.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -254,13 +254,14 @@ TOOLS = [
         "is_local": "endpoint",
         "function": {
             "name": "ha_get_camera_image",
-            "description": "Get a snapshot image from a Home Assistant camera entity. Returns the image for visual analysis. Use ha_house_status first to find camera entity IDs.",
+            "description": "Snapshot from a Home Assistant camera, as an image you can see. ha_house_status lists camera entity "
+                           "ids.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entity_id": {
                         "type": "string",
-                        "description": "Camera entity ID (e.g., 'camera.front_door', 'camera.living_room')"
+                        "description": "e.g. 'camera.front_door'"
                     }
                 },
                 "required": ["entity_id"]

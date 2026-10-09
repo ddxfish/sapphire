@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🎯'
+TOOL_CATEGORY = 'goals'
 
 _db_path = None
 _db_initialized = False
@@ -33,16 +34,17 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "create_goal",
-            "description": "Create a goal.\n  parent_id=N — subtask under goal N\n  (none) — top-level goal",
+            "description": "Create a goal. parent_id=N makes it a subtask of goal N.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "Title (max 200 chars)"
+                        "description": "Max 200 chars"
                     },
                     "description": {
                         "type": "string",
@@ -53,12 +55,11 @@ TOOLS = [
                         "description": "high | medium | low (default medium)"
                     },
                     "parent_id": {
-                        "type": "integer",
-                        "description": "Parent goal id for nesting"
+                        "type": "integer"
                     },
                     "permanent": {
                         "type": "boolean",
-                        "description": "Standing goal — cannot be completed/deleted. For ongoing duties. Default false."
+                        "description": "Standing goal: cannot be completed or deleted (default false)"
                     }
                 },
                 "required": ["title"]
@@ -70,13 +71,12 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "list_goals",
-            "description": "List goals or deep-view one.\n  goal_id=N — full detail + subtasks + journal\n  (none) — overview (top 3 expanded, rest summarized)",
+            "description": "List goals, or deep-view one with goal_id (detail, subtasks, journal).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "goal_id": {
-                        "type": "integer",
-                        "description": "Goal id for deep view"
+                        "type": "integer"
                     },
                     "status": {
                         "type": "string",
@@ -89,24 +89,24 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "update_goal",
-            "description": "Update a goal. Pass any fields to change. progress_note appends (not replaces).",
+            "description": "Update a goal; pass the fields to change.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "goal_id": {
-                        "type": "integer",
-                        "description": "Goal id (shown as [N])"
+                        "type": "integer"
                     },
                     "title": {
                         "type": "string",
-                        "description": "New title (max 200 chars)"
+                        "description": "Max 200 chars"
                     },
                     "description": {
                         "type": "string",
-                        "description": "New description (max 500 chars)"
+                        "description": "Max 500 chars"
                     },
                     "priority": {
                         "type": "string",
@@ -118,7 +118,7 @@ TOOLS = [
                     },
                     "progress_note": {
                         "type": "string",
-                        "description": "Timestamped journal entry — appended (max 1024 chars)"
+                        "description": "Journal entry, appended and timestamped (max 1024 chars)"
                     }
                 },
                 "required": ["goal_id"]
@@ -127,20 +127,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "delete_goal",
-            "description": "Delete a goal. Use update_goal(status='abandoned') to keep history instead.",
+            "description": "Delete a goal. update_goal(status='abandoned') keeps history instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "goal_id": {
-                        "type": "integer",
-                        "description": "Goal id"
+                        "type": "integer"
                     },
                     "cascade": {
                         "type": "boolean",
-                        "description": "Delete subtasks too (default true). False = orphan to top-level."
+                        "description": "Delete subtasks too (default true); false moves them to top level"
                     }
                 },
                 "required": ["goal_id"]

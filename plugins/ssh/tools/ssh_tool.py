@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001f5a5\ufe0f'
+TOOL_CATEGORY = 'system'
 AVAILABLE_FUNCTIONS = [
     'ssh_get_servers',
     'ssh_run_command',
@@ -27,13 +28,12 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "ssh_get_servers",
-            "description": "List configured SSH servers, or details for one by name. No args = list all.",
+            "description": "List configured SSH servers, or one's details by name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
-                        "type": "string",
-                        "description": "Server friendly name. Omit to list all."
+                        "type": "string"
                     }
                 },
                 "required": []
@@ -42,6 +42,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "ssh_run_command",
@@ -51,11 +52,10 @@ TOOLS = [
                 "properties": {
                     "server": {
                         "type": "string",
-                        "description": "Server friendly name (from ssh_get_servers)"
+                        "description": "From ssh_get_servers"
                     },
                     "command": {
-                        "type": "string",
-                        "description": "Shell command"
+                        "type": "string"
                     },
                     "timeout": {
                         "type": "integer",

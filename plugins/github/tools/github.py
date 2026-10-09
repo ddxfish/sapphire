@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🐙'
+TOOL_CATEGORY = 'web'
 API_BASE = 'https://api.github.com'
 
 AVAILABLE_FUNCTIONS = ['github_repo', 'github_file', 'github_issue', 'github_search']
@@ -27,22 +28,18 @@ TOOLS = [
         "function": {
             "name": "github_repo",
             "description": (
-                "Manage GitHub repositories on the active scope's account. "
-                "Actions: 'create' (name, private?, description?), "
-                "'list' (lists your own repos), "
-                "'get' (repo='owner/name' or just 'name' for your own), "
-                "'delete' (repo, requires DELETE permission), "
-                "'fork' (repo='upstream/name')."
+                "Manage GitHub repos on the active scope's account. Actions: create (name, private?, description?), "
+                "list, get (repo), delete (repo), fork (repo)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["create", "list", "get", "delete", "fork"]},
-                    "name": {"type": "string", "description": "Repo name (for create)"},
-                    "repo": {"type": "string", "description": "Repo as 'owner/name' or just 'name' for your own (for get/delete/fork)"},
-                    "private": {"type": "boolean", "description": "Private repo (for create). Default false."},
-                    "description": {"type": "string", "description": "Repo description (for create)"},
-                    "auto_init": {"type": "boolean", "description": "Initialize with README (for create). Default false — leave empty so push_directory makes the first commit."}
+                    "name": {"type": "string", "description": "Repo name (create)"},
+                    "repo": {"type": "string", "description": "'owner/name', or just 'name' for your own"},
+                    "private": {"type": "boolean", "description": "Private repo (default false)"},
+                    "description": {"type": "string", "description": "Repo description (create)"},
+                    "auto_init": {"type": "boolean", "description": "Start with a README (default false; leave off so push_directory makes the first commit)"}
                 },
                 "required": ["action"]
             }
@@ -55,24 +52,22 @@ TOOLS = [
         "function": {
             "name": "github_file",
             "description": (
-                "Read, write, or delete files in a GitHub repo. "
-                "Actions: 'read' (repo, path, ref?), "
-                "'write' (repo, path, content, commit_message, branch?), "
-                "'delete' (repo, path, commit_message, branch?), "
-                "'push_directory' (repo, local_path, commit_message, branch?, exclude?) — bulk push a local directory as ONE commit via the git tree API."
+                "Read, write or delete files in a GitHub repo. Actions: read (repo, path, ref?), write (repo, path, "
+                "content, commit_message, branch?), delete (repo, path, commit_message, branch?), push_directory "
+                "(repo, local_path, commit_message, branch?, exclude?) - a local directory as ONE commit."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["read", "write", "delete", "push_directory"]},
-                    "repo": {"type": "string", "description": "Repo as 'owner/name'"},
-                    "path": {"type": "string", "description": "File path inside the repo (for read/write/delete)"},
-                    "content": {"type": "string", "description": "File content as text (for write)"},
-                    "commit_message": {"type": "string", "description": "Commit message (for write/delete/push_directory)"},
-                    "branch": {"type": "string", "description": "Branch to commit to. Default: repo's default branch."},
-                    "ref": {"type": "string", "description": "Branch/tag/commit to read from (for read). Default: default branch."},
-                    "local_path": {"type": "string", "description": "Local directory to push (for push_directory). Path inside Sapphire's working tree."},
-                    "exclude": {"type": "array", "items": {"type": "string"}, "description": "Glob patterns to exclude (for push_directory). e.g. ['__pycache__', '*.pyc']."}
+                    "repo": {"type": "string", "description": "'owner/name'"},
+                    "path": {"type": "string", "description": "File path in the repo"},
+                    "content": {"type": "string", "description": "File text"},
+                    "commit_message": {"type": "string", "description": "Commit message"},
+                    "branch": {"type": "string", "description": "Branch to commit to (default: the repo's default)"},
+                    "ref": {"type": "string", "description": "Branch/tag/commit to read (default: default branch)"},
+                    "local_path": {"type": "string", "description": "Local directory to push, inside Sapphire's working tree"},
+                    "exclude": {"type": "array", "items": {"type": "string"}, "description": "Glob patterns to skip, e.g. ['__pycache__', '*.pyc']"}
                 },
                 "required": ["action", "repo"]
             }
@@ -85,23 +80,19 @@ TOOLS = [
         "function": {
             "name": "github_issue",
             "description": (
-                "Manage issues in a GitHub repo. Filing issues uses the active scope's identity — "
-                "if you are running as your own GitHub account, the issue is authored by you. "
-                "Actions: 'create' (repo, title, body?), "
-                "'list' (repo, state?='open'|'closed'|'all'), "
-                "'get' (repo, number), "
-                "'comment' (repo, number, body), "
-                "'close' (repo, number)."
+                "Manage issues in a GitHub repo, authored as the active scope's account. Actions: create (repo, "
+                "title, body?), list (repo, state?), get (repo, number), comment (repo, number, body), close (repo, "
+                "number)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["create", "list", "get", "comment", "close"]},
-                    "repo": {"type": "string", "description": "Repo as 'owner/name'"},
-                    "number": {"type": "integer", "description": "Issue number (for get/comment/close)"},
-                    "title": {"type": "string", "description": "Issue title (for create)"},
-                    "body": {"type": "string", "description": "Issue body or comment text (for create/comment)"},
-                    "state": {"type": "string", "enum": ["open", "closed", "all"], "description": "Filter (for list). Default 'open'."}
+                    "repo": {"type": "string", "description": "'owner/name'"},
+                    "number": {"type": "integer", "description": "Issue number"},
+                    "title": {"type": "string", "description": "Issue title"},
+                    "body": {"type": "string", "description": "Issue body or comment text"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"], "description": "list filter: open (default), closed or all"}
                 },
                 "required": ["action", "repo"]
             }
@@ -113,13 +104,13 @@ TOOLS = [
         "network": True,
         "function": {
             "name": "github_search",
-            "description": "Search GitHub. Types: 'repos', 'code', 'issues'. Returns up to 'limit' results.",
+            "description": "Search GitHub repos, code or issues.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "type": {"type": "string", "enum": ["repos", "code", "issues"]},
-                    "query": {"type": "string", "description": "Search query (GitHub search syntax)"},
-                    "limit": {"type": "integer", "description": "Max results. Default 10, max 30."}
+                    "query": {"type": "string", "description": "GitHub search syntax"},
+                    "limit": {"type": "integer", "description": "Default 10, max 30"}
                 },
                 "required": ["type", "query"]
             }

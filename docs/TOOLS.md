@@ -21,6 +21,11 @@ When you ask the AI something like "search for news about SpaceX", the AI recogn
 
 Tools are grouped into **toolsets** — named collections you can switch between. Each persona can have its own custom set of tools you choose. See [TOOLSETS.md](TOOLSETS.md).
 
+Every tool also carries a **category** — `web`, `memory`, `knowledge`, `people`, `goals`, `files`,
+`system`, `devices`, `comms`, `media`, `meta_danger`, `agents` — which is how the Toolsets picker
+groups them and the words Sapphire composes an agent's toolset from (`'web, files'`, see
+[AGENTS.md](AGENTS.md)). `meta_danger` holds the tools that change Sapphire herself.
+
 ---
 
 ## Included Tools

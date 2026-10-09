@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '\U0001f39b\ufe0f'
+TOOL_CATEGORY = 'devices'
 AVAILABLE_FUNCTIONS = ['device_list', 'device_status', 'device_action']
 
 TOOLS = [
@@ -28,8 +29,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "device_list",
-            "description": ("List your devices: name, online or offline, and what each can do. "
-                            "The user adds devices in Settings > Devices."),
+            "description": ("Your devices: name, online or offline, and what each can do."),
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
@@ -38,11 +38,11 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "device_status",
-            "description": "Check one device right now: online or offline, readings, and what it can do.",
+            "description": "One device right now: online or offline, readings, what it can do.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "device": {"type": "string", "description": "Device name from device_list"}
+                    "device": {"type": "string", "description": "From device_list"}
                 },
                 "required": ["device"]
             }
@@ -50,20 +50,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "device_action",
             "description": (
-                "Use a device. device_action(device) shows how it is and everything it can do, "
-                "with the value each action takes. "
-                "device_action(device, capability, action, value) runs one. value is optional."),
+                "Use a device. device_action(device) alone shows everything it can do and the value each action "
+                "takes."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "device": {"type": "string", "description": "Device name from device_list"},
-                    "capability": {"type": "string", "description": "What to use on it, e.g. ssh. Omit for the list."},
-                    "action": {"type": "string", "description": "What to do. Omit for the list."},
-                    "value": {"type": "string", "description": "Optional input for the action"}
+                    "device": {"type": "string", "description": "From device_list"},
+                    "capability": {"type": "string", "description": "e.g. ssh. Omit for the list."},
+                    "action": {"type": "string", "description": "Omit for the list"},
+                    "value": {"type": "string"}
                 },
                 "required": ["device"]
             }

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📝'
+TOOL_CATEGORY = 'files'
 # __file__-anchored (functions/ -> project root). Was CWD-relative — the only
 # user-path in the tree that broke when launched outside the project root
 # (notes landed outside the tree + backups, invisibly). negspace 2026-08-31.
@@ -33,7 +34,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "notepad_read",
-            "description": "Read your scratch notepad. Returns all lines with line numbers for reference.",
+            "description": "Read your scratch notepad, with line numbers.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -43,6 +44,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "notepad_append_lines",
@@ -52,8 +54,7 @@ TOOLS = [
                 "properties": {
                     "lines": {
                         "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Lines to append"
+                        "items": {"type": "string"}
                     }
                 },
                 "required": ["lines"]
@@ -62,6 +63,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "notepad_delete_lines",
@@ -72,7 +74,7 @@ TOOLS = [
                     "line_numbers": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "1-indexed line numbers"
+                        "description": "1-indexed"
                     }
                 },
                 "required": ["line_numbers"]
@@ -81,20 +83,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "notepad_insert_line",
-            "description": "Insert a line after a line number. 0 = beginning.",
+            "description": "Insert a line after a line number.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "after_line": {
                         "type": "integer",
-                        "description": "Line to insert after (0 = beginning)"
+                        "description": "0 = beginning"
                     },
                     "content": {
-                        "type": "string",
-                        "description": "Line content"
+                        "type": "string"
                     }
                 },
                 "required": ["after_line", "content"]

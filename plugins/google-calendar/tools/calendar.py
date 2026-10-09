@@ -35,6 +35,7 @@ def _lock_for(scope: str) -> threading.Lock:
 
 ENABLED = True
 EMOJI = '\U0001f4c5'
+TOOL_CATEGORY = 'comms'
 
 GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 CALENDAR_API = 'https://www.googleapis.com/calendar/v3'
@@ -48,7 +49,7 @@ TOOLS = [
         "network": True,
         "function": {
             "name": "calendar_today",
-            "description": "Today's events (numbered for calendar_delete) with times, guest RSVPs, free hours.",
+            "description": "Today's events (numbered for calendar_delete) with times, guest RSVPs and free hours.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -62,17 +63,17 @@ TOOLS = [
         "network": True,
         "function": {
             "name": "calendar_range",
-            "description": "Events for a date range (YYYY-MM-DD), numbered for calendar_delete.",
+            "description": "Events for a date range, numbered for calendar_delete.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "start_date": {
                         "type": "string",
-                        "description": "YYYY-MM-DD. Default: today."
+                        "description": "YYYY-MM-DD (default today)"
                     },
                     "end_date": {
                         "type": "string",
-                        "description": "YYYY-MM-DD. Default: start + 7 days."
+                        "description": "YYYY-MM-DD (default start + 7 days)"
                     }
                 },
                 "required": []
@@ -81,25 +82,25 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "network": True,
         "function": {
             "name": "calendar_add",
-            "description": "Add a calendar event. Times are local (user's timezone) — do NOT add 'Z' or offsets.",
+            "description": "Add a calendar event. Times are local - do NOT add 'Z' or offsets.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
-                        "type": "string",
-                        "description": "Event title"
+                        "type": "string"
                     },
                     "start": {
                         "type": "string",
-                        "description": "Local time. YYYY-MM-DDTHH:MM for timed, YYYY-MM-DD for all-day."
+                        "description": "YYYY-MM-DDTHH:MM, or YYYY-MM-DD for all-day"
                     },
                     "end": {
                         "type": "string",
-                        "description": "Local time. Default: start + 1 hour."
+                        "description": "Default start + 1 hour"
                     },
                     "description": {
                         "type": "string",
@@ -108,7 +109,8 @@ TOOLS = [
                     "attendees": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Guests to invite, by contact name from People (or id). Google emails them an invite. Only contacts with 'Allow AI to send email' resolve."
+                        "description": "Contact names from People (or ids). Google emails each an invite. Only contacts with 'Allow AI to "
+                                       "send email' resolve."
                     }
                 },
                 "required": ["title", "start"]
@@ -117,17 +119,18 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": False,
         "network": True,
         "function": {
             "name": "calendar_delete",
-            "description": "Delete a calendar event. Get event number from calendar_today / calendar_range first.",
+            "description": "Delete a calendar event by its number from calendar_today / calendar_range.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "event_id": {
                         "type": "string",
-                        "description": "Event number from calendar results (e.g. '1' or '#1')"
+                        "description": "e.g. '1' or '#1'"
                     }
                 },
                 "required": ["event_id"]

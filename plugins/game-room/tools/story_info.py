@@ -12,13 +12,15 @@ _PLUGIN_ROOT = str(Path(__file__).absolute().parent.parent)
 if _PLUGIN_ROOT not in sys.path:
     sys.path.insert(0, _PLUGIN_ROOT)
 
+TOOL_CATEGORY = 'game-room'
 TOOLS = [
     {
         "type": "function",
         "is_local": True,
         "function": {
             "name": "story_status",
-            "description": "What interactive stories are open: every active playthrough across sessions (story, session, room, turn) plus the installed story list. For PLAIN chats — inside a running story your turn context already carries the live state, so you never need this there.",
+            "description": "Open interactive stories: every active playthrough plus the installed story list. For PLAIN chats - "
+                           "inside a story your context already has the live state.",
             "parameters": {"type": "object", "properties": {}}
         }
     }

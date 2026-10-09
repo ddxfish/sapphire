@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = "\U0001F3DE"  # national park / scene
+TOOL_CATEGORY = 'meta_danger'
 
 AVAILABLE_FUNCTIONS = ['set_scene']
 
@@ -43,6 +44,7 @@ def _build_description():
 def _tool_schema(description):
     return [{
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "set_scene",
@@ -51,7 +53,7 @@ def _tool_schema(description):
                 "type": "object",
                 "properties": {
                     "name": {"type": "string",
-                             "description": "A scene name from the available list, or 'none' to clear the scene."}
+                             "description": "'none' clears the scene"}
                 },
                 "required": ["name"],
             },

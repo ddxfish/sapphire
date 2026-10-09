@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '📖'
+TOOL_CATEGORY = 'knowledge'
 
 _db_path = None
 _db_initialized = False
@@ -38,35 +39,36 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
+        "category": "people",
         "is_local": True,
         "function": {
             "name": "save_person",
-            "description": "Save or update a person. No id = upsert by name (case-insensitive). With id = edit that row (enables rename). Use append_notes to extend notes without overwriting.",
+            "description": "Save or update a person. No id = upsert by name; with id = edit that row (and rename).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
-                        "type": "string",
-                        "description": "Person's name. Upsert key when id omitted."
+                        "type": "string"
                     },
                     "id": {
                         "type": "integer",
-                        "description": "Row id to edit. Get from search_knowledge."
+                        "description": "From search_knowledge"
                     },
                     "relationship": {
                         "type": "string",
-                        "description": "Relationship (e.g. father, friend, coworker)"
+                        "description": "e.g. father, friend, coworker"
                     },
-                    "phone": {"type": "string", "description": "Phone"},
-                    "email": {"type": "string", "description": "Email"},
-                    "address": {"type": "string", "description": "Address"},
+                    "phone": {"type": "string"},
+                    "email": {"type": "string"},
+                    "address": {"type": "string"},
                     "notes": {
                         "type": "string",
-                        "description": "Notes. Replaces existing."
+                        "description": "Replaces existing notes"
                     },
                     "append_notes": {
                         "type": "string",
-                        "description": "Append to existing notes with newline. Mutex with notes."
+                        "description": "Adds to existing notes instead; not with notes"
                     }
                 },
                 "required": ["name"]
@@ -75,24 +77,23 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "save_knowledge",
-            "description": "Save content under a category. Auto-creates categories. Long content chunks automatically.",
+            "description": "Save content under a category; new categories are created, long content is chunked.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
-                        "type": "string",
-                        "description": "Category name. Auto-creates if new."
+                        "type": "string"
                     },
                     "content": {
-                        "type": "string",
-                        "description": "Content to save"
+                        "type": "string"
                     },
                     "description": {
                         "type": "string",
-                        "description": "Category description. Used only on first creation."
+                        "description": "Category description, used only when it is created"
                     }
                 },
                 "required": ["category", "content"]
@@ -104,25 +105,25 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_knowledge",
-            "description": "Search/browse/read your knowledge base (people + categories + notes).\n  query='X' — semantic search\n  category='X' — browse a category\n  id=42 — read one entry in full\n  (none) — overview",
+            "description": "Search, browse or read your knowledge base (people, categories, notes). No arguments = overview.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search terms. Omit to browse."
+                        "description": "Semantic search"
                     },
                     "category": {
                         "type": "string",
-                        "description": "Category to filter or browse."
+                        "description": "Browse one category"
                     },
                     "id": {
                         "type": "integer",
-                        "description": "Entry id to read in full."
+                        "description": "Read one entry in full"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max results (default 10)."
+                        "description": "Default 10"
                     }
                 },
                 "required": []
@@ -131,20 +132,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "delete_knowledge",
-            "description": "Delete entries or categories you created. User-created content is protected. Last entry auto-removes the category.\n  id=42 — delete one entry\n  category='X' — delete category + all entries",
+            "description": "Delete entries or categories you created; user-created content is protected.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "integer",
-                        "description": "Entry id to delete."
+                        "description": "One entry"
                     },
                     "category": {
                         "type": "string",
-                        "description": "Category name to delete entirely."
+                        "description": "The category and all its entries"
                     }
                 },
                 "required": []

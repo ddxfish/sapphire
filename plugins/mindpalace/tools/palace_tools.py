@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 ENABLED = True
 EMOJI = '🏛️'
+TOOL_CATEGORY = 'memory'
 GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 _db_path = None
@@ -100,6 +101,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "save_memory",
@@ -124,24 +126,23 @@ TOOLS = [
                 "properties": {
                     "content": {
                         "type": "string",
-                        "description": "The information to remember (no date stamp — it is timestamped for you)"
+                        "description": "No date stamp; it is timestamped"
                     },
                     "layer": {
                         "type": "string",
                         "enum": LAYER_KEYS,
-                        "description": "Destination layer. Default: events."
+                        "description": "Default events"
                     },
                     "entity": {
                         "type": "string",
-                        "description": "Entity name (person/place/thing) this fact belongs to. Required when layer=entities."
+                        "description": "Required when layer=entities"
                     },
                     "label": {
-                        "type": "string",
-                        "description": "Category label"
+                        "type": "string"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Optional gating word. Set only if user asked to make this memory private with a specific word."
+                        "description": "Only if the user asks"
                     }
                 },
                 "required": ["content"]
@@ -153,40 +154,40 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_memory",
-            "description": "Semantic + full-text search across all memory layers. Optionally restrict to one layer or filter by label. layer='knowledge' searches the library (reference documents) with generous per-document depth; results show [doc N] ids that read_document can open.",
+            "description": "Semantic + full-text search across all memory layers. layer='knowledge' searches the library; "
+                           "results show [doc N] ids that read_document opens.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
-                        "type": "string",
-                        "description": "Search terms or topic"
+                        "type": "string"
                     },
                     "layer": {
                         "type": "string",
                         "enum": LAYER_KEYS,
-                        "description": "Restrict to one layer. Omit to search all. layer='knowledge' = the library (books, notes, reference docs), searched deeply."
+                        "description": "Omit for all; 'knowledge' = the library"
                     },
                     "document_id": {
                         "type": "integer",
-                        "description": "Search inside ONE library document (the [doc N] id). Implies layer='knowledge'."
+                        "description": "Search inside one library document ([doc N])"
                     },
                     "label": {
                         "type": "string",
-                        "description": "Filter by label(s), comma-separated"
+                        "description": "Comma-separated"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max results",
                         "default": 10
                     },
                     "depth": {
                         "type": "integer",
-                        "description": "How far to follow connections from the results: 0 = direct matches only (default), 1 = also pull the people/places/things linked to the results and their key facts (the usual choice mid-conversation), 2 = walk a neighborhood further through shared connections (best for waking up, orienting, or deep dives — noticeably longer output). Maximum 2 (higher clamps to 2).",
+                        "description": "Follow connections from the results: 0 = matches only (default), 1 = plus linked "
+                                       "people/places/things and key facts, 2 = a wider walk (long output). Max 2.",
                         "default": 0
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Gating word — pass to include private rows saved with this word."
+                        "description": "Includes private rows saved with it"
                     }
                 },
                 "required": ["query"]
@@ -198,27 +199,26 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Get most recent memories, optionally from one layer or filtered by label.",
+            "description": "Most recent memories.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "How many",
                         "default": 10
                     },
                     "layer": {
                         "type": "string",
                         "enum": LAYER_KEYS,
-                        "description": "Restrict to one layer. Omit for all."
+                        "description": "Omit for all"
                     },
                     "label": {
                         "type": "string",
-                        "description": "Filter by label(s), comma-separated"
+                        "description": "Comma-separated"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Gating word — pass to include private rows saved with this word."
+                        "description": "Includes private rows saved with it"
                     }
                 }
             }
@@ -234,23 +234,19 @@ TOOLS = [
             # card that already carried that nickname) got minted.
             # Merge/delete stay UI-only.
             "description": (
-                "Your roster of entities (people, places, things, events) in "
-                "this memory scope — see everyone at once before saving a fact "
-                "to one. Default: every kind, one brief line each (name, kind, "
-                "nicknames, fact count). Pass kind='person' (or place/thing/"
-                "event/other) for the fuller card of that kind: relationship, "
-                "birthday, and the other filled-in fields."
+                "Your roster of entities (people, places, things, events) in this scope, one line each - check it "
+                "before saving a fact to one. kind= gives that kind's fuller cards."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "One kind (person, place, thing, event, other) — shows its fuller card. Omit for the brief roster of all kinds."
+                        "description": "person, place, thing, event or other. Omit for all, brief."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max entities to list (default 50)"
+                        "description": "Max entities (default 50)"
                     }
                 },
                 "required": []
@@ -259,33 +255,30 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "update_memory",
-            "description": ("Edit a memory in place by ID — fix wording, add a "
-                            "detail, or re-label without losing the memory's id, "
-                            "age, or history. Content 450 chars max or it gets "
-                            "trimmed. Memories only: [N] ids. Library documents "
-                            "([doc N]) are NOT editable here."),
+            "description": ("Edit a memory in place by id; it keeps its id, age and history. Content max 450 chars. Memories only"
+                            " ([N]), not library documents ([doc N])."),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_id": {
                         "type": "integer",
-                        "description": ("Memory ID shown as [42] — never a "
-                                        "[doc N] document id")
+                        "description": ("Shown as [42]")
                     },
                     "content": {
                         "type": "string",
-                        "description": "Replacement text (omit to keep current)"
+                        "description": "Omit to keep"
                     },
                     "label": {
                         "type": "string",
-                        "description": "New category label (omit to keep current)"
+                        "description": "Omit to keep"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Required to edit a private row. Must match save-time word."
+                        "description": "Required for a private row"
                     }
                 },
                 "required": ["memory_id"]
@@ -294,23 +287,20 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "delete_memory",
-            "description": ("Delete a memory by ID. Memories only: [N] ids — "
-                            "library documents ([doc N]) are NOT deletable "
-                            "here."),
+            "description": ("Delete a memory by id. Memories only ([N]), not library documents ([doc N])."),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_id": {
-                        "type": "integer",
-                        "description": ("Memory ID shown as [42] — never a "
-                                        "[doc N] document id")
+                        "type": "integer"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Required to delete a private row. Must match save-time word."
+                        "description": "Required for a private row"
                     }
                 },
                 "required": ["memory_id"]

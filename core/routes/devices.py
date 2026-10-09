@@ -477,6 +477,8 @@ async def light_stream(device_id, key, gone):
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue(maxsize=32)
     now = voice.listen(device_id, loop, queue)
+    from core.devices import glass
+    glass.sync_soon(device_id)               # a board that just linked (a boot, a new lease) shows its chat again
     try:
         # the clock rides along: a board keeps local time from it, no internet clock needed
         yield f"data: {json.dumps(dict(voice.clock(), state='connected', src='device'))}\n\n"

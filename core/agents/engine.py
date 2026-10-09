@@ -842,8 +842,34 @@ class AgentManager:
                     opts = ' one of ' + ', '.join(str(o.get('value') if isinstance(o, dict) else o) for o in f['options'])
                 dflt = f" (default {f['default']!r})" if f.get('default') not in (None, '') else ''
                 lines.append(f"  - {f['key']}{opts}{dflt}: {f.get('help') or f.get('label') or ''}".rstrip(': '))
+            if any(f.get('key') == 'toolset' for f in spec['spawn_schema']):
+                lines.extend(self._toolset_words())
         lines.append(f"Example: agent_spawn({spec['kind']!r}, 'what to do', {_example_options(spec)})")
         return '\n'.join(lines)
+
+    def _toolset_words(self):
+        """What a `toolset` may be made of, live: the tool categories with
+        what is loaded in each, the saved toolsets, the plugins by name
+        (2026-10-08). Static names only - never a chat's data."""
+        out = []
+        try:
+            from core.api_fastapi import get_system
+            from core.toolsets import toolset_manager
+            from core.chat.function_manager import CATEGORIES
+            fm = get_system().llm_chat.function_manager
+            cats = fm.categories()
+            known = [c for c in CATEGORIES if c in cats]
+            others = sorted(c for c in cats if c not in CATEGORIES)
+            out.append("toolset words (combine with commas, e.g. 'web, files'):")
+            out.append('  categories: ' + ' · '.join(f"{c} ({len(cats[c])})" for c in known))
+            if others:
+                out.append('  by name only: ' + ', '.join(others))
+            saved = sorted(toolset_manager.get_toolset_names())
+            if saved:
+                out.append('  saved toolsets: ' + ', '.join(saved))
+        except Exception as e:
+            logger.debug(f"[AGENTS] toolset words unavailable: {e}")
+        return out
 
     def action_text(self, chat, name, action, value, question=None):
         try:
