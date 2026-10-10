@@ -316,6 +316,20 @@ async def devices_firmware(request: Request, _=Depends(require_login)):
     return await _do(firmware_index)
 
 
+@router.put("/api/devices/firmware/sources")
+async def devices_firmware_sources(request: Request, _=Depends(require_login)):
+    """The firmware sources the user added, in their order, and the ones
+    switched off: {"sources": [...], "off": [...]}. Sapphire's own release is
+    always listed after them, and may be switched off too."""
+    _open(request, write=True)
+    from core.devices import firmware
+    body = await _body(request)
+    try:
+        return await asyncio.to_thread(firmware.set_sources, body.get("sources"), body.get("off"))
+    except firmware.FirmwareError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 @router.post("/api/devices/firmware/own")
 async def devices_firmware_own(request: Request, file: UploadFile = File(...), _=Depends(require_login)):
     """A firmware file of the user's own: checked, kept, and from then on the

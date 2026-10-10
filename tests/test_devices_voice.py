@@ -110,6 +110,7 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
     row = engine.get('pi2')
     assert row['parts'][0] == {'driver': 'satellite', 'plugin': 'core',
                                'config': {'url': 'http://192.168.1.100:8090', 'camera': True, 'ota': True, 'chat': '', 'buttons': {},
+                                          'question_max_s': 30, 'flip': False,
                                           'brightness': 80, 'dim': 15, 'dim_after_s': 120, 'off_after_min': 0,
                                           'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',

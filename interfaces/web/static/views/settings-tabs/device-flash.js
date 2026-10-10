@@ -70,7 +70,14 @@ class Console {
         // DTR and RTS sit when the port opens, and the browser picks them. So:
         // the classic run-mode reset (EN low with IO0 high, then let go), the
         // one esptool uses. A board with no such circuit ignores it.
+        // Both lines are let go first. A browser can open a port with DTR raised,
+        // and a chip with USB of its own (an ESP32-S3) that is reset straight
+        // from there starts in its ROM loader ("waiting for download").
+        // Measured on a T-Dongle-S3, 2026-10-10: DTR up, then the reset = the
+        // loader, every time; DTR let go first, even 5 ms before = the program.
         try {
+            await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+            await sleep(100);
             await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
             await sleep(100);
             await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
@@ -332,7 +339,7 @@ export function openFlash(onDone, on = {}) {
     const leaving = e => { e.preventDefault(); e.returnValue = ''; };
     const leave = () => {
         if (!confirm('Leave this board unfinished?\n\nIt was written, but it has no name or WiFi yet, so Sapphire cannot reach it. '
-            + 'To finish later: + New Board, Connect, then "Only change its name, WiFi or Sapphire\'s address".')) return;
+            + 'To finish later: + Add Board, Connect, then "Only change its name, WiFi or Sapphire\'s address".')) return;
         blank = false; guard(); modal.close();
     };
     const keep = e => {
@@ -407,7 +414,7 @@ export function openFlash(onDone, on = {}) {
                 if (mine?.fingerprint && chip.mac && chip.mac !== mine.fingerprint.toLowerCase()) {
                     await lane.close();
                     return void screen(`This is not ${esc(mine.id)}`, `<p class="setting-help">The board on that port has id ${esc(chip.mac)}; ${esc(mine.id)} is ${esc(mine.fingerprint)}.
-                        Plug ${esc(mine.id)} in and start again, or close this and use <b>+ New Board</b> for a board Sapphire has not seen.</p>`);
+                        Plug ${esc(mine.id)} in and start again, or close this and use <b>+ Add Board</b> for a board Sapphire has not seen.</p>`);
                 }
                 if (!wifiOnly) return pick();
                 status('Starting the board...');
@@ -464,41 +471,16 @@ export function openFlash(onDone, on = {}) {
         });
     };
 
-    // Where the firmware comes from. Sapphire's own release says nothing but offers the way out; anything
-    // else (a folder, someone's own release) is named every time, with the way back.
+    // Where the firmware comes from: Sapphire's own release, and before it any source the user added
+    // (Devices > Settings). A source that is not hers is named every time a board is picked.
     const NOT_OURS = "Firmware from another source is someone else's code, not part of Sapphire. It runs on your board, holds your WiFi password and can talk to Sapphire as that device.";
-    const sourceHTML = fw => fw.official
-        ? '<p class="setting-help" style="margin-top:10px">From Sapphire\'s firmware release. <a href="#" id="fl-source-change">Use another source</a></p>'
-        : `<p class="setting-help" style="margin-top:10px;padding:8px;border:1px solid var(--warning, #c90);border-radius:6px"><b>Not Sapphire's release.</b> These come from <code>${esc(fw.source || 'nowhere')}</code>. ${NOT_OURS}
-            <br><a href="#" id="fl-source-back">Back to Sapphire's release</a> &middot; <a href="#" id="fl-source-change">Change</a></p>`;
-    const setSource = async value => {
-        const r = value === null
-            ? await fetchWithTimeout('/api/settings/DEVICE_FIRMWARE_SOURCE', { method: 'DELETE' }, 15000)       // the override goes: the shipped default again
-            : await fetchWithTimeout('/api/settings/batch', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ settings: { DEVICE_FIRMWARE_SOURCE: value } }) }, 15000);
-        return r;
-    };
-    const sourceBind = fw => {
-        body.querySelector('#fl-source-change')?.addEventListener('click', e => { e.preventDefault(); editSource(fw); });
-        body.querySelector('#fl-source-back')?.addEventListener('click', async e => {
-            e.preventDefault();
-            try { await setSource(null); await pick(); } catch (err) { status(err.message); showToast(err.message, 'error'); }
-        });
-    };
-    const editSource = (fw, why) => {
-        screen('Where firmware comes from', `${why ? `<p class="setting-help">${esc(why)}</p>` : ''}
-            <div class="settings-grid"><div class="setting-row"><div class="setting-label"><label>Firmware source</label>
-                <div class="setting-help">A firmware release URL (the folder its index.json is in), or a folder on Sapphire's computer with an index.json.</div></div>
-                <div class="setting-input"><input type="text" id="fl-source" value="${esc(fw.source || '')}" placeholder="https://github.com/someone/their-firmware/releases/latest/download/"></div></div></div>
-            <p class="setting-help" style="margin-top:8px">${NOT_OURS} Use a source you trust.</p>
-            ${fw.official ? '' : '<p class="setting-help"><a href="#" id="fl-source-back">Back to Sapphire\'s release</a></p>'}${ownHTML()}`,
-            { text: 'Save and look again', run: async () => {
-                const value = body.querySelector('#fl-source').value.trim();
-                if (!value) await setSource(null).catch(() => {});      // emptied: the release again (no override to remove is fine)
-                else if (value !== (fw.source || '')) await setSource(value);
-                await pick();
-            } });
-        sourceBind(fw);
+    const theirs = fw => (fw.sources || []).filter(s => !s.official);
+    const sourceHTML = fw => !theirs(fw).length
+        ? '<p class="setting-help" style="margin-top:10px">From Sapphire\'s firmware release. More sources can be added in Devices &gt; Settings.</p>'
+        : `<p class="setting-help" style="margin-top:10px;padding:8px;border:1px solid var(--warning, #c90);border-radius:6px"><b>Not only Sapphire's release.</b> Read first: ${theirs(fw).map(s => `<code>${esc(s.source)}</code>`).join(', ')}. ${NOT_OURS} Sources are changed in Devices &gt; Settings.</p>`;
+    const noFirmware = (fw, why) => {
+        screen('No firmware for this board', `<p class="setting-help">${esc(why)}</p>
+            <p class="setting-help">Firmware sources are set in Devices &gt; Settings.</p>${ownHTML()}`);
         ownBind();
     };
 
@@ -512,8 +494,7 @@ export function openFlash(onDone, on = {}) {
         if (mine) known = mine;
         const fit = fw.boards.filter(b => family(b.chipFamily) === chip.family);
         if (!fit.length) {
-            // nothing to offer: say why, and let the source be fixed right here
-            editSource(fw, fw.error || `No firmware for an ${chip.family} (${chip.text}) in the firmware source.`);
+            noFirmware(fw, fw.error || `No firmware for an ${chip.family} (${chip.text}) in the firmware sources.`);
             return;
         }
         const seen = known ? `<p class="setting-help" style="margin-bottom:8px">This board is <b>${esc(known.label || known.id)}</b>, set up before${known.status?.online ? ' and online' : ''}. Installing writes it afresh; it keeps that name.</p>` : '';
@@ -521,7 +502,7 @@ export function openFlash(onDone, on = {}) {
             <div class="ui-grid ui-grid-sm">${fit.map((b, i) => `
                 <button type="button" class="ui-card" data-board="${esc(b.id)}" style="text-align:left;font:inherit;cursor:pointer${i ? '' : ';outline:2px solid var(--primary)'}">
                     <div class="ui-card-title">${esc(b.name)}</div>
-                    <div class="ui-card-body">firmware ${esc(b.version)}</div></button>`).join('')}</div>
+                    <div class="ui-card-body">firmware ${esc(b.version)}${b.official ? '' : ' &middot; <span style="color:var(--warning, #c90)">not Sapphire\'s</span>'}</div></button>`).join('')}</div>
             ${sourceHTML(fw)}${mine ? '' : `<p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`}${ownHTML()}`,
             { text: 'Install', run: () => install() });
         ownBind();
@@ -533,7 +514,6 @@ export function openFlash(onDone, on = {}) {
             board = fit.find(b => b.id === c.dataset.board);
             body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x === c ? '2px solid var(--primary)' : '');
         }));
-        sourceBind(fw);
         body.querySelector('#fl-settings-only')?.addEventListener('click', async e => {
             e.preventDefault();
             button.disabled = true;
@@ -563,7 +543,7 @@ export function openFlash(onDone, on = {}) {
             } catch { /* not hers */ }
             if (!hers) {
                 hold(false);
-                return void screen(`${esc(board.name)} is written`, `<p class="setting-help">Written and verified, and the board was restarted. It did not answer Sapphire's setup console, so this is not her firmware: there is nothing more to do here. If it is hers, close this and use <b>Change WiFi (USB)</b> on its card, or <b>+ New Board</b> and the "Only change its name, WiFi" link.</p>`);
+                return void screen(`${esc(board.name)} is written`, `<p class="setting-help">Written and verified, and the board was restarted. It did not answer Sapphire's setup console, so this is not her firmware: there is nothing more to do here. If it is hers, close this and use <b>Change WiFi (USB)</b> on its card, or <b>+ Add Board</b> and the "Only change its name, WiFi" link.</p>`);
             }
         } else await lane.reopen(() => bar(100, 'Unplug the board and plug it back in.'));
         await setup();                                // still held: the board is blank until it has its name and WiFi

@@ -84,6 +84,14 @@
     "short": "Where board firmware comes from: the firmware release URL, or a folder on this machine",
     "long": "Where the Devices page's flasher finds index.json and one .bin per board. The default is the latest release of Sapphire's firmware repository. A URL fetches through Sapphire, checks the file's sha256 and keeps the board's parts under user/firmware_cache, so a board can be flashed again offline. A folder path on this machine reads a build's dist folder (development). Nothing is fetched until the flasher is opened."
   },
+  "DEVICE_FIRMWARE_SOURCES": {
+    "short": "More places board firmware comes from: release URLs or folders, read before Sapphire's own",
+    "long": "Firmware sources you added in Settings > Devices > Settings, each a release URL or a folder on this machine holding index.json and one .bin per board. They are read first, then Sapphire's own release; a board two sources have comes from the first. Firmware from a source that is not Sapphire's is someone else's code: the page says so on every board it offers."
+  },
+  "DEVICE_FIRMWARE_SOURCES_OFF": {
+    "short": "Firmware sources that are listed but not read",
+    "long": "The firmware sources switched off in Settings > Devices > Settings. A source that is off stays in the list and offers no boards. Sapphire's own release can be switched off too, for an install that runs only firmware of its own."
+  },
   "AUDIO_INPUT_DEVICE": {
     "short": "Input device index (null = auto-detect)",
     "long": "Specific audio input device to use by index number. Set to null for automatic detection which tries preferred devices first (pipewire, pulse on Linux). Use the Audio tab test feature to find your device index. Useful when you have multiple microphones."

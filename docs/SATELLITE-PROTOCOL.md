@@ -43,7 +43,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `firmware`, `model`, `slot` | The program's version (`"0.3.0"`), which program it is (`"pocket"`, `"satellite"`: the firmware source's board id, so Sapphire knows what to send it), and the slot running it (`"ota_0"`). With `firmware` in `has` the board takes a new program over the air (below). A board with one program slot (a builder who kept the whole flash for the program, a small chip) leaves `firmware` out of `has`: the device then reads "updates: over USB only" and gets no Firmware tab. The person can also turn updates off per device in Sapphire (the Status tab's switch) whatever the board says |
 | `mac` | The chip's own id, `"aa:bb:cc:dd:ee:01"`. The flasher reads the same over USB: a board is known by it whatever it is called |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
-| `buttons` | With `buttons` in `has`: `{"list": [{"name": "boot", "short": "keyboard", "long": "clear"}], "can": {"keyboard": "Show or hide the keyboard", "clear": "Clear the chat window"}}`. `list` names each button and the job it does by itself for a short, long or double press (left out = nothing). `can` is every job the board can do by itself, with the words the Devices page shows for it. See "A button was pressed" |
+| `buttons` | With `buttons` in `has`: `{"list": [{"name": "boot", "short": "keyboard", "long": "clear"}], "can": {"keyboard": "Show or hide the keyboard", "clear": "Clear the chat window"}}`. `list` names each button and the job it does by itself for a short, long or double press (left out = nothing). An entry may state `"ways": ["short"]`: the only ways that button can be pressed (a place on a touch screen is tapped, never held), and the page offers no others. `can` is every job the board can do by itself, with the words the Devices page shows for it. See "A button was pressed" |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
 
@@ -61,6 +61,17 @@ decoder and almost no memory.
 A board that states neither is taken as an early Pi: it has everything, and it
 gets the sound as the voice engine made it (ogg, wav or mp3), as a form file.
 
+## What a board takes
+
+Sapphire shows a setting or an action only on a board that says it takes it
+(`_takes` in the satellite driver; the engine keeps the list with the device,
+so it holds while the board is off):
+
+- each key in `/health` `screen` is a screen setting it takes (`brightness`, `dim`, `dim_after_s`, `off_after_min`, `flip`)
+- `screen` with `w`, `h` and `format`: it takes a picture
+- `mic.max_s`: it takes the longest question
+- `led.looks`, a list of look names: the only looks it takes. A board that lists none takes them all
+
 ## What Sapphire asks of the board
 
 A board answers only the addresses of what it has.
@@ -74,7 +85,7 @@ A board answers only the addresses of what it has.
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
 | `speaker` | `POST /volume?level=80` | Sets it, kept across restarts. A board without it answers 404 |
 | `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav. A body may also take `lead_in` (seconds before the mic opens, default its own cue) and `tone=false` (no ping): the Wakeword Maker asks for `lead_in=0&tone=false` because it tells the person itself when to speak |
-| `mic` | `GET /mic`, `POST /mic?gain=36`, `POST /mic?agc=on` | The microphones' gain in dB (`gain_db`, `gain_max_db`) and the board's automatic gain control. Optional: a body without the door answers 404 and the driver says so |
+| `mic` | `GET /mic`, `POST /mic?gain=36`, `POST /mic?agc=on`, `POST /mic?max_s=30` | The microphones' gain in dB (`gain_db`, `gain_max_db`), the board's automatic gain control, and `max_s`: the seconds at which a question is cut off however long the talk (5 to 60, kept). A board that takes `max_s` states it in `/health` as `mic.max_s`, and only such a board is sent it, when the device is saved. Optional: a body without the door answers 404 and the driver says so |
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
 | `light` | `GET /led/spec` | Its colors and animations |
 | `light` | `GET` and `PUT /led/baseline` | Its resting light, kept after a restart |
@@ -88,12 +99,13 @@ A board answers only the addresses of what it has.
 | `storage` | `PUT /storage/{name}` | A backup onto the card: the bytes are the request body (`application/octet-stream`, `Content-Length` required, `X-Sha256` optional). The board writes `name.partial`, renames when complete, answers `{"ok": true, "name", "size", "sha256"}`. It REFUSES with 400 any name that is not `sapphire_*.sapphirebak` carrying the `SAPPHIREBAK` magic in its first 12 bytes, except the four opener files (`README.txt`, `open-backup.sh`, `open-backup.bat`, `decrypt_backup.py`): plaintext backups never land on a satellite, even if Sapphire has a bug. 409 while another PUT runs, 411 without a length, 507 when it does not fit. A 70 MB backup takes a minute or two over WiFi; the board must still answer `/health` meanwhile |
 | `storage` | `GET /storage/{name}` | The bytes back, for a restore |
 | `storage` | `DELETE /storage/{name}` | Rotation: Sapphire keeps the counts set on the device page and drops the oldest |
+| `storage` | `POST /storage/check` | Only a board whose `storage.can` lists `check`: reads every backup back now and compares it with its hash. Answers `{"ok": true, "checking": true}` at once and runs by itself (`storage.checks` in `/health` says how far); 409 while one is running |
 | `storage` | `POST /storage/format` | Only a board whose `storage.can` lists `format`: wipes the card and formats it FAT32. The person at the Devices page runs it, never Sapphire |
 | `screen` | `POST /screen` | `{"text", "seconds"}`: a line across the top of its screen for that long (20 s if left out), or `{"clear": true}`. Answers `{"ok": true, "seconds"}`. Her `screen` / `show` action |
 | `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action |
 | `screen` | `POST /screen/background?w=&h=&name=` | The scene behind its clock: the body is `w` x `h` pixels of RGB565, big-endian, cropped by Sapphire to fill the glass; `name` is the scene's name and comes back in `/health` as `screen.background`. `{"clear": true}` as JSON takes it away. Sapphire sends it when the board links, and when its chat or that chat's scene changes (`core/devices/glass.py`). |
 | `screen` | `POST /screen` with `{"chat", "brain", "trim"}` | The chat the board talks in: its name, shown on the glass (`""` hides it), the name of the model that answers in it, and its trim color `"#rrggbb"` (`""` = none). They come back as `screen.chat`, `.brain`, `.trim`; only the ones a board states are compared. A board that states no `screen.chat` in `/health` is sent neither the name nor a scene. A private chat is never named or pictured. |
-| `screen` | `PUT /screen/settings` | `{"brightness", "dim", "dim_after_s", "off_after_min"}`, any of them: the backlight in use and when left alone (percent), when it dims (seconds, 0 = never) and when it goes dark (minutes, 0 = never). Kept on the board across a restart; `/health` states them in `screen`. Sent when the device is saved. |
+| `screen` | `PUT /screen/settings` | `{"brightness", "dim", "dim_after_s", "off_after_min", "flip"}`, any of them: the backlight in use and when left alone (percent), when it dims (seconds, 0 = never) and when it goes dark (minutes, 0 = never), and `flip` (true or false) to turn the picture and its touch 180 degrees. A board with only `flip` (the pocket, the backup stick) answers `{"flip", "restarting"}` and restarts to draw that way; it refuses with 409 while its card is being written. Kept on the board across a restart; `/health` states them in `screen`. Sent when the device is saved. |
 | `firmware` | `PUT /firmware` | A new program, over the air: the bytes are the body (`application/octet-stream`, `Content-Length` required, `X-Sha256` of the whole body). The board writes them into the slot not running, checks the image and the sha256, marks that slot to boot and answers `{"ok": true, "restarting": true, "slot": "ota_1", "sha256"}`, then restarts onto it. Rollback: the new program is on trial until it says it is fine (WiFi joined, or 90 s up); a program that crashes before that is replaced by the old one at the next boot. 413 when it does not fit the slot, 422 when it is not an ESP image or the sha differs (nothing is changed then), 501 on a board with one slot. Her `firmware` / `update` action sends the source's newest; the person at the Devices page runs it, never she on her own |
 | `sensors` | `GET /sensors` | What it measures, now: `{"sensors": {"light": 1234, "temp_c": 23.5}}`. A name ends in its unit; a light sensor with no calibration sends its raw reading. The same object in `/health` feeds the readings on the device's page. Her `sensors` / `read` action |
 | `keyboard` | nothing | Sapphire asks nothing of a keyboard. The board sends what was typed (below) and pulls her reply |

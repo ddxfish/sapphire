@@ -26,6 +26,10 @@
 # driver's status() answered 'has'). From then on the device shows only
 # those, also while it is offline. A part without the key has everything its
 # driver can do: a device that never said.
+# A part may hold "takes": the finer things the device said it takes (its
+# driver's status() answered 'takes', names like "screen.flip"). A config
+# field that names one (`takes`) is shown only on a device that takes it. A
+# part without the key takes everything: a device that never said.
 # The file kept its place when the engine moved into core, so no device list
 # ever had to be migrated. Secrets never sit in a row. They live in
 # secret_store.py under "<driver>.<field>".
@@ -535,6 +539,28 @@ def _learn(row, part, spec, said):
     logger.info(f"[DEVICES] {row['id']}: it says it has {', '.join(kept) or 'nothing'}")
 
 
+def _learn_takes(row, part, said):
+    """Keep the finer things the device said it takes. Written only when the list changed."""
+    if not isinstance(said, (list, tuple)):
+        return
+    kept = sorted({str(n)[:48] for n in said if isinstance(n, str) and n})[:200]
+    if kept == part.get('takes'):
+        return
+    part['takes'] = kept
+
+    def step(table):
+        mine = _part(table.get(row['id']) or {}, part['driver'])
+        if mine is not None:
+            mine['takes'] = kept
+    _write(step)
+
+
+def taken(field, part):
+    """False for a field that names something (`takes`) this device said it does not take."""
+    takes = part.get('takes')
+    return not field.get('takes') or not isinstance(takes, list) or field['takes'] in takes
+
+
 def _shut(row):
     names = row.get('locked')
     if not isinstance(names, list):              # never set: what its drivers ask for
@@ -897,7 +923,7 @@ def public(row):
         schema = []
         for f in (spec['config_schema'] if spec else []):
             cap = field_capability(f, has, spec['capabilities'])
-            if cap is None:
+            if cap is None or not taken(f, part):
                 continue
             f = dict(f, capability=cap) if isinstance(f.get('capability'), (list, tuple)) else f
             # a bindings field's menu is the device's own (its buttons, what it can do by itself)
@@ -932,7 +958,7 @@ def describe(row):
     for part in row.get('parts', []):
         try:
             mod, spec = _driver(part['driver'], part.get('plugin', ''))
-            told = mod.describe(dict(_brief(row), has=part.get('has')), dict(part.get('config') or {})) or {}
+            told = mod.describe(dict(_brief(row), has=part.get('has'), takes=part.get('takes')), dict(part.get('config') or {})) or {}
         except DeviceError as e:
             out.append({'capability': part['driver'], 'label': part['driver'], 'help': '',
                         'driver': part['driver'], 'actions': {}, 'error': str(e),
@@ -1004,6 +1030,7 @@ def _probe(row):
             told = mod.status(_brief(row), dict(part.get('config') or {}), secrets) or {}
             entry['online'] = bool(told.get('online'))
             _learn(row, part, spec, told.get('has'))
+            _learn_takes(row, part, told.get('takes'))
             entry['detail'] = secrets.scrub(str(told.get('detail') or ''))[:300]
             readings = told.get('readings')
             if isinstance(readings, dict):

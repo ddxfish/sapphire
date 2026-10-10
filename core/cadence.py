@@ -58,6 +58,7 @@ class Unreachable(RuntimeError):
     "model not found") as a failed turn - matching the message text turned real
     errors into silent drops (chaos + day-ruiner scouts, 2026-10-07)."""
 _thread = None
+_listening = False              # the AI_TYPING_END hook is registered once per process
 _stop = threading.Event()
 
 
@@ -213,6 +214,24 @@ def poke(chat, note=None, force=False):
         if rec['mode'] == 'timer':
             floor = (rec['last_at'] or 0) + rec['min_s']
             rec['next_at'] = min(rec['next_at'] or floor, max(floor, _now()))
+    return status(chat)
+
+
+def touch(chat):
+    """Someone spoke on the chat and she answered (a typed line at the
+    table, a talk button): her next unprompted turn waits a fresh gap from
+    now, and a pending moment waits the min gap too. Her own cadence turn
+    is not a touch (`running`) — _fire sets its own clock. Returns status().
+    Wired to AI_TYPING_END in start() (Krem 2026-10-10: talking to her
+    resets her countdown)."""
+    with _lock:
+        rec = _records.get(chat)
+        if not rec or rec['running']:
+            return None
+        rec['last_at'] = _now()
+        rec['skips'] = 0
+        if rec['mode'] == 'timer':
+            rec['next_at'] = _now() + _gap(rec)
     return status(chat)
 
 
@@ -508,10 +527,22 @@ def _loop():
             logger.warning(f"[CADENCE] tick failed: {e}")
 
 
+def _on_turn_end(event):
+    """Bus listener (publisher's thread, returns at once): a turn ended on
+    some chat — if that chat is armed, her clock restarts."""
+    chat = ((event or {}).get('data') or {}).get('chat')
+    if chat and chat in _records:
+        touch(chat)
+
+
 def start(system):
-    global _system, _thread
+    global _system, _thread, _listening
     _system = system
     _stop.clear()
+    if not _listening:
+        from core.event_bus import get_event_bus
+        get_event_bus().on([Events.AI_TYPING_END], _on_turn_end)
+        _listening = True
     if _thread and _thread.is_alive():
         return
     _thread = threading.Thread(target=_loop, daemon=True, name='cadence-organ')

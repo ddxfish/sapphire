@@ -292,3 +292,15 @@ def test_the_card_check_is_among_the_readings(home):
         r = sat.status({'id': 'pocket'}, {'url': 'http://10.0.0.9'}, {})['readings']
     assert r['backups'] == '14 on the card' and r['damaged backups'].startswith('1:')
     assert r['card check'] == 'reading every backup back, 3 of 14'
+
+
+def test_a_button_that_states_its_ways_is_offered_only_those(home):
+    _with_button()
+    with sat._lock:
+        at, said = sat._about['pocket']
+        said = dict(said, buttons={'list': [{'name': 'key1', 'short': 'wake'},
+                                            {'name': 'top-left', 'short': 'light', 'ways': ['short']}],
+                                   'can': {'wake': 'Wake word on or off', 'light': 'Ring on or off'}})
+        sat._about['pocket'] = (at, said)
+    menu = sat.bindings({'id': 'pocket'}, {}, 'buttons')
+    assert [s['key'] for s in menu['slots']] == ['key1.short', 'key1.long', 'key1.double', 'top-left.short']

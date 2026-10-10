@@ -120,7 +120,7 @@ def test_a_board_that_cannot_be_reached_is_tried_again():
 
 def test_saving_a_device_sends_its_screen_settings_only_to_a_board_with_a_screen():
     from core.devices.drivers import satellite as sat
-    config = {'url': 'http://b', 'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10}
+    config = {'url': 'http://b', 'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10, 'flip': True}
     for has, expect in ((['screen'], True), (['speaker'], False)):
         calls = []
         with patch.object(sat, '_call', side_effect=lambda m, path, c, s, **kw: calls.append((m, path, kw.get('json')))), \
@@ -130,7 +130,7 @@ def test_saving_a_device_sends_its_screen_settings_only_to_a_board_with_a_screen
         sent = [c for c in calls if c[1] == '/screen/settings']
         assert bool(sent) == expect
         if expect:
-            assert sent[0] == ('PUT', '/screen/settings', {'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10})
+            assert sent[0] == ('PUT', '/screen/settings', {'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10, 'flip': True})
 
 
 def test_wanted_names_the_model_and_the_trim_of_the_chat():
@@ -140,3 +140,33 @@ def test_wanted_names_the_model_and_the_trim_of_the_chat():
     class Sys: llm_chat = type('L', (), {'session_manager': SM()})()
     with patch('core.api_fastapi.get_system', return_value=Sys()), patch.object(glass, '_brain', return_value='opus'):
         assert glass.wanted({'config': {}}) == {'chat': 'coding', 'scene': 'matrix', 'brain': 'opus', 'trim': '#00ffaa'}
+
+
+def test_saving_a_device_sends_its_longest_question():
+    from core.devices.drivers import satellite as sat
+    for mic, expect in (({'gain_db': 30, 'max_s': 30}, True), ({'gain_db': 30}, False)):   # an older program states no max_s
+        calls = []
+        with patch.object(sat, '_call', side_effect=lambda m, path, c, s, **kw: calls.append((m, path))), \
+             patch.object(sat, '_health', return_value={'has': ['mic'], 'mic': mic}), \
+             patch.object(glass, 'sync_soon'):
+            sat.apply({'id': 'esp'}, {'url': 'http://b', 'question_max_s': 45}, {'token': 'k'})
+        assert (('POST', '/mic?max_s=45') in calls) == expect
+
+
+def test_a_board_is_shown_only_what_it_says_it_takes():
+    from core.devices import engine
+    from core.devices.drivers import satellite as sat
+    stick = {'has': ['screen', 'light'], 'screen': {'flip': False}, 'led': {'looks': ['night']}}
+    takes = sat._takes(stick)
+    assert set(takes) == {'screen.flip', 'look.night'}
+    part = {'takes': takes}
+    schema = {f['key']: f for f in sat.DRIVER['config_schema']} if hasattr(sat, 'DRIVER') else None
+    fields = schema or {f['key']: f for f in next(v for v in vars(sat).values() if isinstance(v, dict) and 'config_schema' in v)['config_schema']}
+    shown = {k for k, f in fields.items() if engine.taken(f, part)}
+    assert 'flip' in shown and 'look_night' in shown and 'lights_from' in shown
+    assert not shown & {'brightness', 'dim', 'look_resting', 'look_thinking', 'question_max_s'}
+    assert all(engine.taken(f, {}) for f in fields.values())            # a device that never said takes everything
+    glass_board = {'has': ['screen', 'mic'], 'screen': {'w': 320, 'h': 240, 'format': 'rgb565be', 'brightness': 80}, 'mic': {'max_s': 30}}
+    assert {'screen.picture', 'screen.brightness', 'mic.max_s', 'look.resting'} <= set(sat._takes(glass_board))
+    assert 'picture' not in sat.describe({'id': 'x', 'takes': takes}, {})['screen']['actions']
+    assert 'picture' in sat.describe({'id': 'x', 'takes': sat._takes(glass_board)}, {})['screen']['actions']

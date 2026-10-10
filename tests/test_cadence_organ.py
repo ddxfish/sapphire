@@ -617,3 +617,58 @@ def test_run_turn_publishes_its_tool_calls_so_the_tab_paints_them_live():
     js = (Path(__file__).resolve().parent.parent / 'interfaces' / 'web' / 'static' / 'main.js').read_text(encoding='utf-8')
     handler = js.split("eventBus.on('voice_turn_tool'")[1].split("eventBus.on('voice_turn_end'")[0]
     assert '_notMine(data) || !_voiceTurnActive' in handler and 'ui.startTool(' in handler and 'ui.endTool(' in handler
+
+
+# ── touch: a player turn restarts her clock (2026-10-10) ────────────────────
+
+def test_touch_restarts_the_clock_and_ignores_her_own_turn():
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    rec = cadence._records['c']
+    rec['next_at'] = cadence._now() + 1          # about to fire
+    rec['skips'] = 3
+    st = cadence.touch('c')
+    assert st['armed'] and 99 <= st['next_in'] <= 100
+    assert rec['skips'] == 0 and rec['last_at'] is not None
+    # her own turn in flight: not a touch — _fire owns that clock
+    rec['running'] = True
+    rec['next_at'] = cadence._now() + 1
+    assert cadence.touch('c') is None and rec['next_at'] - cadence._now() <= 1
+    assert cadence.touch('nobody') is None
+    # a pending moment waits the min gap from the touch too
+    rec['running'] = False
+    cadence.touch('c')
+    cadence.poke('c', 'a moment')
+    assert not cadence._due(rec, cadence._now())
+
+
+def test_turn_end_on_the_bus_touches_only_armed_chats():
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    rec = cadence._records['c']
+    rec['next_at'] = cadence._now() + 1
+    cadence._on_turn_end({'type': 'ai_typing_end', 'data': {'chat': 'other', 'foreign': True}})
+    assert rec['next_at'] - cadence._now() <= 1
+    cadence._on_turn_end({'type': 'ai_typing_end', 'data': {'chat': 'c', 'foreign': False}})
+    assert rec['next_at'] - cadence._now() > 90
+    cadence._on_turn_end({'data': {}})
+    cadence._on_turn_end(None)
+
+
+def test_start_registers_the_turn_end_hook_once(monkeypatch):
+    calls = []
+
+    class Bus:
+        def on(self, types, fn):
+            calls.append((tuple(types), fn))
+
+    class T:
+        def __init__(self, *a, **k): pass
+        def start(self): pass
+        def is_alive(self): return True
+
+    monkeypatch.setattr('core.event_bus.get_event_bus', lambda: Bus())
+    monkeypatch.setattr(cadence.threading, 'Thread', T)
+    monkeypatch.setattr(cadence, '_listening', False)
+    monkeypatch.setattr(cadence, '_thread', None)
+    cadence.start(object())
+    cadence.start(object())
+    assert calls == [((cadence.Events.AI_TYPING_END,), cadence._on_turn_end)]

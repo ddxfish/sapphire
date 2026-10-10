@@ -18,6 +18,9 @@ import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { openFlash } from './device-flash.js';
+import { renderSectionTabs } from '../../shared/section-tabs.js';
+
+const PANES = [{ id: 'list', label: 'Devices', icon: '\u{1F4E1}' }, { id: 'settings', label: 'Settings', icon: '\u{2699}\u{FE0F}' }];
 
 const API = '/api/devices';
 const ICON = String.fromCodePoint(0x1F39B, 0xFE0F);
@@ -53,15 +56,38 @@ const dot = (d, size = 10) => {
 function drawPage(container) {
     page = container;
     container.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-            <div class="setting-help">Machines and gadgets Sapphire can use by name. Only this page can add or change them.</div>
-            <div style="display:flex;gap:6px;flex-shrink:0">
-                <button class="btn btn-sm" id="dev-board-btn" style="display:none" title="Plug an ESP32 board in: it is written and set up from here">+ New Board</button>
-                <button class="btn btn-sm btn-primary" id="dev-add-btn">+ Add Device</button>
+        <div id="dev-tabs" style="margin-bottom:14px">${renderSectionTabs(PANES, 'list')}</div>
+        <div id="dev-pane-settings" style="display:none"></div>
+        <div id="dev-pane-list">
+        <div class="setting-help" style="margin-bottom:12px">Machines and gadgets Sapphire can use by name. Only this page can add or change them.</div>
+        <div id="dev-filter"></div>
+        <div class="sched-layout trigger-2col" id="dev-list" style="max-width:none;padding:0">
+            <div style="min-width:0">
+                <div class="sched-col-header">
+                    <h3>Boards</h3>
+                    <button class="btn btn-sm btn-primary" id="dev-board-btn" style="display:none" title="Plug an ESP32 board in: it is written and set up from here">+ Add Board</button>
+                </div>
+                <div id="dev-list-boards"><p class="text-muted">Loading...</p></div>
+            </div>
+            <div style="min-width:0">
+                <div class="sched-col-header">
+                    <h3>Devices</h3>
+                    <button class="btn btn-sm btn-primary" id="dev-add-btn">+ Add Device</button>
+                </div>
+                <div id="dev-list-devices"></div>
             </div>
         </div>
-        <div id="dev-filter"></div>
-        <div id="dev-list"><p class="text-muted">Loading...</p></div>`;
+        </div>`;
+    // the strip every section wears (shared/section-tabs.js); here a tab shows a pane of this page, not another view
+    container.querySelector('#dev-tabs').addEventListener('click', e => {
+        const tab = e.target.closest('.section-tab');
+        if (!tab) return;
+        container.querySelectorAll('#dev-tabs .section-tab').forEach(b => b.classList.toggle('active', b === tab));
+        const settings = tab.dataset.view === 'settings';
+        container.querySelector('#dev-pane-list').style.display = settings ? 'none' : '';
+        container.querySelector('#dev-pane-settings').style.display = settings ? '' : 'none';
+        if (settings) drawSettings(container.querySelector('#dev-pane-settings'));
+    });
     container.querySelector('#dev-add-btn').addEventListener('click', () => openAdd());
     container.querySelector('#dev-board-btn').addEventListener('click', () => openFlash(flashed));
     container.querySelector('#dev-filter').addEventListener('click', e => {
@@ -84,8 +110,58 @@ function drawPage(container) {
     }, POLL_MS);
 }
 
+// ---- settings for every device: where board firmware comes from -------------------------
+
+const NOT_OURS = "Firmware from a source you add is someone else's code, not part of Sapphire. It runs on your board, holds your WiFi password and can talk to Sapphire as that device. Add only a source you trust.";
+
+async function drawSettings(el) {
+    el.innerHTML = '<p class="text-muted">Reading the firmware sources...</p>';
+    let fw;
+    try { fw = await call('GET', '/firmware', undefined, 60000); }
+    catch (e) { el.innerHTML = `<p style="color:var(--error)">Could not read the firmware sources: ${esc(e.message)}</p>`; return; }
+    const all = fw.sources || [];
+    const mine = all.filter(s => !s.official).map(s => s.source);
+    const off = all.filter(s => !s.on).map(s => s.source);
+    const save = async (list, quiet) => {
+        try { await call('PUT', '/firmware/sources', { sources: list, off: quiet }, 60000); }
+        catch (e) { showToast(e.message, 'error'); }
+        drawSettings(el);
+    };
+    const said = s => !s.on ? 'Switched off: not read, no boards offered from here.'
+        : s.error ? `<span style="color:var(--error)">Could not be read: ${esc(s.error)}</span>`
+        : `${s.boards} board${s.boards === 1 ? '' : 's'} offered from here.`;
+    const row = s => `
+        <div class="setting-row" style="align-items:center${s.on ? '' : ';opacity:0.6'}">
+            <div class="setting-label"><code style="word-break:break-all">${esc(s.source)}</code>
+                <div class="setting-help">${s.official ? "Sapphire's own release, read after any source of yours." : '<span style="color:var(--warning, #c90)">Not Sapphire\'s.</span> Read before her release: a board both have comes from here.'}
+                <br>${said(s)}</div></div>
+            <div class="setting-input" style="display:flex;gap:10px;align-items:center;justify-content:flex-end">
+                <label class="setting-toggle" title="${s.on ? 'On: read' : 'Off: not read'}"><input type="checkbox" data-toggle="${esc(s.source)}" ${s.on ? 'checked' : ''}></label>
+                ${s.official ? '' : `<button type="button" class="btn btn-sm" data-drop="${esc(s.source)}">Remove</button>`}</div>
+        </div>`;
+    el.innerHTML = `
+        <b style="display:block;margin-bottom:4px">Board firmware sources</b>
+        <div class="setting-help" style="margin-bottom:10px">Where Add Board and a device's Firmware tab find programs for boards. Each is a firmware release URL (the folder its index.json is in) or a folder on Sapphire's computer.</div>
+        <div class="settings-grid">${all.map(row).join('')}</div>
+        <div class="setting-input" style="display:flex;gap:8px;margin-top:14px;align-items:center">
+            <input type="text" id="dev-source-new" style="flex:1;min-width:0" placeholder="https://github.com/someone/their-firmware/releases/latest/download/">
+            <button type="button" class="btn btn-sm btn-primary" id="dev-source-add" style="flex-shrink:0">+ Board Repo</button>
+        </div>
+        <p class="setting-help" style="margin-top:8px">${NOT_OURS}</p>`;
+    el.querySelectorAll('[data-drop]').forEach(b => b.addEventListener('click', () =>
+        save(mine.filter(s => s !== b.dataset.drop), off.filter(s => s !== b.dataset.drop))));
+    el.querySelectorAll('[data-toggle]').forEach(t => t.addEventListener('change', () =>
+        save(mine, t.checked ? off.filter(s => s !== t.dataset.toggle) : [...off, t.dataset.toggle])));
+    const add = () => {
+        const value = el.querySelector('#dev-source-new').value.trim();
+        if (value) save([...mine, value], off);
+    };
+    el.querySelector('#dev-source-add').addEventListener('click', add);
+    el.querySelector('#dev-source-new').addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+}
+
 async function loadList() {
-    const list = page?.querySelector('#dev-list');
+    const list = page?.querySelector('#dev-list-boards');
     if (!list) return;
     try {
         const data = await call('GET');
@@ -101,9 +177,10 @@ async function loadList() {
 }
 
 function drawList() {
-    const list = page?.querySelector('#dev-list');
+    const boards = page?.querySelector('#dev-list-boards');
+    const others = page?.querySelector('#dev-list-devices');
     const bar = page?.querySelector('#dev-filter');
-    if (!list || !bar) return;
+    if (!boards || !others || !bar) return;
     const counts = {};
     for (const d of devices) if (d.type) counts[d.type] = (counts[d.type] || 0) + 1;
     const types = Object.keys(counts).sort((a, b) => a.localeCompare(b));
@@ -113,8 +190,11 @@ function drawList() {
     bar.innerHTML = types.length < 2 ? '' : `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${
         pill('', `All (${devices.length})`)}${types.map(t => pill(t, `${t} (${counts[t]})`)).join('')}</div>`;
     const shown = typeFilter ? devices.filter(d => d.type === typeFilter) : devices;
-    list.innerHTML = devices.length ? shown.map(card).join('')
-        : `<p class="text-muted" style="font-size:0.9em">No devices yet. Add one to get started.</p>`;
+    // two columns only so the page is shorter: boards Sapphire's firmware runs on, and everything else
+    const none = what => `<p class="text-muted" style="font-size:0.9em">${what}</p>`;
+    const fill = (el, some, empty) => { el.innerHTML = some.length ? some.map(card).join('') : none(empty); };
+    fill(boards, shown.filter(isBoard), typeFilter ? 'No boards of this type.' : 'No boards yet. Plug one in and add it.');
+    fill(others, shown.filter(d => !isBoard(d)), typeFilter ? 'No devices of this type.' : 'No devices yet. Add one to get started.');
     onPoll?.(devices);
 }
 

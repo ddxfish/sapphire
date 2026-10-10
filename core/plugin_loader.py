@@ -2205,8 +2205,14 @@ class PluginLoader:
             regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', path)
             compiled = re.compile(f'^{regex_pattern}$')
 
-            registered.append((method, compiled, param_names, handler_func))
-            logger.debug(f"[PLUGINS] Registered route: {method} /api/plugin/{name}/{path}")
+            # Route options the dispatcher reads (2026-10-10). `media`: a door
+            # that hands file bytes to a <video>, <audio> or <img> — a seeking
+            # player fires Range requests in bursts and a thumbnail grid is one
+            # GET per tile, so a media GET is not metered like an API call.
+            opts = {'media': bool(route_def.get('media'))}
+            registered.append((method, compiled, param_names, handler_func, opts))
+            logger.debug(f"[PLUGINS] Registered route: {method} /api/plugin/{name}/{path}"
+                         f"{' (media)' if opts['media'] else ''}")
 
         if registered:
             with self._lock:
@@ -2219,20 +2225,21 @@ class PluginLoader:
                 del self._routes[name]
                 logger.debug(f"[PLUGINS] Unregistered routes for: {name}")
 
-    def get_route_handler(self, plugin_name: str, method: str, path: str) -> Optional[Tuple[Callable, dict]]:
-        """Find a matching route handler. Returns (handler_func, path_params) or None."""
+    def get_route_handler(self, plugin_name: str, method: str, path: str) -> Optional[Tuple[Callable, dict, dict]]:
+        """Find a matching route handler. Returns (handler_func, path_params,
+        opts) or None; opts = the manifest's route options ({'media': bool})."""
         with self._lock:
             routes = self._routes.get(plugin_name)
         if not routes:
             return None
 
         method = method.upper()
-        for route_method, pattern, param_names, handler in routes:
+        for route_method, pattern, param_names, handler, opts in routes:
             if route_method != method:
                 continue
             match = pattern.match(path)
             if match:
-                return handler, match.groupdict()
+                return handler, match.groupdict(), opts
         return None
 
     # ── Event source helpers ──

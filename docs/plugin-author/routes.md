@@ -29,6 +29,7 @@ For the example above: `POST /api/plugin/webcam/capture/abc123`
 | `method` | string | No | `GET`, `POST`, `PUT`, or `DELETE` (default: `GET`) |
 | `path` | string | Yes | URL path (supports `{param}` placeholders) |
 | `handler` | string | Yes | `file:function` reference (default function: `handle`) |
+| `media` | bool | No | `true` for a door that serves file bytes to a `<video>`, `<audio>` or `<img>` (a `FileResponse`). Its GETs skip the per-plugin rate meter: a seeking player fires Range requests in bursts and a thumbnail grid is one GET per tile. Other verbs on the route stay metered |
 
 ## Handler Signature
 
@@ -71,7 +72,7 @@ All of the following are enforced automatically — you cannot disable them:
 
 - **Authentication**: `require_login` dependency — session or API key required
 - **CSRF**: Middleware validates tokens on POST/PUT/DELETE from browser sessions
-- **Rate limiting**: 60 GET / 30 non-GET requests per minute, per plugin (bucketed by session — or by bearer-token hash when bearer auth is used)
+- **Rate limiting**: 60 GET / 30 non-GET requests per minute, per plugin (bucketed by session — or by bearer-token hash when bearer auth is used). GETs on a route declared `media: true` are exempt — that is the one door for streaming a file to the browser
 - **Bearer-token auth (opt-in)**: a plugin may *add* (never weaken) a bearer path by writing `user/plugin_state/{plugin}_mcp_key.json` (`{"key": "..."}`). A request whose `Authorization: Bearer <key>` matches then bypasses session login — used by MCP clients. Session CSRF still cannot be disabled.
 
 ## Example: Webcam Capture Endpoint
@@ -140,11 +141,11 @@ def handle_capture(request_id: str, body: dict, **_) -> dict:
 
 ## Reference for AI
 
-- Declare: `capabilities.routes` = `[{method: GET|POST|PUT|DELETE (default GET), path (supports {param}, single-segment match only), handler: "file.py:function" (default function: handle)}]`. Mounted at `/api/plugin/{plugin_name}/{path}`.
+- Declare: `capabilities.routes` = `[{method: GET|POST|PUT|DELETE (default GET), path (supports {param}, single-segment match only), handler: "file.py:function" (default function: handle), media: bool (optional; a file door for <video>/<audio>/<img> — its GETs skip the rate meter)}]`. Mounted at `/api/plugin/{plugin_name}/{path}`.
 - Handler kwargs ALWAYS passed: every path param + `body` + `settings` + `credentials` + `query` + `request` — end the signature with `**_` or the first request raises TypeError.
 - `body`: parsed JSON dict for POST/PUT/DELETE (DELETE bodies ARE parsed — confirm tokens ride them); `{}` for GET, multipart requests, unparseable JSON, or a non-object JSON body.
 - Returns: `dict` → JSON 200; `(dict, int)` 2-tuple → JSON with that status code; `Response` object → passed through; anything else → FastAPI default serialization.
 - Sync handlers run in a threadpool; async handlers are awaited directly.
-- Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET / 30 non-GET per minute per plugin.
+- Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET / 30 non-GET per minute per plugin (GETs on `media: true` routes exempt — serve the file with a `FileResponse`, which does HTTP Range).
 - Bearer opt-in: `user/plugin_state/{plugin}_mcp_key.json` = `{"key": "..."}` lets a matching `Authorization: Bearer` header bypass session login (rate-bucketed by token hash). Additive only — session CSRF can't be weakened.
 - Routes register on load, drop on unload, re-register on hot reload.

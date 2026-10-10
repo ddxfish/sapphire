@@ -3,7 +3,8 @@
 #
 # A board is written over USB, from the browser (Web Serial, esptool-js) or
 # from this machine (flasher.py). The program comes from here.
-# DEVICE_FIRMWARE_SOURCE names where: a URL (the firmware repository's
+# DEVICE_FIRMWARE_SOURCE names Sapphire's own release, and DEVICE_FIRMWARE_SOURCES
+# the sources the user added (read first). Each names where: a URL (the firmware repository's
 # release) or, for development, a folder on this machine. There it finds an
 # index and ONE file per board, every part at its own address:
 #
@@ -49,7 +50,9 @@ _VERSION = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$')
 _REDIRECT_OK = ('.githubusercontent.com',)     # a release asset is a 302 to objects.githubusercontent.com
 HOPS = 2                          # releases/latest/download/x: 302 to the tagged URL on the same host, then to the asset host
 _lock = threading.Lock()
-_recent = (0.0, None, '')         # (when, {id: board}, the source they came from)
+_recent = (0.0, None, ())         # (when, {id: board}, the sources they came from)
+_errors = {}                      # {source: why it could not be read}, from the last reading
+SOURCES_MAX = 12
 OWN = 'own'                       # the board id of a file the user gave: never one of the source's
 _own = None                       # that board, until the next file or a restart
 _CHIP = {0: 'ESP32', 2: 'ESP32-S2', 5: 'ESP32-C3', 9: 'ESP32-S3', 12: 'ESP32-C2', 13: 'ESP32-C6', 16: 'ESP32-H2'}
@@ -59,19 +62,94 @@ class FirmwareError(Exception):
     """A reason fit to show as it is."""
 
 
-def source():
-    import config
-    s = str(getattr(config, 'DEVICE_FIRMWARE_SOURCE', '') or '').strip()
+def _tidy(s):
+    s = str(s or '').strip()
     return s + '/' if _is_url(s) and not s.endswith('/') else s      # a folder: urljoin keeps its last segment
 
 
-def official():
-    """True while the source is the one Sapphire ships with: her own firmware
-    release. Anything else (another URL, a folder) is someone's own build,
-    and the page says so."""
+def release():
+    """The source Sapphire ships with: her own firmware release."""
     from core.settings_manager import settings
-    default = str(settings.get_defaults().get('DEVICE_FIRMWARE_SOURCE') or '').strip()
-    return bool(default) and source().rstrip('/') == default.rstrip('/')
+    return _tidy(settings.get_defaults().get('DEVICE_FIRMWARE_SOURCE'))
+
+
+def added():
+    """The sources the user added, in their order: DEVICE_FIRMWARE_SOURCES,
+    and before them a DEVICE_FIRMWARE_SOURCE that was pointed somewhere else
+    (how one other source was set before there could be several)."""
+    import config
+    out = []
+    one = _tidy(getattr(config, 'DEVICE_FIRMWARE_SOURCE', ''))
+    many = getattr(config, 'DEVICE_FIRMWARE_SOURCES', None)
+    for s in ([one] if one and one != release() else []) + (list(many) if isinstance(many, (list, tuple)) else []):
+        s = _tidy(s) if isinstance(s, str) else ''
+        if s and s != release() and s not in out:
+            out.append(s)
+    return out[:SOURCES_MAX]
+
+
+def set_sources(wanted, off=None):
+    """The user's sources, kept (DEVICE_FIRMWARE_SOURCES): release URLs or
+    folders, in their order. Sapphire's own release is never one of them and
+    never leaves the list. `off` names the listed sources that are not to be
+    read (DEVICE_FIRMWARE_SOURCES_OFF); her release may be one. A source once
+    set the old way (DEVICE_FIRMWARE_SOURCE) moves into the list with the
+    rest. Returns index()."""
+    global _recent
+    import config
+    from core.settings_manager import settings
+    if not isinstance(wanted, (list, tuple)):
+        raise FirmwareError("sources: a list of URLs or folders.")
+    kept = []
+    for s in wanted:
+        s = _tidy(s) if isinstance(s, str) else ''
+        if not s or s == release() or s in kept:
+            continue
+        if len(s) > 300 or not (_is_url(s) or Path(s).expanduser().is_absolute()):
+            raise FirmwareError(f"'{s[:60]}' is not a release URL (http or https) or a full folder path.")
+        kept.append(s)
+    if len(kept) > SOURCES_MAX:
+        raise FirmwareError(f"At most {SOURCES_MAX} sources.")
+    settings.set('DEVICE_FIRMWARE_SOURCES', kept, persist=True)
+    quiet = {_tidy(x) for x in off if isinstance(x, str)} if isinstance(off, (list, tuple)) else set(switched_off())
+    settings.set('DEVICE_FIRMWARE_SOURCES_OFF', [x for x in kept + [release()] if x and x in quiet], persist=True)
+    if _tidy(getattr(config, 'DEVICE_FIRMWARE_SOURCE', '')) != release():
+        settings.remove_user_override('DEVICE_FIRMWARE_SOURCE')       # the one other source of before: in the list now, or dropped
+    _recent = (0.0, None, ())
+    logger.info(f"[DEVICES] firmware sources: {len(kept)} added, then Sapphire's release")
+    return index()
+
+
+def listed():
+    """Every source there is, on or off: the user's own first, then Sapphire's release."""
+    return added() + ([release()] if release() else [])
+
+
+def switched_off():
+    """The listed sources that are switched off (DEVICE_FIRMWARE_SOURCES_OFF). Her own release can be one."""
+    import config
+    off = getattr(config, 'DEVICE_FIRMWARE_SOURCES_OFF', None)
+    off = {_tidy(s) for s in off if isinstance(s, str)} if isinstance(off, (list, tuple)) else set()
+    return [s for s in listed() if s in off]
+
+
+def sources():
+    """The sources that are read, in order: the user's own first, then
+    Sapphire's release, less the ones switched off. A board two sources have
+    comes from the first."""
+    off = switched_off()
+    return [s for s in listed() if s not in off]
+
+
+def source():
+    """The first source: where a board comes from when nothing else says."""
+    return (sources() or [''])[0]
+
+
+def official(base=None):
+    """True for the source Sapphire ships with. Anything else (another URL,
+    a folder) is someone's own build, and the page says so."""
+    return bool(release()) and _tidy(source() if base is None else base) == release()
 
 
 def _is_url(s):
@@ -173,26 +251,35 @@ def _board(entry):
 
 
 def _boards(fresh=False):
-    """({id: board}, error) from the source, remembered a minute. With the
-    source unreachable, boards already in the cache are offered from there,
-    so a board can be flashed again offline."""
-    global _recent
+    """({id: board}, error) from every source, remembered a minute. Each
+    board says which source it is from (`source`); one that two sources have
+    comes from the first. With a source unreachable, boards already in the
+    cache are offered from there, so a board can be flashed again offline.
+    `error` is set only when nothing could be read at all."""
+    global _recent, _errors
     when, boards, of = _recent
-    base = source()
-    if not fresh and boards is not None and of == base and time.monotonic() - when < REMEMBER:
+    bases = tuple(sources())
+    if not fresh and boards is not None and of == bases and time.monotonic() - when < REMEMBER:
         return boards, None
-    if not base:
-        return {}, "No firmware source is set (DEVICE_FIRMWARE_SOURCE in Settings)."
-    try:
-        entries = _json_of(_read(base, 'index.json', TEXT_MAX), 'index').get('boards') or []
-        boards = {b['id']: b for b in (_board(e) for e in entries if isinstance(e, dict))}
-        error = None
-    except Exception as e:
-        logger.warning(f"[DEVICES] firmware index from {base[:80]}: {e}")
-        boards, error = _cached_boards(), f"Could not read the firmware source: {e}"
+    if not bases:
+        return {}, "No firmware source is switched on (Settings > Devices > Settings)."
+    boards, errors = {}, {}
+    for base in bases:
+        try:
+            entries = _json_of(_read(base, 'index.json', TEXT_MAX), 'index').get('boards') or []
+            for b in (_board(e) for e in entries if isinstance(e, dict)):
+                boards.setdefault(b['id'], dict(b, source=base))
+        except Exception as e:
+            logger.warning(f"[DEVICES] firmware index from {base[:80]}: {e}")
+            errors[base] = str(e)
+    if errors:
+        for board_id, b in _cached_boards().items():       # what was fetched before, for what cannot be read now
+            boards.setdefault(board_id, dict(b, source=''))
+    _errors = errors
     if boards:
-        _recent = (time.monotonic(), boards, base)
-    return boards, error
+        _recent = (time.monotonic(), boards, bases)
+    failed = len(errors) == len(bases)
+    return boards, (f"Could not read the firmware source: {next(iter(errors.values()))}" if failed else None)
 
 
 def _whole(home, b):
@@ -219,10 +306,17 @@ def _cached_boards():
 # --- what the flasher asks ---------------------------------------------------
 
 def index():
-    """The boards the flasher can offer: {'source', 'official', 'boards', 'error'}."""
+    """The boards the flasher can offer, and where they come from: {'boards',
+    'sources': [{'source', 'official', 'on', 'error', 'boards': how many}]
+    (every source listed, also one switched off),
+    'error'}. Each board says its `source` and whether that is Sapphire's
+    release (`official`). 'source' and 'official' speak of the first source."""
     boards, error = _boards(fresh=True)
     return {'source': source(), 'official': official(), 'error': error,
-            'boards': [{k: b[k] for k in ('id', 'name', 'chipFamily', 'version', 'flash', 'parts')}
+            'sources': [{'source': s, 'official': official(s), 'on': s in sources(), 'error': _errors.get(s, ''),
+                         'boards': sum(1 for b in boards.values() if b.get('source') == s)} for s in listed()],
+            'boards': [dict({k: b[k] for k in ('id', 'name', 'chipFamily', 'version', 'flash', 'parts')},
+                            source=b.get('source', ''), official=official(b['source']) if b.get('source') else False)
                        for b in boards.values()]}
 
 
@@ -282,7 +376,7 @@ def known_version(board_id):
     status probe can ask without reaching out. '' when nothing is known."""
     board_id = str(board_id or '').strip().lower()
     _, boards, of = _recent
-    if boards is None or of != source():
+    if boards is None or of != tuple(sources()):
         boards = _cached_boards()
     b = (boards or {}).get(board_id)
     return b['version'] if b else ''
@@ -305,7 +399,9 @@ def part(board_id, path):
         home = CACHE / board_id / b['version']
         if _whole(home, b):
             return home / path
-        image = _read(source(), b['file'], FILE_MAX)
+        if not b.get('source'):
+            raise FirmwareError(f"The source {board_id} {b['version']} came from cannot be read now, and it is not whole in the cache.")
+        image = _read(b['source'], b['file'], FILE_MAX)
         if len(image) != b['size'] or hashlib.sha256(image).hexdigest() != b['sha256']:
             raise FirmwareError(f"{b['file']} is not the file the index describes (its sha256 differs). Nothing was written.")
         cut = {p['path']: image[p['offset']:p['offset'] + p['size']] for p in b['parts']}

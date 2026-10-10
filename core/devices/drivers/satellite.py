@@ -73,31 +73,37 @@ SPEC = {
         # what each press of each button does: the board says which buttons it has and what it can do by
         # itself (/health `buttons`), bindings() below turns that into the menu the page draws
         {'key': 'buttons', 'type': 'bindings', 'label': 'Buttons', 'capability': 'buttons'},
+        {'key': 'question_max_s', 'takes': 'mic.max_s', 'type': 'number', 'label': 'Longest question (seconds)', 'capability': 'wake',
+         'default': 30, 'min': 5, 'max': 60,
+         'help': 'It stops listening when you go quiet. This is the cut-off for when you do not: '
+                 'raise it if you talk for a long time in one go.'},
         # the glass: its backlight is the board's biggest draw that can be chosen (firmware 0.5.5)
-        {'key': 'brightness', 'type': 'number', 'label': 'Brightness in use', 'capability': 'screen',
+        {'key': 'brightness', 'takes': 'screen.brightness', 'type': 'number', 'label': 'Brightness in use', 'capability': 'screen',
          'default': 80, 'min': 0, 'max': 100,
          'help': 'Percent, while it is touched or she is listening, thinking or speaking.'},
-        {'key': 'dim', 'type': 'number', 'label': 'Brightness when left alone', 'capability': 'screen',
+        {'key': 'dim', 'takes': 'screen.dim', 'type': 'number', 'label': 'Brightness when left alone', 'capability': 'screen',
          'default': 15, 'min': 0, 'max': 100, 'help': 'Percent. A touch, or her stirring, brings it back.'},
-        {'key': 'dim_after_s', 'type': 'number', 'label': 'Dims after (seconds)', 'capability': 'screen',
+        {'key': 'dim_after_s', 'takes': 'screen.dim_after_s', 'type': 'number', 'label': 'Dims after (seconds)', 'capability': 'screen',
          'default': 120, 'min': 0, 'max': 3600, 'help': '0 = never dims.'},
-        {'key': 'off_after_min', 'type': 'number', 'label': 'Screen dark after (minutes)', 'capability': 'screen',
+        {'key': 'off_after_min', 'takes': 'screen.off_after_min', 'type': 'number', 'label': 'Screen dark after (minutes)', 'capability': 'screen',
          'default': 0, 'min': 0, 'max': 1440,
          'help': '0 = never. The backlight goes out to save power; a touch or her stirring brings it back.'},
+        {'key': 'flip', 'takes': 'screen.flip', 'type': 'boolean', 'label': 'Upside down', 'capability': 'screen',
+         'help': 'Turns the picture and its touch 180 degrees, for a board mounted the other way up.'},
         # the looks: what the ring shows in each state, in the words of `light set`
-        {'key': 'look_resting', 'type': 'string', 'label': 'Resting', 'capability': 'light',
+        {'key': 'look_resting', 'takes': 'look.resting', 'type': 'string', 'label': 'Resting', 'capability': 'light',
          'default': 'sapphire heartbeat bpm=33 ceiling=0.1',
          'help': 'What the ring shows when nothing is going on. Color, pattern, bpm, floor, ceiling.'},
-        {'key': 'look_listening', 'type': 'string', 'label': 'Listening', 'capability': 'light',
+        {'key': 'look_listening', 'takes': 'look.listening', 'type': 'string', 'label': 'Listening', 'capability': 'light',
          'default': 'yellow spin'},
-        {'key': 'look_thinking', 'type': 'string', 'label': 'Thinking', 'capability': 'light',
+        {'key': 'look_thinking', 'takes': 'look.thinking', 'type': 'string', 'label': 'Thinking', 'capability': 'light',
          'default': 'rainbow spin'},
-        {'key': 'look_tool', 'type': 'string', 'label': 'Using a tool', 'capability': 'light',
+        {'key': 'look_tool', 'takes': 'look.tool', 'type': 'string', 'label': 'Using a tool', 'capability': 'light',
          'default': 'purple pulse',
          'help': 'While she looks something up or works a device, between thinking and speaking.'},
-        {'key': 'look_speaking', 'type': 'string', 'label': 'Speaking', 'capability': 'light',
+        {'key': 'look_speaking', 'takes': 'look.speaking', 'type': 'string', 'label': 'Speaking', 'capability': 'light',
          'default': 'cyan solid'},
-        {'key': 'look_nolink', 'type': 'string', 'label': 'No link to Sapphire', 'capability': 'light',
+        {'key': 'look_nolink', 'takes': 'look.nolink', 'type': 'string', 'label': 'No link to Sapphire', 'capability': 'light',
          'default': 'red pulse'},
         {'key': 'lights_from', 'type': 'string', 'label': 'Lights on from', 'capability': 'light',
          'default': '08:00', 'placeholder': '08:00',
@@ -106,7 +112,7 @@ SPEC = {
                  'and so does what she sets.'},
         {'key': 'lights_until', 'type': 'string', 'label': 'until', 'capability': 'light',
          'default': '00:00', 'placeholder': '00:00'},
-        {'key': 'look_night', 'type': 'string', 'label': 'Outside those hours', 'capability': 'light',
+        {'key': 'look_night', 'takes': 'look.night', 'type': 'string', 'label': 'Outside those hours', 'capability': 'light',
          'default': 'off', 'help': 'off = dark. Or something soft: sapphire pulse ceiling=0.05'},
         *KEEP_FIELDS,
     ],
@@ -216,7 +222,16 @@ def apply(device, config, secrets):
         pass
     except Problem as e:
         raise _engine_error(str(e))
+    longest = config.get('question_max_s')
+    # only a board that states it (/health mic.max_s) is told: an older program refuses the word
+    if isinstance(longest, (int, float)) and 'max_s' in (_health(device, config, secrets).get('mic') or {}):
+        try:
+            _call('POST', f"/mic?max_s={int(longest)}", config, secrets)
+        except Problem as e:
+            raise _engine_error(str(e))
     screen = {k: int(config[k]) for k in SCREEN_KEYS if isinstance(config.get(k), (int, float))}
+    if isinstance(config.get('flip'), bool):
+        screen['flip'] = config['flip']
     if screen and 'screen' in (_health(device, config, secrets).get('has') or []):
         try:
             _call('PUT', '/screen/settings', config, secrets, json=screen)
@@ -273,9 +288,12 @@ def _health(device, config, secrets, fresh=False):
     with _lock:
         when, said = _about.get(device['id'], (0, None))
     if fresh or said is None or time.monotonic() - when > ABOUT_FRESH:
-        with _lock:
-            _about.pop(device['id'], None)       # no answer = nothing is known
-        said = _json(_call('GET', '/health', config, secrets))
+        try:
+            said = _json(_call('GET', '/health', config, secrets))
+        except Exception:
+            with _lock:
+                _about.pop(device['id'], None)   # no answer = nothing is known; while it is being asked, the last answer stands
+            raise
         with _lock:
             _about[device['id']] = (time.monotonic(), said)
     return said
@@ -482,6 +500,12 @@ def describe(device, config):
                    'example': ''},
         'list': {'help': 'what is on the card and how much room is left', 'example': ''},
     }}
+    if isinstance(device.get('takes'), list) and 'screen.picture' not in device['takes']:
+        told['screen']['actions'].pop('picture')          # a screen for words only
+    if 'check' in _can(device):
+        told['storage']['actions']['check'] = {
+            'help': 'read every backup on the card back now and compare it with the hash kept when it was '
+                    'written. Runs by itself; the readings say how far it is and what it found', 'example': ''}
     if 'format' in _can(device):
         told['storage']['actions']['format'] = {
             'help': 'wipe the card and format it FAT32', 'example': '', 'owner': True, 'wait': STORE_WAIT,
@@ -504,7 +528,7 @@ def describe(device, config):
         from core.devices import firmware
         if not firmware.official():            # a folder or someone's own release: said wherever a program is sent
             told['firmware']['help'] += (f". The source is NOT Sapphire's release now: {firmware.source()[:120] or 'none set'} "
-                                         "(New board changes it)")
+                                         "(Devices > Settings changes it)")
             if 'update' in told['firmware']['actions']:
                 told['firmware']['actions']['update']['danger'] += " It comes from a source that is not Sapphire's release."
     return told
@@ -517,8 +541,9 @@ def bindings(device, config, key):
     """The menu of the `buttons` setting (engine._menu): one slot for each
     way each button is pressed, and what a press can be set to. From what
     the board's last /health said: {"buttons": {"list": [{"name", "short",
-    "long", "double"}], "can": {job: words}}}, where short/long/double name
-    the job the board does by itself when the press is left to it."""
+    "long", "double", "ways"}], "can": {job: words}}}, where short/long/double
+    name the job the board does by itself when the press is left to it, and
+    `ways` (when stated) the only ways that button can be pressed."""
     from core.devices import voice
     with _lock:
         _, said = _about.get(device['id'], (0, None))
@@ -529,7 +554,8 @@ def bindings(device, config, key):
     slots = []
     for b in (told.get('list') if isinstance(told.get('list'), list) else []):
         name = str(b.get('name') or '').strip().lower()[:24] if isinstance(b, dict) else ''
-        for how in voice.HOWS if name else ():
+        ways = b.get('ways') if name and isinstance(b.get('ways'), list) else voice.HOWS   # a place on a touch screen: short only
+        for how in [h for h in voice.HOWS if h in ways] if name else ():
             own = str(b.get(how) or '').lower()
             slots.append({'key': f'{name}.{how}', 'label': f'{name}: {HOW_WORDS[how]}',
                           'own': can.get(own, own) or 'nothing'})
@@ -605,6 +631,25 @@ def _update(device, config, secrets, value):
             f"(it ran {running}). Back in about a minute; if the new program fails, the old one returns by itself."), True
 
 
+def _takes(h):
+    """The finer things a board's /health says it takes, as the engine keeps
+    them (a field or an action that names one is shown only on such a board):
+    each setting its `screen` states, `screen.picture` when it states a
+    picture's size, `mic.max_s`, and its looks (`led.looks`; a board that
+    lists none takes them all, as every board did)."""
+    takes = []
+    screen = h.get('screen') if isinstance(h.get('screen'), dict) else {}
+    takes += [f'screen.{k}' for k in screen if isinstance(k, str)]
+    if all(k in screen for k in ('w', 'h', 'format')):
+        takes.append('screen.picture')
+    if 'max_s' in (h.get('mic') if isinstance(h.get('mic'), dict) else {}):
+        takes.append('mic.max_s')
+    led = h.get('led') if isinstance(h.get('led'), dict) else {}
+    looks = led['looks'] if isinstance(led.get('looks'), list) else LOOKS
+    takes += [f'look.{n}' for n in looks if isinstance(n, str)]
+    return takes
+
+
 def _can(device):
     """What the board's last /health said its storage can do beyond the
     doors every board has (`storage: {can: [...]}`): 'format' on the ESP32.
@@ -656,7 +701,9 @@ def status(device, config, secrets):
     if isinstance(h.get('volume'), (int, float)):
         readings['volume'] = f"{int(h['volume'])}%"
     mic = h.get('mic') if isinstance(h.get('mic'), dict) else {}
-    if mic:
+    if isinstance(mic.get('max_s'), (int, float)):
+        readings['longest question'] = f"{int(mic['max_s'])} s"
+    if 'gain_db' in mic:
         readings['mic gain'] = f"{mic.get('gain_db')} dB" + (', AGC on' if mic.get('agc') else '')
     if isinstance(h.get('uptime_s'), (int, float)):
         readings['running for'] = _span(h['uptime_s'])
@@ -702,6 +749,7 @@ def status(device, config, secrets):
            'detail': f"{h.get('name') or h.get('body_name') or device['id']} at {where}"}
     if isinstance(h.get('has'), list):           # the engine keeps it with the device
         out['has'] = h['has']
+        out['takes'] = _takes(h)
     return out
 
 
@@ -873,6 +921,8 @@ def _mic_gain(value, config, secrets):
     try:
         if not want or want in ('up', 'down'):
             now = _json(_call('GET', '/mic', config, secrets))
+            if 'gain_db' not in now:           # a Pi body's /mic holds only the longest question
+                raise Missing('no gain')
             if not want:
                 return f"Mic gain is {now.get('gain_db')} dB of {now.get('gain_max_db')}; AGC {'on' if now.get('agc') else 'off'}.", True
             db = float(now.get('gain_db', 0)) + (3 if want == 'up' else -3)
@@ -1011,6 +1061,13 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 except Missing:
                     return "This satellite's program has no backup door. Update it.", False
                 return st.listing_text(target, info), True
+            if action == 'check':
+                if 'check' not in _can(device):
+                    return "This satellite does not read its backups back.", False
+                _json(_call('POST', '/storage/check', config, secrets))
+                with _lock:
+                    _about.pop(device['id'], None)
+                return f"{device['id']} is reading its backups back now. Its readings say how far it is.", True
             if action == 'format':
                 if 'format' not in _can(device):
                     return "This satellite cannot format its card.", False

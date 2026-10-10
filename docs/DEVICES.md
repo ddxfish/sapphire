@@ -236,7 +236,7 @@ number until it is calibrated.
 ### A new board from the browser
 
 An ESP32 board that has never been set up is done entirely from this page:
-the **+ New Board** button. The first question is where the board is
+the **+ Add Board** button. The first question is where the board is
 plugged in. **This computer** means the browser writes it over USB (Web
 Serial, so Chrome or Edge): press **Connect** and pick its port in the
 browser's window. **The computer Sapphire runs on** means she writes it
@@ -267,7 +267,7 @@ A board that is already a device has both jobs in the **⋮** menu on its
 card: **Reflash (USB)** writes its program again, and **Change WiFi (USB)**
 gives it a new WiFi or a new address for Sapphire without reinstalling.
 Both take that board only, and it keeps its name; plug in another and you
-are sent to **+ New Board**. The same menu has **Delete device**. A device that already exists keeps its keys, its
+are sent to **+ Add Board**. The same menu has **Delete device**. A device that already exists keeps its keys, its
 name and its address until the board calls in with the new ones, so a
 setup that fails halfway leaves it working as it was; a known board given
 a new name is that device renamed when it calls in. A name in use by a
@@ -297,20 +297,22 @@ program is ever sent to that board from here, and its Firmware tab only
 checks. The switch is Sapphire's; the board's own two slots are its
 builder's choice and show up as `firmware` in what it says it has.
 
-The firmware comes from the source named by `DEVICE_FIRMWARE_SOURCE`: the
-latest release of the firmware repository unless you change it, or a folder on Sapphire's computer with an
-`index.json` (the firmware repository's `build.sh` makes one in its
-`dist` folder). Sapphire fetches it, never the page, and keeps each board's parts
+The firmware comes from the firmware sources: Sapphire's own release (the
+latest release of the firmware repository, `DEVICE_FIRMWARE_SOURCE`), and
+before it any you add in Settings > Devices > Settings with **+ Board Repo**
+(`DEVICE_FIRMWARE_SOURCES`). A source is a release URL, or a folder on
+Sapphire's computer with an `index.json` (the firmware repository's
+`build.sh` makes one in its `dist` folder). Every source is read; a board
+two of them have comes from the first, yours before hers, and a board from a
+source that is not hers is marked. Sapphire fetches it, never the page, and keeps each board's parts
 under `user/firmware_cache` so a board can be flashed again offline.
 
-The flasher's board list says where the firmware comes from. On Sapphire's
-own release it offers **Use another source**: another firmware release URL
-(someone else's boards) or a folder. Any other source is named each time
-with a warning and **Back to Sapphire's release**, and a device's Firmware
-tab says so too. Firmware from another source is someone else's code, not
-part of Sapphire: it runs on your board, holds your WiFi password and can
-talk to Sapphire as that device. The change is yours alone (an override in
-`user/`); a new install always starts on Sapphire's release.
+The flasher's board list says where the firmware comes from: any source
+that is not Sapphire's release is named with a warning, each board from one
+is marked, and a device's Firmware tab says so too. Firmware from another
+source is someone else's code, not part of Sapphire: it runs on your board,
+holds your WiFi password and can talk to Sapphire as that device. Sources are
+added and removed in Settings > Devices > Settings, by you alone.
 
 On Linux the browser opens the port as you, so you need to be in the
 `dialout` group once; for the Sapphire-side lane it is the user she runs as. A board with native USB (an ESP32-S3) vanishes from
