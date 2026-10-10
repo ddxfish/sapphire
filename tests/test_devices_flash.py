@@ -334,10 +334,10 @@ def _index(root, version='0.2.0', chip='ESP32'):
 
 @pytest.fixture
 def fw(tmp_path):
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     with patch.object(firmware, 'CACHE', tmp_path / 'cache'):
         yield tmp_path
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
 
 
 def test_local_folder_source(fw):
@@ -405,7 +405,7 @@ def test_url_source_caches_parts_and_drops_old_versions(fw):
         assert firmware.part('pocket', 'app.bin') == where and len(calls) == n       # cached: nothing fetched
         firmware.part('pocket', 'boot.bin')
     # the source gone: the board whose parts are all in the cache is still offered, from there
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     with patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), \
          patch.object(firmware.net, 'get', lambda *a, **k: Resp(500)):
         idx = firmware.index()
@@ -422,7 +422,7 @@ def test_url_source_refuses_strange_redirects_and_big_parts(fw):
             firmware.index()
             with pytest.raises(firmware.FirmwareError, match='redirect'):
                 firmware.part('pocket', 'app.bin')
-        firmware._recent = (0.0, None)
+        firmware._recent = (0.0, None, '')
         with patch.object(firmware, 'FILE_MAX', 50), \
              patch.object(firmware.net, 'get', lambda url, **k: Resp(200, (src / url.split('/fw/')[1]).read_bytes())):
             firmware.index()
@@ -450,7 +450,7 @@ def test_a_file_that_is_not_the_one_in_the_index_is_never_cut_up(fw):
     entry['sha256'] = hashlib.sha256(image.read_bytes()).hexdigest()
     entry['parts'][1]['sha256'] = hashlib.sha256(image.read_bytes()[65536:]).hexdigest()
     idx.write_text(json.dumps({'boards': [entry]}))
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     with patch.object(firmware, 'source', lambda: str(root)):
         assert firmware.part('pocket', 'app.bin').read_bytes().endswith(b'z')
 
@@ -483,6 +483,32 @@ def test_a_source_url_ends_with_a_slash_and_a_folder_is_left_alone():
         assert firmware.source() == '/srv/firmware'
 
 
+def test_only_the_shipped_source_is_official():
+    """The page warns for any source but Sapphire's own release; a slash more
+    or less is the same place."""
+    from core.settings_manager import settings
+    shipped = settings.get_defaults()['DEVICE_FIRMWARE_SOURCE']
+    assert shipped.startswith('https://')
+    for said, want in ((shipped, True), (shipped.rstrip('/'), True), ('/srv/firmware', False),
+                       ('https://github.com/someone/else/releases/latest/download/', False), ('', False)):
+        with patch('config.DEVICE_FIRMWARE_SOURCE', said, create=True):
+            assert firmware.official() is want, said
+
+
+def test_boards_of_one_source_are_not_offered_for_another(fw):
+    """The index is remembered a minute; a source changed in that minute is
+    read afresh, and its newest version is not the old source's."""
+    src = _index(fw / 'web')
+    firmware._recent = (0.0, None, '')
+    with patch('config.DEVICE_FIRMWARE_SOURCE', str(src), create=True):
+        assert firmware.index()['official'] is False
+        assert firmware._boards()[0] and firmware.known_version('pocket')
+    with patch('config.DEVICE_FIRMWARE_SOURCE', str(fw / 'nothing-here'), create=True):
+        boards, error = firmware._boards()
+        assert error and boards == {} and firmware.known_version('pocket') == ''
+    firmware._recent = (0.0, None, '')
+
+
 def test_latest_download_hops_once_on_github_then_to_the_asset_host(fw):
     """releases/latest/download/x is a 302 to the tagged URL on github.com,
     which is a 302 to objects.githubusercontent.com. A hop anywhere else, or
@@ -502,7 +528,7 @@ def test_latest_download_hops_once_on_github_then_to_the_asset_host(fw):
     with patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), patch.object(firmware.net, 'get', get):
         firmware.index()
         assert firmware.part('pocket', 'app.bin').read_bytes().startswith(b'\xe9')
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     for path in [fw / 'cache' / 'pocket' / '0.2.0' / 'app.bin']:
         path.unlink()
     with patch.dict(hops, {'https://example.test/fw/releases/download/v0.2.0/pocket-0.2.0.bin': 'https://evil.test/x'}), \
@@ -510,7 +536,7 @@ def test_latest_download_hops_once_on_github_then_to_the_asset_host(fw):
         firmware.index()
         with pytest.raises(firmware.FirmwareError, match='redirect'):
             firmware.part('pocket', 'app.bin')
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     with patch.dict(hops, {'https://objects.githubusercontent.com/x': 'https://objects.githubusercontent.com/y'}), \
          patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), patch.object(firmware.net, 'get', get):
         firmware.index()
@@ -671,10 +697,10 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(flasher, '_esptool', lambda: (fake, EspLog, EspLogBase))
     flasher._job = None
     _index(tmp_path / 'src')
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     with patch.object(firmware, 'source', lambda: str(tmp_path / 'src')), patch.object(firmware, 'CACHE', tmp_path / 'cache'):
         yield types.SimpleNamespace(cmds=fake, port=str(port), tmp=tmp_path)
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     flasher._job = None
     EspLog.instance = None
 
@@ -809,7 +835,7 @@ def test_the_app_part_and_the_version_known_without_the_network(fw):
     # an index without the mark cannot be sent over the air
     m = fw / 'src' / 'index.json'
     m.write_text(m.read_text().replace(', "app": true', ''))
-    firmware._recent = (0.0, None)
+    firmware._recent = (0.0, None, '')
     with patch.object(firmware, 'source', lambda: str(fw / 'src')):
         with pytest.raises(firmware.FirmwareError, match='is the program'):
             firmware.app_part('pocket')

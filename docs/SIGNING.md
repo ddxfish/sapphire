@@ -81,7 +81,7 @@ python tools/sign_plugin.py --all --include-user
 Default key path: `user/plugin_signing_key.pem`. Override with `--key`.
 
 The tool:
-1. Hashes all signable files (`.py`, `.json`, `.js`, `.css`, `.html`, `.md`)
+1. Hashes all signable files (`.py`, `.json`, `.js`, `.css`, `.html`, `.md`, and `.wasm` byte for byte)
 2. Normalizes line endings (CRLF to LF) for cross-platform consistency
 3. Signs the hash manifest with your ed25519 private key
 4. Writes `plugin.sig` to the plugin directory

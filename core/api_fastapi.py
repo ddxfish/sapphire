@@ -513,11 +513,15 @@ async def security_headers(request: Request, call_next):
     # basis-universal, etc.). blob: URLs are ephemeral and same-origin
     # by construction — no exfiltration risk added.
     #
+    # 'wasm-unsafe-eval' lets a page compile WebAssembly (a Game Room emulator
+    # core). It allows WASM only, never JS eval, and connect-src still pins
+    # where any code may talk.
+    #
     # Tightening to strict CSP requires cleaning up the inline handlers across
     # the codebase first — out of scope.
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://esm.sh https://cdn.jsdelivr.net https://unpkg.com; "
+        "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://esm.sh https://cdn.jsdelivr.net https://unpkg.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https:; "
         "media-src 'self' blob:; "

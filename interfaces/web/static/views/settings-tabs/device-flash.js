@@ -464,6 +464,44 @@ export function openFlash(onDone, on = {}) {
         });
     };
 
+    // Where the firmware comes from. Sapphire's own release says nothing but offers the way out; anything
+    // else (a folder, someone's own release) is named every time, with the way back.
+    const NOT_OURS = "Firmware from another source is someone else's code, not part of Sapphire. It runs on your board, holds your WiFi password and can talk to Sapphire as that device.";
+    const sourceHTML = fw => fw.official
+        ? '<p class="setting-help" style="margin-top:10px">From Sapphire\'s firmware release. <a href="#" id="fl-source-change">Use another source</a></p>'
+        : `<p class="setting-help" style="margin-top:10px;padding:8px;border:1px solid var(--warning, #c90);border-radius:6px"><b>Not Sapphire's release.</b> These come from <code>${esc(fw.source || 'nowhere')}</code>. ${NOT_OURS}
+            <br><a href="#" id="fl-source-back">Back to Sapphire's release</a> &middot; <a href="#" id="fl-source-change">Change</a></p>`;
+    const setSource = async value => {
+        const r = value === null
+            ? await fetchWithTimeout('/api/settings/DEVICE_FIRMWARE_SOURCE', { method: 'DELETE' }, 15000)       // the override goes: the shipped default again
+            : await fetchWithTimeout('/api/settings/batch', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: { DEVICE_FIRMWARE_SOURCE: value } }) }, 15000);
+        return r;
+    };
+    const sourceBind = fw => {
+        body.querySelector('#fl-source-change')?.addEventListener('click', e => { e.preventDefault(); editSource(fw); });
+        body.querySelector('#fl-source-back')?.addEventListener('click', async e => {
+            e.preventDefault();
+            try { await setSource(null); await pick(); } catch (err) { status(err.message); showToast(err.message, 'error'); }
+        });
+    };
+    const editSource = (fw, why) => {
+        screen('Where firmware comes from', `${why ? `<p class="setting-help">${esc(why)}</p>` : ''}
+            <div class="settings-grid"><div class="setting-row"><div class="setting-label"><label>Firmware source</label>
+                <div class="setting-help">A firmware release URL (the folder its index.json is in), or a folder on Sapphire's computer with an index.json.</div></div>
+                <div class="setting-input"><input type="text" id="fl-source" value="${esc(fw.source || '')}" placeholder="https://github.com/someone/their-firmware/releases/latest/download/"></div></div></div>
+            <p class="setting-help" style="margin-top:8px">${NOT_OURS} Use a source you trust.</p>
+            ${fw.official ? '' : '<p class="setting-help"><a href="#" id="fl-source-back">Back to Sapphire\'s release</a></p>'}${ownHTML()}`,
+            { text: 'Save and look again', run: async () => {
+                const value = body.querySelector('#fl-source').value.trim();
+                if (!value) await setSource(null).catch(() => {});      // emptied: the release again (no override to remove is fine)
+                else if (value !== (fw.source || '')) await setSource(value);
+                await pick();
+            } });
+        sourceBind(fw);
+        ownBind();
+    };
+
     // 2. which board: only the ones this chip can run; a board seen before is named
     const pick = async () => {
         screen(`Found an ${esc(chip.family)}`, '<p class="setting-help">Reading the firmware list...</p>');
@@ -475,16 +513,7 @@ export function openFlash(onDone, on = {}) {
         const fit = fw.boards.filter(b => family(b.chipFamily) === chip.family);
         if (!fit.length) {
             // nothing to offer: say why, and let the source be fixed right here
-            screen(`Found an ${esc(chip.family)}`, `<p class="setting-help">${esc(fw.error || `No firmware for an ${chip.family} (${chip.text}) in the firmware source.`)}</p>
-                <div class="settings-grid"><div class="setting-row"><div class="setting-label"><label>Firmware source</label>
-                    <div class="setting-help">The firmware release URL, or a folder on Sapphire's computer with an index.json.</div></div>
-                    <div class="setting-input"><input type="text" id="fl-source" value="${esc(fw.source || '')}" placeholder="https://.../index.json's folder"></div></div></div>${ownHTML()}`,
-                { text: 'Save and look again', run: async () => {
-                    await fetchWithTimeout('/api/settings/batch', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ settings: { DEVICE_FIRMWARE_SOURCE: body.querySelector('#fl-source').value.trim() } }) }, 15000);
-                    await pick();
-                } });
-            ownBind();
+            editSource(fw, fw.error || `No firmware for an ${chip.family} (${chip.text}) in the firmware source.`);
             return;
         }
         const seen = known ? `<p class="setting-help" style="margin-bottom:8px">This board is <b>${esc(known.label || known.id)}</b>, set up before${known.status?.online ? ' and online' : ''}. Installing writes it afresh; it keeps that name.</p>` : '';
@@ -493,7 +522,7 @@ export function openFlash(onDone, on = {}) {
                 <button type="button" class="ui-card" data-board="${esc(b.id)}" style="text-align:left;font:inherit;cursor:pointer${i ? '' : ';outline:2px solid var(--primary)'}">
                     <div class="ui-card-title">${esc(b.name)}</div>
                     <div class="ui-card-body">firmware ${esc(b.version)}</div></button>`).join('')}</div>
-            ${mine ? '' : `<p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`}${ownHTML()}`,
+            ${sourceHTML(fw)}${mine ? '' : `<p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`}${ownHTML()}`,
             { text: 'Install', run: () => install() });
         ownBind();
         // its own device says which program it runs (the `model` reading): that one is offered first
@@ -504,6 +533,7 @@ export function openFlash(onDone, on = {}) {
             board = fit.find(b => b.id === c.dataset.board);
             body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x === c ? '2px solid var(--primary)' : '');
         }));
+        sourceBind(fw);
         body.querySelector('#fl-settings-only')?.addEventListener('click', async e => {
             e.preventDefault();
             button.disabled = true;

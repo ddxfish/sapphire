@@ -26,11 +26,14 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 # Must match core/plugin_verify.py
 SIGNABLE_EXTENSIONS = {".py", ".json", ".js", ".css", ".html", ".md"}
+RAW_EXTENSIONS = {".wasm"}   # hashed byte for byte, no line-ending normalization
 
 
 def hash_file(path: Path) -> str:
-    """SHA256 hex digest, line-ending normalized (CRLF -> LF)."""
-    content = path.read_bytes().replace(b"\r\n", b"\n")
+    """SHA256 hex digest, line-ending normalized (CRLF -> LF); RAW_EXTENSIONS as is."""
+    content = path.read_bytes()
+    if path.suffix not in RAW_EXTENSIONS:
+        content = content.replace(b"\r\n", b"\n")
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
@@ -42,7 +45,7 @@ def build_file_manifest(plugin_dir: Path) -> dict:
             continue
         if f.name == "plugin.sig":
             continue
-        if f.suffix not in SIGNABLE_EXTENSIONS:
+        if f.suffix not in SIGNABLE_EXTENSIONS | RAW_EXTENSIONS:
             continue
         if "__pycache__" in f.parts or ".claude" in f.parts:
             continue   # .claude/: Claude Code's per-dir scratch (gitignored), never shipped

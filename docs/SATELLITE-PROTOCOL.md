@@ -84,7 +84,7 @@ A board answers only the addresses of what it has.
 | `wake` | `PUT /wakeword/model?name=hey_marcus&threshold=0.97&format=tflite&phrase=hey+marcus` | A new wake word model: the bytes are the request body (`application/octet-stream`). `format` is `tflite` (microWakeWord, for an ESP32; `sliding_window` and `step_ms` ride along) or `onnx` (openWakeWord, for a Pi). The body keeps it across restarts, listens for it from then on, and answers `{"model": name, "threshold"}`; `GET /wakeword` reports the new name. The Wakeword Maker's Install page sends this. A body without the door answers 404 and the page says to copy the files by hand |
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
 | `power` | `POST /power?action=restart` | `restart` or `shutdown`. Answers first, then acts: `{"in_s": 3}` |
-| `storage` | `GET /storage` | What is kept: `{"free_bytes", "total_bytes", "path", "files": [{"name", "size", "mtime"}], "can": []}` |
+| `storage` | `GET /storage` | What is kept: `{"free_bytes", "total_bytes", "path", "files": [{"name", "size", "mtime"}], "can": []}`. A board that reads its backups back says `"check"` in `can`, adds `"ok": true` or `false` to each backup it holds a hash for (`false` = it no longer matches: damaged; Sapphire removes those before her next backup lands), and `"checks": {"running", "done", "of", "damaged", "unchecked"}` for the check it runs after every start. The same block, without `files`, is `storage` in `/health`, with `count`, `writing` and `failed` (the last backup sent did not land). The hash files themselves (`name.sha256`) are the board's own and never listed |
 | `storage` | `PUT /storage/{name}` | A backup onto the card: the bytes are the request body (`application/octet-stream`, `Content-Length` required, `X-Sha256` optional). The board writes `name.partial`, renames when complete, answers `{"ok": true, "name", "size", "sha256"}`. It REFUSES with 400 any name that is not `sapphire_*.sapphirebak` carrying the `SAPPHIREBAK` magic in its first 12 bytes, except the four opener files (`README.txt`, `open-backup.sh`, `open-backup.bat`, `decrypt_backup.py`): plaintext backups never land on a satellite, even if Sapphire has a bug. 409 while another PUT runs, 411 without a length, 507 when it does not fit. A 70 MB backup takes a minute or two over WiFi; the board must still answer `/health` meanwhile |
 | `storage` | `GET /storage/{name}` | The bytes back, for a restore |
 | `storage` | `DELETE /storage/{name}` | Rotation: Sapphire keeps the counts set on the device page and drops the oldest |
@@ -277,6 +277,15 @@ Content-Type: application/json
 |---|---|
 | `{"ok": true, "accepted": true, "chat": "default", "text": "Goodnight", "msg": "3f9a1c"}` | A turn has started with the message set for that press (`text`). Her reply goes to the board's screen when it has a keyboard (`msg`, pulled like a typed question's), else to its speaker, else it stays in the chat |
 | `{"ok": true, "accepted": false}` | That press is not set to send anything |
+| `{"ok": true, "accepted": true, "job": "backup", "said": "Backup is on its way"}` | The press was a job that is Sapphire's to do, and it has started. `said` is a line short enough for a small screen. No chat turn |
+
+**Jobs that are Sapphire's.** Some work a press asks for cannot be done on
+the board: a backup is made by Sapphire. The board lists such a job in `can`
+like any other, and when the press is that job it posts
+`{"button": "boot", "how": "short", "job": "backup"}`. What the Devices page
+set for the press wins; `job` counts only for a press left to the board. The
+one job so far is `backup`: a fresh backup, sealed, onto that device's own
+card (it needs `storage`). Any other word is `accepted: false`.
 | `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
 
 **Her reply, for a screen.** Her words never ride the events stream: a

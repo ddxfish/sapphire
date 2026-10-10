@@ -74,6 +74,11 @@ class Target:
     def delete(self, name: str):
         raise NotImplementedError
 
+    def damaged(self):
+        """Names the target itself found damaged (a board that keeps a hash
+        beside each backup and reads them back). () when it cannot tell."""
+        return ()
+
     def get(self, name: str, dst: Path):
         raise NotImplementedError
 
@@ -135,6 +140,14 @@ def _ship_one(t: Target, plain: Path, sealed):
     try:
         t.check(path, name)                       # GATE 2
         have = set(t.names())
+        # What the target found damaged goes first: a sealed backup with one
+        # wrong byte opens for nobody, and it must not count as "kept" or as
+        # "already there". Today's copy lands in its place.
+        bad = [d for d in t.damaged() if d in have]
+        for d in bad:
+            logger.error(f"[BACKUP->{t.label}] {d} is DAMAGED on the target: dropping it")
+            t.delete(d)
+            have.discard(d)
         sent = path.stat().st_size
         if name in have:
             verb = "already there"
@@ -164,7 +177,7 @@ def _ship_one(t: Target, plain: Path, sealed):
         except Exception as e:
             logger.warning(f"[BACKUP->{t.label}] openers not written: {e}")
         kept = sum(1 for n in t.names() if tier_of(n))
-        msg = f"{name} {verb}; kept {kept}, dropped {len(doomed)}"
+        msg = f"{name} {verb}; kept {kept}, dropped {len(doomed)}" + (f", {len(bad)} damaged removed" if bad else '')
         logger.info(f"[BACKUP->{t.label}] {msg}")
         return {"target": t.label, "ok": True, "msg": msg}
     except Exception as e:

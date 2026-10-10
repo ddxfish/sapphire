@@ -26,6 +26,9 @@ SIGNING_PUBLIC_KEY = bytes.fromhex("b4e188e374c7ddc83544cda23f4818693441bc197068
 
 # File extensions to verify (must match what sign_plugin.py hashes)
 SIGNABLE_EXTENSIONS = {".py", ".json", ".js", ".css", ".html", ".md"}
+# Compiled code a plugin runs in the browser: signed like the text files, but
+# hashed as raw bytes (a CRLF pair inside a binary is data, not a line ending).
+RAW_EXTENSIONS = {".wasm"}
 
 # Filenames that platform tooling drops into directories without the user's
 # knowledge. If one of these is a signable extension (currently none are, but
@@ -60,8 +63,11 @@ def _build_signable_payload(manifest_data: dict) -> bytes:
 
 
 def _hash_file(path: Path) -> str:
-    """SHA256 hex digest of a file, line-ending normalized (CRLF → LF)."""
-    content = path.read_bytes().replace(b'\r\n', b'\n')
+    """SHA256 hex digest of a file, line-ending normalized (CRLF → LF);
+    RAW_EXTENSIONS are hashed byte for byte."""
+    content = path.read_bytes()
+    if path.suffix not in RAW_EXTENSIONS:
+        content = content.replace(b'\r\n', b'\n')
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
@@ -209,7 +215,7 @@ def _verify_file_integrity(plugin_dir: Path, sig_data: dict) -> Tuple[bool, str]
             continue
         if f.name in _IGNORABLE_FILENAMES:
             continue
-        if f.suffix not in SIGNABLE_EXTENSIONS:
+        if f.suffix not in SIGNABLE_EXTENSIONS | RAW_EXTENSIONS:
             continue
         if "__pycache__" in f.parts or ".claude" in f.parts:
             continue   # .claude/: Claude Code scratch (gitignored) — a scout's notes must not block the plugin

@@ -75,6 +75,7 @@ class Fake:
     wants_encryption = _T.wants_encryption
     check = _T.check
     put_openers = _T.put_openers
+    damaged = _T.damaged
 
     def put(self, path, name):
         self.check(path, name)        # GATE 3 as a real driver would
@@ -275,3 +276,27 @@ def test_ship_verifies_size_on_the_target_and_drops_a_short_copy(mgr):
     good = Fake(remote=True)
     res = T.ship(fn, to=[good])
     assert res[0]["ok"] and "verified" in res[0]["msg"]
+
+
+def test_a_backup_the_target_found_damaged_is_replaced(mgr):
+    """A board that reads its backups back names the ones that no longer
+    match their hash. They go before anything is counted: a damaged copy of
+    today's file is sent again, an older one is not "kept"."""
+    from core import backup_targets as T
+
+    class Checks(Fake):
+        bad = ()
+        def damaged(self):
+            return [n for n in self.bad if n in self.store]
+
+    t = Checks(remote=True)
+    fn = _plain(mgr)
+    assert T.ship(fn, to=[t])[0]["ok"]
+    name = next(n for n in t.store if n.endswith(".sapphirebak"))
+    old = "sapphire_2020-01-01_030000_daily.tar.gz.sapphirebak"
+    t.store[old] = b"x"
+    t.bad = (name, old)
+    t.puts.clear()
+    res = T.ship(fn, to=[t])
+    assert res[0]["ok"] and "2 damaged removed" in res[0]["msg"] and "shipped" in res[0]["msg"]
+    assert t.puts == [name] and old not in t.store

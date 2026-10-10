@@ -67,7 +67,7 @@ SPEC = {
                  "A board with one program slot never offers this and is updated over USB."},
         # the mic's field, or the keyboard's on a board that types instead of listening
         {'key': 'voice_key', 'type': 'string', 'widget': 'password', 'secret': True, 'setup': True,
-         'capability': ('mic', 'keyboard'), 'label': 'Key the satellite sends',
+         'capability': ('mic', 'keyboard', 'buttons'), 'label': 'Key the satellite sends',
          'help': "Proves a question came from this satellite. Stored scrambled. On a Pi "
                  "body this is SAPPH_BRAIN_TOKEN, next to SAPPH_DEVICE_ID."},
         # what each press of each button does: the board says which buttons it has and what it can do by
@@ -501,6 +501,12 @@ def describe(device, config):
                 'example': '', 'values': "(no value) | again", 'owner': True, 'wait': UPDATE_WAIT,
                 'danger': f"Replaces the program on {device['id']} and restarts it. The board is away for a "
                           f"minute. If the new program does not run, the old one comes back on its own."}
+        from core.devices import firmware
+        if not firmware.official():            # a folder or someone's own release: said wherever a program is sent
+            told['firmware']['help'] += (f". The source is NOT Sapphire's release now: {firmware.source()[:120] or 'none set'} "
+                                         "(New board changes it)")
+            if 'update' in told['firmware']['actions']:
+                told['firmware']['actions']['update']['danger'] += " It comes from a source that is not Sapphire's release."
     return told
 
 
@@ -678,6 +684,19 @@ def status(device, config, secrets):
             (f" of {_gb(st['total_bytes'])}" if st.get('total_bytes') else '')
     elif st.get('mounted') is False:                              # a slot with no card in it (pocket 0.2.0)
         readings['card'] = 'none: put one in (FAT32) and restart the board'
+    if isinstance(st.get('count'), int):
+        readings['backups'] = f"{st['count']} on the card" + (', one arriving now' if st.get('writing') else '') \
+            + (', the last one sent did NOT land' if st.get('failed') else '')
+    ch = st.get('checks') if isinstance(st.get('checks'), dict) else None
+    if ch:                                                        # a board that reads its backups back (tdongle 0.1.0)
+        if ch.get('damaged'):
+            readings['damaged backups'] = f"{ch['damaged']}: replaced at the next backup"
+        if ch.get('running'):
+            readings['card check'] = f"reading every backup back, {ch.get('done', 0)} of {ch.get('of', 0)}"
+        elif ch.get('unchecked'):
+            readings['card check'] = f"done; {ch['unchecked']} older backup(s) have no hash to check against"
+        else:
+            readings['card check'] = 'every backup read back and whole' if not ch.get('damaged') else 'done'
     where = urlsplit(str(config.get('url') or '')).netloc
     out = {'online': bool(h.get('ok', True)), 'readings': readings,
            'detail': f"{h.get('name') or h.get('body_name') or device['id']} at {where}"}
@@ -936,6 +955,11 @@ class SatelliteTarget(Target):
     def sizes(self):
         files = self.info().get('files') or []
         return {str(f.get('name')): int(f.get('size') or 0) for f in files if isinstance(f, dict) and f.get('name')}
+
+    def damaged(self):
+        # a board that keeps hashes says "ok": false for a backup that no longer matches its own
+        files = self.info().get('files') or []
+        return [str(f['name']) for f in files if isinstance(f, dict) and f.get('name') and f.get('ok') is False]
 
     def put(self, path, name):
         self.check(path, name)

@@ -723,6 +723,20 @@ def pressed_line(row, out):
     return spoken.replace('Your reply is spoken aloud there.', told, 1) if told else spoken
 
 
+def _ask_backup(row):
+    """A press that asks for a backup onto the device's own card, now.
+    (taken, a line short enough for a small screen)."""
+    from core.devices import storage
+    target = storage.target_for(row['id'])
+    if target is None:
+        return False, 'No card to back up to'
+    text, ok = storage.backup_now(target)
+    return bool(ok), ('Backup is on its way' if ok and 'already' not in text else 'A backup is already on its way' if ok else text[:60])
+
+
+ASKS = {'backup': _ask_backup}     # press jobs that are Sapphire's work, with no chat turn
+
+
 def press_text(row, button, how):
     """What a press says when no message was set for it."""
     return f"The {button} button on {row['id']} was pressed{ {'long': ' and held', 'double': ' twice'}.get(how, '') }."
@@ -884,12 +898,15 @@ def typed(device_id, text):
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
-def pressed(device_id, button, how):
+def pressed(device_id, button, how, job=None):
     """A device's button was pressed (POST /api/devices/{id}/press). Answers
     {'ok', 'accepted', 'chat', 'text'} and 'msg' when her reply goes to its
     screen; accepted = a turn has started with the message set for that
     press. A press that is not set to send one is {'ok': True, 'accepted':
-    False}: the board does everything else by itself. Never raises."""
+    False}: the board does everything else by itself. `job` is what the
+    board says the press does when it is one of ASKS (work that is
+    Sapphire's, with no chat turn): then {'ok', 'accepted', 'said'}.
+    Never raises."""
     try:
         e = _engine()
         why = e.refusal()
@@ -906,6 +923,12 @@ def pressed(device_id, button, how):
             return {'ok': False, 'error': f"A press is a button's name and one of {', '.join(HOWS)}."}
         held = part['config'].get('buttons')
         pick = (held if isinstance(held, dict) else {}).get(f'{button}.{how}')
+        # what the page set wins; a press left to the board is the board's word, and only for a job in ASKS
+        do = pick.get('do') if isinstance(pick, dict) and pick.get('do') else str(job or '').strip().lower()
+        if do in ASKS:
+            ok, said = ASKS[do](row)
+            logger.info(f"[DEVICES] {row['id']}: {button} {how} pressed, {do}: {said}")
+            return {'ok': True, 'accepted': ok, 'job': do, 'said': said}
         if not isinstance(pick, dict) or pick.get('do') != TELL:
             logger.info(f"[DEVICES] {row['id']}: {button} {how} pressed, nothing is set to be sent for it")
             return {'ok': True, 'accepted': False}

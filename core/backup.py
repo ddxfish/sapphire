@@ -78,8 +78,14 @@ def _privacy_excluded(rel: str) -> bool:
 # is re-downloaded on first use (HF models via the Windows HF_HOME redirect,
 # dtln, silero VAD, geonames). Anything precious must live elsewhere in user/.
 # Without this, Windows installs back up 100s of MB of model blobs.
+# `user/game-room/library/` is the same class: game files the player uploaded
+# from copies they own (a WAD, a ROM), 10s of MB each and the same bytes in
+# every archive. Saves are NOT here: they ride the chat database.
+_CACHE_FLOOR = ('models', 'game-room/library')
+
+
 def _cache_excluded(rel: str) -> bool:
-    return rel == 'models' or rel.startswith('models/')
+    return any(rel == d or rel.startswith(d + '/') for d in _CACHE_FLOOR)
 
 
 def _exclude_patterns_setting():

@@ -20,6 +20,16 @@ def test_cache_floor_models_always_excluded():
     assert not _is_excluded("memory/library.db", [])
 
 
+def test_cache_floor_game_library_always_excluded():
+    """Uploaded game files (WADs, ROMs) are re-uploadable; saves ride the chat db."""
+    assert _cache_excluded("game-room/library")
+    assert _cache_excluded("game-room/library/abc123.wad")
+    assert _is_excluded("game-room/library/abc123.wad", [])
+    assert not _cache_excluded("game-room/library-notes.txt")
+    assert not _cache_excluded("game-room/settings.json")
+    assert not _is_excluded("history/sapphire_history.db", [])
+
+
 def test_privacy_floor_always_excluded():
     assert _privacy_excluded("plugin_state/foo.bad-123")
     assert _privacy_excluded("x.tmp")

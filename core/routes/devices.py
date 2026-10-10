@@ -470,12 +470,13 @@ async def devices_text(device_id: str, request: Request):
 @router.post("/api/devices/{device_id}/press")
 async def devices_press(device_id: str, request: Request):
     """A device's button was pressed and that press is set to reach her:
-    {"button": "boot", "how": "short" | "long" | "double"}. Answered once a
-    turn has started with the message set for that press."""
+    {"button": "boot", "how": "short" | "long" | "double"}, and "job" when
+    the press is work of hers the board names ("backup"). Answered once a
+    turn has started with the message set for that press, or the job has."""
     await _device_key(device_id, request, 'press')
     from core.devices import voice
     body = await _body(request)
-    return await asyncio.to_thread(voice.pressed, device_id, body.get('button'), body.get('how'))
+    return await asyncio.to_thread(voice.pressed, device_id, body.get('button'), body.get('how'), body.get('job'))
 
 
 @router.get("/api/devices/{device_id}/text")

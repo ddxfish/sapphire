@@ -183,6 +183,19 @@ const base = new URL('./towerd', import.meta.url).pathname;
 const defs = await fetch(`${base}/defs.json`).then(r => r.json());
 ```
 
+## A WebAssembly engine on the stage
+
+A free-mount board can host a compiled engine (an emulator core, a source port). What the app gives you and what stays yours:
+
+- **It runs.** The page's CSP allows WebAssembly (`'wasm-unsafe-eval'`), and `.wasm` under `app/` is served with the right type.
+- **It is signed.** `.wasm` files are in the signature like your code, hashed byte for byte. Build before you sign, and leave no build folder inside the plugin.
+- **Her view of the screen.** The host copies the first `<canvas>` in your stage for her frames. A WebGL canvas reads back black unless it was created with `preserveDrawingBuffer: true`, so ask for that (wrap `canvas.getContext` before the engine makes its context).
+- **Keys.** Declare `keeps_focus: true` and make the engine listen on its canvas, not the window, or typing in the chat plays the game.
+- **Leaving.** `unmount` must stop the engine for real: its loop, its sound, its listeners. Build it so a second instance can start in the same page.
+- **The player's game files** (a WAD, a ROM) go in `user/game-room/library/<your game>/` through a route of your own. That folder is never backed up: the player keeps the original. Put saves somewhere else under `user/` so they are.
+
+`game-doom` (its own repository) is the worked example.
+
 ## Sessions, saves, and silent verbs
 
 - **Sessions are chats** — the chat IS the save, literally: the host writes your engine's state as a row *on the session chat* (core's chat-scoped store, key `game:<id>`), so your plugin never touches disk for state. Keep state JSON-serializable; it round-trips through JSON on every save.

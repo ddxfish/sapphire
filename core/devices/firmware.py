@@ -49,7 +49,7 @@ _VERSION = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$')
 _REDIRECT_OK = ('.githubusercontent.com',)     # a release asset is a 302 to objects.githubusercontent.com
 HOPS = 2                          # releases/latest/download/x: 302 to the tagged URL on the same host, then to the asset host
 _lock = threading.Lock()
-_recent = (0.0, None)             # (when, {id: board})
+_recent = (0.0, None, '')         # (when, {id: board}, the source they came from)
 OWN = 'own'                       # the board id of a file the user gave: never one of the source's
 _own = None                       # that board, until the next file or a restart
 _CHIP = {0: 'ESP32', 2: 'ESP32-S2', 5: 'ESP32-C3', 9: 'ESP32-S3', 12: 'ESP32-C2', 13: 'ESP32-C6', 16: 'ESP32-H2'}
@@ -63,6 +63,15 @@ def source():
     import config
     s = str(getattr(config, 'DEVICE_FIRMWARE_SOURCE', '') or '').strip()
     return s + '/' if _is_url(s) and not s.endswith('/') else s      # a folder: urljoin keeps its last segment
+
+
+def official():
+    """True while the source is the one Sapphire ships with: her own firmware
+    release. Anything else (another URL, a folder) is someone's own build,
+    and the page says so."""
+    from core.settings_manager import settings
+    default = str(settings.get_defaults().get('DEVICE_FIRMWARE_SOURCE') or '').strip()
+    return bool(default) and source().rstrip('/') == default.rstrip('/')
 
 
 def _is_url(s):
@@ -168,10 +177,10 @@ def _boards(fresh=False):
     source unreachable, boards already in the cache are offered from there,
     so a board can be flashed again offline."""
     global _recent
-    when, boards = _recent
-    if not fresh and boards is not None and time.monotonic() - when < REMEMBER:
-        return boards, None
+    when, boards, of = _recent
     base = source()
+    if not fresh and boards is not None and of == base and time.monotonic() - when < REMEMBER:
+        return boards, None
     if not base:
         return {}, "No firmware source is set (DEVICE_FIRMWARE_SOURCE in Settings)."
     try:
@@ -182,7 +191,7 @@ def _boards(fresh=False):
         logger.warning(f"[DEVICES] firmware index from {base[:80]}: {e}")
         boards, error = _cached_boards(), f"Could not read the firmware source: {e}"
     if boards:
-        _recent = (time.monotonic(), boards)
+        _recent = (time.monotonic(), boards, base)
     return boards, error
 
 
@@ -210,9 +219,9 @@ def _cached_boards():
 # --- what the flasher asks ---------------------------------------------------
 
 def index():
-    """The boards the flasher can offer: {'source', 'boards', 'error'}."""
+    """The boards the flasher can offer: {'source', 'official', 'boards', 'error'}."""
     boards, error = _boards(fresh=True)
-    return {'source': source(), 'error': error,
+    return {'source': source(), 'official': official(), 'error': error,
             'boards': [{k: b[k] for k in ('id', 'name', 'chipFamily', 'version', 'flash', 'parts')}
                        for b in boards.values()]}
 
@@ -272,8 +281,8 @@ def known_version(board_id):
     known (the index read lately, or the cache): never the network, so a
     status probe can ask without reaching out. '' when nothing is known."""
     board_id = str(board_id or '').strip().lower()
-    _, boards = _recent
-    if boards is None:
+    _, boards, of = _recent
+    if boards is None or of != source():
         boards = _cached_boards()
     b = (boards or {}).get(board_id)
     return b['version'] if b else ''

@@ -506,3 +506,78 @@ def test_claude_scratch_dir_is_ignored_by_signer_and_verifier(tmp_path, monkeypa
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert not any(rel.startswith('.claude/') for rel in mod.build_file_manifest(plugin))
+
+
+# =============================================================================
+# 9. COMPILED CODE (.wasm) — signed like text, hashed byte for byte
+# =============================================================================
+
+def _load_signer():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "sign_plugin_under_test", Path(__file__).resolve().parent.parent / "tools" / "sign_plugin.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _sign_with_real_signer(plugin_dir: Path, private_key):
+    """plugin.sig whose file manifest comes from tools/sign_plugin.py itself."""
+    sig_data = {"plugin": "test-plugin", "version": "1.0.0",
+                "files": _load_signer().build_file_manifest(plugin_dir)}
+    payload = json.dumps(sig_data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    sig_data["signature"] = base64.b64encode(private_key.sign(payload)).decode("ascii")
+    (plugin_dir / "plugin.sig").write_text(json.dumps(sig_data, indent=2), encoding="utf-8")
+    return sig_data
+
+
+class TestWasmSigned:
+    WASM = b"\x00asm\x01\x00\x00\x00 code \r\n more code \r\n"
+
+    def _plugin(self, tmp):
+        d = _make_plugin(tmp)
+        (d / "app").mkdir()
+        (d / "app" / "engine.wasm").write_bytes(self.WASM)
+        return d
+
+    def test_signer_and_verifier_agree_on_the_sets(self):
+        signer = _load_signer()
+        assert signer.RAW_EXTENSIONS == pv.RAW_EXTENSIONS
+        assert signer.SIGNABLE_EXTENSIONS == pv.SIGNABLE_EXTENSIONS
+
+    def test_wasm_is_in_the_manifest_and_verifies(self, tmp, official_key):
+        priv, _ = official_key
+        d = self._plugin(tmp)
+        sig = _sign_with_real_signer(d, priv)
+        assert "app/engine.wasm" in sig["files"]
+        passed, msg, meta = verify_plugin(d)
+        assert passed, msg
+        assert meta["tier"] == "official"
+
+    def test_swapped_wasm_fails(self, tmp, official_key):
+        priv, _ = official_key
+        d = self._plugin(tmp)
+        _sign_with_real_signer(d, priv)
+        (d / "app" / "engine.wasm").write_bytes(self.WASM.replace(b"more", b"evil"))
+        passed, msg, _ = verify_plugin(d)
+        assert not passed
+        assert "hash mismatch" in msg
+
+    def test_wasm_is_hashed_raw_not_line_normalized(self, tmp, official_key):
+        """A binary that differs only by CRLF vs LF is a different binary."""
+        priv, _ = official_key
+        d = self._plugin(tmp)
+        _sign_with_real_signer(d, priv)
+        (d / "app" / "engine.wasm").write_bytes(self.WASM.replace(b"\r\n", b"\n"))
+        passed, msg, _ = verify_plugin(d)
+        assert not passed
+        assert "hash mismatch" in msg
+
+    def test_wasm_added_after_signing_fails(self, tmp, official_key):
+        priv, _ = official_key
+        d = _make_plugin(tmp)
+        _sign_with_real_signer(d, priv)
+        (d / "injected.wasm").write_bytes(self.WASM)
+        passed, msg, _ = verify_plugin(d)
+        assert not passed
+        assert "unrecognized file" in msg

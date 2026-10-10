@@ -301,8 +301,16 @@ The firmware comes from the source named by `DEVICE_FIRMWARE_SOURCE`: the
 latest release of the firmware repository unless you change it, or a folder on Sapphire's computer with an
 `index.json` (the firmware repository's `build.sh` makes one in its
 `dist` folder). Sapphire fetches it, never the page, and keeps each board's parts
-under `user/firmware_cache` so a board can be flashed again offline. With
-nothing to offer, the flasher shows the source and lets you set it there.
+under `user/firmware_cache` so a board can be flashed again offline.
+
+The flasher's board list says where the firmware comes from. On Sapphire's
+own release it offers **Use another source**: another firmware release URL
+(someone else's boards) or a folder. Any other source is named each time
+with a warning and **Back to Sapphire's release**, and a device's Firmware
+tab says so too. Firmware from another source is someone else's code, not
+part of Sapphire: it runs on your board, holds your WiFi password and can
+talk to Sapphire as that device. The change is yours alone (an override in
+`user/`); a new install always starts on Sapphire's release.
 
 On Linux the browser opens the port as you, so you need to be in the
 `dialout` group once; for the Sapphire-side lane it is the user she runs as. A board with native USB (an ESP32-S3) vanishes from
@@ -473,6 +481,10 @@ second) and double. Each is set to one of:
 | One of the board's own jobs | What the board said it can do: listen now or stop her voice, the ring, the screen, the wake word, the speaker. It does these by itself, at once, with no trip to Sapphire |
 | Nothing | The press does nothing |
 
+One job is not the board's own but Sapphire's: **Back up to this stick now**,
+on a board with a card that offers it (the backup stick). The press asks her
+for a fresh backup onto that device. No chat turn is spent on it.
+
 A press you set replaces what the board did with it. A short press fires at
 once unless that button has a double press set: then it waits a third of a
 second for the second press. The **press** line under the settings sends a
@@ -484,6 +496,28 @@ has reached Sapphire, each press is the board's own.
 Using BOOT this way changes nothing about flashing: Sapphire puts a board
 into its loader over USB by herself, and holding BOOT while plugging in is
 still the rescue. Do not hold it while the board restarts.
+
+### A backup stick
+
+A satellite whose whole job is its card: the LilyGO T-Dongle-S3 with the
+`tdongle` firmware. It is a backup device like any other with `storage`
+(the **Backup** tab, the nightly copy, **Send to devices**), and three
+things more:
+
+- **It checks what it holds.** Each backup is read back from the card after
+  it is written and its hash kept beside it. After every start the stick
+  reads every backup back again. One that no longer matches shows as
+  **damaged backups** in its readings; Sapphire removes it and sends a
+  whole one at her next backup to that stick.
+- **Its LED and screen are its status**, not her thinking: green = safe,
+  blue pulse = writing (do not unplug), cyan = checking, red = no card,
+  damaged or failed, amber = stale or out of reach. The screen's two lines
+  are room used and how many backups with the newest one's date.
+- **Its button asks for a backup** (a first press on a dark screen only
+  lights it).
+
+The check is a board's choice (`BOARD_STORAGE_CHECKS` in its firmware): it
+costs a second read of every backup, so the voice board leaves it off.
 
 ### A pocket terminal
 

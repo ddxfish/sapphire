@@ -243,3 +243,52 @@ def test_the_press_door_takes_the_boards_key(home):
             assert False, 'a wrong key got in'
         except routes.HTTPException as e:
             assert e.status_code == 401
+
+
+# --- a press that is Sapphire's work, with no chat turn (the backup stick) ---------------
+
+def test_a_press_the_board_calls_backup_starts_one_and_no_turn(home):
+    """The stick's own short press is 'backup': it names the job, nothing is
+    set on the page, and no chat is touched."""
+    _with_button('light', 'buttons', 'storage')
+    with _streaming(['ok']) as run_turn, patch('core.devices.storage.target_for', return_value=object()) as target, \
+         patch('core.devices.storage.backup_now', return_value=('Backing up to pocket now', True)) as now:
+        out = voice.pressed('pocket', 'boot', 'short', 'backup')
+    assert out == {'ok': True, 'accepted': True, 'job': 'backup', 'said': 'Backup is on its way'}
+    target.assert_called_once_with('pocket')
+    now.assert_called_once()
+    run_turn.assert_not_called()
+
+
+def test_what_the_page_set_wins_over_the_boards_word(home):
+    _with_button('light', 'buttons', 'storage')
+    _bind(boot_short={'do': 'screen'})
+    with patch('core.devices.storage.backup_now') as now:
+        assert voice.pressed('pocket', 'boot', 'short', 'backup') == {'ok': True, 'accepted': False}
+    now.assert_not_called()
+    _bind(boot_long={'do': 'backup'})                       # set on the page: the board need not say it
+    with patch('core.devices.storage.target_for', return_value=object()), \
+         patch('core.devices.storage.backup_now', return_value=('A backup to pocket is already on its way (3s in).', True)):
+        assert voice.pressed('pocket', 'boot', 'long')['said'] == 'A backup is already on its way'
+
+
+def test_a_backup_press_with_no_card_says_so_and_a_made_up_job_does_nothing(home):
+    _with_button('light', 'buttons')
+    with patch('core.devices.storage.target_for', return_value=None):
+        assert voice.pressed('pocket', 'boot', 'short', 'backup') == \
+            {'ok': True, 'accepted': False, 'job': 'backup', 'said': 'No card to back up to'}
+    assert voice.pressed('pocket', 'boot', 'short', 'format') == {'ok': True, 'accepted': False}
+
+
+def test_a_board_with_only_buttons_still_shows_its_key_field(home):
+    field = next(f for f in sat.SPEC['config_schema'] if f['key'] == 'voice_key')
+    assert 'buttons' in field['capability']
+
+
+def test_the_card_check_is_among_the_readings(home):
+    said = {'ok': True, 'has': ['storage'], 'storage': {'mounted': True, 'free_bytes': 2 ** 34, 'total_bytes': 2 ** 35, 'count': 14,
+            'checks': {'running': True, 'done': 3, 'of': 14, 'damaged': 1, 'unchecked': 0}}}
+    with patch.object(sat, '_health', return_value=said):
+        r = sat.status({'id': 'pocket'}, {'url': 'http://10.0.0.9'}, {})['readings']
+    assert r['backups'] == '14 on the card' and r['damaged backups'].startswith('1:')
+    assert r['card check'] == 'reading every backup back, 3 of 14'
