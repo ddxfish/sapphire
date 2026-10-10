@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 
 from core.auth import require_login, check_endpoint_rate, get_client_ip
@@ -316,6 +316,21 @@ async def devices_firmware(request: Request, _=Depends(require_login)):
     return await _do(firmware_index)
 
 
+@router.post("/api/devices/firmware/own")
+async def devices_firmware_own(request: Request, file: UploadFile = File(...), _=Depends(require_login)):
+    """A firmware file of the user's own: checked, kept, and from then on the
+    board 'own' to either lane of the flasher."""
+    _open(request)
+    from core.devices import firmware
+    data = await file.read(firmware.FILE_MAX + 1)
+    if len(data) > firmware.FILE_MAX:
+        raise HTTPException(status_code=413, detail=f"That file is larger than {firmware.FILE_MAX // 1024 // 1024} MB.")
+    try:
+        return await asyncio.to_thread(firmware.keep_own, data, file.filename)
+    except firmware.FirmwareError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/api/devices/firmware/{board_id}/{path:path}")
 async def devices_firmware_part(board_id: str, path: str, request: Request, _=Depends(require_login)):
     _open(request)
@@ -452,6 +467,17 @@ async def devices_text(device_id: str, request: Request):
     return await asyncio.to_thread(voice.typed, device_id, text)
 
 
+@router.post("/api/devices/{device_id}/press")
+async def devices_press(device_id: str, request: Request):
+    """A device's button was pressed and that press is set to reach her:
+    {"button": "boot", "how": "short" | "long" | "double"}. Answered once a
+    turn has started with the message set for that press."""
+    await _device_key(device_id, request, 'press')
+    from core.devices import voice
+    body = await _body(request)
+    return await asyncio.to_thread(voice.pressed, device_id, body.get('button'), body.get('how'))
+
+
 @router.get("/api/devices/{device_id}/text")
 async def devices_text_read(device_id: str, request: Request):
     """A piece of her reply, for the device's screen: ?msg=&from=&max=.
@@ -484,6 +510,9 @@ async def light_stream(device_id, key, gone):
         yield f"data: {json.dumps(dict(voice.clock(), state='connected', src='device'))}\n\n"
         if now:
             yield f"data: {json.dumps(now)}\n\n"
+        jobs = await asyncio.to_thread(voice.bound, device_id)      # a board keeps what its presses do only in memory
+        if jobs is not None:
+            yield f"data: {json.dumps({'state': 'buttons', 'bound': jobs, 'src': 'device'})}\n\n"
         while True:
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=STREAM_QUIET)

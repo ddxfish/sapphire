@@ -224,8 +224,8 @@ same box. The Raspberry Pi bodies are satellites. This type is built in.
 **A satellite says what it has.** A board with no light shows no Light tab, and
 Sapphire is not offered one. Press **Test now** after you change what is on a
 board. Any board that speaks the [Satellite Protocol](SATELLITE-PROTOCOL.md)
-can be added here. Sapphire ships a program for the Waveshare ESP32-S3 audio
-board: see `firmware/satellite-esp32/README.md`.
+can be added here. The programs for the boards Sapphire knows live in their
+own repository: <https://github.com/ddxfish/sapphire-firmware>.
 
 A board with sensors (a light sensor, a temperature or humidity module) gets
 a **Sensors** tab with one action, `read`, which measures everything now;
@@ -236,7 +236,7 @@ number until it is calibrated.
 ### A new board from the browser
 
 An ESP32 board that has never been set up is done entirely from this page:
-**+ Add Device > New board (USB)**. The first question is where the board is
+the **+ New Board** button. The first question is where the board is
 plugged in. **This computer** means the browser writes it over USB (Web
 Serial, so Chrome or Edge): press **Connect** and pick its port in the
 browser's window. **The computer Sapphire runs on** means she writes it
@@ -263,9 +263,11 @@ reaches Sapphire ("link to Sapphire"). From then on the address is learned
 from the board's own calls, so a board that moves is followed. A board set
 up away from its WiFi stays "waiting for the board" until it gets home.
 
-A board already running Sapphire's firmware can have its name, WiFi or
-Sapphire's address changed the same way, without reinstalling: the link
-under the board cards. A device that already exists keeps its keys, its
+A board that is already a device has both jobs in the **⋮** menu on its
+card: **Reflash (USB)** writes its program again, and **Change WiFi (USB)**
+gives it a new WiFi or a new address for Sapphire without reinstalling.
+Both take that board only, and it keeps its name; plug in another and you
+are sent to **+ New Board**. The same menu has **Delete device**. A device that already exists keeps its keys, its
 name and its address until the board calls in with the new ones, so a
 setup that fails halfway leaves it working as it was; a known board given
 a new name is that device renamed when it calls in. A name in use by a
@@ -296,9 +298,9 @@ checks. The switch is Sapphire's; the board's own two slots are its
 builder's choice and show up as `firmware` in what it says it has.
 
 The firmware comes from the source named by `DEVICE_FIRMWARE_SOURCE`: the
-firmware release URL, or a folder on Sapphire's computer with an
-`index.json` (`tools/firmware_manifest.py` makes one from an ESP-IDF
-build). Sapphire fetches it, never the page, and keeps each board's parts
+latest release of the firmware repository unless you change it, or a folder on Sapphire's computer with an
+`index.json` (the firmware repository's `build.sh` makes one in its
+`dist` folder). Sapphire fetches it, never the page, and keeps each board's parts
 under `user/firmware_cache` so a board can be flashed again offline. With
 nothing to offer, the flasher shows the source and lets you set it there.
 
@@ -317,7 +319,7 @@ Add one with **+ Add Device**, type **Satellite**:
 | Address | Where the satellite listens, like `http://192.168.1.100:8090`. Empty = learned the first time it calls in; it follows the satellite when its address changes, but only once the old address stops answering: an address you typed that works is never overwritten |
 | Key Sapphire sends | The satellite's own key |
 | Has a camera | Turn off for a satellite with no camera. Sapphire is then not offered one |
-| Talks in chat | The chat its questions land in. Empty means the last chat used. A name means always that chat |
+| Talks in chat | On the first tab. The chat this device is in: what it hears, what is typed on it and what its buttons send land there, and its screen shows it. Empty means the last chat used. A name means always that chat; a name that is not a chat yet is made when you save |
 | Key the satellite sends | The satellite's own key for talking to Sapphire. See "Give a Pi its own key" below |
 
 What Sapphire can do with it:
@@ -458,11 +460,36 @@ checks before sending and the board checks again before writing. A board that
 can wipe its card shows a **Format** button on the tab, for you only, behind
 an I UNDERSTAND. No card, no tab. Set the password in Settings > Backup.
 
+### Buttons
+
+A board with a real button (the BOOT button on an ESP32 board) gets a
+**Buttons** tab. Each button has three presses: short, long (held most of a
+second) and double. Each is set to one of:
+
+| Set to | What happens |
+|---|---|
+| Leave it to the board | What the board does with it by itself; the line says what |
+| Send Sapphire a message | The words you type there land in the device's chat (**Talks in chat**) as a turn, under a line that says a button was pressed on that device. Empty = "The boot button on den was pressed." Her reply is shown on the board's screen when it is a pocket terminal, spoken when it has a speaker, and otherwise only in the chat |
+| One of the board's own jobs | What the board said it can do: listen now or stop her voice, the ring, the screen, the wake word, the speaker. It does these by itself, at once, with no trip to Sapphire |
+| Nothing | The press does nothing |
+
+A press you set replaces what the board did with it. A short press fires at
+once unless that button has a double press set: then it waits a third of a
+second for the second press. The **press** line under the settings sends a
+press from the page, to try a message without walking to the board.
+
+The board learns what is set when it connects and at every save. Before it
+has reached Sapphire, each press is the board's own.
+
+Using BOOT this way changes nothing about flashing: Sapphire puts a board
+into its loader over USB by herself, and holding BOOT while plugging in is
+still the rescue. Do not hold it while the board restarts.
+
 ### A pocket terminal
 
 A satellite with a keyboard and a screen instead of a mic: a small
 touchscreen board you type at. What you type lands in its chat (the
-**Talks in chat** setting, on its Keyboard tab with the key it sends) under a
+**Talks in chat** setting, on its first tab) under a
 line that says it was typed there, and her reply appears on its screen as
 she writes it. Nothing is spoken. She can put a line across the top of its
 screen herself:

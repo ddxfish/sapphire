@@ -23,6 +23,12 @@
 #           writes it and rings the device's stream with a `text` doorbell
 #           ({msg, rev, have, done}); the device pulls what it lacks from
 #           reply_text(). A doorbell can be dropped, the text never is.
+#   pressed() a device's button was pressed and its press is set to send her
+#           a message (the device's Buttons tab). The words set there land
+#           in the device's chat as a turn; her reply goes where the device
+#           can take it: its screen, else its speaker, else only the chat.
+#           What else a press can do, the board does by itself: bound() is
+#           what it is told, on its events stream.
 # One wake gets one answer: hear() asks wake.py whether the main app or
 # another satellite already holds the room, and drops a repeat of its words.
 #
@@ -57,7 +63,9 @@ RATES = (8000, 48000)      # the sample rates a device may ask for, lowest and h
 QUIET = 0.01               # below this a sample is silence, for the trim
 HEAD, TAIL = 0.08, 0.20    # seconds of silence left before and after her words
 CUE_FRESH = 300            # seconds a cue is still worth showing to a late stream
-CUES = ('thinking', 'tool', 'idle', 'error', 'standdown', 'text')   # standdown: another listener took this wake; text: a doorbell
+CUES = ('thinking', 'tool', 'idle', 'error', 'standdown', 'text', 'buttons')   # standdown: another listener took this wake; text: a doorbell; buttons: what its presses do
+HOWS = ('short', 'long', 'double')     # the ways a button is pressed
+TELL = 'tell'              # a press that sends her a message; any other job is the board's own
 SPEECH_WAIT = 600          # seconds a turn waits for the last sentence to finish playing
 SAY_ALL_WAIT = 180         # seconds say_all waits for the slowest device
 TYPED_MAX = 2000           # chars a device may type at once
@@ -256,6 +264,69 @@ def _talk_part(row):
     return _part_with(row, 'mic', 'keyboard')
 
 
+def chat_named(text):
+    """The name to keep for what was typed into a device's chat setting: a
+    chat that exists as it is, else the form a new chat is given."""
+    from core.chat.history import sanitize_chat_name
+    text = str(text or '').strip()[:64]
+    if not text:
+        return ''
+    try:
+        if _system().llm_chat.session_manager.chat_exists(text):
+            return text
+    except Exception:
+        return text
+    return sanitize_chat_name(text)[:64]
+
+
+def chat_for(config, device_id=''):
+    """(chat, its settings, '') for a device's settings: the chat it names,
+    else the last chat used. A name that is no chat yet is made here (Krem
+    2026-10-09: a typed name makes the chat). (chat, None, why) when the
+    chat cannot be used: it is locked, or it could not be made."""
+    sm = _system().llm_chat.session_manager
+    named = str((config or {}).get('chat') or '').strip()
+    chat = named or sm.get_active_chat_name()
+    settings = sm.get_settings_for(chat)
+    if settings is None and named and not sm.chat_exists(named):
+        from core.chat.history import sanitize_chat_name
+        new = sanitize_chat_name(named)              # the name a chat made from these words gets
+        if new and (sm.chat_exists(new) or sm.create_chat(new)):
+            chat, settings = new, sm.get_settings_for(new)
+            logger.info(f"[DEVICES] {device_id or 'a device'}: talks in the chat '{chat}', made for it if it was not there")
+    if settings is None:
+        return chat, None, f"The chat '{chat}' set for '{device_id}' cannot be opened."
+    return chat, settings, ''
+
+
+def bound_of(config):
+    """{button: {how: job}} from a part's `buttons` setting: what its board
+    is told. `tell` = send the press to Sapphire; any other job is one the
+    board said it can do by itself."""
+    out = {}
+    held = (config or {}).get('buttons')
+    for slot, pick in (held.items() if isinstance(held, dict) else ()):
+        button, _, how = str(slot).rpartition('.')
+        do = str(pick.get('do') or '') if isinstance(pick, dict) else ''
+        if button and how in HOWS and do:
+            out.setdefault(button, {})[how] = do
+    return out
+
+
+def bound(device_id):
+    """What a device's presses are set to, for its events stream. None for a
+    device with no buttons. Never raises."""
+    try:
+        row = _engine().rows().get(str(device_id or '').strip().lower())
+        part = _part_with(row, 'buttons') if row and row.get('enabled', True) else None
+        if not part or 'buttons' not in (part.get('has') or ()):     # only a board that SAID it has buttons knows the word
+            return None
+        return bound_of(part.get('config'))
+    except Exception as e:
+        logger.warning(f"[DEVICES] {device_id}: what its buttons do could not be read: {e}")
+        return None
+
+
 def key_ok(device_id, presented):
     """True when `presented` is the key stored for this device's voice - or
     the one provision() minted for this name, which becomes the stored one
@@ -319,7 +390,7 @@ def cue(device_id, state, **more):
     with _lock:
         if state in ('thinking', 'tool'):
             _showing[device_id] = payload
-        elif state != 'text':            # a doorbell says nothing about the light
+        elif state not in ('text', 'buttons'):   # a doorbell, or what its buttons do, says nothing about the light
             _showing.pop(device_id, None)
         streams = list(_listeners.get(device_id, ()))
     for loop, queue in streams:
@@ -643,6 +714,20 @@ def typed_line(row):
                  .replace('Your reply is spoken aloud there.', 'Your reply is shown on its small screen.', 1)
 
 
+def pressed_line(row, out):
+    """The line above a button's message. `out` is where her reply goes:
+    'voice', 'screen', or 'none' for a device that can do neither."""
+    spoken = origin_line(row).replace('[Voice from device', '[Button pressed on device', 1)
+    told = {'screen': 'Your reply is shown on its small screen.',
+            'none': 'It can neither speak nor show a reply.'}.get(out)
+    return spoken.replace('Your reply is spoken aloud there.', told, 1) if told else spoken
+
+
+def press_text(row, button, how):
+    """What a press says when no message was set for it."""
+    return f"The {button} button on {row['id']} was pressed{ {'long': ' and held', 'double': ' twice'}.get(how, '') }."
+
+
 def _spawn(fn, *args):
     threading.Thread(target=fn, args=args, daemon=True, name='device-turn').start()
 
@@ -664,20 +749,22 @@ def _free_slot(device_id):
             _waiting.pop(device_id, None)
 
 
-def _turn(row, chat, heard, reply=None):
+def _turn(row, chat, heard, reply=None, line=None, mute=False):
     """One question from start to finish, on its own thread. Never raises.
     Her reply is spoken on the device as it is made (Speech); a device whose
     driver cannot take sound that way hears it whole at the end, through
     the reply lane. With a Reply (a typed question) nothing is spoken: her
-    text goes to the device's screen as she writes it. The light ends on
-    idle, or on error when the person got no answer."""
+    text goes to the device's screen as she writes it. `mute` is a device
+    that can do neither (a button and a light): her reply stays in the chat.
+    `line` is the line above the words when it is neither heard nor typed.
+    The light ends on idle, or on error when the person got no answer."""
     device_id, failed, speech, box = row['id'], False, None, {}
     lane = f"device:{device_id}"
     try:
         from core import cadence
         from core.chat import inbox
         cue(device_id, 'thinking')
-        text = f"{typed_line(row) if reply else origin_line(row)}\n{heard}"
+        text = f"{line or (typed_line(row) if reply else origin_line(row))}\n{heard}"
 
         def _body():
             # Runs when it is the chat's turn (core/chat/inbox.py, 'now' lane:
@@ -687,7 +774,7 @@ def _turn(row, chat, heard, reply=None):
             # threading.local set by voice.say inside run_turn - is read on
             # this same thread before returning.
             _spoke.ok = None
-            sp = Speech(device_id) if reply is None else None
+            sp = Speech(device_id) if reply is None and not mute else None
             box['speech'] = sp
             try:
                 return cadence.run_turn(chat, text, speak=lane if sp else None, source=lane,
@@ -703,6 +790,10 @@ def _turn(row, chat, heard, reply=None):
             failed = not said
             logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}' on its screen, "
                         f"{len(said or '')} chars, rev {reply.rev}")
+            return
+        if speech is None:               # nowhere to say it: it is in the chat
+            failed = not said
+            logger.info(f"[DEVICES] {device_id}: answered in chat '{chat}', {len(said or '')} chars, kept in the chat")
             return
         speech.finish()
         speech.wait()
@@ -774,10 +865,9 @@ def typed(device_id, text):
             return {'ok': False, 'error': 'Nothing was typed.'}
         if len(text) > TYPED_MAX:
             return {'ok': False, 'error': f'That is more than {TYPED_MAX} characters.'}
-        sm = _system().llm_chat.session_manager
-        chat = str(part['config'].get('chat') or '').strip() or sm.get_active_chat_name()
-        if sm.get_settings_for(chat) is None:
-            return {'ok': False, 'error': f"The chat '{chat}' set for '{row['id']}' does not exist."}
+        chat, settings, why = chat_for(part['config'], row['id'])
+        if settings is None:
+            return {'ok': False, 'error': why}
         logger.info(f"[DEVICES] {row['id']} typed {len(text)} chars for chat '{chat}'")
         if not _take_slot(row['id']):
             return {'ok': False, 'busy': True, 'chat': chat,
@@ -791,6 +881,58 @@ def typed(device_id, text):
         return {'ok': True, 'accepted': True, 'chat': chat, 'msg': reply.msg}
     except Exception as e:
         logger.error(f"[DEVICES] typed({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
+
+
+def pressed(device_id, button, how):
+    """A device's button was pressed (POST /api/devices/{id}/press). Answers
+    {'ok', 'accepted', 'chat', 'text'} and 'msg' when her reply goes to its
+    screen; accepted = a turn has started with the message set for that
+    press. A press that is not set to send one is {'ok': True, 'accepted':
+    False}: the board does everything else by itself. Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        part = _part_with(row, 'buttons')
+        if not part:
+            return {'ok': False, 'error': f"'{row['id']}' has no buttons."}
+        button, how = str(button or '').strip().lower()[:24], str(how or 'short').strip().lower()
+        if not button or how not in HOWS:
+            return {'ok': False, 'error': f"A press is a button's name and one of {', '.join(HOWS)}."}
+        held = part['config'].get('buttons')
+        pick = (held if isinstance(held, dict) else {}).get(f'{button}.{how}')
+        if not isinstance(pick, dict) or pick.get('do') != TELL:
+            logger.info(f"[DEVICES] {row['id']}: {button} {how} pressed, nothing is set to be sent for it")
+            return {'ok': True, 'accepted': False}
+        text = str(pick.get('text') or '').strip()[:TYPED_MAX] or press_text(row, button, how)
+        chat, settings, why = chat_for(part['config'], row['id'])
+        if settings is None:
+            return {'ok': False, 'error': why}
+        caps = {c for p in row.get('parts', []) for c in e.capabilities(p, e._registry().get_driver(p.get('driver')))}
+        logger.info(f"[DEVICES] {row['id']}: {button} {how} pressed, {len(text)} chars for chat '{chat}'")
+        if not _take_slot(row['id']):
+            return {'ok': False, 'busy': True, 'chat': chat,
+                    'error': f"'{row['id']}' already has {MAX_WAITING} questions waiting."}
+        # where her reply goes: a screen that pulls her words (the lane typed words use), else a speaker, else nowhere
+        reply = Reply(row['id']) if 'keyboard' in caps else None
+        mute = reply is None and 'speaker' not in caps
+        line = pressed_line(row, 'screen' if reply else 'none' if mute else 'voice')
+        try:
+            _spawn(_turn, row, chat, text, reply, line, mute)
+        except Exception:
+            _free_slot(row['id'])
+            raise
+        out = {'ok': True, 'accepted': True, 'chat': chat, 'text': text}
+        if reply is not None:
+            out['msg'] = reply.msg
+        return out
+    except Exception as e:
+        logger.error(f"[DEVICES] pressed({device_id}) failed: {e}", exc_info=True)
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
@@ -815,11 +957,9 @@ def hear(device_id, audio, suffix='.wav'):
         if len(audio) > MAX_AUDIO:
             return {'ok': False, 'error': 'The audio is too large.'}
 
-        sm = _system().llm_chat.session_manager
-        chat = str(part['config'].get('chat') or '').strip() or sm.get_active_chat_name()
-        settings = sm.get_settings_for(chat)
+        chat, settings, why = chat_for(part['config'], row['id'])
         if settings is None:
-            return {'ok': False, 'error': f"The chat '{chat}' set for '{row['id']}' does not exist."}
+            return {'ok': False, 'error': why}
         gate = stt_refusal(settings)
         if gate:
             return {'ok': False, 'error': gate, 'chat': chat}

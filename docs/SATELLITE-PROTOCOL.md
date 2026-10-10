@@ -6,6 +6,7 @@ driver and no plugin. A Raspberry Pi speaks it, and so can an ESP32.
 
 ```
 board    --POST /api/devices/<name>/voice-->   Sapphire   what it heard
+board    --POST /api/devices/<name>/press-->   Sapphire   a button set to send her a message
 board    --GET  /api/devices/<name>/events-->  Sapphire   what its light should show
 Sapphire --GET /health, POST /audio/speak--->  board      status, say, light, ...
 ```
@@ -42,11 +43,12 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `firmware`, `model`, `slot` | The program's version (`"0.3.0"`), which program it is (`"pocket"`, `"satellite"`: the firmware source's board id, so Sapphire knows what to send it), and the slot running it (`"ota_0"`). With `firmware` in `has` the board takes a new program over the air (below). A board with one program slot (a builder who kept the whole flash for the program, a small chip) leaves `firmware` out of `has`: the device then reads "updates: over USB only" and gets no Firmware tab. The person can also turn updates off per device in Sapphire (the Status tab's switch) whatever the board says |
 | `mac` | The chip's own id, `"aa:bb:cc:dd:ee:01"`. The flasher reads the same over USB: a board is known by it whatever it is called |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
+| `buttons` | With `buttons` in `has`: `{"list": [{"name": "boot", "short": "keyboard", "long": "clear"}], "can": {"keyboard": "Show or hide the keyboard", "clear": "Clear the chat window"}}`. `list` names each button and the job it does by itself for a short, long or double press (left out = nothing). `can` is every job the board can do by itself, with the words the Devices page shows for it. See "A button was pressed" |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
 
 **`has`** takes these names: `speaker`, `mic`, `light`, `wake`, `camera`,
-`power`, `storage`, `screen`, `keyboard`, `sensors`, `firmware`. A name Sapphire does not know is left out and logged.
+`power`, `storage`, `screen`, `keyboard`, `buttons`, `sensors`, `firmware`. A name Sapphire does not know is left out and logged.
 `storage` is said only while the card is mounted: no card, no Backup tab.
 `keyboard` is a board that types at her instead of listening (a pocket
 terminal, `tmp/pocket-esp32`): it gets the mic's key and chat settings, and
@@ -95,6 +97,7 @@ A board answers only the addresses of what it has.
 | `firmware` | `PUT /firmware` | A new program, over the air: the bytes are the body (`application/octet-stream`, `Content-Length` required, `X-Sha256` of the whole body). The board writes them into the slot not running, checks the image and the sha256, marks that slot to boot and answers `{"ok": true, "restarting": true, "slot": "ota_1", "sha256"}`, then restarts onto it. Rollback: the new program is on trial until it says it is fine (WiFi joined, or 90 s up); a program that crashes before that is replaced by the old one at the next boot. 413 when it does not fit the slot, 422 when it is not an ESP image or the sha differs (nothing is changed then), 501 on a board with one slot. Her `firmware` / `update` action sends the source's newest; the person at the Devices page runs it, never she on her own |
 | `sensors` | `GET /sensors` | What it measures, now: `{"sensors": {"light": 1234, "temp_c": 23.5}}`. A name ends in its unit; a light sensor with no calibration sends its raw reading. The same object in `/health` feeds the readings on the device's page. Her `sensors` / `read` action |
 | `keyboard` | nothing | Sapphire asks nothing of a keyboard. The board sends what was typed (below) and pulls her reply |
+| `buttons` | nothing | Sapphire asks nothing of a button. The board is told on its events stream what each press is set to, does what it can by itself, and sends her the presses set to reach her (below) |
 
 **`/audio/speak`** carries the sound as the request body, with its
 `Content-Type`, when the board stated `plays`. The board can play it while it
@@ -236,6 +239,46 @@ JSON `{"text": "..."}` works too. Up to 2000 characters.
 | `{"ok": true, "accepted": true, "chat": "default", "msg": "3f9a1c"}` | A turn has started. Her reply arrives on the screen through the stream below |
 | `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
 
+### A button was pressed
+
+A board with buttons says so in `/health` (`buttons`, above). In Settings >
+Devices each way of pressing each button (`short`, `long`, `double`) is left
+to the board, or set to one of the jobs the board said it `can` do, or to
+`tell`: send Sapphire a message. The board learns what is set from its
+events stream, when the stream opens and at every save:
+
+```
+data: {"state": "buttons", "bound": {"boot": {"short": "tell", "double": "listen"}}}
+```
+
+| A press that is | The board |
+|---|---|
+| not in `bound` | does its own job for it, the one `list` names |
+| a name from its `can` | does that job, by itself, with no call |
+| `tell` | calls the door below |
+| any other word (`none`) | does nothing |
+
+The board keeps `bound` in memory only: before its stream has opened, and
+on a board Sapphire never reached, every press is the board's own. A long
+press is one held 0.8 s and fires while still held. A short press fires on
+release; only on a button with a `double` in `bound` does it wait 0.3 s for
+a second press first. Never give a press a job that restarts the board: a
+button held through a restart is the chip's download mode on an ESP32.
+
+```
+POST /api/devices/pocket/press
+Authorization: Bearer <voice key>
+Content-Type: application/json
+
+{"button": "boot", "how": "short"}
+```
+
+| Answer | Meaning |
+|---|---|
+| `{"ok": true, "accepted": true, "chat": "default", "text": "Goodnight", "msg": "3f9a1c"}` | A turn has started with the message set for that press (`text`). Her reply goes to the board's screen when it has a keyboard (`msg`, pulled like a typed question's), else to its speaker, else it stays in the chat |
+| `{"ok": true, "accepted": false}` | That press is not set to send anything |
+| `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
+
 **Her reply, for a screen.** Her words never ride the events stream: a
 stream that falls behind drops a line, and a dropped line of prose is garbage
 on a screen. The stream carries a doorbell, `{"state": "text", "msg", "rev",
@@ -277,6 +320,7 @@ It answers server-sent events. Each is one line of JSON after `data: `.
 | `idle` | The turn is over |
 | `error` | This board got no answer |
 | `text` | A doorbell for a board with a keyboard: `msg`, `rev`, `have`, `done`. Pull the words, see "What was typed". Not a light state |
+| `buttons` | What each press is set to: `bound`, see "A button was pressed". Sent only to a board that said it has buttons. Not a light state |
 
 A line that starts with `:` arrives every 20 seconds and means nothing. When
 the stream ends, open it again. A board only ever hears about its own turns.
@@ -288,5 +332,6 @@ the stream ends, open it again. A board only ever hears about its own turns.
 - Conversion: `core/devices/voice.py` `fit(audio, kind, plays)`, checked by `wanted(plays)`. The only place her voice is converted for a device.
 - A board from the browser: `interfaces/web/static/views/settings-tabs/device-flash.js` (two lanes: esptool-js over Web Serial with `shared/md5.js` for the write check, or `core/devices/flasher.py` on Sapphire's computer through `/api/devices/flash/{ports,chip,start,status,ask,close}`; then the console line), the chip's MAC as the device `fingerprint` (`engine.provision`, `/health.mac`, console `show.mac`), `POST /api/devices/provision` (`engine.provision`: the row with no url, two keys, her address: the body's `sapphire` or `GET /api/devices/here`'s guess from `net.local_ips`, tunnels and bridges excluded; `ssl_utils.cert_pem`), `GET /api/devices/firmware[/{board}/{part}]` (`core/devices/firmware.py`, index + ESP Web Tools manifests, cached). The address: `engine.learned`, called by `_device_key` on every device door.
 - Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`; typed words `devices_text` (POST) and `devices_text_read` (GET), which ride `voice.typed`, `voice.Reply` and `voice.reply_text`.
+- Buttons: the `buttons` setting is a `bindings` field (`engine._bound`, `engine._menu`), its menu is the driver's `bindings()` from the board's `/health`; `voice.bound` is what the stream carries (`routes.light_stream` at open, the driver's `apply` at a save), `voice.pressed` the press door (`devices_press`). The chat every lane uses: `voice.chat_for`, which makes a chat that is named and does not exist. Firmware: `main/buttons.c` in each board.
 - Backups onto a board: `core/devices/storage.py` makes a `SatelliteTarget` (in the driver) for every device whose `has` says `storage`; `core/backup_targets.ship` seals once, PUTs, rotates by the device's keep fields, drops the openers. Never plaintext: `Target.check` (Sapphire) + the board's own magic check.
 - `tests/test_docs_satellite_protocol.py` runs this page's health example through the real driver and checks every address in the table.

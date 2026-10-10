@@ -311,6 +311,43 @@ def _is_found(field):
     return field.get('widget') == 'found' or field.get('type') == 'found'
 
 
+def _is_bindings(field):
+    return field.get('type') == 'bindings'
+
+
+_SLOT = re.compile(r'[a-z0-9][a-z0-9_.-]{0,39}$')
+_DO = re.compile(r'[a-z0-9][a-z0-9_-]{0,23}$')
+MAX_SLOTS = 32           # slots one bindings field keeps
+BINDING_TEXT = 500       # characters of the text a pick may carry
+
+
+def _bound(value):
+    """A bindings field as it is stored: {slot: {'do': name, 'text': words}}.
+    A slot is something of the device's that can be given a job (a button's
+    short press); 'do' names the job from the menu its driver offers. A slot
+    with no job is not kept."""
+    out = {}
+    for slot, pick in (value.items() if isinstance(value, dict) else ()):
+        pick = pick if isinstance(pick, dict) else {'do': pick}
+        slot, do = _slug(slot), _slug(pick.get('do'))
+        if _SLOT.match(slot) and _DO.match(do) and len(out) < MAX_SLOTS:
+            out[slot] = {'do': do, 'text': ' '.join(str(pick.get('text') or '').split())[:BINDING_TEXT]}
+    return out
+
+
+def _menu(row, part, field):
+    """What a bindings field offers on this device, from its driver's
+    bindings(device, config, key): {'slots': [{'key', 'label', 'own'}],
+    'choices': [{'value', 'label', 'text'?}], 'note'}. Never raises."""
+    try:
+        mod, _ = _driver(part['driver'], part.get('plugin', ''))
+        said = mod.bindings(dict(_brief(row), has=part.get('has')), dict(part.get('config') or {}), field['key'])
+        return said if isinstance(said, dict) else {}
+    except Exception as e:
+        logger.warning(f"[DEVICES] {row['id']}: {part['driver']} could not say what {field['key']} offers: {e}")
+        return {}
+
+
 def _picks(field, value):
     """A filter as it is stored: {'all': bool, 'only': [{'id', 'name'}]}.
     Never set = everything counts. "only" is kept while "all" is on, so the
@@ -332,6 +369,8 @@ def _coerce(field, value):
     default = field.get('default')
     if _is_found(field):
         return _picks(field, value)
+    if _is_bindings(field):
+        return _bound(value)
     if _is_rows(field):
         cols = _columns(field)
         out = []
@@ -860,7 +899,9 @@ def public(row):
             cap = field_capability(f, has, spec['capabilities'])
             if cap is None:
                 continue
-            schema.append(dict(f, capability=cap) if isinstance(f.get('capability'), (list, tuple)) else f)
+            f = dict(f, capability=cap) if isinstance(f.get('capability'), (list, tuple)) else f
+            # a bindings field's menu is the device's own (its buttons, what it can do by itself)
+            schema.append(dict(f, menu=_menu(row, part, f)) if _is_bindings(f) else f)
         values = dict(part.get('config') or {})
         unreadable = []
         for field in schema:

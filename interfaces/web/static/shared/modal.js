@@ -44,7 +44,9 @@ export function escapeHtml(text) {
  * @param {string} title - Modal title
  * @param {Array} fields - Array of field configs
  * @param {Function|null} onSave - Callback with form data, null for close-only mode
- * @param {Object} options - Optional settings: { wide: bool }
+ * @param {Object} options - Optional settings: { wide: bool, sticky: bool }
+ *   sticky: only the buttons close it (the X, Close, Cancel, Save). A click
+ *   beside it or Esc does nothing: for a modal that must not be lost by a slip.
  * @returns {Object} - { close: Function, element: HTMLElement }
  * 
  * Field types:
@@ -168,7 +170,7 @@ export function showModal(title, fields, onSave = null, options = {}) {
   overlay.querySelector('.modal-x')?.addEventListener('click', close);
   overlay.querySelector('.modal-close')?.addEventListener('click', close);
   overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
-  setupModalClose(overlay, close);
+  if (!options.sticky) setupModalClose(overlay, close);
   
   // Save handler. An onSave that returns a promise keeps the modal OPEN
   // (save button disabled, "Working…") until it settles — a bulk vault

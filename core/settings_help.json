@@ -82,7 +82,7 @@
   },
   "DEVICE_FIRMWARE_SOURCE": {
     "short": "Where board firmware comes from: the firmware release URL, or a folder on this machine",
-    "long": "The index the Devices page's flasher reads (index.json, with one manifest per board in the ESP Web Tools form). A URL fetches through Sapphire and keeps each board's parts under user/firmware_cache, so a board can be flashed again offline. A folder path on this machine serves the files as they are (development). Nothing is fetched until the flasher is opened."
+    "long": "Where the Devices page's flasher finds index.json and one .bin per board. The default is the latest release of Sapphire's firmware repository. A URL fetches through Sapphire, checks the file's sha256 and keeps the board's parts under user/firmware_cache, so a board can be flashed again offline. A folder path on this machine reads a build's dist folder (development). Nothing is fetched until the flasher is opened."
   },
   "AUDIO_INPUT_DEVICE": {
     "short": "Input device index (null = auto-detect)",

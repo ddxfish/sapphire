@@ -316,14 +316,19 @@ def test_satellite_waits_without_an_address():
 # --- the firmware source -------------------------------------------------------------
 
 def _index(root, version='0.2.0', chip='ESP32'):
-    (root / 'pocket').mkdir(parents=True)
-    (root / 'pocket' / 'app.bin').write_bytes(b'\xe9' + b'x' * 99)
-    (root / 'pocket' / 'boot.bin').write_bytes(b'b' * 10)
-    (root / 'pocket' / 'manifest.json').write_text(json.dumps({
-        'name': 'Pocket', 'version': version,
-        'builds': [{'chipFamily': chip, 'flash': {'mode': 'dio', 'size': '4MB', 'freq': '40m'},
-                    'parts': [{'path': 'boot.bin', 'offset': 4096}, {'path': 'app.bin', 'offset': 65536, 'app': True}]}]}))
-    (root / 'index.json').write_text(json.dumps({'boards': [{'id': 'pocket', 'name': 'Pocket (CYD)', 'manifest': 'pocket/manifest.json'}]}))
+    """A firmware source: one file for the board, its two parts at their addresses."""
+    import hashlib
+    root.mkdir(parents=True)
+    boot, app = b'b' * 10, b'\xe9' + b'x' * 99
+    image = b'\xff' * 4096 + boot + b'\xff' * (65536 - 4096 - len(boot)) + app
+    (root / f'pocket-{version}.bin').write_bytes(image)
+    sha = lambda d: hashlib.sha256(d).hexdigest()
+    (root / 'index.json').write_text(json.dumps({'boards': [{
+        'id': 'pocket', 'name': 'Pocket (CYD)', 'version': version, 'chipFamily': chip,
+        'flash': {'mode': 'dio', 'size': '4MB', 'freq': '40m'},
+        'file': f'pocket-{version}.bin', 'size': len(image), 'sha256': sha(image),
+        'parts': [{'name': 'boot', 'offset': 4096, 'size': len(boot), 'sha256': sha(boot)},
+                  {'name': 'app', 'offset': 65536, 'size': len(app), 'sha256': sha(app), 'app': True}]}]}))
     return root
 
 
@@ -342,9 +347,10 @@ def test_local_folder_source(fw):
         assert idx['error'] is None and [b['id'] for b in idx['boards']] == ['pocket']
         b = idx['boards'][0]
         assert b['chipFamily'] == 'ESP32' and b['version'] == '0.2.0' and b['flash']['size'] == '4MB'
-        assert b['parts'] == [{'path': 'boot.bin', 'offset': 4096, 'app': False}, {'path': 'app.bin', 'offset': 65536, 'app': True}]
-        assert 'manifest' not in b and 'folder' not in b
-        assert firmware.part('pocket', 'app.bin').read_bytes().startswith(b'\xe9')
+        assert [(p['path'], p['offset'], p['size'], p['app']) for p in b['parts']] == [('boot.bin', 4096, 10, False), ('app.bin', 65536, 100, True)]
+        assert 'entry' not in b and 'file' not in b
+        assert firmware.part('pocket', 'app.bin').read_bytes() == b'\xe9' + b'x' * 99        # cut out of the one file
+        assert firmware.part('pocket', 'boot.bin').read_bytes() == b'b' * 10
         for bad in ('../index.json', 'boot.bin/../app.bin', 'nope.bin', '/etc/passwd'):
             with pytest.raises(firmware.FirmwareError):
                 firmware.part('pocket', bad)
@@ -352,11 +358,11 @@ def test_local_folder_source(fw):
             firmware.part('other', 'app.bin')
 
 
-def test_no_source_and_a_broken_manifest(fw):
+def test_no_source_and_a_broken_index(fw):
     with patch.object(firmware, 'source', lambda: ''):
         assert firmware.index()['boards'] == [] and 'No firmware source' in firmware.index()['error']
     root = _index(fw / 'src')
-    (root / 'pocket' / 'manifest.json').write_text('{"name": "x"}')
+    (root / 'index.json').write_text('{"boards": [{"id": "pocket", "name": "x"}]}')
     with patch.object(firmware, 'source', lambda: str(root)):
         idx = firmware.index()
         assert idx['boards'] == [] and 'version' in idx['error']
@@ -379,9 +385,9 @@ def test_url_source_caches_parts_and_drops_old_versions(fw):
         calls.append(url)
         assert kw.get('allow_redirects') is False
         if url.startswith('https://objects.githubusercontent.com/'):          # a release asset, after its 302
-            return Resp(200, (src / 'pocket' / 'app.bin').read_bytes())
+            return Resp(200, (src / 'pocket-0.2.0.bin').read_bytes())
         rel = url.replace('https://example.test/fw/', '')
-        if rel == 'pocket/app.bin':
+        if rel == 'pocket-0.2.0.bin':
             return Resp(302, headers={'Location': 'https://objects.githubusercontent.com/x'})
         p = src / rel
         return Resp(200, p.read_bytes()) if p.is_file() else Resp(404)
@@ -394,7 +400,7 @@ def test_url_source_caches_parts_and_drops_old_versions(fw):
         where = firmware.part('pocket', 'app.bin')
         assert where == fw / 'cache' / 'pocket' / '0.2.0' / 'app.bin' and where.read_bytes().startswith(b'\xe9')
         assert not (fw / 'cache' / 'pocket' / '0.1.0').exists()
-        assert (fw / 'cache' / 'pocket' / '0.2.0' / 'manifest.json').is_file()
+        assert (fw / 'cache' / 'pocket' / '0.2.0' / 'board.json').is_file()
         n = len(calls)
         assert firmware.part('pocket', 'app.bin') == where and len(calls) == n       # cached: nothing fetched
         firmware.part('pocket', 'boot.bin')
@@ -412,18 +418,62 @@ def test_url_source_refuses_strange_redirects_and_big_parts(fw):
     src = _index(fw / 'web')
     with patch.object(firmware, 'source', lambda: 'https://example.test/fw/'):
         with patch.object(firmware.net, 'get', lambda url, **k: Resp(302, headers={'Location': 'https://evil.test/x'})
-                          if url.endswith('app.bin') else Resp(200, (src / url.split('/fw/')[1]).read_bytes())):
+                          if url.endswith('.bin') else Resp(200, (src / url.split('/fw/')[1]).read_bytes())):
             firmware.index()
             with pytest.raises(firmware.FirmwareError, match='redirect'):
                 firmware.part('pocket', 'app.bin')
         firmware._recent = (0.0, None)
-        with patch.object(firmware, 'PART_MAX', 50), \
+        with patch.object(firmware, 'FILE_MAX', 50), \
              patch.object(firmware.net, 'get', lambda url, **k: Resp(200, (src / url.split('/fw/')[1]).read_bytes())):
             firmware.index()
             with pytest.raises(firmware.FirmwareError, match='larger'):
                 firmware.part('pocket', 'app.bin')
             assert not (fw / 'cache' / 'pocket' / '0.2.0' / 'app.bin').exists()
-            assert not list((fw / 'cache' / 'pocket' / '0.2.0').glob('*.partial'))
+
+
+def test_a_file_that_is_not_the_one_in_the_index_is_never_cut_up(fw):
+    root = _index(fw / 'src')
+    image = root / 'pocket-0.2.0.bin'
+    good = image.read_bytes()
+    image.write_bytes(good[:-1] + b'y')
+    with patch.object(firmware, 'source', lambda: str(root)):
+        with pytest.raises(firmware.FirmwareError, match='sha256'):
+            firmware.part('pocket', 'app.bin')
+        assert not (fw / 'cache' / 'pocket').exists()
+        image.write_bytes(good)
+        assert firmware.part('pocket', 'app.bin').is_file()
+    # the same version built again: the cache follows the file, not the version number
+    image.write_bytes(good[:-1] + b'z')
+    idx = root / 'index.json'
+    import hashlib
+    entry = json.loads(idx.read_text())['boards'][0]
+    entry['sha256'] = hashlib.sha256(image.read_bytes()).hexdigest()
+    entry['parts'][1]['sha256'] = hashlib.sha256(image.read_bytes()[65536:]).hexdigest()
+    idx.write_text(json.dumps({'boards': [entry]}))
+    firmware._recent = (0.0, None)
+    with patch.object(firmware, 'source', lambda: str(root)):
+        assert firmware.part('pocket', 'app.bin').read_bytes().endswith(b'z')
+
+
+def test_a_file_of_ones_own_is_checked_and_kept_as_the_board_own(fw):
+    with pytest.raises(firmware.FirmwareError, match='whole-board'):
+        firmware.keep_own(b'\xe9' + b'x' * 0x9000, 'app.bin')              # a lone program: no partition table
+    with pytest.raises(firmware.FirmwareError, match='bootloader'):
+        firmware.keep_own(b'\xff' * 0x8000 + b'\xaa\x50' + b'\xff' * 64, 'x.bin')
+    assert firmware.own() is None
+    with pytest.raises(firmware.FirmwareError, match='Choose it again'):
+        firmware.part('own', 'image.bin')
+    esp32 = b'\xff' * 0x1000 + b'\xe9' + b'\0' * 11 + b'\x00\x00' + b'\xff' * (0x7000 - 14) + b'\xaa\x50' + b'rest'
+    s3 = b'\xe9' + b'\0' * 11 + b'\x09\x00' + b'\xff' * (0x8000 - 14) + b'\xaa\x50' + b'rest'
+    assert firmware.keep_own(esp32, '../../My Build.bin')['chipFamily'] == 'ESP32'
+    b = firmware.keep_own(s3, 'mine.bin')                                # the next file replaces the one before
+    assert (b['id'], b['name'], b['chipFamily'], b['flash']['size']) == ('own', 'mine.bin', 'ESP32-S3', 'keep')
+    assert b['parts'] == [{'path': 'image.bin', 'offset': 0, 'size': len(s3), 'sha256': b['parts'][0]['sha256'], 'app': False}]
+    assert firmware.part('own', 'image.bin').read_bytes() == s3 and firmware.own() == b
+    assert firmware.part('own', 'image.bin').parent == fw / 'cache' / 'own'
+    with pytest.raises(firmware.FirmwareError):
+        firmware.part('own', 'other.bin')
+    firmware._own = None
 
 
 def test_a_source_url_ends_with_a_slash_and_a_folder_is_left_alone():
@@ -438,14 +488,14 @@ def test_latest_download_hops_once_on_github_then_to_the_asset_host(fw):
     which is a 302 to objects.githubusercontent.com. A hop anywhere else, or
     a third hop, is refused."""
     src = _index(fw / 'web')
-    hops = {'https://example.test/fw/pocket/app.bin': 'https://example.test/fw/releases/download/v0.2.0/app.bin',
-            'https://example.test/fw/releases/download/v0.2.0/app.bin': 'https://objects.githubusercontent.com/x'}
+    hops = {'https://example.test/fw/pocket-0.2.0.bin': 'https://example.test/fw/releases/download/v0.2.0/pocket-0.2.0.bin',
+            'https://example.test/fw/releases/download/v0.2.0/pocket-0.2.0.bin': 'https://objects.githubusercontent.com/x'}
 
     def get(url, **kw):
         if url in hops:
             return Resp(302, headers={'Location': hops[url]})
         if url.startswith('https://objects.githubusercontent.com/'):
-            return Resp(200, (src / 'pocket' / 'app.bin').read_bytes())
+            return Resp(200, (src / 'pocket-0.2.0.bin').read_bytes())
         p = src / url.replace('https://example.test/fw/', '')
         return Resp(200, p.read_bytes()) if p.is_file() else Resp(404)
 
@@ -455,7 +505,7 @@ def test_latest_download_hops_once_on_github_then_to_the_asset_host(fw):
     firmware._recent = (0.0, None)
     for path in [fw / 'cache' / 'pocket' / '0.2.0' / 'app.bin']:
         path.unlink()
-    with patch.dict(hops, {'https://example.test/fw/releases/download/v0.2.0/app.bin': 'https://evil.test/x'}), \
+    with patch.dict(hops, {'https://example.test/fw/releases/download/v0.2.0/pocket-0.2.0.bin': 'https://evil.test/x'}), \
          patch.object(firmware, 'source', lambda: 'https://example.test/fw/'), patch.object(firmware.net, 'get', get):
         firmware.index()
         with pytest.raises(firmware.FirmwareError, match='redirect'):
@@ -622,7 +672,7 @@ def lane(tmp_path, monkeypatch):
     flasher._job = None
     _index(tmp_path / 'src')
     firmware._recent = (0.0, None)
-    with patch.object(firmware, 'source', lambda: str(tmp_path / 'src')):
+    with patch.object(firmware, 'source', lambda: str(tmp_path / 'src')), patch.object(firmware, 'CACHE', tmp_path / 'cache'):
         yield types.SimpleNamespace(cmds=fake, port=str(port), tmp=tmp_path)
     firmware._recent = (0.0, None)
     flasher._job = None
@@ -652,6 +702,20 @@ def test_a_write_runs_in_the_background_and_reports_progress(lane):
     assert lane.cmds.calls[-1] == ('reset', 'hard-reset')
     with pytest.raises(flasher.FlashError, match='No such board'):
         flasher.start(lane.port, 'nope')
+    with pytest.raises(flasher.FlashError, match='No such board'):
+        flasher.start(lane.port, 'own')                                  # no file given yet
+    image = b'\xe9' + b'\0' * 11 + b'\x09\x00' + b'\xff' * (0x8000 - 14) + b'\xaa\x50'
+    firmware.keep_own(image, 'mine.bin')
+    lane.cmds.calls.clear()
+    flasher.start(lane.port, 'own')
+    for _ in range(100):
+        if flasher.status()['state'] in ('done', 'failed'):
+            break
+        time.sleep(0.02)
+    assert flasher.status()['state'] == 'done', flasher.status()
+    write = next(c for c in lane.cmds.calls if c[0] == 'write')
+    assert write[1] == [(0, 'image.bin')] and write[2]['flash_size'] == 'keep'      # the whole file, at address 0
+    firmware._own = None
 
 
 def test_a_failed_write_says_why_and_never_exits(lane):
@@ -742,12 +806,12 @@ def test_the_app_part_and_the_version_known_without_the_network(fw):
         assert firmware.known_version('pocket') == '0.2.0' and firmware.known_version('nope') == ''
         with pytest.raises(firmware.FirmwareError, match='No firmware'):
             firmware.app_part('nope')
-    # a manifest without the mark cannot be sent over the air
-    m = fw / 'src' / 'pocket' / 'manifest.json'
+    # an index without the mark cannot be sent over the air
+    m = fw / 'src' / 'index.json'
     m.write_text(m.read_text().replace(', "app": true', ''))
     firmware._recent = (0.0, None)
     with patch.object(firmware, 'source', lambda: str(fw / 'src')):
-        with pytest.raises(firmware.FirmwareError, match='which part is the program'):
+        with pytest.raises(firmware.FirmwareError, match='is the program'):
             firmware.app_part('pocket')
 
 

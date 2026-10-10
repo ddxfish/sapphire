@@ -105,7 +105,7 @@ def test_a_pocket_shows_only_what_it_has_and_the_key_fields_ride_on_the_keyboard
     assert [c['capability'] for c in engine.describe(row)] == ['light', 'power', 'screen', 'keyboard']
     view = engine.public(row)
     fields = {f['key']: f for f in view['parts'][0]['schema']}
-    assert fields['chat']['capability'] == 'keyboard'          # the page puts it on the Keyboard tab
+    assert fields['chat']['capability'] == 'keyboard' and fields['chat']['tab'] == 'Status'   # the page puts it on the first tab
     assert fields['voice_key']['capability'] == 'keyboard'
     assert 'look_resting' in fields and 'keep_daily' not in fields      # no card, no backup fields
     assert view['parts'][0]['values']['voice_key'] == 'set'
@@ -116,6 +116,7 @@ def test_the_key_fields_still_ride_on_the_mic_for_a_pi(home):
                {'url': 'http://192.168.1.100:8090', 'token': 'body-key-abcdefgh', 'voice_key': 'voice-key-12345678'})
     fields = {f['key']: f for f in engine.public(engine.get('pi2'))['parts'][0]['schema']}
     assert fields['chat']['capability'] == 'mic' and fields['voice_key']['capability'] == 'mic'
+    assert fields['chat']['tab'] == 'Status' and 'tab' not in fields['voice_key']
 
 
 def test_field_capability_rules():
@@ -242,7 +243,7 @@ def test_typed_refusals(home):
     engine._learn(pi, pi['parts'][0], sat.SPEC, ['speaker', 'mic', 'light', 'wake'])   # a Pi says what it has
     assert voice.typed('pi2', 'hi') == {'ok': False, 'error': "'pi2' has no keyboard."}
     engine.update('pocket', parts={'satellite': {'chat': 'ghost'}})
-    assert "does not exist" in voice.typed('pocket', 'hi')['error']
+    assert "cannot be opened" in voice.typed('pocket', 'hi')['error']
 
 
 def test_a_text_doorbell_does_not_wipe_the_thinking_cue_for_a_late_stream(home):

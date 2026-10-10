@@ -294,7 +294,7 @@ def test_engine_refuses_owner_only_actions_for_her():
     with patch.object(engine, '_usable', lambda d: row), \
          patch.object(engine, '_driver', lambda *a, **k: (fake_mod, spec)), \
          patch.object(engine, '_part_secrets', lambda *a: Secrets()), \
-         patch.object(engine, '_health', lambda: SimpleNamespace(view=lambda i: {'ts': 0, 'online': None, 'parts': []})):
+         patch.object(engine, '_health', lambda: SimpleNamespace(view=lambda i: {'ts': 0, 'online': None, 'parts': []}, poke=lambda i: None)):
         caps = engine.describe(row)
         st = next(c for c in caps if c['capability'] == 'storage')
         assert st['actions']['format']['owner'] is True and st['actions']['format']['danger'] == 'Erases everything.'

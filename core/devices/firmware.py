@@ -1,25 +1,27 @@
 # core/devices/firmware.py - the programs boards run, for the Devices page's
 # flasher (tmp/board-flash-web-plan.md)
 #
-# A board is written over USB from the browser (Web Serial, esptool-js). The
-# program comes from here. DEVICE_FIRMWARE_SOURCE names an index: a URL
-# (the firmware repository's release) or, for development, a folder on this
-# machine. The index lists boards; each board has a manifest in the ESP Web
-# Tools form, so the same files serve a standalone flasher too:
+# A board is written over USB, from the browser (Web Serial, esptool-js) or
+# from this machine (flasher.py). The program comes from here.
+# DEVICE_FIRMWARE_SOURCE names where: a URL (the firmware repository's
+# release) or, for development, a folder on this machine. There it finds an
+# index and ONE file per board, every part at its own address:
 #
-#   index.json     {"boards": [{"id": "pocket", "name": "...", "manifest": "pocket/manifest.json"}]}
-#   manifest.json  {"name": "...", "version": "0.2.0",
-#                   "builds": [{"chipFamily": "ESP32",
-#                               "flash": {"mode": "dio", "size": "4MB", "freq": "40m"},   (ours; optional)
-#                               "parts": [{"path": "bootloader.bin", "offset": 4096},
-#                                         {"path": "app.bin", "offset": 131072, "app": true}, ...]}]}
+#   index.json     {"boards": [{"id": "cyd35", "name": "...", "version": "0.3.0", "chipFamily": "ESP32",
+#                               "flash": {"mode": "dio", "size": "4MB", "freq": "40m"},
+#                               "file": "cyd35-0.3.0.bin", "size": 1596272, "sha256": "...",
+#                               "parts": [{"name": "bootloader", "offset": 4096, "size": 26208, "sha256": "..."},
+#                                         {"name": "app", "offset": 131072, "size": ..., "app": true}, ...]}]}
 #   ("app": true marks the program itself, the one part an update over the air sends)
 #
-# Parts fetched from a URL are kept under user/firmware_cache/<board>/<version>/
-# so a board can be flashed again without the network; older versions of
-# that board are dropped. Nothing is fetched on its own: only when the
-# flasher asks. The page never fetches from the internet itself (the CSP's
-# connect-src is 'self'): it asks these doors.
+# The file is fetched once, checked against its sha256 and cut into its parts
+# under user/firmware_cache/<board>/<version>/, so a board can be flashed
+# again without the network; older versions of that board are dropped. The
+# flasher writes the parts, not the megabytes of blanks between them.
+# Nothing is fetched on its own: only when the flasher asks. The page never
+# fetches from the internet itself (the CSP's connect-src is 'self'): it
+# asks these doors.
+import hashlib
 import json
 import logging
 import re
@@ -35,10 +37,12 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CACHE = ROOT / 'user' / 'firmware_cache'
-TEXT_MAX = 64 * 1024              # an index or a manifest
-PART_MAX = 8 * 1024 * 1024        # one part: an app is 1.5-2.5 MB, the speech models 0.6 MB
+TEXT_MAX = 64 * 1024              # the index
+FILE_MAX = 32 * 1024 * 1024       # one board's file: as large as its chip at most (16 MB so far)
 FETCH_WAIT = 30                   # seconds, per request
 REMEMBER = 60                     # seconds the index is kept: the flasher asks for it, then each part
+MARK = 'board.json'               # the board's index entry beside its parts, written last: the parts are whole
+_SHA = re.compile(r'^[0-9a-f]{64}$')
 _PATH = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(/[A-Za-z0-9][A-Za-z0-9._-]{0,80}){0,4}$')
 _ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,32}$')
 _VERSION = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$')
@@ -46,6 +50,9 @@ _REDIRECT_OK = ('.githubusercontent.com',)     # a release asset is a 302 to obj
 HOPS = 2                          # releases/latest/download/x: 302 to the tagged URL on the same host, then to the asset host
 _lock = threading.Lock()
 _recent = (0.0, None)             # (when, {id: board})
+OWN = 'own'                       # the board id of a file the user gave: never one of the source's
+_own = None                       # that board, until the next file or a restart
+_CHIP = {0: 'ESP32', 2: 'ESP32-S2', 5: 'ESP32-C3', 9: 'ESP32-S3', 12: 'ESP32-C2', 13: 'ESP32-C6', 16: 'ESP32-H2'}
 
 
 class FirmwareError(Exception):
@@ -71,9 +78,8 @@ def _safe_path(path):
 
 # --- reading from the source -------------------------------------------------
 
-def _fetch(url, limit, into=None):
-    """Bytes from a URL on the wan lane, at most `limit`, or written to
-    `into`. Redirects are followed HOPS deep, each one https and either on
+def _fetch(url, limit):
+    """Bytes from a URL on the wan lane, at most `limit`. Redirects are followed HOPS deep, each one https and either on
     the source's own host or to a GitHub asset host."""
     r = net.get(url, stream=True, timeout=FETCH_WAIT, allow_redirects=False)
     mine = (urlsplit(url).hostname or '').lower()
@@ -92,7 +98,7 @@ def _fetch(url, limit, into=None):
         size += len(piece)
         if size > limit:
             raise FirmwareError(f"{url} is larger than {limit // 1024} KB.")
-        (into.write if into else got.extend)(piece)
+        got.extend(piece)
     return bytes(got)
 
 
@@ -126,34 +132,35 @@ def _json_of(data, what):
     return out
 
 
-def _board(entry, base):
-    """One board of the index, with its manifest read and checked."""
+def _board(entry):
+    """One board of the index, checked."""
     board_id = str(entry.get('id') or '').strip().lower()
     if not _ID.fullmatch(board_id):
         raise FirmwareError(f"A board id in the index is not usable: '{board_id[:40]}'.")
-    rel = _safe_path(entry.get('manifest') or f'{board_id}/manifest.json')
-    m = _json_of(_read(base, rel, TEXT_MAX), f'{board_id} manifest')
-    version = str(m.get('version') or '').strip()
+    version = str(entry.get('version') or '').strip()
     if not _VERSION.fullmatch(version):
-        raise FirmwareError(f"The {board_id} manifest has no usable version.")
-    builds = [b for b in (m.get('builds') or []) if isinstance(b, dict)]
-    if not builds:
-        raise FirmwareError(f"The {board_id} manifest has no builds.")
-    b = builds[0]
+        raise FirmwareError(f"The index gives {board_id} no usable version.")
+    sha = str(entry.get('sha256') or '').lower()
+    if not entry.get('file') or not _SHA.fullmatch(sha):
+        raise FirmwareError(f"The index gives {board_id} no file with a sha256.")
     parts = []
-    for p in (b.get('parts') or []):
-        try:
-            parts.append({'path': _safe_path(p.get('path')), 'offset': int(p.get('offset')), 'app': p.get('app') is True})
-        except (TypeError, ValueError, AttributeError):
-            raise FirmwareError(f"A part of {board_id} has no offset.")
+    try:
+        size = int(entry.get('size'))
+        for p in (entry.get('parts') or []):
+            part = {'path': _safe_path(f"{p.get('name')}.bin"), 'offset': int(p.get('offset')), 'size': int(p.get('size')),
+                    'sha256': str(p.get('sha256') or '').lower(), 'app': p.get('app') is True}
+            if part['offset'] < 0 or part['size'] <= 0 or part['offset'] + part['size'] > size:
+                raise ValueError
+            parts.append(part)
+    except (TypeError, ValueError, AttributeError):
+        raise FirmwareError(f"The index does not say where the parts of {board_id} are in its file.")
     if not parts:
-        raise FirmwareError(f"The {board_id} manifest has no parts.")
-    flash = b.get('flash') if isinstance(b.get('flash'), dict) else {}
-    return {'id': board_id, 'name': str(entry.get('name') or m.get('name') or board_id)[:80],
-            'chipFamily': str(b.get('chipFamily') or '')[:20], 'version': version,
+        raise FirmwareError(f"The index gives {board_id} no parts.")
+    flash = entry.get('flash') if isinstance(entry.get('flash'), dict) else {}
+    return {'id': board_id, 'name': str(entry.get('name') or board_id)[:80],
+            'chipFamily': str(entry.get('chipFamily') or '')[:20], 'version': version,
             'flash': {k: str(flash.get(k) or 'keep')[:8] for k in ('mode', 'size', 'freq')},
-            'parts': parts,
-            'folder': rel.rsplit('/', 1)[0] + '/' if '/' in rel else '', 'manifest': m}
+            'parts': parts, 'file': _safe_path(entry.get('file')), 'size': size, 'sha256': sha, 'entry': entry}
 
 
 def _boards(fresh=False):
@@ -169,7 +176,7 @@ def _boards(fresh=False):
         return {}, "No firmware source is set (DEVICE_FIRMWARE_SOURCE in Settings)."
     try:
         entries = _json_of(_read(base, 'index.json', TEXT_MAX), 'index').get('boards') or []
-        boards = {b['id']: b for b in (_board(e, base) for e in entries if isinstance(e, dict))}
+        boards = {b['id']: b for b in (_board(e) for e in entries if isinstance(e, dict))}
         error = None
     except Exception as e:
         logger.warning(f"[DEVICES] firmware index from {base[:80]}: {e}")
@@ -179,16 +186,24 @@ def _boards(fresh=False):
     return boards, error
 
 
+def _whole(home, b):
+    """True when `home` holds every part of this very file."""
+    try:
+        kept = json.loads((home / MARK).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return isinstance(kept, dict) and kept.get('sha256') == b['sha256'] and all((home / p['path']).is_file() for p in b['parts'])
+
+
 def _cached_boards():
     found = {}
-    for mf in sorted(CACHE.glob('*/*/manifest.json')) if CACHE.is_dir() else []:
-        board_id, version = mf.parent.parent.name, mf.parent.name
+    for mark in sorted(CACHE.glob(f'*/*/{MARK}')) if CACHE.is_dir() else []:
         try:
-            b = _board({'id': board_id, 'manifest': f'{board_id}/{version}/manifest.json'}, str(CACHE))
-        except FirmwareError:
+            b = _board(_json_of(mark.read_bytes(), 'cached board'))
+        except (OSError, FirmwareError):
             continue
-        if all((mf.parent / p['path']).is_file() for p in b['parts']):
-            found[board_id] = b
+        if (b['id'], b['version']) == (mark.parent.parent.name, mark.parent.name) and _whole(mark.parent, b):
+            found[b['id']] = b
     return found
 
 
@@ -211,12 +226,44 @@ def board(board_id, fresh=False):
     return b
 
 
+def keep_own(data, name):
+    """A firmware file of the user's own, kept as the board 'own' so either
+    lane writes it like any other: one part, the whole file, at address 0.
+    It must be a whole-board image, the kind the firmware repository's build
+    makes: the bootloader first (at 0x1000 on an ESP32 or S2), the partition
+    table at 0x8000. A lone program (an "app" .bin) is refused: at address 0
+    it would leave a board that cannot start. Returns the board."""
+    global _own
+    name = re.sub(r'[^A-Za-z0-9._ -]', '_', Path(str(name or '')).name)[:80] or 'firmware.bin'
+    if len(data) < 0x8002 or data[0x8000:0x8002] != b'\xaa\x50':
+        raise FirmwareError(f"{name} is not a whole-board image: it has no partition table at 0x8000. A build's single "
+                            f"program (the \"app\" .bin) cannot be written this way; use the merged file, the one a release has.")
+    boot = 0 if data[0] == 0xE9 else 0x1000 if data[0x1000] == 0xE9 else None
+    if boot is None:
+        raise FirmwareError(f"{name} has no bootloader where one belongs.")
+    b = {'id': OWN, 'name': name, 'version': '', 'chipFamily': _CHIP.get(int.from_bytes(data[boot + 12:boot + 14], 'little'), ''),
+         'flash': {'mode': 'keep', 'size': 'keep', 'freq': 'keep'},
+         'parts': [{'path': 'image.bin', 'offset': 0, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'app': False}]}
+    with _lock:
+        home = CACHE / OWN
+        home.mkdir(parents=True, exist_ok=True)
+        (home / 'image.bin').write_bytes(data)
+        _own = b
+    logger.info(f"[DEVICES] own firmware kept: {name}, {len(data)} bytes, {b['chipFamily'] or 'chip unknown'}")
+    return b
+
+
+def own():
+    """The board of the last file given, or None."""
+    return _own if _own and (CACHE / OWN / 'image.bin').is_file() else None
+
+
 def app_part(board_id):
     """The program itself, as a local file: what an update over the air sends."""
     b = board(board_id, fresh=True)
     app = next((p['path'] for p in b['parts'] if p['app']), None)
     if not app:
-        raise FirmwareError(f"The {b['id']} manifest does not say which part is the program (\"app\": true).")
+        raise FirmwareError(f"The index does not say which part of {b['id']} is the program (\"app\": true).")
     return part(board_id, app), b['version']
 
 
@@ -233,35 +280,33 @@ def known_version(board_id):
 
 
 def part(board_id, path):
-    """The local file of one part, fetched into the cache when it is not
-    there yet. Raises FirmwareError."""
+    """The local file of one part, the board's file fetched and cut up when
+    it is not in the cache yet. Raises FirmwareError."""
     board_id = str(board_id or '').strip().lower()
     path = _safe_path(path)
+    if board_id == OWN:
+        if not own() or path != 'image.bin':
+            raise FirmwareError("No file of your own is here. Choose it again.")
+        return CACHE / OWN / 'image.bin'
     boards, error = _boards()
     b = boards.get(board_id)
     if not b or path not in [p['path'] for p in b['parts']]:
         raise FirmwareError(error or f"No such part: {board_id}/{path}.")
-    base = source()
-    if not _is_url(base):
-        return _local(base, b['folder'] + path)
     with _lock:
         home = CACHE / board_id / b['version']
-        want = home / path
-        if want.is_file() and want.stat().st_size > 0:
-            return want
-        home.mkdir(parents=True, exist_ok=True)
-        for old in (CACHE / board_id).iterdir():
-            if old.is_dir() and old.name != b['version']:
-                shutil.rmtree(old, ignore_errors=True)
-        want.parent.mkdir(parents=True, exist_ok=True)
-        tmp = want.with_name(want.name + '.partial')
-        try:
-            with open(tmp, 'wb') as f:
-                _fetch(urljoin(base, b['folder'] + path), PART_MAX, into=f)
-            tmp.replace(want)
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
-        (home / 'manifest.json').write_text(json.dumps(b['manifest']), encoding='utf-8')
-        logger.info(f"[DEVICES] firmware cached: {board_id} {b['version']} {path}")
-        return want
+        if _whole(home, b):
+            return home / path
+        image = _read(source(), b['file'], FILE_MAX)
+        if len(image) != b['size'] or hashlib.sha256(image).hexdigest() != b['sha256']:
+            raise FirmwareError(f"{b['file']} is not the file the index describes (its sha256 differs). Nothing was written.")
+        cut = {p['path']: image[p['offset']:p['offset'] + p['size']] for p in b['parts']}
+        for p in b['parts']:
+            if p['sha256'] and hashlib.sha256(cut[p['path']]).hexdigest() != p['sha256']:
+                raise FirmwareError(f"The {p['path'][:-4]} part of {b['file']} is not what the index describes.")
+        shutil.rmtree(CACHE / board_id, ignore_errors=True)       # older versions, or half of this one
+        home.mkdir(parents=True)
+        for name, data in cut.items():
+            (home / name).write_bytes(data)
+        (home / MARK).write_text(json.dumps(b['entry']), encoding='utf-8')
+        logger.info(f"[DEVICES] firmware cached: {board_id} {b['version']} ({len(image)} bytes, {len(cut)} parts)")
+        return home / path

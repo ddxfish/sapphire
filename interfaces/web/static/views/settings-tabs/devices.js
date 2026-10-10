@@ -55,11 +55,15 @@ function drawPage(container) {
     container.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
             <div class="setting-help">Machines and gadgets Sapphire can use by name. Only this page can add or change them.</div>
-            <button class="btn btn-sm btn-primary" id="dev-add-btn">+ Add Device</button>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+                <button class="btn btn-sm" id="dev-board-btn" style="display:none" title="Plug an ESP32 board in: it is written and set up from here">+ New Board</button>
+                <button class="btn btn-sm btn-primary" id="dev-add-btn">+ Add Device</button>
+            </div>
         </div>
         <div id="dev-filter"></div>
         <div id="dev-list"><p class="text-muted">Loading...</p></div>`;
     container.querySelector('#dev-add-btn').addEventListener('click', () => openAdd());
+    container.querySelector('#dev-board-btn').addEventListener('click', () => openFlash(flashed));
     container.querySelector('#dev-filter').addEventListener('click', e => {
         const pill = e.target.closest('[data-type]');
         if (!pill) return;
@@ -67,6 +71,8 @@ function drawPage(container) {
         drawList();
     });
     container.querySelector('#dev-list').addEventListener('click', e => {
+        const more = e.target.closest('[data-more]');
+        if (more) return openMenu(more, devices.find(d => d.id === more.dataset.more));
         const row = e.target.closest('[data-device]');
         if (row) openDevice(row.dataset.device);
     });
@@ -86,6 +92,8 @@ async function loadList() {
         drivers = data.drivers || [];
         devices = (data.devices || []).sort((a, b) =>
             (a.type || '').localeCompare(b.type || '') || a.id.localeCompare(b.id));   // by type, then name: stable
+        const board = page.querySelector('#dev-board-btn');           // boards are satellites: no driver, no button
+        if (board) board.style.display = drivers.some(d => d.driver === 'satellite' && d.available) ? '' : 'none';
         drawList();
     } catch (e) {
         list.innerHTML = `<p style="color:var(--error)">Could not load devices: ${esc(e.message)}</p>`;
@@ -135,7 +143,57 @@ function card(d) {
             ${d.location ? `<span class="text-muted" style="font-size:var(--font-xs)">${esc(d.location)}</span>` : ''}
             ${update}${d.type ? `<span class="sched-plugin-badge">${esc(d.type)}</span>` : ''}
         </div>
+        <button type="button" data-more="${esc(d.id)}" title="More" aria-label="More for ${esc(d.id)}"
+                style="background:none;border:0;color:var(--text-muted,#888);font-size:1.3em;line-height:1;cursor:pointer;padding:6px 8px;border-radius:6px">&#8942;</button>
     </div>`;
+}
+
+// ---- the card's menu ---------------------------------------------------------
+
+// after a board was written or given new settings: the list, then its window asking it once
+const flashed = async id => { await loadList(); openDevice(id, undefined, { test: true }); };
+
+// A board Sapphire's own firmware runs on: written by the flasher (it has the
+// chip's id) or one that says it takes a program. A Pi satellite is neither.
+const isBoard = d => d.driver === 'satellite' && !!(d.fingerprint || (d.capabilities || []).includes('firmware'));
+
+function openMenu(anchor, d) {
+    document.querySelector('#dev-menu')?.remove();
+    if (!d) return;
+    const items = [
+        ...(isBoard(d) ? [{ text: 'Reflash (USB)', run: () => openFlash(flashed, { device: d, mode: 'install' }) },
+                          { text: 'Change WiFi (USB)', run: () => openFlash(flashed, { device: d, mode: 'wifi' }) }] : []),
+        { text: 'Delete device', danger: true, run: () => removeDevice(d.id) },
+    ];
+    const at = anchor.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = 'dev-menu';
+    menu.style.cssText = `position:fixed;z-index:1000;top:${at.bottom + 4}px;right:${Math.max(8, innerWidth - at.right)}px;min-width:170px;padding:4px;
+        background:var(--bg-secondary,#222);border:1px solid var(--border,#444);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35)`;
+    menu.innerHTML = items.map((it, i) => `<button type="button" data-i="${i}" style="display:block;width:100%;text-align:left;background:none;border:0;
+        padding:8px 10px;border-radius:6px;font:inherit;cursor:pointer;color:${it.danger ? 'var(--error,#e53935)' : 'inherit'}">${esc(it.text)}</button>`).join('');
+    document.body.appendChild(menu);
+    menu.addEventListener('mouseover', e => { for (const b of menu.children) b.style.background = b === e.target ? 'var(--bg-tertiary,#333)' : 'none'; });
+    // any click, Esc, a scroll or a resize puts it away; a click on one of its lines also runs it
+    const shut = e => {
+        if (e.type === 'keydown' && e.key !== 'Escape') return;
+        const line = e.type === 'click' ? e.target.closest?.('#dev-menu [data-i]') : null;
+        menu.remove();
+        for (const ev of ['click', 'keydown', 'scroll', 'resize']) window.removeEventListener(ev, shut, true);
+        if (line) items[+line.dataset.i].run();
+    };
+    setTimeout(() => { for (const ev of ['click', 'keydown', 'scroll', 'resize']) window.addEventListener(ev, shut, true); });
+}
+
+// True when it is gone.
+async function removeDevice(id) {
+    if (!confirm(`Delete device "${id}"? Its stored secrets are deleted too. This cannot be undone.`)) return false;
+    try {
+        await call('DELETE', `/${encodeURIComponent(id)}`);
+        showToast(`Deleted ${id}`, 'success');
+        await loadList();
+        return true;
+    } catch (e) { showToast(e.message, 'error'); return false; }
 }
 
 // ---- add a device ----------------------------------------------------------
@@ -169,16 +227,6 @@ function typeCard(d) {
     </button>`;
 }
 
-// a board written over USB from this browser, then set up: device-flash.js
-function boardCard() {
-    if (!drivers.some(d => d.driver === 'satellite' && d.available)) return '';
-    return `<button type="button" class="ui-card" id="dev-new-board" style="cursor:pointer;text-align:left;font:inherit">
-        <div style="font-size:1.6em;line-height:1.2">\u{1F50C}</div>
-        <div class="ui-card-title" style="padding-right:0">New board (USB)</div>
-        <div class="ui-card-body" style="margin-top:2px">plug an ESP32 board in: it is written and set up from here</div>
-    </button>`;
-}
-
 
 function openAdd() {
     const modal = showModal(`${ICON} Add a device`,
@@ -192,16 +240,12 @@ function openAdd() {
         addBtn?.remove(); addBtn = null;
         body.innerHTML = drivers.length
             ? `<div class="setting-help" style="margin-bottom:10px">What are you adding?</div>
-               <div class="ui-grid ui-grid-sm">${boardCard()}${drivers.map(typeCard).join('')}</div>`
+               <div class="ui-grid ui-grid-sm">${drivers.map(typeCard).join('')}</div>`
             : '<p class="text-muted" style="font-size:0.9em">No device types yet. Enable a plugin that provides one, such as SSH.</p>';
         body.querySelectorAll('[data-driver]').forEach(c => c.addEventListener('click', () => {
             const d = drivers.find(x => x.driver === c.dataset.driver && x.available);
             if (d) setup(d);
         }));
-        body.querySelector('#dev-new-board')?.addEventListener('click', () => {
-            modal.close();
-            openFlash(async id => { await loadList(); openDevice(id, undefined, { test: true }); });
-        });
     };
 
     // step 2: only what this type needs
@@ -284,9 +328,14 @@ function modalSchema(device) {
                       help: 'Off = only you can, with the buttons on this tab.' });
         values[lockKey(cap.capability)] = !cap.locked;
     }
+    const bindings = [];     // drawn by mountBindings in the tab's slot, not by the form renderer
     for (const part of device.parts) {
         for (const f of part.schema) {
             const cap = f.capability || part.capabilities[0];
+            if (f.type === 'bindings') {
+                bindings.push({ part, field: f, tab: f.tab || tabOf[cap] || cap });
+                continue;
+            }
             const show_if = f.show_if
                 ? Object.fromEntries(Object.entries(f.show_if).map(([k, v]) => [fieldKey(part.driver, k), v]))
                 : undefined;
@@ -296,7 +345,44 @@ function modalSchema(device) {
             values[fieldKey(part.driver, f.key)] = part.values[f.key];
         }
     }
-    return { schema, values };
+    return { schema, values, bindings };
+}
+
+// ---- a bindings field: each slot of the device picks a job from its own menu --------
+// (a button's short press -> send a message). The menu comes with the field
+// (`menu`, from the driver); a device that has not said what it offers shows
+// the note and its stored picks are left as they are.
+
+function mountBindings(el, b) {
+    const menu = b.field.menu || {};
+    const held = b.part.values[b.field.key] || {};
+    const choices = menu.choices || [];
+    const note = menu.note ? `<div class="setting-help" style="margin:10px 0 8px">${esc(menu.note)}</div>` : '';
+    if (!(menu.slots || []).length) { el.innerHTML = note; return; }
+    el.innerHTML = note + menu.slots.map(slot => {
+        const pick = held[slot.key] || {};
+        const known = choices.some(c => c.value === (pick.do || ''));
+        const options = choices.map(c => `<option value="${esc(c.value)}" ${c.value === (pick.do || '') ? 'selected' : ''}>${
+            esc(c.value === '' && slot.own ? `${c.label}: ${slot.own}` : c.label)}</option>`).join('')
+            + (known ? '' : `<option value="${esc(pick.do)}" selected>${esc(pick.do)} (this board no longer offers it)</option>`);
+        return `
+        <div data-bind="${esc(slot.key)}" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+            <label style="min-width:150px">${esc(slot.label)}</label>
+            <select class="dev-bind-do" style="flex:1;min-width:180px">${options}</select>
+            <input type="text" class="dev-bind-text" maxlength="500" value="${esc(pick.text || '')}" style="flex:2;min-width:200px">
+        </div>`;
+    }).join('');
+    const sync = row => {
+        const c = choices.find(x => x.value === row.querySelector('.dev-bind-do').value);
+        const text = row.querySelector('.dev-bind-text');
+        text.hidden = !c?.text;
+        text.placeholder = c?.placeholder || '';
+    };
+    el.querySelectorAll('[data-bind]').forEach(sync);
+    el.addEventListener('change', e => { if (e.target.matches('.dev-bind-do')) sync(e.target.closest('[data-bind]')); });
+    b.read = () => Object.fromEntries([...el.querySelectorAll('[data-bind]')].map(row => [row.dataset.bind,
+        { do: row.querySelector('.dev-bind-do').value, text: row.querySelector('.dev-bind-text').value }])
+        .filter(([, pick]) => pick.do));
 }
 
 function statusHTML(device) {
@@ -341,14 +427,7 @@ function mountStatus(el, device, redraw) {
         } catch (e) { showToast(e.message, 'error'); }
         btn.disabled = false; btn.textContent = 'Test now';
     });
-    el.querySelector('#dev-delete').addEventListener('click', async () => {
-        if (!confirm(`Delete device "${device.id}"? Its stored secrets are deleted too. This cannot be undone.`)) return;
-        try {
-            await call('DELETE', `/${encodeURIComponent(device.id)}`);
-            showToast(`Deleted ${device.id}`, 'success');
-            redraw(null);
-        } catch (e) { showToast(e.message, 'error'); }
-    });
+    el.querySelector('#dev-delete').addEventListener('click', async () => { if (await removeDevice(device.id)) redraw(null); });
 }
 
 function mountActions(el, device, cap) {
@@ -420,6 +499,7 @@ async function openDevice(id, tab, opts = {}) {
         [{ type: 'html', value: '<div id="dev-modal"></div>' }], null, { wide: true });
     const body = modal.element.querySelector('#dev-modal');
     let schema = [];
+    let bindings = [];
     let root = null;      // a fresh element per draw, so old listeners die with it
 
     // Each list poll brings this device's state too: the window shows it without asking.
@@ -437,7 +517,9 @@ async function openDevice(id, tab, opts = {}) {
         device = dev;
         const built = modalSchema(device);
         schema = built.schema;
+        bindings = built.bindings;
         const slots = [{ tab: 'Status', mount: el => mountStatus(el, device, after) }];
+        for (const b of bindings) slots.push({ tab: b.tab, mount: el => mountBindings(el, b) });
         for (const cap of device.capabilities || [])
             slots.push({ tab: cap.label || cap.capability, mount: el => mountActions(el, device, cap) });
         root = document.createElement('div');
@@ -468,6 +550,7 @@ async function openDevice(id, tab, opts = {}) {
                 if (k in form) parts[part.driver][f.key] = form[k];
             }
         }
+        for (const b of bindings) if (b.read && b.part.available) parts[b.part.driver][b.field.key] = b.read();
         // only the switches this window showed: one it did not show is never touched
         const locked = Object.fromEntries((device.capabilities || [])
             .filter(c => c.lockable && lockKey(c.capability) in form)

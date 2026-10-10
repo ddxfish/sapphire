@@ -170,7 +170,8 @@ def start(port, board_id):
         if _job and _job['state'] in ('getting', 'writing'):
             raise FlashError("A board is being written already. Wait for it.")
         boards, error = firmware._boards()
-        b = boards.get(str(board_id or '').strip().lower())
+        board_id = str(board_id or '').strip().lower()
+        b = firmware.own() if board_id == firmware.OWN else boards.get(board_id)      # 'own': a file the user gave
         if not b:
             raise FlashError(error or f"No such board: {board_id}.")
         _job = {'state': 'getting', 'percent': 0, 'text': 'Getting the firmware...', 'error': '',

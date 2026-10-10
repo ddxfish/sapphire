@@ -86,7 +86,7 @@ def test_spec_registers_as_a_core_driver():
     assert reg.register_driver('satellite', sat.SPEC, 'core', builtin=True)
     spec = reg.get_driver('satellite')
     assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                                    'sensors', 'firmware']
+                                    'buttons', 'sensors', 'firmware']
     sat._about[DEV['id']] = (0, {'has': ['firmware']})      # describe() offers firmware only to a board that says it
     try:
         assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))
@@ -313,6 +313,7 @@ def test_every_example_in_the_help_really_runs(pi):
     with patch.object(voice, 'render', return_value=(b'OggS', 'audio/ogg')), \
          patch.object(voice, 'stt_refusal', return_value=''), \
          patch.object(voice, 'transcribe', return_value=('hi', '')), \
+         patch.object(voice, 'pressed', return_value={'ok': True, 'accepted': False}), \
          patch.object(sat, '_update', lambda d, c, s, v: ('over the air: tests/test_devices_flash.py', True)), \
          patch.object(sat, '_check', lambda d, c, s: ('the source: tests/test_devices_flash.py', True)):
         for cap, info in sat.describe(DEV, CFG).items():

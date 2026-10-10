@@ -34,6 +34,7 @@ const GIVE_UP = 180000;        // ms before a board that never comes back is giv
 const GAVE_UP = 'The board did not come back. Unplug it, plug it in again, and try again from the port.';
 const CLOSED = 'The window was closed.';
 const ASK_WAIT = 15000;        // ms for one console answer
+const OWN_WAIT = 25000;        // ms a file of the user's own gets to prove it is Sapphire's firmware
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = msg => { throw new Error(msg); };
@@ -44,6 +45,18 @@ const call = (method, path, body, ms = 30000) => fetchWithTimeout(API + path, {
 // "esp32s3", "ESP32-S3", "ESP32-S3 (QFN56)" -> ESP32-S3; "ESP32-D0WD-V3 (revision 3)" -> ESP32
 const family = s => (String(s || '').toUpperCase().replace(/\s+/g, '').replace(/^ESP32(?=[SCH]\d)/, 'ESP32-')
     .match(/^ESP32(-[SCH]\d+)?|^ESP8266/) || [''])[0];
+
+// ---- a file of the user's own ---------------------------------------------------
+
+// Handed to Sapphire, who checks it is a whole-board image and keeps it as
+// the board 'own'. Either lane then writes it like a board of the source.
+async function ownImage(file, chip) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const b = await fetchWithTimeout(`${API}/firmware/own`, { method: 'POST', body: fd }, 120000);
+    if (b.chipFamily && chip.family && family(b.chipFamily) !== chip.family) fail(`${file.name} was built for an ${b.chipFamily}. This board is an ${chip.family}.`);
+    return b;
+}
 
 // ---- the firmware's console over an open Web Serial port ------------------------
 // One line in; log lines come out until one `>> {json}` answers.
@@ -131,10 +144,10 @@ function webSerialLane(log) {
 
     // the port again after a reset: the same one (a UART bridge) or the one
     // that reappears (native USB re-enumerates). Resolves when it is open.
-    async function reopen(onWaiting) {
+    async function reopen(onWaiting, giveUp = GIVE_UP) {
         if (con) { await con.close(); con = null; }
         await letGo();
-        const until = Date.now() + COME_BACK, deadline = Date.now() + GIVE_UP;
+        const until = Date.now() + COME_BACK, deadline = Date.now() + giveUp;
         let warned = false;
         for (;;) {
             if (stopped) throw new Error(CLOSED);
@@ -260,9 +273,9 @@ function serverLane(log) {
             onProgress(100, 'Written and verified. Waiting for it to start...');
         },
 
-        async reopen(onWaiting) {
+        async reopen(onWaiting, giveUp = GIVE_UP) {
             await call('POST', '/flash/close', { port }).catch(() => {});
-            const until = Date.now() + COME_BACK, deadline = Date.now() + GIVE_UP;
+            const until = Date.now() + COME_BACK, deadline = Date.now() + giveUp;
             let warned = false;
             for (;;) {
                 if (stopped) throw new Error(CLOSED);
@@ -283,8 +296,12 @@ function serverLane(log) {
 
 // ---- the wizard ----------------------------------------------------------------------
 
-export function openFlash(onDone) {
-    const modal = showModal('\u{1F4E1} New board (USB)', [{ type: 'html', value: '<div id="flash"></div>' }], null, { wide: true });
+// With no `on`: a new board. With on.device (a row of the Devices list) it is
+// that device's board and no other: mode 'install' writes it again, mode
+// 'wifi' only gives it its WiFi and Sapphire's address again. It keeps its name.
+export function openFlash(onDone, on = {}) {
+    const mine = on.device || null, wifiOnly = !!mine && on.mode === 'wifi';
+    const modal = showModal(`\u{1F4E1} ${!mine ? 'New board (USB)' : wifiOnly ? `WiFi for ${mine.id}` : `Reflash ${mine.id}`}`, [{ type: 'html', value: '<div id="flash"></div>' }], null, { wide: true, sticky: true });
     const body = modal.element.querySelector('#flash');
     const footer = modal.element.querySelector('.modal-footer');
     const said = [];                              // the last lines from the flasher and the board, for an error
@@ -298,35 +315,41 @@ export function openFlash(onDone) {
     const status = text => { const el = body.querySelector('#flash-status'); if (el) el.textContent = text; };
     const lanes = { browser: webSerialLane(log), server: serverLane(log) };
     let lane = lanes.browser.available() ? lanes.browser : lanes.server;
-    let chip = { family: '', text: '', mac: '' }, board = null, given = null, button = null, known = null, devices = [];
+    let chip = { family: '', text: '', mac: '' }, board = null, given = null, button = null, known = null, devices = [], wrote = false;
     const free = base => { let n = base, i = 2; while (devices.some(d => d.id === n)) n = `${base}-${i++}`; return n; };   // a name no device has
 
     // the modal has no close event: when it leaves the page, let the port go
-    const gone = new MutationObserver(() => { if (!modal.element.isConnected) { gone.disconnect(); hold(false); lane.close(); } });
+    const gone = new MutationObserver(() => { if (!modal.element.isConnected) { gone.disconnect(); blank = false; hold(false); lane.close(); } });
     gone.observe(document.body, { childList: true });
 
-    // While the board is being written or set up, nothing closes this: not
-    // the X, Esc, the backdrop, nor leaving the page (a slipped click left a
-    // board half written, 2026-10-07). The browser's own leave prompt is the
-    // only one it allows; its words are its own.
-    let busy = false;
+    // The modal is sticky: a click beside it or Esc never closes it (one
+    // aimed at another window closed it unseen, 2026-10-09). That leaves the
+    // X and Close. While the board is being written or set up (`busy`) they
+    // do nothing either, nor does leaving the page without the browser's own
+    // prompt (a slipped click left a board half written, 2026-10-07). With a
+    // written board that has no name or WiFi yet (`blank`), they ask first.
+    let busy = false, blank = false, guarded = false;
     const leaving = e => { e.preventDefault(); e.returnValue = ''; };
-    const keep = e => {
-        if (!busy) return;
-        if (e.type === 'keydown' && e.key !== 'Escape') return;
-        if (e.type !== 'keydown' && !(e.target === modal.element || e.target.closest('.modal-x, .modal-close, .modal-cancel'))) return;
-        e.stopImmediatePropagation();
-        if (e.type !== 'mousedown') showToast('Still working on the board. Wait for it to finish.', 'warning');
+    const leave = () => {
+        if (!confirm('Leave this board unfinished?\n\nIt was written, but it has no name or WiFi yet, so Sapphire cannot reach it. '
+            + 'To finish later: + New Board, Connect, then "Only change its name, WiFi or Sapphire\'s address".')) return;
+        blank = false; guard(); modal.close();
     };
-    const hold = on => {
-        if (on === busy) return;
-        busy = on;
+    const keep = e => {
+        if (!e.target.closest('.modal-x, .modal-close, .modal-cancel')) return;
+        e.stopImmediatePropagation();
+        if (busy) showToast('Still working on the board. Wait for it to finish.', 'warning');
+        else leave();
+    };
+    const guard = () => {
+        const on = busy || blank;
+        if (on === guarded) return;
+        guarded = on;
         const way = on ? 'addEventListener' : 'removeEventListener';
         window[way]('beforeunload', leaving);
-        document[way]('keydown', keep, true);
         modal.element[way]('click', keep, true);
-        modal.element[way]('mousedown', keep, true);
     };
+    const hold = on => { busy = on; guard(); };
 
     const screen = (title, html, foot) => {
         button?.remove(); button = null;
@@ -381,7 +404,17 @@ export function openFlash(onDone) {
                 else status("Pick the port in the browser's window...");
                 chip = await lane.connect(status);
                 if (!chip) { status(''); button.disabled = false; return; }
-                await pick();
+                if (mine?.fingerprint && chip.mac && chip.mac !== mine.fingerprint.toLowerCase()) {
+                    await lane.close();
+                    return void screen(`This is not ${esc(mine.id)}`, `<p class="setting-help">The board on that port has id ${esc(chip.mac)}; ${esc(mine.id)} is ${esc(mine.fingerprint)}.
+                        Plug ${esc(mine.id)} in and start again, or close this and use <b>+ New Board</b> for a board Sapphire has not seen.</p>`);
+                }
+                if (!wifiOnly) return pick();
+                status('Starting the board...');
+                known = mine;
+                try { devices = (await call('GET', '')).devices || []; } catch { devices = []; }
+                await lane.reopen(() => status('Unplug the board and plug it back in.'));
+                await setup();
             } });
         const portsRow = body.querySelector('#fl-ports-row');
         const listPorts = async () => {
@@ -409,6 +442,28 @@ export function openFlash(onDone) {
         if (lane.id === 'server') { if (await serverReady()) listPorts(); else status("Sapphire's computer cannot flash until that set is installed."); }
     };
 
+    // a .bin of the user's own, from the computer the browser is on, whichever lane writes it
+    const ownHTML = () => '<p class="setting-help" style="margin-top:10px">Your own firmware? <a href="#" id="fl-own">Write a .bin from this computer</a>: a whole-board image, like the ones a release has.<input type="file" id="fl-own-file" accept=".bin" style="display:none"></p>';
+    const ownBind = () => {
+        const input = body.querySelector('#fl-own-file');
+        if (!input) return;
+        body.querySelector('#fl-own').addEventListener('click', e => { e.preventDefault(); input.value = ''; input.click(); });
+        input.addEventListener('change', async () => {
+            const file = input.files[0];
+            if (!file) return;
+            try {
+                const own = await ownImage(file, chip);
+                if (!confirm(`Write ${file.name} (${Math.round(file.size / 1024)} KB) to this ${chip.family}?\n\nEverything on the board is erased first.`)) return;
+                board = own;
+                await install();
+            } catch (e) {
+                hold(false);
+                status(e.message); showToast(e.message, 'error');
+                if (!body.querySelector('#fl-own') && !button) offer({ text: 'Start again', run: () => pick() });   // it failed past this screen
+            }
+        });
+    };
+
     // 2. which board: only the ones this chip can run; a board seen before is named
     const pick = async () => {
         screen(`Found an ${esc(chip.family)}`, '<p class="setting-help">Reading the firmware list...</p>');
@@ -416,18 +471,20 @@ export function openFlash(onDone) {
         known = null;
         try { devices = (await call('GET', '')).devices || []; } catch { devices = []; /* the list is a nicety here */ }
         if (chip.mac) known = devices.find(d => d.fingerprint === chip.mac) || null;
+        if (mine) known = mine;
         const fit = fw.boards.filter(b => family(b.chipFamily) === chip.family);
         if (!fit.length) {
             // nothing to offer: say why, and let the source be fixed right here
             screen(`Found an ${esc(chip.family)}`, `<p class="setting-help">${esc(fw.error || `No firmware for an ${chip.family} (${chip.text}) in the firmware source.`)}</p>
                 <div class="settings-grid"><div class="setting-row"><div class="setting-label"><label>Firmware source</label>
                     <div class="setting-help">The firmware release URL, or a folder on Sapphire's computer with an index.json.</div></div>
-                    <div class="setting-input"><input type="text" id="fl-source" value="${esc(fw.source || '')}" placeholder="https://.../index.json's folder"></div></div></div>`,
+                    <div class="setting-input"><input type="text" id="fl-source" value="${esc(fw.source || '')}" placeholder="https://.../index.json's folder"></div></div></div>${ownHTML()}`,
                 { text: 'Save and look again', run: async () => {
                     await fetchWithTimeout('/api/settings/batch', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ settings: { DEVICE_FIRMWARE_SOURCE: body.querySelector('#fl-source').value.trim() } }) }, 15000);
                     await pick();
                 } });
+            ownBind();
             return;
         }
         const seen = known ? `<p class="setting-help" style="margin-bottom:8px">This board is <b>${esc(known.label || known.id)}</b>, set up before${known.status?.online ? ' and online' : ''}. Installing writes it afresh; it keeps that name.</p>` : '';
@@ -436,14 +493,18 @@ export function openFlash(onDone) {
                 <button type="button" class="ui-card" data-board="${esc(b.id)}" style="text-align:left;font:inherit;cursor:pointer${i ? '' : ';outline:2px solid var(--primary)'}">
                     <div class="ui-card-title">${esc(b.name)}</div>
                     <div class="ui-card-body">firmware ${esc(b.version)}</div></button>`).join('')}</div>
-            <p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`,
+            ${mine ? '' : `<p class="setting-help" style="margin-top:10px">Already running Sapphire's firmware? <a href="#" id="fl-settings-only">Only change its name, WiFi or Sapphire's address</a>, without installing.</p>`}${ownHTML()}`,
             { text: 'Install', run: () => install() });
-        board = fit[0];
+        ownBind();
+        // its own device says which program it runs (the `model` reading): that one is offered first
+        const model = (mine?.status?.parts || []).map(p => p.readings?.model).find(Boolean);
+        board = fit.find(b => b.id === model) || fit[0];
+        body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x.dataset.board === board.id ? '2px solid var(--primary)' : '');
         body.querySelectorAll('[data-board]').forEach(c => c.addEventListener('click', () => {
             board = fit.find(b => b.id === c.dataset.board);
             body.querySelectorAll('[data-board]').forEach(x => x.style.outline = x === c ? '2px solid var(--primary)' : '');
         }));
-        body.querySelector('#fl-settings-only').addEventListener('click', async e => {
+        body.querySelector('#fl-settings-only')?.addEventListener('click', async e => {
             e.preventDefault();
             button.disabled = true;
             try {
@@ -457,13 +518,25 @@ export function openFlash(onDone) {
     // 3. write it
     const install = async () => {
         hold(true);
-        screen(`Installing ${esc(board.name)} ${esc(board.version)}`, `
+        screen(`Installing ${esc(board.name)} ${esc(board.version)}`.trim(), `
             <div id="flash-bar" style="height:8px;background:var(--bg-tertiary,#333);border-radius:4px;overflow:hidden"><div style="height:100%;width:0;background:var(--primary)"></div></div>
             <p class="setting-help" style="margin-top:6px">Getting the firmware from Sapphire...</p>`);
         await lane.flash(board, bar);
-        await lane.reopen(() => bar(100, 'Unplug the board and plug it back in.'));
-        hold(false);
-        await setup();
+        wrote = true;
+        if (board.id === 'own') {
+            // Sapphire's firmware, built by hand, answers her console and is set up like any other.
+            // Anything else never will: it gets a short wait, not the long one, and is done here.
+            let hers = false;
+            try {
+                await lane.reopen(null, OWN_WAIT);
+                hers = !!(await lane.ask('show', 6000));
+            } catch { /* not hers */ }
+            if (!hers) {
+                hold(false);
+                return void screen(`${esc(board.name)} is written`, `<p class="setting-help">Written and verified, and the board was restarted. It did not answer Sapphire's setup console, so this is not her firmware: there is nothing more to do here. If it is hers, close this and use <b>Change WiFi (USB)</b> on its card, or <b>+ New Board</b> and the "Only change its name, WiFi" link.</p>`);
+            }
+        } else await lane.reopen(() => bar(100, 'Unplug the board and plug it back in.'));
+        await setup();                                // still held: the board is blank until it has its name and WiFi
     };
 
     // the board that came back is the board that was written
@@ -481,7 +554,7 @@ export function openFlash(onDone) {
         screen('Name it and give it the WiFi', `
             <div class="settings-grid">
                 <div class="setting-row"><div class="setting-label"><label>Name</label><div class="setting-help">What Sapphire calls it.</div></div>
-                    <div class="setting-input"><input type="text" id="fl-name" value="${esc(known?.id || free(board.id))}" maxlength="33"></div></div>
+                    <div class="setting-input"><input type="text" id="fl-name" value="${esc(known?.id || free(board && board.id !== 'own' ? board.id : 'board'))}" maxlength="33" ${mine ? 'readonly' : ''}></div></div>
                 <div class="setting-row"><div class="setting-label"><label>WiFi</label><div class="setting-help">${names.length ? 'What the board can see. ' : ''}Type one it cannot see yet.</div></div>
                     <div class="setting-input">${names.length ? `<select id="fl-pick">${names.map(n => `<option>${esc(n)}</option>`).join('')}<option value="">Other network...</option></select>` : ''}
                         <input type="text" id="fl-ssid" placeholder="network name" ${names.length ? 'style="display:none;margin-top:6px"' : ''}></div></div>
@@ -493,9 +566,11 @@ export function openFlash(onDone) {
                         ${here.addresses.length > 1 ? `<div class="setting-help" style="margin-top:4px">also here: ${here.addresses.slice(1).map(esc).join(', ')}</div>` : ''}</div></div>
             </div>`,
             { text: 'Finish', run: () => finish() });
+        blank = wrote;                                // the form is up: closing it now is a choice, never a slip
+        hold(false);
         const pickEl = body.querySelector('#fl-pick'), ssidEl = body.querySelector('#fl-ssid');
         pickEl?.addEventListener('change', () => { ssidEl.style.display = pickEl.value ? 'none' : ''; if (!pickEl.value) ssidEl.focus(); });
-        body.querySelector('#fl-name').focus();
+        body.querySelector(mine ? '#fl-pass' : '#fl-name').focus();
     };
 
     // 5. Sapphire's side, then the board's, then wait for WiFi
@@ -533,6 +608,7 @@ export function openFlash(onDone) {
             key: given.token, voice_key: given.voice_key, sapphire: given.sapphire, cert: given.cert || '',
         }));
         if (!said.ok) fail(said.error || 'The board refused its settings.');
+        blank = false;                                // it has its settings: it joins by itself from here
         screen(`Joining ${esc(ssid)}`, `<p class="setting-help" id="fl-join">The board has its settings and is restarting to join the WiFi...</p>`);
         await sleep(1500);
         await lane.reopen(() => { body.querySelector('#fl-join').textContent = 'Unplug the board and plug it back in.'; });

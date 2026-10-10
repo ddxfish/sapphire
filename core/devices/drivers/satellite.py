@@ -21,6 +21,7 @@
 # network. That is checked when the device is saved.
 import hashlib
 import io
+import logging
 import re
 import threading
 import time
@@ -32,11 +33,13 @@ from core import net
 from core.backup_targets import Target
 from core.devices.storage import KEEP_FIELDS, keep_from
 
+logger = logging.getLogger(__name__)
+
 SPEC = {
     'label': 'Satellite (a board that speaks the protocol)',
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                     'sensors', 'firmware'],
+                     'buttons', 'sensors', 'firmware'],
     # it calls Sapphire with its own key (wake, voice, text, events): the
     # address it calls from becomes its url, so a board set up from the
     # browser needs none typed, and a new DHCP lease is followed
@@ -49,6 +52,12 @@ SPEC = {
         {'key': 'token', 'type': 'string', 'widget': 'password', 'secret': True, 'tab': 'Status', 'setup': True,
          'label': 'Key Sapphire sends',
          'help': "The satellite's own key (SAPPH_BODY_TOKEN on a Pi body). Stored scrambled."},
+        # the chat this device is in, for everything it has that talks or shows: on the first tab (2026-10-09)
+        {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'tab': 'Status',
+         'capability': ('mic', 'keyboard', 'buttons', 'screen'),
+         'help': "The chat this device is in: what it hears, what is typed on it and what its buttons send "
+                 "land there, and its screen shows it. Empty = the last chat used. A name that is not a "
+                 "chat yet is made when you save."},
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
          'capability': 'camera',
          'help': "Off = Sapphire is not offered a camera on this satellite."},
@@ -56,13 +65,14 @@ SPEC = {
          'capability': 'firmware',
          'help': "Off = no program is ever sent to this board from here; its Firmware tab only checks. "
                  "A board with one program slot never offers this and is updated over USB."},
-        # the mic's fields, or the keyboard's on a board that types instead of listening
-        {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'capability': ('mic', 'keyboard'),
-         'help': "The chat this satellite's questions land in. Empty = the last chat used."},
+        # the mic's field, or the keyboard's on a board that types instead of listening
         {'key': 'voice_key', 'type': 'string', 'widget': 'password', 'secret': True, 'setup': True,
          'capability': ('mic', 'keyboard'), 'label': 'Key the satellite sends',
          'help': "Proves a question came from this satellite. Stored scrambled. On a Pi "
                  "body this is SAPPH_BRAIN_TOKEN, next to SAPPH_DEVICE_ID."},
+        # what each press of each button does: the board says which buttons it has and what it can do by
+        # itself (/health `buttons`), bindings() below turns that into the menu the page draws
+        {'key': 'buttons', 'type': 'bindings', 'label': 'Buttons', 'capability': 'buttons'},
         # the glass: its backlight is the board's biggest draw that can be chosen (firmware 0.5.5)
         {'key': 'brightness', 'type': 'number', 'label': 'Brightness in use', 'capability': 'screen',
          'default': 80, 'min': 0, 'max': 100,
@@ -104,7 +114,7 @@ SPEC = {
 
 SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min')
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
-INBOUND = ('keyboard',)       # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed()
+INBOUND = ('keyboard', 'buttons')   # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed(), pressed()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 _SECONDS = re.compile(r'^seconds=(\d{1,4})$', re.I)
 
@@ -156,7 +166,15 @@ def validate(config):
                             "without encryption, so an internet address is refused.")
         url = f"{parts.scheme}://{parts.netloc}"
     config['url'] = url                       # '' = learned when it calls in (engine.learned)
-    config['chat'] = str(config.get('chat') or '').strip()[:64]
+    from core.devices import voice
+    config['chat'] = voice.chat_named(config.get('chat'))
+    held = config.get('buttons') if isinstance(config.get('buttons'), dict) else {}
+    for slot, pick in list(held.items()):
+        if str(slot).rpartition('.')[2] not in voice.HOWS:
+            held.pop(slot)
+        elif pick.get('do') != voice.TELL:
+            pick['text'] = ''                 # only a message to her has words
+    config['buttons'] = held
     for name in LOOKS:
         text = str(config.get(f'look_{name}') or '').strip()
         try:
@@ -176,7 +194,18 @@ def validate(config):
 
 def apply(device, config, secrets):
     """After a save: the looks and the hours go to the board. An early Pi
-    body (before 0.7.0) has no such door and keeps its own; that is not a fault."""
+    body (before 0.7.0) has no such door and keeps its own; that is not a fault.
+    First what needs no answer from the board: its chat is made when it is
+    not one yet, and its stream is told what its buttons do now."""
+    from core.devices import voice
+    if config.get('chat'):
+        try:
+            voice.chat_for(config, device['id'])
+        except Exception as e:                 # not a reason to hold the rest back: it is tried again when the device speaks
+            logger.warning(f"[DEVICES] {device['id']}: its chat '{config['chat']}' could not be made now: {e}")
+    jobs = voice.bound(device['id'])           # None: it has no buttons, and its program may not know the word
+    if jobs is not None:
+        voice.cue(device['id'], 'buttons', bound=jobs)
     body = {name: parse_light(config.get(f'look_{name}')) for name in LOOKS}
     body = {k: v for k, v in body.items() if v}
     body['from'] = str(config.get('lights_from') or '')
@@ -435,6 +464,12 @@ def describe(device, config):
                             'library, or last = the newest image in this chat. A landscape image is turned sideways',
                     'example': 'last seconds=120', 'values': '<img:id | doc:N | last> [seconds=60]', 'wait': PICTURE_WAIT},
     }}
+    told['buttons'] = {'label': 'Buttons', 'help': "its buttons: each press does what is set above. Set to send a "
+                       "message, the words land in its chat as if someone there had said them", 'actions': {
+        'press': {'help': 'press one from here, to try what it sends. Only a press set to send a message does '
+                          'anything from here: the rest the board does by itself',
+                  'example': 'boot short', 'values': '<button> [short | long | double]', 'owner': True},
+    }}
     told['keyboard'] = {'label': 'Keyboard', 'help': 'what is typed on it lands in your chat; your reply is shown on its screen',
                         'actions': {}}
     if config.get('camera', True):
@@ -467,6 +502,42 @@ def describe(device, config):
                 'danger': f"Replaces the program on {device['id']} and restarts it. The board is away for a "
                           f"minute. If the new program does not run, the old one comes back on its own."}
     return told
+
+
+HOW_WORDS = {'short': 'short press', 'long': 'long press', 'double': 'double press'}
+
+
+def bindings(device, config, key):
+    """The menu of the `buttons` setting (engine._menu): one slot for each
+    way each button is pressed, and what a press can be set to. From what
+    the board's last /health said: {"buttons": {"list": [{"name", "short",
+    "long", "double"}], "can": {job: words}}}, where short/long/double name
+    the job the board does by itself when the press is left to it."""
+    from core.devices import voice
+    with _lock:
+        _, said = _about.get(device['id'], (0, None))
+    told = (said or {}).get('buttons') if isinstance(said, dict) else None
+    told = told if isinstance(told, dict) else {}
+    can = {str(k)[:24].lower(): str(v)[:60] for k, v in (told.get('can') or {}).items()} \
+        if isinstance(told.get('can'), dict) else {}
+    slots = []
+    for b in (told.get('list') if isinstance(told.get('list'), list) else []):
+        name = str(b.get('name') or '').strip().lower()[:24] if isinstance(b, dict) else ''
+        for how in voice.HOWS if name else ():
+            own = str(b.get(how) or '').lower()
+            slots.append({'key': f'{name}.{how}', 'label': f'{name}: {HOW_WORDS[how]}',
+                          'own': can.get(own, own) or 'nothing'})
+    if not slots:
+        return {'slots': [], 'choices': [], 'note': "This board has not said which buttons it has yet. "
+                "Press Test now on the Status tab while it is on."}
+    choices = [{'value': '', 'label': 'Leave it to the board'},
+               {'value': voice.TELL, 'label': 'Send Sapphire a message', 'text': True,
+                'placeholder': f"The button on {device['id']} was pressed."},
+               *({'value': k, 'label': v} for k, v in can.items() if k != voice.TELL),
+               {'value': 'none', 'label': 'Nothing'}]
+    return {'slots': slots, 'choices': choices,
+            'note': "A press set here replaces what the board does with it. A double press makes a short press "
+                    "wait a third of a second, only on a button that has one set."}
 
 
 def _has(device):
@@ -560,6 +631,8 @@ def status(device, config, secrets):
         glass.sync_soon(device['id'])
     if h.get('firmware'):
         readings['program'] = ' '.join(str(x) for x in (h.get('board'), h['firmware']) if x)[:60]
+    if h.get('model'):
+        readings['model'] = str(h['model'])[:33]                       # the firmware source's board id: a reflash offers that one first
     if h.get('mac'):
         readings['board id'] = str(h['mac'])[:17]                      # the chip's MAC (pocket 0.2.1, satellite 0.2.3)
     if isinstance(h.get('has'), list):                                 # how its program is replaced
@@ -1002,6 +1075,18 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 w = _json(_call('GET', '/wakeword', config, secrets))
                 state = 'listening' if w.get('enabled') and w.get('running') else 'not listening'
                 return f"It is {state}" + (f" for {w['model']}." if w.get('model') else '.'), True
+        if capability == 'buttons' and action == 'press':
+            from core.devices import voice
+            words = str(value or '').split()
+            if not words:
+                return "press: the button's name, then short, long or double. Example: boot short", True
+            out = voice.pressed(device['id'], words[0], words[1] if len(words) > 1 else 'short')
+            if not out.get('ok'):
+                return str(out.get('error') or 'It was not taken.'), False
+            if not out.get('accepted'):
+                return (f"Nothing is set to be sent for {words[0]} {words[1] if len(words) > 1 else 'short'}. "
+                        "What the board does by itself only a real press does."), True
+            return f"Sent to the chat '{out.get('chat')}': \"{out.get('text')}\"", True
         if capability == 'sensors' and action == 'read':
             try:
                 got = _json(_call('GET', '/sensors', config, secrets)).get('sensors')
