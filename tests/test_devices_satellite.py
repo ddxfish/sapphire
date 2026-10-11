@@ -2,6 +2,7 @@
 # The network is faked: every reply below is the shape the real Pi body
 # returned on 2026-09-27. No satellite, no speech engine, no sound.
 import importlib
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -564,3 +565,54 @@ def test_sensors_read_and_readings(pi):
     with patch.dict(REAL, {('GET', '/health'): dict(REAL[('GET', '/health')], sensors={"light": 1234})}):
         st = sat.status(DEV, CFG, KEY)
     assert st['readings']['light'] == '1234'
+
+
+# --- 0.7.0: a turned camera, the volume step ------------------------------------
+
+def test_a_turned_camera_is_set_upright(pi):
+    import base64, io
+    from PIL import Image
+    wide = io.BytesIO()
+    Image.new('RGB', (40, 20), 'red').save(wide, 'JPEG')
+    shot = {"ok": True, "width": 40, "height": 20, "data_b64": base64.b64encode(wide.getvalue()).decode()}
+    with patch.dict(REAL, {('GET', '/camera/snap'): shot}):
+        out, ok = run('camera', 'look', cfg=dict(CFG, camera_turn='90'))
+        assert ok and out['text'].endswith('20x40.')
+        assert Image.open(io.BytesIO(base64.b64decode(out['images'][0]['data']))).size == (20, 40)
+        out, ok = run('camera', 'look', cfg=dict(CFG, camera_turn='180'))
+        assert ok and out['text'].endswith('40x20.')
+        out, ok = run('camera', 'look', cfg=dict(CFG, camera_turn='0'))
+        assert out['images'][0]['data'] == shot['data_b64']          # untouched when not turned
+
+
+def test_the_volume_step_is_the_devices_own(board):
+    with patch.dict(REAL, {('GET', '/volume'): {"volume": 60}, ('POST', '/volume'): {"volume": 80}}):
+        run('speaker', 'volume', 'up', cfg=dict(CFG, volume_step='20'))
+        assert board[-1].path == '/volume?level=80'
+        run('speaker', 'volume', 'down', cfg=dict(CFG, volume_step='5'))
+        assert board[-1].path == '/volume?level=55'
+        run('speaker', 'volume', 'up', cfg=dict(CFG, volume_step='loud'))   # not a number: ten
+        assert board[-1].path == '/volume?level=70'
+
+
+def test_say_is_refused_on_the_device_she_is_already_answering(board):
+    """Her reply is spoken there as she writes it; a say for it was a tool call a stop could not keep."""
+    from core.devices import voice
+    with voice._lock:
+        voice._running[DEV['id']] = ({'speech': SimpleNamespace(ready=True), 'thread': threading.get_ident()}, 'default')
+    try:
+        calls = len(board)
+        out, ok = run('speaker', 'say', 'hello')
+        assert not ok and 'Just answer' in out and len(board) == calls      # nothing was sent to the board
+        token = voice._lane.set(True)                                       # the reply lane's own say goes through
+        try:
+            assert voice.answering(DEV['id']) is False
+        finally:
+            voice._lane.reset(token)
+        seen = []                                                           # and so does anyone else's: a reminder, another chat
+        t = threading.Thread(target=lambda: seen.append(voice.answering(DEV['id'])))
+        t.start(); t.join()
+        assert seen == [False]
+    finally:
+        with voice._lock:
+            voice._running.pop(DEV['id'], None)

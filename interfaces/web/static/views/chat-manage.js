@@ -51,6 +51,7 @@ const chatTab = c => {
     if (c.private_chat) return 'private';
     const m = c.mode || c.settings?.mode;
     if (m === 'game') return 'game';
+    if (m === 'room') return 'room';          // Chat > Chat Room's (core/rooms.py, 2026-10-11)
     // mode stamp = new plumbing (librarian stamps at claim since 2026-08-05);
     // the name regex stays for the pre-stamp generations.
     if (m === 'librarian' || LIB_RE.test(c.name)) return 'librarian';
@@ -58,7 +59,7 @@ const chatTab = c => {
 };
 const isStory = c => ((c.settings?.game_id) || '').startsWith('story:');
 const TAB_LABELS = { chat: '\u{1F4AC} Chats', private: '\u{1F5DD} Private',
-                     game: '\u{1F3B2} Game Room',
+                     game: '\u{1F3B2} Game Room', room: '\u{1FA91} Chat Rooms',
                      librarian: '\u{1F4DA} Librarian', archive: '\u{1F4E6} Archive' };
 
 function matchesSearch(c) {
@@ -163,8 +164,8 @@ function render() {
     });
 
     // Per-tab totals (and match counts while a search is narrowing things)
-    const counts = { chat: 0, private: 0, game: 0, librarian: 0, archive: 0 };
-    const matched = { chat: 0, private: 0, game: 0, librarian: 0, archive: 0 };
+    const counts = { chat: 0, private: 0, game: 0, room: 0, librarian: 0, archive: 0 };
+    const matched = { chat: 0, private: 0, game: 0, room: 0, librarian: 0, archive: 0 };
     for (const c of chats) {
         const t = chatTab(c);
         counts[t]++;
@@ -204,7 +205,7 @@ function render() {
         const canVault = !vaultState.exists || vaultState.unlocked;
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.degraded ? ' <span class="cm-badge" title="Some messages could not be read — chat is read-only until repaired">⚠ degraded</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
+            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${(c.mode ?? c.settings?.mode) === 'room' ? ' <span class="cm-badge">\u{1FA91} room</span>' : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.degraded ? ' <span class="cm-badge" title="Some messages could not be read — chat is read-only until repaired">⚠ degraded</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>
@@ -318,6 +319,12 @@ async function doBulkExport() {
 async function openChat(name) {
     if (getIsProc()) {
         ui.showToast('Cannot switch chats while generating', 'error');
+        return;
+    }
+    const c = chats.find(x => x.name === name);
+    if ((c?.mode ?? c?.settings?.mode) === 'room') {        // a room opens in Chat Room, never the chat view
+        localStorage.setItem('sapphire-room-last', name);
+        switchView('rooms');
         return;
     }
     const sel = document.getElementById('chat-select');
@@ -785,6 +792,7 @@ export default {
                 <button class="cm-tab" data-tab="chat"></button>
                 <button class="cm-tab" data-tab="private"></button>
                 <button class="cm-tab" data-tab="game"></button>
+                <button class="cm-tab" data-tab="room"></button>
                 <button class="cm-tab" data-tab="librarian"></button>
                 <button class="cm-tab" data-tab="archive"></button>
             </div>

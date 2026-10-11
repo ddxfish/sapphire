@@ -47,6 +47,18 @@ class FakeSM:
         self.chats[c]['rows'].extend(dict(r) for r in rows)
         return True
 
+    def clear_chat(self, c):
+        if c not in self.chats:
+            return False
+        self.chats[c]['rows'] = []
+        return True
+
+    def replace_messages(self, c, msgs, expected_count=None, expected_digest=None):
+        if c not in self.chats:
+            return False, 'no such chat'
+        self.chats[c]['rows'] = [dict(m) for m in msgs]
+        return True, None
+
     def _read_store_messages(self, c):
         s = self.chats.get(c)
         return (list(s['rows']) if s else None), None, 0
@@ -469,3 +481,47 @@ def test_pause_between_seats(world, monkeypatch):
     assert len(stamps) == 2 and stamps[1] - stamps[0] >= 0.12
     rooms.stop(chat)
     assert _wait(lambda: not rooms.state(chat)['running'])
+
+
+# ── clear and import keep the seats ─────────────────────────────────────────
+
+def test_clear_keeps_seats_and_rules_and_resets_the_count(world, monkeypatch):
+    chat, a, b = _salon()
+    monkeypatch.setattr(rooms, '_seat_turn', _recording_seat_turn([]))
+    rooms.update_room(chat, {'human_every': 2, 'purpose': 'Keep me'})
+    rooms.say(chat, 'hello')
+    assert _wait(lambda: rooms.state(chat)['waiting'])
+    assert rooms.state(chat)['since_human'] == 2
+    st = rooms.clear(chat)
+    assert world.llm_chat.session_manager.chats[chat]['rows'] == []
+    assert (st['round'], st['since_human'], st['rounds_run'], st['running']) == (0, 0, 0, False)
+    d = rooms.describe(chat)
+    assert [s['id'] for s in d['seats']] == [a['id'], b['id']] and d['human_every'] == 2 and d['purpose'] == 'Keep me'
+
+
+def test_import_transcript_and_whole_room(world):
+    chat, a, b = _salon()
+    other = rooms.create('other', 'Elsewhere')
+    exported = {'messages': [{'role': 'user', 'content': 'from the file', 'speaker': 'user', 'name': 'Krem'}],
+                'room': {'purpose': 'Imported purpose', 'human_every': 3, 'shuffle': True,
+                         'seats': [{'id': 'zz1', 'persona': 'cobalt', 'name': 'Cobalt', 'context': '', 'memory_write': False,
+                                    'enabled': True, 'color': '', 'avatar': None, 'settings': {'toolset': 'none'}},
+                                   {'bad': 'row'}]}}
+    d = rooms.import_room(other, {'messages': exported['messages']})          # transcript only
+    assert world.llm_chat.session_manager.chats[other]['rows'][0]['content'] == 'from the file'
+    assert d['purpose'] == 'Elsewhere' and d['seats'] == []
+    d = rooms.import_room(other, exported)                                       # the whole room
+    assert d['purpose'] == 'Imported purpose' and d['human_every'] == 3 and d['shuffle'] is True
+    assert [s['id'] for s in d['seats']] == ['zz1'] and d['seats'][0]['settings'] == {'toolset': 'none'}
+    assert [s['id'] for s in rooms.describe(chat)['seats']] == [a['id'], b['id']]  # the salon untouched
+    with pytest.raises(rooms.RoomError):
+        rooms.import_room('nope', exported)
+
+
+def test_a_speakerless_row_is_labelled_the_rooms(world):
+    chat, a, b = _salon()
+    _, room = rooms._room(chat)
+    rows = [{'role': 'user', 'content': 'Summary of earlier talk.'},           # a compress summary
+            {'role': 'assistant', 'content': 'Fine.', 'speaker': a['id']}]
+    hist, cue = rooms.projection(rows, {'id': b['id'], 'name': 'Sapphire 2'}, rooms._names(room))
+    assert hist == [] and cue.startswith('Room: Summary of earlier talk.\n\nSapphire: Fine.')

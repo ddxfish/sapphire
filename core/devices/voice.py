@@ -75,6 +75,7 @@ DOORBELL_GAP = 0.25        # seconds between doorbells while she writes
 PULL_MAX = 2000            # chars one pull may ask for
 
 _speaking_for = contextvars.ContextVar('device_voice_chat_settings', default=None)
+_lane = contextvars.ContextVar('device_voice_reply_lane', default=False)   # inside say(): the reply lane, not her tool call
 _lock = threading.Lock()
 _waiting = {}              # device id -> questions waiting or running
 _showing = {}              # device id -> the cue its light should show right now
@@ -526,6 +527,7 @@ class Speech:
         self.queue = queue.Queue()
         self.spoken = 0                              # sentences the device has played
         self.stopped = False                         # the device stopped it, or a play failed
+        self.turn = None                             # the turn it speaks for (_turn's box): a stop at the device ends that turn
         self.problem = None
         self._thread = None
 
@@ -596,17 +598,19 @@ class Speech:
             if isinstance(said, dict) and said.get('stopped'):
                 self.stopped = True
                 logger.info(f"[DEVICES] {self.device_id}: stopped at the device after {self.spoken} sentence(s)")
+                interrupt(self.device_id, only=self.turn)
 
 
 # --- the halves ----------------------------------------------------------------
 
 def say(device_id, text, chat_settings=None):
     """Speak on a device. Returns (what happened, ok)."""
-    token = _speaking_for.set(chat_settings)
+    token, lane = _speaking_for.set(chat_settings), _lane.set(True)
     try:
         said, ok = _engine().run(device_id, 'speaker', 'say', text, owner=True)
     finally:
         _speaking_for.reset(token)
+        _lane.reset(lane)
     _spoke.ok = bool(ok)
     return _engine().text_of(said), ok
 
@@ -620,6 +624,50 @@ def halt(device_id):
     for speech in live:
         speech.stopped = True
     return bool(live)
+
+
+_running = {}        # device id -> (its turn's box, chat): the turn she is answering that device with, while it runs
+
+
+def answering(device_id):
+    """True while her reply to that device is being spoken there as she
+    writes it. A `say` on it then would be her answer said a second way, as a
+    tool call a stop cannot keep (2026-10-11): the driver refuses it."""
+    if _lane.get():                      # the reply lane's own say, when no sentence was made as she wrote
+        return False
+    with _lock:
+        turn, _ = _running.get(device_id, (None, None))
+    speech = turn.get('speech') if turn else None
+    # only her own turn: a reminder or another chat speaking there is not her answer said twice
+    return bool(speech and speech.ready and turn.get('thread') == threading.get_ident())
+
+
+def interrupt(device_id, only=None):
+    """The person at a device cut her off (its stop, or its wake word said
+    over her): what she was still to say there is dropped AND the turn stops
+    being written, so the next question is not left waiting behind an answer
+    nobody will hear (24 s, 2026-10-11). `only`: that turn and no other, for
+    a stop that is learned late, when the device's next turn may be running.
+    True when there was something to end. Never raises."""
+    if only is not None:                 # that turn's voice and no other's
+        speech = only.get('speech')
+        was = bool(speech and not speech.stopped)
+        if speech:
+            speech.stopped = True
+    else:
+        was = halt(device_id)
+    with _lock:
+        turn, chat = _running.get(device_id, (None, None))
+    if turn is None or (only is not None and turn is not only):
+        return was
+    try:
+        n = _system().llm_chat.cancel_streams(chat)
+        if n:
+            logger.info(f"[DEVICES] {device_id}: cut off at the device, the turn in chat '{chat}' is ended")
+        return was or bool(n)
+    except Exception as e:
+        logger.warning(f"[DEVICES] {device_id}: the turn could not be ended: {e}")
+        return was
 
 
 def say_all(text):
@@ -695,6 +743,11 @@ def stop_all(but=None):
     return '\n'.join(f"{d}: {said.get(d, 'no answer yet')}" for d in todo), any(not v.startswith('not stopped') for v in said.values())
 
 
+# The end of the line above what a device heard. "Just answer": she once called say for her own
+# reply, as a tool call a stop at the device could not keep (2026-10-11).
+ALOUD = "Your reply is spoken aloud there by itself: just answer, never call say on that device for it."
+
+
 def origin_line(row):
     """The line she reads above anything a device heard: which device, where
     it is, and that her answer is said out loud there."""
@@ -703,7 +756,7 @@ def origin_line(row):
     label, where = clean(row.get('label')), clean(row.get('location'))
     name = f'"{row["id"]}"' + (f" ({label})" if label and label != row['id'] else '')
     return (f"[Voice from device {name}." + (f" Location: {where}." if where else '')
-            + " Your reply is spoken aloud there.]")
+            + f" {ALOUD}]")
 
 
 def typed_line(row):
@@ -711,7 +764,7 @@ def typed_line(row):
     read on its small screen, not heard."""
     spoken = origin_line(row)
     return spoken.replace('[Voice from device', '[Typed on device', 1) \
-                 .replace('Your reply is spoken aloud there.', 'Your reply is shown on its small screen.', 1)
+                 .replace(ALOUD, 'Your reply is shown on its small screen.', 1)
 
 
 def pressed_line(row, out):
@@ -720,7 +773,7 @@ def pressed_line(row, out):
     spoken = origin_line(row).replace('[Voice from device', '[Button pressed on device', 1)
     told = {'screen': 'Your reply is shown on its small screen.',
             'none': 'It can neither speak nor show a reply.'}.get(out)
-    return spoken.replace('Your reply is spoken aloud there.', told, 1) if told else spoken
+    return spoken.replace(ALOUD, told, 1) if told else spoken
 
 
 def _ask_backup(row):
@@ -790,12 +843,20 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
             _spoke.ok = None
             sp = Speech(device_id) if reply is None and not mute else None
             box['speech'] = sp
+            if sp:
+                sp.turn = box
+            box['thread'] = threading.get_ident()
+            with _lock:
+                _running[device_id] = (box, chat)
             try:
                 return cadence.run_turn(chat, text, speak=lane if sp else None, source=lane,
                                         on_event=lambda ev: _follow(device_id, ev, sp, reply),
                                         stream_speech=bool(sp and sp.ready))
             finally:
                 box['spoke_ok'] = getattr(_spoke, 'ok', None)
+                with _lock:
+                    if _running.get(device_id, (None,))[0] is box:
+                        _running.pop(device_id, None)
 
         said = inbox.turn(chat, _body, source=lane, lane='now', text=heard)   # a room: the words land as a line
         speech = box.get('speech')
@@ -831,7 +892,11 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
             speech.finish()              # the worker goes home whatever happened
         _free_slot(device_id)
         wake.release(device_id)
-        cue(device_id, 'error' if failed else 'idle')
+        with _lock:
+            more = _waiting.get(device_id, 0) > 0
+        # Its next question is already waiting (asked over this one): that turn said
+        # 'thinking' before this one ended, and an 'idle' now would land on top of it.
+        cue(device_id, 'thinking' if more else 'error' if failed else 'idle')
 
 
 def woke(device_id):
@@ -851,6 +916,8 @@ def woke(device_id):
         if not yours:
             logger.info(f"[DEVICES] {row['id']} woke; the room is {taken_by}'s")
             return {'ok': True, 'yours': False, 'taken_by': taken_by}
+        if interrupt(row['id']):           # said over her: the reply she was making for that device ends, spoken and written
+            logger.info(f"[DEVICES] {row['id']} woke over her own answer: that turn is ended")
         logger.info(f"[DEVICES] {row['id']} woke and holds the room")
         return {'ok': True, 'yours': True}
     except Exception as e:

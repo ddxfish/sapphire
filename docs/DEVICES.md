@@ -438,7 +438,7 @@ of that reply.
 arrives with one line above it, and you see that line in the chat too:
 
 ```
-[Voice from device "kitchen" (Kitchen Pi). Location: Kitchen. Your reply is spoken aloud there.]
+[Voice from device "kitchen" (Kitchen Pi). Location: Kitchen. Your reply is spoken aloud there by itself: just answer, never call say on that device for it.]
 What time is it?
 ```
 

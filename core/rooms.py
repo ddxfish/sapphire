@@ -233,6 +233,54 @@ def remove_seat(chat, seat_id):
     _write(chat, room)
 
 
+def _settle(chat):
+    """Stop the run and wait for the seat in flight to end, so a wipe or a
+    transcript swap never lands inside a turn."""
+    stop(chat)
+    rt = _rooms.get(chat)
+    t = rt.thread if rt is not None else None
+    if t is not None and t.is_alive() and t is not threading.current_thread():
+        t.join(timeout=5.0)
+
+
+def _reset(chat):
+    rt = _rt(chat)
+    rt.round = rt.since_human = rt.rounds_run = rt.skip = 0
+    _publish_state(rt)
+
+
+def clear(chat):
+    """Wipe the transcript. The seats, the rules and the purpose stay."""
+    _room(chat)
+    _settle(chat)
+    if not _sm().clear_chat(chat):
+        raise RoomError(f"The room '{chat}' could not be cleared (a seat is still speaking, or it is sealed).")
+    publish(Events.CHAT_CLEARED, {'chat_name': chat})
+    _reset(chat)
+    return state(chat)
+
+
+def import_room(chat, data):
+    """A room export back in: `messages` replace the transcript; `room` (the
+    chat export's settings.room - seats, rules, purpose) replaces the room
+    record when given, so a room travels whole."""
+    data = data if isinstance(data, dict) else {}
+    _room(chat)
+    rec = data.get('room')
+    if isinstance(rec, dict):
+        seats = [dict(x) for x in (rec.get('seats') or [])
+                 if isinstance(x, dict) and x.get('id') and x.get('persona')]
+        _write(chat, {'purpose': str(rec.get('purpose') or '')[:2000], 'seats': seats, **_rules(rec)})
+    msgs = data.get('messages')
+    if isinstance(msgs, list):
+        _settle(chat)
+        ok, err = _sm().replace_messages(chat, [m for m in msgs if isinstance(m, dict)])
+        if not ok:
+            raise RoomError(f"The transcript could not be imported: {err}")
+        _reset(chat)
+    return describe(chat)
+
+
 # --- the projection ---------------------------------------------------------------
 
 def _names(room):
@@ -258,7 +306,7 @@ def _label(row, names):
         return str(row['name'])
     if isinstance(sp, str) and ':' in sp:
         return sp.split(':', 1)[1] or sp
-    return sp or 'someone'
+    return sp or names[NOTICE]          # a row with no speaker (a compress summary) is the room's
 
 
 def rows_of(chat):

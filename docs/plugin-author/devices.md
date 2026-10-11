@@ -381,7 +381,7 @@ answer.
 She reads one line above what was heard, naming the device and its location:
 
 ```
-[Voice from device "kitchen" (Kitchen Pi). Location: Kitchen. Your reply is spoken aloud there.]
+[Voice from device "kitchen" (Kitchen Pi). Location: Kitchen. Your reply is spoken aloud there by itself: just answer, never call say on that device for it.]
 ```
 
 A chat that is mid-turn is waited for, up to 20 seconds. One device may have

@@ -155,7 +155,7 @@ def test_a_board_with_a_speaker_and_no_keyboard_hears_the_reply(home):
         speech.return_value.spoken = 0
         out = voice.pressed('pocket', 'boot', 'short')
     assert out['accepted'] and 'msg' not in out
-    assert run_turn.call_args.args[1].startswith('[Button pressed on device "pocket" (Pocket). Your reply is spoken aloud there.]')
+    assert run_turn.call_args.args[1].startswith('[Button pressed on device "pocket" (Pocket). Your reply is spoken aloud there by itself: just answer, never call say on that device for it.]')
     assert run_turn.call_args.kwargs['speak'] == 'device:pocket'
 
 

@@ -96,6 +96,20 @@ async def say(chat: str, request: Request, _=Depends(require_login)):
     return {"ticket": ticket, "state": rooms.state(chat)}
 
 
+@router.post("/api/rooms/{chat}/clear")
+async def clear(chat: str, _=Depends(require_login)):
+    """Wipe the transcript; seats, rules and purpose stay."""
+    await _room_or_404(chat)
+    return await _call(rooms.clear, chat)
+
+
+@router.post("/api/rooms/{chat}/import")
+async def import_room(chat: str, request: Request, _=Depends(require_login)):
+    """{messages?, room?} - a chat export's messages and settings.room."""
+    await _room_or_404(chat)
+    return await _call(rooms.import_room, chat, await _json(request))
+
+
 @router.post("/api/rooms/{chat}/start")
 async def start(chat: str, request: Request, _=Depends(require_login)):
     """Go: a waiting room runs one more round; `rounds` = N rounds before the human rule asks again."""

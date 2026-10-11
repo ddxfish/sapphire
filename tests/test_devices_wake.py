@@ -2,6 +2,7 @@
 # her voice on every device at once (`all`). The room arbiter on its own,
 # then through the real voice door with two satellites and the main app,
 # then the main app's own hook points, then `all` and `stop`.
+import inspect
 import os
 import threading
 import time
@@ -438,3 +439,28 @@ def test_the_wake_door(home):
     with pytest.raises(HTTPException) as e:
         asyncio.run(routes.devices_wake('pi2', _request(key='wrong-key-00000000')))
     assert e.value.status_code == 401
+
+
+def test_a_wake_said_over_her_ends_that_turn():
+    """0.7.1: the wake word during her reply. The board cuts the sentence; core stops sending the rest
+    AND stops writing the turn, so the next question does not wait behind it."""
+    assert 'interrupt(' in inspect.getsource(voice.woke)
+    speech, chatter = SimpleNamespace(stopped=False), MagicMock()
+    mine = {'speech': speech}
+    chatter.cancel_streams.return_value = 1
+    with voice._lock:
+        voice._live['esp-over'] = [speech]
+        voice._running['esp-over'] = (mine, 'den')
+    try:
+        with patch.object(voice, '_system', return_value=SimpleNamespace(llm_chat=chatter)):
+            assert voice.interrupt('esp-over', only={}) is False         # a late stop for another turn: this one is left alone
+            chatter.cancel_streams.assert_not_called()
+            assert speech.stopped is False
+            assert voice.interrupt('esp-over', only=mine) is True
+            chatter.cancel_streams.assert_called_once_with('den')
+            assert speech.stopped is True
+            assert voice.interrupt('nobody') is False
+    finally:
+        with voice._lock:
+            voice._live.pop('esp-over', None)
+            voice._running.pop('esp-over', None)

@@ -17,6 +17,7 @@ import { claimOrgans, releaseOrgans } from '../surface/organs.js';
 import { coreSections } from '../surface/sections/core-sections.js';
 import { accordionHtml, initAccordions } from '../shared/accordion.js';
 import { showModal, showConfirm, showPrompt, escapeHtml as esc } from '../shared/modal.js';
+import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { listPersonas, avatarImg } from '../shared/persona-api.js';
 import { fetchWithTimeout } from '../shared/fetch.js';
 import * as api from '../api.js';
@@ -95,6 +96,14 @@ function skeleton() {
                 <div class="sb-actions-left">
                     <button type="button" id="rm-new" class="sb-icon-btn" title="New room">+</button>
                     <button type="button" id="rm-delete" class="sb-icon-btn sb-icon-danger" title="Delete this room (its chat too)">&#x1F5D1;</button>
+                    <button type="button" id="rm-clear" class="sb-icon-btn" title="Clear the transcript - bots, rules and purpose stay">&#x2715;</button>
+                    <div class="sb-kebab kebab-menu" id="rm-kebab">
+                        <button type="button" class="sb-icon-btn kebab-btn" id="rm-kebab-btn" title="More">&#x22EE;</button>
+                        <div class="kebab-dropdown">
+                            <button type="button" id="rm-import">Import</button>
+                            <button type="button" id="rm-export">Export</button>
+                        </div>
+                    </div>
                 </div>
             </div>`,
         sidebarBody: `
@@ -138,6 +147,10 @@ function skeleton() {
     $('#rm-settings').onclick = () => { if (R) openSettings(); };
     $('#rm-new').onclick = newRoom;
     $('#rm-delete').onclick = () => { if (R) deleteRoom(); };
+    $('#rm-clear').onclick = () => { if (R) clearRoom(); };
+    $('#rm-kebab-btn').onclick = (e) => { e.stopPropagation(); $('#rm-kebab').classList.toggle('open'); };
+    $('#rm-import').onclick = () => { $('#rm-kebab').classList.remove('open'); if (R) importRoom(); };
+    $('#rm-export').onclick = () => { $('#rm-kebab').classList.remove('open'); if (R) exportRoom(); };
     $('#rm-go').onclick = () => run('/start', {});
     $('#rm-stop').onclick = () => run('/stop', {});
     $('#rm-skip').onclick = () => run('/start', { rounds: Math.max(1, parseInt($('#rm-skip-n').value, 10) || 1) });
@@ -150,7 +163,7 @@ function skeleton() {
         const picker = $('#rm-picker');
         if (picker.classList.toggle('open')) await fillPicker();
     };
-    document.addEventListener('click', () => $('#rm-picker')?.classList.remove('open'));
+    document.addEventListener('click', () => { $('#rm-picker')?.classList.remove('open'); $('#rm-kebab')?.classList.remove('open'); });
 
     // the roster: one delegate for the seat rows (accordions persist per room:seat id)
     const roster = $('#rm-roster');
@@ -522,6 +535,44 @@ async function newRoom() {
         const info = await call('/api/rooms', 'POST', { name: name.trim() });
         await open(info.chat);
     } catch (e) { ui.showToast(e.message, 'error'); }
+}
+
+function clearRoom() {
+    const chat = R.chat;
+    showConfirm(`Clear the transcript of "${chat}"? The bots, their settings, the rules and the purpose stay.`, async () => {
+        try {
+            R.info.state = await call(roomUrl('/clear'), 'POST', {});
+            await refresh(false);
+            paintTurn();
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    }, { title: 'Clear transcript', saveLabel: 'Clear' });
+}
+
+async function exportRoom() {
+    try {
+        const data = await call(`/api/chats/${enc(R.chat)}/export`);
+        showExportDialog({ type: 'Chat Room', name: R.chat, data, filename: `${R.chat}.room.json` });
+    } catch (e) { ui.showToast(e.message, 'error'); }
+}
+
+function importRoom() {
+    const chat = R.chat;
+    showImportDialog({
+        type: `into the room "${chat}"`,
+        overwrites: [{ key: 'room', label: 'Also restore the bots, rules and purpose from the file (a room export)' }],
+        existingNames: [],
+        validate: (p) => (Array.isArray(p) || Array.isArray(p?.messages)) ? null : 'Not a chat export: no messages array',
+        getName: () => chat,
+        onImport: async (p, { overwrites }) => {
+            const body = { messages: Array.isArray(p) ? p : p.messages };
+            const rec = p?.settings?.room || p?.room;
+            if (overwrites.room && rec && typeof rec === 'object') body.room = rec;
+            if (!R || R.chat !== chat) throw new Error('The room changed while the file was open.');
+            R.mute = Date.now() + ECHO_MS;
+            R.info = await call(roomUrl('/import'), 'POST', body);
+        },
+        onDone: async () => { if (R && R.chat === chat) { paintAll(); await refresh(false); } },
+    });
 }
 
 function deleteRoom() {

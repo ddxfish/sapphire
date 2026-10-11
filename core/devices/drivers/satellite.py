@@ -19,6 +19,7 @@
 #
 # The key travels without encryption, so a satellite has to be on the local
 # network. That is checked when the device is saved.
+import base64
 import hashlib
 import io
 import logging
@@ -62,6 +63,11 @@ SPEC = {
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
          'capability': 'camera',
          'help': "Off = Sapphire is not offered a camera on this satellite."},
+        {'key': 'camera_turn', 'type': 'select', 'label': 'Turn its pictures', 'default': '0',
+         'capability': 'camera',
+         'options': [{'value': '0', 'label': 'not at all'}, {'value': '90', 'label': '90 degrees to the right'},
+                     {'value': '180', 'label': '180 degrees'}, {'value': '270', 'label': '90 degrees to the left'}],
+         'help': "For a camera mounted on its side or upside down: each picture is turned this way before she sees it."},
         {'key': 'ota', 'type': 'boolean', 'label': 'Updates over the air', 'tab': 'Status', 'default': True,
          'capability': 'firmware',
          'help': "Off = no program is ever sent to this board from here; its Firmware tab only checks. "
@@ -74,6 +80,10 @@ SPEC = {
         # what each press of each button does: the board says which buttons it has and what it can do by
         # itself (/health `buttons`), bindings() below turns that into the menu the page draws
         {'key': 'buttons', 'type': 'bindings', 'label': 'Buttons', 'capability': 'buttons'},
+        {'key': 'volume_step', 'takes': 'volume.step', 'type': 'select', 'label': 'A volume button changes it by',
+         'capability': 'speaker', 'default': '10',
+         'options': [{'value': '5', 'label': '5%'}, {'value': '10', 'label': '10%'}, {'value': '20', 'label': '20%'}],
+         'help': "For a button set to Volume up or Volume down (Buttons tab), and for her own up and down."},
         {'key': 'question_max_s', 'takes': 'mic.max_s', 'type': 'number', 'label': 'Longest question (seconds)', 'capability': 'wake',
          'default': 30, 'min': 5, 'max': 60,
          'help': 'It stops listening when you go quiet. This is the cut-off for when you do not: '
@@ -228,6 +238,12 @@ def apply(device, config, secrets):
     if isinstance(longest, (int, float)) and 'max_s' in (_health(device, config, secrets).get('mic') or {}):
         try:
             _call('POST', f"/mic?max_s={int(longest)}", config, secrets)
+        except Problem as e:
+            raise _engine_error(str(e))
+    # only when it is set, and only a board that states it (0.7.0): an older program refuses the word
+    if config.get('volume_step') and 'volume_step' in _health(device, config, secrets):
+        try:
+            _call('POST', f"/volume?step={_step(config)}", config, secrets)
         except Problem as e:
             raise _engine_error(str(e))
     screen = {k: int(config[k]) for k in SCREEN_KEYS if isinstance(config.get(k), (int, float))}
@@ -645,6 +661,8 @@ def _takes(h):
         takes.append('screen.picture')
     if 'max_s' in (h.get('mic') if isinstance(h.get('mic'), dict) else {}):
         takes.append('mic.max_s')
+    if 'volume_step' in h:
+        takes.append('volume.step')
     led = h.get('led') if isinstance(h.get('led'), dict) else {}
     looks = led['looks'] if isinstance(led.get('looks'), list) else LOOKS
     takes += [f'look.{n}' for n in looks if isinstance(n, str)]
@@ -712,11 +730,13 @@ def status(device, config, secrets):
         readings['temperature'] = f"{h['temp_c']}C"
     wake = h.get('wakeword') if isinstance(h.get('wakeword'), dict) else {}
     if wake:
-        readings['wake word'] = ('listening' if wake.get('enabled') and wake.get('running') else 'off') \
+        readings['wake word'] = ('paused while a backup lands' if wake.get('paused') else
+                                 'listening' if wake.get('enabled') and wake.get('running') else 'off') \
             + (f" for {wake['model']}" if wake.get('model') else '')
     led = h.get('led') if isinstance(h.get('led'), dict) else {}
     if led:
-        readings['light'] = 'dark' if led.get('blackout') else f"{led.get('state', '?')}, {led.get('animation', '?')}"
+        readings['light'] = 'turned off: dark through every state' if led.get('off') else \
+            'dark' if led.get('blackout') else f"{led.get('state', '?')}, {led.get('animation', '?')}"
     link = next((h[k] for k in ('link', 'brain_events') if isinstance(h.get(k), dict)), {})
     if link:
         readings['link to Sapphire'] = 'connected' if link.get('connected') else 'NOT connected'
@@ -817,6 +837,24 @@ def rgb565(raw, width, height):
     return packed.astype('>u2').tobytes(), img.width, img.height
 
 
+def _upright(b64, turn, width, height):
+    """A camera's JPEG (base64) turned `camera_turn` degrees to the right,
+    for a camera mounted turned: (base64, w, h). Left as it came when it is
+    not turned, or will not open."""
+    how = {'90': 'ROTATE_270', '180': 'ROTATE_180', '270': 'ROTATE_90'}.get(str(turn or '0'))   # PIL counts to the left
+    if not how:
+        return b64, width, height
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(base64.b64decode(b64))).transpose(getattr(Image.Transpose, how))
+        out = io.BytesIO()
+        img.convert('RGB').save(out, 'JPEG', quality=90)
+        return base64.b64encode(out.getvalue()).decode('ascii'), img.width, img.height
+    except Exception as e:
+        logger.warning(f"[DEVICES] a camera picture could not be turned: {e}")
+        return b64, width, height
+
+
 def _picture(value, device, config, secrets):
     from core import images
     source, seconds = _seconds_and_rest(value, 60)
@@ -895,6 +933,14 @@ def _stop(device, config, secrets):
 VOLUME_STEP = 10
 
 
+def _step(config):
+    """The device's volume step, 1 to 50; 10 when it is not set or not a number."""
+    try:
+        return max(1, min(50, int(config.get('volume_step') or VOLUME_STEP)))
+    except (TypeError, ValueError):
+        return VOLUME_STEP
+
+
 def _volume(value, config, secrets):
     """Read, set, or step the speaker's volume. A satellite whose program
     has no volume door is told so, plainly."""
@@ -904,7 +950,7 @@ def _volume(value, config, secrets):
             now = int(_json(_call('GET', '/volume', config, secrets)).get('volume', 0))
             if not want:
                 return f"Volume is {now}%.", True
-            level = max(0, min(100, now + (VOLUME_STEP if want == 'up' else -VOLUME_STEP)))
+            level = max(0, min(100, now + (_step(config) if want == 'up' else -_step(config))))
         else:
             try:
                 level = max(0, min(100, int(float(want))))
@@ -1078,6 +1124,10 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 return f"The card in {device['id']} is formatted (FAT32) and empty.", True
         if capability == 'speaker':
             if action == 'say':
+                from core.devices import voice
+                if voice.answering(device['id']):          # her own reply is already spoken there, sentence by sentence
+                    return (f"Not said: your reply to {device['id']} is already spoken there as you write it. "
+                            "Do not use say for it. Just answer in plain words."), False
                 return _say(value, device, config, secrets)
             if action == 'stop':
                 return _stop(device, config, secrets)
@@ -1223,9 +1273,10 @@ def run(device, capability, action, value, config, secrets, call_tool):
             if not shot.get('data_b64'):
                 return "The camera gave no picture.", False
             where = f" in {device['location']}" if device.get('location') else ''
-            size = f", {shot['width']}x{shot['height']}" if shot.get('width') and shot.get('height') else ''
+            data, w, h = _upright(shot['data_b64'], config.get('camera_turn'), shot.get('width'), shot.get('height'))
+            size = f", {w}x{h}" if w and h else ''
             return {'text': f"A picture from the camera of {device['id']}{where}{size}.",
-                    'images': [{'data': shot['data_b64'], 'media_type': 'image/jpeg'}]}, True
+                    'images': [{'data': data, 'media_type': 'image/jpeg'}]}, True
     except Problem as e:
         return str(e), False
     return f"A satellite has no {capability} / {action}.", False

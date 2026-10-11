@@ -42,7 +42,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes; with `chat` and `background`, the chat name and scene it shows now |
 | `firmware`, `model`, `slot` | The program's version (`"0.3.0"`), which program it is (`"pocket"`, `"satellite"`: the firmware source's board id, so Sapphire knows what to send it), and the slot running it (`"ota_0"`). With `firmware` in `has` the board takes a new program over the air (below). A board with one program slot (a builder who kept the whole flash for the program, a small chip) leaves `firmware` out of `has`: the device then reads "updates: over USB only" and gets no Firmware tab. The person can also turn updates off per device in Sapphire (the Status tab's switch) whatever the board says |
 | `mac` | The chip's own id, `"aa:bb:cc:dd:ee:01"`. The flasher reads the same over USB: a board is known by it whatever it is called |
-| `led` | `{"state", "animation", "blackout"}`, what the ring shows now |
+| `led` | `{"state", "animation", "blackout"}`, what the ring shows now. A ring that can be turned off for good adds `"off"` (true = dark through every state until it is turned on) and `"level"`, its own brightness in percent |
 | `buttons` | With `buttons` in `has`: `{"list": [{"name": "boot", "short": "keyboard", "long": "clear"}], "can": {"keyboard": "Show or hide the keyboard", "clear": "Clear the chat window"}}`. `list` names each button and the job it does by itself for a short, long or double press (left out = nothing). An entry may state `"ways": ["short"]`: the only ways that button can be pressed (a place on a touch screen is tapped, never held), and the page offers no others. `can` is every job the board can do by itself, with the words the Devices page shows for it. See "A button was pressed" |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
@@ -79,18 +79,18 @@ A board answers only the addresses of what it has.
 | Has | Request | What it does |
 |---|---|---|
 | `speaker` | `POST /audio/speak` | Plays the sound. Answers when it has taken the sound, within 150 s - a board that plays as it goes may still be sounding its last second: `{"ok": true}`, or `{"ok": true, "stopped": true}` when the board's own button cut it short |
-| `speaker` | `POST /audio/stop` | Cuts what is playing and refuses the rest of that reply for a few seconds: `{"stopped": true}`, or `{"stopped": false}` when nothing was playing. A board without it answers 404; Sapphire then only stops sending |
+| `speaker` | `POST /audio/stop` | Cuts what is playing and refuses the rest of that reply for a few seconds: `{"stopped": true}`, or `{"stopped": false}` when nothing was playing. A board without it answers 404; Sapphire then only stops sending. A stop made on the board (a button, a tap, the wake word said over her) cuts the sentence and answers `"stopped": true` to every sentence after it until her turn ends (`idle` on its stream) or it has sent a new question. A sentence that arrives while the board is hearing a question is answered `stopped` too. A wake claimed over her own voice (`POST .../wake`) makes Sapphire drop the rest of that reply by itself |
 | `speaker` | `GET /sounds` | Its stored sounds: `{"sounds": [{"name": "ping"}]}` |
 | `speaker` | `POST /audio/effect?name=ping` | Plays one stored sound |
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
-| `speaker` | `POST /volume?level=80` | Sets it, kept across restarts. A board without it answers 404 |
+| `speaker` | `POST /volume?level=80` | Sets it, kept across restarts. A board without it answers 404. A board with volume buttons states `volume_step` in `/health` and takes `step=10` here too (1 to 50): what one press adds or takes, set per device in Settings > Devices |
 | `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav. A body may also take `lead_in` (seconds before the mic opens, default its own cue) and `tone=false` (no ping): the Wakeword Maker asks for `lead_in=0&tone=false` because it tells the person itself when to speak |
 | `mic` | `GET /mic`, `POST /mic?gain=36`, `POST /mic?agc=on`, `POST /mic?max_s=30` | The microphones' gain in dB (`gain_db`, `gain_max_db`), the board's automatic gain control, and `max_s`: the seconds at which a question is cut off however long the talk (5 to 60, kept). A board that takes `max_s` states it in `/health` as `mic.max_s`, and only such a board is sent it, when the device is saved. Optional: a body without the door answers 404 and the driver says so |
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
 | `light` | `GET /led/spec` | Its colors and animations |
 | `light` | `GET` and `PUT /led/baseline` | Its resting light, kept after a restart |
 | `light` | `PUT /led/looks` | After a save in Settings > Devices: `{"resting", "listening", "thinking", "tool", "speaking", "nolink", "night"}`, each a look, plus `"from"` and `"until"` clock times. A look that is not sent is kept. A board without the door answers 404 and keeps its own |
-| `wake` | `GET /wakeword` | `{"enabled", "running", "model"}` |
+| `wake` | `GET /wakeword` | `{"enabled", "running", "model"}`. In `/health` a board may add `"paused": true`: a backup is landing on its card and it hears no wake word until that ends (the ESP32, 0.7.0) |
 | `wake` | `POST /wakeword?enabled=true` | Listen for the wake word, or stop |
 | `wake` | `PUT /wakeword/model?name=hey_marcus&threshold=0.97&format=tflite&phrase=hey+marcus` | A new wake word model: the bytes are the request body (`application/octet-stream`). `format` is `tflite` (microWakeWord, for an ESP32; `sliding_window` and `step_ms` ride along) or `onnx` (openWakeWord, for a Pi). The body keeps it across restarts, listens for it from then on, and answers `{"model": name, "threshold"}`; `GET /wakeword` reports the new name. The Wakeword Maker's Install page sends this. A body without the door answers 404 and the page says to copy the files by hand |
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
@@ -142,7 +142,11 @@ tool, speaking, error); then what she set with `/led`, held for its time, or
 dark after `{"state": "off"}` until `{"state": "idle"}`; then, inside the hours,
 the resting look, and outside them the `night` look, where the color `off` is
 dark. A state always shows, through a blackout and at any hour, so the ring
-says when she is listening. The hours are by the board's own local time; the
+says when she is listening. The ESP32 firmware (0.7.0) is stricter about
+`off`: a ring turned off, by her or by its own button, is dark through every
+state except the camera's warning, and stays off across a restart (`led.off`
+in `/health`); its screen still shows the state. A backup landing on its card
+shows as a soft orange pulse. The hours are by the board's own local time; the
 same `from` and `until` means always on. Built in, before any save: dark from
 00:00 to 08:00, tool purple, speaking cyan. The Pi body (0.7.2) and the ESP32
 firmware keep this order, and both state `plays`.
