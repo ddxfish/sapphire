@@ -820,7 +820,7 @@ def test_the_routes_are_all_behind_login():
     prove that lock on them)."""
     from core.auth import require_login
     found = [r for r in routes.router.routes if r.path.startswith('/api/devices')]
-    assert len(found) == 26            # + the firmware sources (2026-10-10), + provision, here, firmware index + part, flash ports/chip/start/status/ask/close (2026-10-07), a firmware file of the user's own and a press (2026-10-09)
+    assert len(found) == 28            # + add and remove a connection, + the firmware sources (2026-10-10), + provision, here, firmware index + part, flash ports/chip/start/status/ask/close (2026-10-07), a firmware file of the user's own and a press (2026-10-09)
     assert not [r.path for r in routes.router.routes if r.path.startswith('/api/body')]
     open_doors = []
     for r in found:
@@ -1032,3 +1032,76 @@ def test_a_device_turned_off_is_not_told(host):
     routes.update_device('desktop', {'enabled': False})
     assert told == [] and core.get('desktop')['enabled'] is False
     del sys.modules[MOD].apply
+
+
+# ── connections: more than one way to reach a device (2026-10-10) ──────────────
+
+def _second(host, driver='fake2', kind='Fake machine'):
+    assert host.reg.register_driver(driver, dict(DRIVER, label='Other way', kind=kind,
+                                                 locked_by_default=[]), 'fakeplug')
+    core._modules.clear()                        # a new driver: the engine imports its plugin's modules afresh
+    sys.modules[MOD] = _fake_driver(host.seen)
+
+
+def test_a_driver_with_no_kind_is_a_kind_of_its_own(host):
+    assert host.reg.get_driver('fake')['kind'] == 'Fake machine'
+    _second(host, 'cam', kind='Camera')
+    assert host.reg.get_driver('cam')['kind'] == 'Camera'
+
+
+def test_a_second_connection_is_added_last_and_keeps_its_own_secrets(host):
+    _add()
+    _second(host)
+    row, failed = core.connect('desktop', 'fake2', {'host': 'tower-b', 'password': 'second-secret', 'auth': 'password'})
+    assert failed == [] and [p['driver'] for p in row['parts']] == ['fake', 'fake2']
+    assert [p['driver'] for p in core.get('desktop')['parts']] == ['fake', 'fake2']
+    held = host.sec.status('desktop')
+    assert held.get('fake.password') == 'set' and held.get('fake2.password') == 'set'
+    with pytest.raises(core.DeviceError, match='already has'):
+        core.connect('desktop', 'fake2', {'host': 'x'})
+
+
+def test_a_connection_of_another_kind_is_refused(host):
+    _add()
+    _second(host, 'cam', kind='Camera')
+    with pytest.raises(core.DeviceError, match='is a Fake machine'):
+        core.connect('desktop', 'cam', {'host': 'x'})
+    assert len(core.get('desktop')['parts']) == 1
+
+
+def test_the_earlier_connection_does_what_both_can_and_the_order_is_the_users(host):
+    _add(allow_all=True)
+    _second(host)
+    core.connect('desktop', 'fake2', {'host': 'tower-b', 'allow_all': True})
+    caps = core.describe(core.get('desktop'))
+    assert [(c['capability'], c['driver']) for c in caps] == [('shell', 'fake'), ('lamp', 'fake')]   # said once
+    core.update('desktop', order=['fake2', 'fake'])
+    assert [p['driver'] for p in core.get('desktop')['parts']] == ['fake2', 'fake']
+    assert {c['driver'] for c in core.describe(core.get('desktop'))} == {'fake2'}
+    with pytest.raises(core.DeviceError, match='each of'):
+        core.update('desktop', order=['fake2'])
+
+
+def test_a_device_reached_by_one_connection_is_online_and_says_which_is_down(host):
+    _add()
+    _second(host)
+    core.connect('desktop', 'fake2', {'host': 'dead'})
+    st = core._probe(core.get('desktop'))
+    assert st['online'] and [p['online'] for p in st['parts']] == [True, False]
+    st = dict(st, misses=0)
+    assert core._down_note(st, 'fake') == ''
+    assert core._down_note(st, 'fake2').startswith('Its fake2 connection is down')
+
+
+def test_removing_a_connection_forgets_its_secrets_and_the_last_one_stays(host):
+    _add()
+    _second(host)
+    core.connect('desktop', 'fake2', {'host': 'tower-b', 'password': 'second-secret', 'auth': 'password'})
+    row = core.disconnect('desktop', 'fake')
+    assert [p['driver'] for p in row['parts']] == ['fake2']
+    held = host.sec.status('desktop')
+    assert 'fake.password' not in held and held.get('fake2.password') == 'set'
+    with pytest.raises(core.DeviceError, match='only connection'):
+        core.disconnect('desktop', 'fake2')
+    with pytest.raises(core.DeviceError, match="no 'fake'"):
+        core.disconnect('desktop', 'fake')

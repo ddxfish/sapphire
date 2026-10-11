@@ -64,8 +64,8 @@ function drawPage(container) {
         <div class="sched-layout trigger-2col" id="dev-list" style="max-width:none;padding:0">
             <div style="min-width:0">
                 <div class="sched-col-header">
-                    <h3>Boards</h3>
-                    <button class="btn btn-sm btn-primary" id="dev-board-btn" style="display:none" title="Plug an ESP32 board in: it is written and set up from here">+ Add Board</button>
+                    <h3>Satellites</h3>
+                    <button class="btn btn-sm btn-primary" id="dev-board-btn" style="display:none" title="Something that runs Sapphire's own program: a dev board, a Raspberry Pi, a computer">+ Add Satellite</button>
                 </div>
                 <div id="dev-list-boards"><p class="text-muted">Loading...</p></div>
             </div>
@@ -89,7 +89,7 @@ function drawPage(container) {
         if (settings) drawSettings(container.querySelector('#dev-pane-settings'));
     });
     container.querySelector('#dev-add-btn').addEventListener('click', () => openAdd());
-    container.querySelector('#dev-board-btn').addEventListener('click', () => openFlash(flashed));
+    container.querySelector('#dev-board-btn').addEventListener('click', () => openAdd(true));
     container.querySelector('#dev-filter').addEventListener('click', e => {
         const pill = e.target.closest('[data-type]');
         if (!pill) return;
@@ -141,7 +141,7 @@ async function drawSettings(el) {
         </div>`;
     el.innerHTML = `
         <b style="display:block;margin-bottom:4px">Board firmware sources</b>
-        <div class="setting-help" style="margin-bottom:10px">Where Add Board and a device's Firmware tab find programs for boards. Each is a firmware release URL (the folder its index.json is in) or a folder on Sapphire's computer.</div>
+        <div class="setting-help" style="margin-bottom:10px">Where Add Satellite and a device's Firmware tab find programs for boards. Each is a firmware release URL (the folder its index.json is in) or a folder on Sapphire's computer.</div>
         <div class="settings-grid">${all.map(row).join('')}</div>
         <div class="setting-input" style="display:flex;gap:8px;margin-top:14px;align-items:center">
             <input type="text" id="dev-source-new" style="flex:1;min-width:0" placeholder="https://github.com/someone/their-firmware/releases/latest/download/">
@@ -168,7 +168,7 @@ async function loadList() {
         drivers = data.drivers || [];
         devices = (data.devices || []).sort((a, b) =>
             (a.type || '').localeCompare(b.type || '') || a.id.localeCompare(b.id));   // by type, then name: stable
-        const board = page.querySelector('#dev-board-btn');           // boards are satellites: no driver, no button
+        const board = page.querySelector('#dev-board-btn');           // no satellite driver, no button
         if (board) board.style.display = drivers.some(d => d.driver === 'satellite' && d.available) ? '' : 'none';
         drawList();
     } catch (e) {
@@ -190,11 +190,11 @@ function drawList() {
     bar.innerHTML = types.length < 2 ? '' : `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${
         pill('', `All (${devices.length})`)}${types.map(t => pill(t, `${t} (${counts[t]})`)).join('')}</div>`;
     const shown = typeFilter ? devices.filter(d => d.type === typeFilter) : devices;
-    // two columns only so the page is shorter: boards Sapphire's firmware runs on, and everything else
+    // left: what runs Sapphire's own program (a satellite). right: everything else she can use
     const none = what => `<p class="text-muted" style="font-size:0.9em">${what}</p>`;
     const fill = (el, some, empty) => { el.innerHTML = some.length ? some.map(card).join('') : none(empty); };
-    fill(boards, shown.filter(isBoard), typeFilter ? 'No boards of this type.' : 'No boards yet. Plug one in and add it.');
-    fill(others, shown.filter(d => !isBoard(d)), typeFilter ? 'No devices of this type.' : 'No devices yet. Add one to get started.');
+    fill(boards, shown.filter(isSatellite), typeFilter ? 'No satellites of this type.' : 'No satellites yet. Add a board, a Raspberry Pi or a computer.');
+    fill(others, shown.filter(d => !isSatellite(d)), typeFilter ? 'No devices of this type.' : 'No devices yet. Add one to get started.');
     onPoll?.(devices);
 }
 
@@ -235,6 +235,7 @@ const flashed = async id => { await loadList(); openDevice(id, undefined, { test
 
 // A board Sapphire's own firmware runs on: written by the flasher (it has the
 // chip's id) or one that says it takes a program. A Pi satellite is neither.
+const isSatellite = d => d.driver === 'satellite';
 const isBoard = d => d.driver === 'satellite' && !!(d.fingerprint || (d.capabilities || []).includes('firmware'));
 
 function openMenu(anchor, d) {
@@ -295,35 +296,53 @@ function setupFields(d) {
         .map(f => ({ ...withLook(f, d.driver), tab: undefined }));
 }
 
-function typeCard(d) {
-    const caps = (d.capabilities || []).join(' · ');
-    return `
-    <button type="button" class="ui-card" data-driver="${esc(d.driver)}" ${d.available ? '' : 'disabled'}
-            style="cursor:${d.available ? 'pointer' : 'not-allowed'};text-align:left;font:inherit;${d.available ? '' : 'opacity:0.55'}">
-        <div style="font-size:1.6em;line-height:1.2">${d.icon || ''}</div>
-        <div class="ui-card-title" style="padding-right:0">${esc(d.label)}</div>
-        <div class="ui-card-body" style="margin-top:2px">${esc(caps)}</div>
-        ${d.available ? '' : `<div class="ui-card-body" style="color:var(--text-muted)">${esc(d.note || 'not available')}</div>`}
-    </button>`;
+// The add window: what the thing IS, opened to the ways it is reached. One
+// kind = nothing to choose, so it is open. Both buttons of the page use it.
+const BOARD = { driver: '', label: 'Dev board', icon: '\u{1F4E1}', available: true,
+                note: 'An ESP32 board on a USB cable. Sapphire writes her program to it and sets it up.' };
+
+function addRows(satellite) {
+    if (!satellite) return drivers.filter(d => d.kind !== 'Satellite');
+    const program = drivers.find(d => d.driver === 'satellite');
+    return [BOARD, ...(program ? [{ ...program, label: 'Raspberry Pi or computer',
+        note: program.available ? "A machine already running Sapphire's satellite program. You give its address." : program.note }] : [])];
 }
 
+function kindsHTML(rows) {
+    const kinds = [...new Set(rows.map(d => d.kind || 'Satellite'))].sort((x, y) => x.localeCompare(y));
+    const row = d => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--border)${d.available ? '' : ';opacity:0.55'}">
+            <span style="font-size:1.3em;line-height:1">${d.icon || ''}</span>
+            <div style="flex:1;min-width:0"><div>${esc(d.label)}</div>
+                <div class="setting-help">${esc(d.note || (d.capabilities || []).join(' \u00b7 '))}</div></div>
+            <button type="button" class="btn btn-sm btn-primary" data-driver="${esc(d.driver)}" ${d.available ? '' : 'disabled'} style="flex-shrink:0">Add</button>
+        </div>`;
+    return kinds.map(k => {
+        const mine = rows.filter(d => (d.kind || 'Satellite') === k);
+        return `<details ${kinds.length === 1 ? 'open' : ''} style="border:1px solid var(--border);border-radius:var(--radius-md,8px);margin-bottom:6px">
+            <summary style="cursor:pointer;padding:8px 12px;font-weight:600">${mine[0].icon || ''} ${esc(k)}
+                <span class="text-muted" style="font-weight:400;font-size:var(--font-sm,13px)">${mine.length}</span></summary>
+            ${mine.map(row).join('')}</details>`;
+    }).join('');
+}
 
-function openAdd() {
-    const modal = showModal(`${ICON} Add a device`,
+function openAdd(satellite = false) {
+    const modal = showModal(`${ICON} ${satellite ? 'Add a satellite' : 'Add a device'}`,
         [{ type: 'html', value: '<div id="dev-add"></div>' }], null, { wide: true });
     const body = modal.element.querySelector('#dev-add');
     const footer = modal.element.querySelector('.modal-footer');
     let addBtn = null;
 
     // step 1: what are you adding?
+    const rows = addRows(satellite);
     const pick = () => {
         addBtn?.remove(); addBtn = null;
-        body.innerHTML = drivers.length
-            ? `<div class="setting-help" style="margin-bottom:10px">What are you adding?</div>
-               <div class="ui-grid ui-grid-sm">${drivers.map(typeCard).join('')}</div>`
+        body.innerHTML = rows.length
+            ? `<div class="setting-help" style="margin-bottom:10px">What are you adding?</div>${kindsHTML(rows)}`
             : '<p class="text-muted" style="font-size:0.9em">No device types yet. Enable a plugin that provides one, such as SSH.</p>';
         body.querySelectorAll('[data-driver]').forEach(c => c.addEventListener('click', () => {
-            const d = drivers.find(x => x.driver === c.dataset.driver && x.available);
+            if (!c.dataset.driver) { modal.close(); return openFlash(flashed); }      // a board is written, not typed in
+            const d = rows.find(x => x.driver === c.dataset.driver && x.available);
             if (d) setup(d);
         }));
     };
@@ -569,6 +588,69 @@ function mountActions(el, device, cap) {
     });
 }
 
+// The ways this device is reached. The first that can do a thing does it, so
+// the order is the user's. Every change here is saved at once.
+const addable = device => {
+    const kind = device.parts[0]?.kind;
+    return drivers.filter(d => d.available && d.kind === kind && !device.parts.some(p => p.driver === d.driver));
+};
+
+function mountConnections(el, device, redraw) {
+    const at = `/${encodeURIComponent(device.id)}`;
+    const more = addable(device);
+    const how = Object.fromEntries((device.status?.parts || []).map(p => [p.driver, p]));
+    const fresh = async () => redraw((await call('GET', at)).device);
+    const row = (p, i) => {
+        const st = how[p.driver];
+        const said = !device.enabled || !st ? '' : st.online ? 'ok' : `down${st.detail ? ' - ' + st.detail : ''}`;
+        const move = (to, arrow, title) => `<button type="button" class="btn btn-sm" data-move="${i}" data-to="${to}" title="${title}"
+            ${to < 0 || to >= device.parts.length ? 'disabled' : ''}>${arrow}</button>`;
+        return `
+        <div class="setting-row" style="align-items:center">
+            <div class="setting-label">${i + 1}. ${esc(p.label)}
+                <div class="setting-help">${esc((p.capabilities || []).join(' \u00b7 ') || 'nothing yet')}${said ? '<br>' + esc(said) : ''}</div></div>
+            <div class="setting-input" style="display:flex;gap:6px;justify-content:flex-end">
+                ${device.parts.length > 1 ? move(i - 1, '&uarr;', 'Earlier') + move(i + 1, '&darr;', 'Later')
+                    + `<button type="button" class="btn btn-sm" data-drop="${esc(p.driver)}">Remove</button>` : ''}</div>
+        </div>`;
+    };
+    el.innerHTML = `
+        <div class="setting-help" style="margin:10px 0">How Sapphire reaches this device. When two connections can do the same thing, the earlier one does it.</div>
+        <div class="settings-grid">${device.parts.map(row).join('')}</div>
+        ${more.length ? `<div class="setting-input" style="display:flex;gap:8px;margin-top:14px;align-items:center">
+            <select id="dev-conn-pick" style="flex:1;min-width:0">${more.map(d => `<option value="${esc(d.driver)}">${esc(d.label)}</option>`).join('')}</select>
+            <button type="button" class="btn btn-sm btn-primary" id="dev-conn-add" style="flex-shrink:0">+ Add Connection</button>
+        </div><div id="dev-conn-new"></div>` : ''}`;
+    const run = async (work) => {
+        try { await work(); await fresh(); }
+        catch (e) { showToast(e.message, 'error'); }
+    };
+    el.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', () => run(async () => {
+        const order = device.parts.map(p => p.driver);
+        const [from, to] = [+b.dataset.move, +b.dataset.to];
+        order.splice(to, 0, order.splice(from, 1)[0]);
+        await call('PUT', at, { order });
+    })));
+    el.querySelectorAll('[data-drop]').forEach(b => b.addEventListener('click', () => {
+        if (confirm(`Remove this connection from "${device.id}"? Its settings and keys are forgotten.`))
+            run(() => call('DELETE', `${at}/connections/${encodeURIComponent(b.dataset.drop)}`));
+    }));
+    el.querySelector('#dev-conn-add')?.addEventListener('click', () => {
+        const d = more.find(x => x.driver === el.querySelector('#dev-conn-pick').value);
+        const box = el.querySelector('#dev-conn-new');
+        const schema = setupFields(d);
+        box.innerHTML = `<div id="dev-conn-fields" style="margin-top:10px"></div>
+            <div style="display:flex;justify-content:flex-end;margin-top:8px"><button type="button" class="btn btn-sm btn-primary" id="dev-conn-save">Add ${esc(d.label)}</button></div>`;
+        const fields = box.querySelector('#dev-conn-fields');
+        if (schema.length) renderSettingsForm(fields, schema, {});
+        else fields.innerHTML = '<p class="text-muted" style="font-size:0.9em;margin:4px 0">Nothing to set up for this one.</p>';
+        box.querySelector('#dev-conn-save').addEventListener('click', () => run(async () => {
+            const res = await call('POST', `${at}/connections`, { driver: d.driver, config: schema.length ? readSettingsForm(fields, schema) : {} });
+            showToast(res.warning || `Added ${d.label}`, res.warning ? 'warning' : 'success');
+        }));
+    });
+}
+
 async function openDevice(id, tab, opts = {}) {
     let device;
     try {
@@ -599,6 +681,9 @@ async function openDevice(id, tab, opts = {}) {
         schema = built.schema;
         bindings = built.bindings;
         const slots = [{ tab: 'Status', mount: el => mountStatus(el, device, after) }];
+        // a kind reached one way only (a satellite) has nothing to choose here
+        if (device.parts.length > 1 || addable(device).length)
+            slots.push({ tab: 'Connections', mount: el => mountConnections(el, device, after) });
         for (const b of bindings) slots.push({ tab: b.tab, mount: el => mountBindings(el, b) });
         for (const cap of device.capabilities || [])
             slots.push({ tab: cap.label || cap.capability, mount: el => mountActions(el, device, cap) });

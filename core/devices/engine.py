@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 STORE = 'devices'          # the state file's name: user/plugin_state/devices.json
 ID_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,32}$')
 MAX_DEVICES = 64
+MAX_PARTS = 4        # connections on one device
 MAX_ROWS = 50            # items in one rows field
 MAX_PICTURES = 4         # pictures one action may answer with
 MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
@@ -212,6 +213,7 @@ def drivers():
                     continue
                 title = manifest.get('short_display_name') or info['name']
                 out.append({'driver': did, 'label': str(dd.get('label') or did),
+                            'kind': str(dd.get('kind') or dd.get('label') or did),
                             'icon': str(dd.get('icon') or ''), 'module': '',
                             'capabilities': [str(c) for c in (dd.get('capabilities') or [])],
                             'config_schema': [], 'plugin_name': info['name'],
@@ -638,8 +640,10 @@ def add(device_id, label, driver_id, config=None, location=''):
 
 
 def update(device_id, label=None, enabled=None, parts=None, new_id=None, location=None,
-           locked=None):
-    """Change a device. parts: {driver: submitted config}. locked: what she
+           locked=None, order=None):
+    """Change a device. parts: {driver: submitted config}. order: its
+    connections' drivers, first to last (the first that has a capability is
+    the one that does it). locked: what she
     may not use. A map {capability: bool} changes only the capabilities it
     names, so a switch the page did not show is never touched (a device that
     was off showed none, and saving it opened every lock, 2026-09-28). A list
@@ -671,6 +675,12 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
         part, ops, _ = _build_part(device_id, old['driver'], incoming, old.get('config'))
         old.update(part)
         pending.append((old['driver'], ops))
+
+    if order is not None:
+        want = [_slug(d) for d in order] if isinstance(order, (list, tuple)) else []
+        if sorted(want) != sorted(p['driver'] for p in row['parts']):
+            raise DeviceError("order names each of the device's connections once.")
+        row['parts'].sort(key=lambda p: want.index(p['driver']))
 
     target = device_id
     if new_id is not None and _slug(new_id) != device_id:
@@ -704,6 +714,51 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
         _health().poke(target)           # its settings may have changed: look again soon
     _changed()
     return row, failed
+
+
+def connect(device_id, driver_id, config=None):
+    """One more way to reach a device that exists: a second connection of
+    its own kind (a Computer over SSH, say). Last in line, so what the device
+    already does it keeps doing the same way. Returns (row, failed secrets)."""
+    row = get(device_id)
+    device_id, driver_id = row['id'], _slug(driver_id)
+    if _part(row, driver_id):
+        raise DeviceError(f"'{device_id}' already has a '{driver_id}' connection.")
+    if len(row['parts']) >= MAX_PARTS:
+        raise DeviceError(f"The limit is {MAX_PARTS} connections on one device.")
+    _, first = _driver(row['parts'][0]['driver'], row['parts'][0].get('plugin', ''))
+    part, ops, spec = _build_part(device_id, driver_id, config)
+    if spec['kind'] != first['kind']:
+        raise DeviceError(f"'{spec['label']}' reaches a {spec['kind']}, and '{device_id}' is a {first['kind']}.")
+    if isinstance(row.get('locked'), list):       # what is new on the device starts as its driver asks
+        had = {c for p in row['parts'] for c in capabilities(p, _registry().get_driver(p['driver']))}
+        row['locked'] = sorted(set(row['locked']) | {c for c in spec.get('locked_by_default') or []
+                                                     if c in LOCKABLE and c not in had})
+    row['parts'].append(part)
+    _write(lambda t: t.__setitem__(device_id, row))
+    failed = _apply_secrets(device_id, driver_id, ops)
+    _health().poke(device_id)
+    _changed()
+    return row, failed
+
+
+def disconnect(device_id, driver_id):
+    """Take one connection off a device, and forget that connection's secrets."""
+    row = get(device_id)
+    device_id, driver_id = row['id'], _slug(driver_id)
+    part = _part(row, driver_id)
+    if not part:
+        raise DeviceError(f"'{device_id}' has no '{driver_id}' connection.")
+    if len(row['parts']) == 1:
+        raise DeviceError("That is its only connection. Delete the device instead.")
+    row['parts'].remove(part)
+    _write(lambda t: t.__setitem__(device_id, row))
+    for name in list(_secrets().status(device_id)):
+        if name.startswith(driver_id + '.'):
+            _secrets().clear(device_id, name)
+    _health().poke(device_id)
+    _changed()
+    return row
 
 
 def _voice_forget(device_id):
@@ -938,6 +993,7 @@ def public(row):
                     unreadable.append(field['key'])
         parts.append({'driver': part['driver'], 'plugin': part.get('plugin', ''),
                       'label': spec['label'] if spec else part['driver'],
+                      'kind': spec['kind'] if spec else '',
                       'available': bool(spec), 'schema': schema, 'values': values,
                       'capabilities': has,
                       'unreadable': unreadable})
@@ -973,6 +1029,8 @@ def describe(row):
         for cap in capabilities(part, spec):
             if not isinstance(told.get(cap), dict):
                 continue            # this device does not have it (self-describing drivers)
+            if any(c['capability'] == cap for c in out):
+                continue            # an earlier connection does it: the order is the user's (Connections tab)
             info = told[cap]
             actions = {}
             for name, a in (info.get('actions') or {}).items():
@@ -1047,7 +1105,8 @@ def _probe(row):
             logger.error(f"[DEVICES] {part['driver']}.status failed: {e}", exc_info=True)
             entry['detail'] = f"driver error: {e}"
         parts.append(entry)
-    return {'online': bool(parts) and all(p['online'] for p in parts),
+    # reached by any of its connections, it is here; each says how it is itself
+    return {'online': any(p['online'] for p in parts),
             'parts': parts, 'ts': time.time()}
 
 
@@ -1168,9 +1227,10 @@ def status_text(device_id):
 def _down_note(st, driver=None):
     """One line that saves her a wasted call when the device is believed
     offline. A single miss says nothing here."""
-    if st['online']:
-        return ''
     down = [p for p in st['parts'] if not p['online']]
+    if st['online']:
+        mine = next((p for p in down if p['driver'] == driver), None)     # here, but not by this connection
+        return f"Its {driver} connection is down: {mine['detail'] or 'no answer'}" if mine else ''
     mine = [p for p in down if p['driver'] == driver] or down
     why = (mine[0]['detail'] if mine else '') or ('not heard from yet' if not st['ts'] else 'no answer')
     return f"Offline: {why}\nCommands will fail until it is back."

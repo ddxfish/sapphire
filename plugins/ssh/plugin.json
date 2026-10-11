@@ -14,7 +14,8 @@
     "devices": [
       {
         "driver": "ssh",
-        "label": "SSH machine",
+        "label": "SSH connection",
+        "kind": "Computer",
         "icon": "🖥️",
         "module": "device_driver.py",
         "capabilities": [

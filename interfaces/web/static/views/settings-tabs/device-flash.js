@@ -339,7 +339,7 @@ export function openFlash(onDone, on = {}) {
     const leaving = e => { e.preventDefault(); e.returnValue = ''; };
     const leave = () => {
         if (!confirm('Leave this board unfinished?\n\nIt was written, but it has no name or WiFi yet, so Sapphire cannot reach it. '
-            + 'To finish later: + Add Board, Connect, then "Only change its name, WiFi or Sapphire\'s address".')) return;
+            + 'To finish later: + Add Satellite, Connect, then "Only change its name, WiFi or Sapphire\'s address".')) return;
         blank = false; guard(); modal.close();
     };
     const keep = e => {
@@ -414,7 +414,7 @@ export function openFlash(onDone, on = {}) {
                 if (mine?.fingerprint && chip.mac && chip.mac !== mine.fingerprint.toLowerCase()) {
                     await lane.close();
                     return void screen(`This is not ${esc(mine.id)}`, `<p class="setting-help">The board on that port has id ${esc(chip.mac)}; ${esc(mine.id)} is ${esc(mine.fingerprint)}.
-                        Plug ${esc(mine.id)} in and start again, or close this and use <b>+ Add Board</b> for a board Sapphire has not seen.</p>`);
+                        Plug ${esc(mine.id)} in and start again, or close this and use <b>+ Add Satellite</b> for a board Sapphire has not seen.</p>`);
                 }
                 if (!wifiOnly) return pick();
                 status('Starting the board...');
@@ -543,7 +543,7 @@ export function openFlash(onDone, on = {}) {
             } catch { /* not hers */ }
             if (!hers) {
                 hold(false);
-                return void screen(`${esc(board.name)} is written`, `<p class="setting-help">Written and verified, and the board was restarted. It did not answer Sapphire's setup console, so this is not her firmware: there is nothing more to do here. If it is hers, close this and use <b>Change WiFi (USB)</b> on its card, or <b>+ Add Board</b> and the "Only change its name, WiFi" link.</p>`);
+                return void screen(`${esc(board.name)} is written`, `<p class="setting-help">Written and verified, and the board was restarted. It did not answer Sapphire's setup console, so this is not her firmware: there is nothing more to do here. If it is hers, close this and use <b>Change WiFi (USB)</b> on its card, or <b>+ Add Satellite</b> and the "Only change its name, WiFi" link.</p>`);
             }
         } else await lane.reopen(() => bar(100, 'Unplug the board and plug it back in.'));
         await setup();                                // still held: the board is blank until it has its name and WiFi

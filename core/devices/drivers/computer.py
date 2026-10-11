@@ -32,6 +32,7 @@ SCREEN_TOOL = 'get_screenshot'
 
 SPEC = {
     'label': 'This computer',
+    'kind': 'Computer',
     'icon': '\U0001f4bb',
     'capabilities': ['sound', 'screen', 'power', 'storage'],
     'locked_by_default': ['power'],

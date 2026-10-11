@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 SPEC = {
     'label': 'Satellite (a board that speaks the protocol)',
+    'kind': 'Satellite',
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
                      'buttons', 'sensors', 'firmware'],

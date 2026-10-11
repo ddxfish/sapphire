@@ -68,6 +68,7 @@
       {
         "driver": "synth",
         "label": "Hardware synth (FM-1 and others)",
+        "kind": "MIDI",
         "icon": "🎹",
         "module": "synth_driver.py",
         "capabilities": [
@@ -79,6 +80,7 @@
       {
         "driver": "midi-keyboard",
         "label": "MIDI keyboard (the computer makes its sound)",
+        "kind": "MIDI",
         "icon": "🎹",
         "module": "keyboard_driver.py",
         "capabilities": [

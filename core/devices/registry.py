@@ -105,6 +105,9 @@ def register_driver(driver_id, spec, plugin_name, builtin=False):
                 'driver': driver_id,
                 'label': str(spec.get('label') or driver_id.replace('-', ' ').title())[:80],
                 'icon': str(spec.get('icon') or '')[:16],
+                # what the thing IS (Computer, Camera): the drivers of one kind are the
+                # ways to reach it. With none said, a driver is a kind of its own.
+                'kind': str(spec.get('kind') or spec.get('label') or driver_id).strip()[:40],
                 'module': module,
                 'capabilities': caps,
                 'config_schema': schema,

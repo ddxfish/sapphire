@@ -158,6 +158,7 @@ restart is needed.
 |-------|----------|-------------|
 | `driver` | yes | Slug, `[a-z0-9][a-z0-9_-]{0,32}`, unique across plugins. First plugin to register a name keeps it |
 | `label` | no | Name in the Add Device picker |
+| `kind` | no | What the thing is: `Computer`, `Camera`, `MIDI`. Drivers of one kind are listed together in the picker and can be connections of one device. Left out, the driver is a kind of its own |
 | `icon` | no | Emoji |
 | `module` | yes | Plugin-relative path to a `.py` file. It may not leave the plugin folder |
 | `capabilities` | yes | 1 to 16 slugs. Each becomes a tab in the device window and the second argument of `device_action` |

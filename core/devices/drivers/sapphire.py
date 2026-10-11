@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 SPEC = {
     'label': 'Another Sapphire',
+    'kind': 'Sapphire',
     'icon': '\U0001f48e',
     'capabilities': ['chat', 'tools'],
     'config_schema': [

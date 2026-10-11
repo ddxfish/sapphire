@@ -62,7 +62,7 @@ def list_devices():
         devices.append({"id": v["id"], "label": v["label"], "enabled": v["enabled"],
                         "location": v["location"], "fingerprint": v["fingerprint"],
                         "driver": first.get("driver", ""),
-                        "type": first.get("label", "").split(" (")[0],     # the pill: "Satellite", not the aside
+                        "type": first.get("kind") or first.get("label", ""),     # the pill: what it is, not how it is reached
                         "capabilities": [c["capability"] for c in e.describe(row) if not c["error"]],
                         "missing": [p["driver"] for p in v["parts"] if not p["available"]],
                         "status": found.get(device_id)})
@@ -88,8 +88,19 @@ def update_device(device_id, body):
     e = _engine()
     row, failed = e.update(device_id, label=body.get("label"), enabled=body.get("enabled"),
                            parts=body.get("parts"), new_id=body.get("new_id"),
-                           location=body.get("location"), locked=body.get("locked"))
+                           location=body.get("location"), locked=body.get("locked"),
+                           order=body.get("order"))
     return _saved(row, failed, e.tell(row) if row.get("enabled", True) else [])
+
+
+def connect_device(device_id, body):
+    e = _engine()
+    row, failed = e.connect(device_id, body.get("driver"), body.get("config"))
+    return _saved(row, failed, e.tell(row) if row.get("enabled", True) else [])
+
+
+def disconnect_device(device_id, driver_id):
+    return {"device": _view(_engine().disconnect(device_id, driver_id))}
 
 
 def remove_device(device_id):
@@ -368,6 +379,18 @@ async def devices_update(device_id: str, request: Request, _=Depends(require_log
 async def devices_remove(device_id: str, request: Request, _=Depends(require_login)):
     _open(request, write=True)
     return await _do(remove_device, device_id)
+
+
+@router.post("/api/devices/{device_id}/connections")
+async def devices_connect(device_id: str, request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    return await _do(connect_device, device_id, await _body(request))
+
+
+@router.delete("/api/devices/{device_id}/connections/{driver_id}")
+async def devices_disconnect(device_id: str, driver_id: str, request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    return await _do(disconnect_device, device_id, driver_id)
 
 
 @router.post("/api/devices/{device_id}/test")

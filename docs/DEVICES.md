@@ -23,12 +23,15 @@ default.
 
 ## Add a device
 
-1. System > Devices > **+ Add Device**.
-2. **What are you adding?** One card per type. A greyed-out card names the
-   plugin to enable.
+1. System > Devices > **+ Add Device** (a satellite has its own button,
+   **+ Add Satellite**, over the left column).
+2. **What are you adding?** One row per kind of thing: Camera, Computer, MIDI,
+   Sapphire. Open one to see the ways it is reached, each with an **Add**
+   button: a Computer is **This computer** or an **SSH connection**. A greyed-out
+   row names the plugin to enable.
 3. Only what that type needs to work: a name (one is filled in, change it if
    you like; it is what Sapphire calls it, for example `desktop`), the
-   address and keys for a satellite, host and user for an SSH machine, nothing
+   address and keys for a satellite, host and user for an SSH connection, nothing
    at all for this computer. A **Location** if you like, for example `Living
    Room`: Sapphire sees it in her device list, and at the top of anything the
    device hears.
@@ -183,6 +186,15 @@ It needs `fluidsynth`, `alsa-utils` and a SoundFont. On Debian and Ubuntu the
 packages are `fluidsynth`, `alsa-utils` and `fluid-soundfont-gm`. The Status
 tab says which one is missing.
 
+## Connections
+
+A device is added with one way to reach it. A kind that can be reached more
+than one way (a Computer) has a **Connections** tab in its window: **+ Add
+Connection** gives it another, the arrows change their order, **Remove** takes
+one off and forgets its keys. When two connections can do the same thing
+(restart it, say), the earlier one does it. A device counts as online while
+any of its connections answers, and the Status tab says how each one is.
+
 ## SSH machines
 
 Four ways to log in:
@@ -236,7 +248,7 @@ number until it is calibrated.
 ### A new board from the browser
 
 An ESP32 board that has never been set up is done entirely from this page:
-the **+ Add Board** button. The first question is where the board is
+**+ Add Satellite**, then **Dev board**. The first question is where the board is
 plugged in. **This computer** means the browser writes it over USB (Web
 Serial, so Chrome or Edge): press **Connect** and pick its port in the
 browser's window. **The computer Sapphire runs on** means she writes it
@@ -267,7 +279,7 @@ A board that is already a device has both jobs in the **⋮** menu on its
 card: **Reflash (USB)** writes its program again, and **Change WiFi (USB)**
 gives it a new WiFi or a new address for Sapphire without reinstalling.
 Both take that board only, and it keeps its name; plug in another and you
-are sent to **+ Add Board**. The same menu has **Delete device**. A device that already exists keeps its keys, its
+are sent to **+ Add Satellite**. The same menu has **Delete device**. A device that already exists keeps its keys, its
 name and its address until the board calls in with the new ones, so a
 setup that fails halfway leaves it working as it was; a known board given
 a new name is that device renamed when it calls in. A name in use by a
@@ -322,7 +334,7 @@ at all, hold the BOOT button while plugging the board in.
 
 ### Adding one by hand
 
-Add one with **+ Add Device**, type **Satellite**:
+Add one with **+ Add Satellite**, then **Raspberry Pi or computer**:
 
 | Field | What to enter |
 |---|---|
