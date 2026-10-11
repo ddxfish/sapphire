@@ -294,8 +294,13 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         exists = exists_fn(chat) if exists_fn is not None else True
     except Exception as e:
         raise Unreadable(f"chat '{chat}' can't be read right now ({type(e).__name__})")
-    if not exists or sm.get_settings_for(chat) is None:
+    settings = sm.get_settings_for(chat) if exists else None
+    if settings is None:
         raise Unreachable(f"chat '{chat}' isn't reachable (missing or sealed)")
+    if settings.get('mode') == 'room':
+        # a room's seats speak through core/rooms.py; her unprompted turn has
+        # no brain there (which seat would it be?). A failed turn, not a drop.
+        raise RuntimeError(f"'{chat}' is a chat room; nothing runs an unprompted turn on it")
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
     sentences = 0                         # tts_chunk events this turn made
     parts, cancelled, errored, overthought = [], False, None, False

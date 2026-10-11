@@ -992,6 +992,7 @@ from core.routes.conversation import router as conversation_router
 from core.routes.vault import router as vault_router
 from core.routes.devices import router as devices_router
 from core.routes.mcp import router as mcp_router
+from core.routes.rooms import router as rooms_router
 
 app.include_router(chat_router)
 app.include_router(tts_router)
@@ -1013,4 +1014,5 @@ app.include_router(conversation_router)
 app.include_router(vault_router)
 app.include_router(devices_router)
 app.include_router(mcp_router)
+app.include_router(rooms_router)
 

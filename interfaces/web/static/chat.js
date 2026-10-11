@@ -3,6 +3,7 @@ import * as ui from './ui.js';
 import * as api from './api.js';
 import * as audio from './audio.js';
 import { releaseOwnership } from './core/state.js';
+import { getBoundChat } from './core/bound-chat.js';
 
 const handleError = (e, action) => {
     if (e.message === 'Cancelled') return console.log(`${action} cancelled by user`);
@@ -59,9 +60,16 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
         if (seq !== _histPaintSeq) return { hist: null, len: lastLen };
         noteDegraded(returnedChat, degraded);
 
-        // Guard: skip render if backend is temporarily on a different chat
-        // (e.g. continuity foreground task switched the active chat)
-        const expectedChat = document.getElementById('chat-select')?.value;
+        // Guard: the rail paints only the chat it is LOOKING AT. Unbound, that
+        // is the pointer (#chat-select) - skip when the backend is briefly on
+        // another chat (a continuity foreground task switched it). Bound to a
+        // room or game session by name (F1), it is the BOUND chat: the
+        // pointer's select is the previous chat until the dropdown refetch
+        // lands, and comparing against it dropped the room's own first paint
+        // while a regular chat's rows stayed in the borrowed rail (Krem,
+        // 2026-10-11: Default showed inside Chat Room). The game room hid the
+        // same hole by writing the select itself (room-host syncCore).
+        const expectedChat = getBoundChat() || document.getElementById('chat-select')?.value;
         if (returnedChat && expectedChat && returnedChat !== expectedChat) {
             return { hist: null, len: lastLen };
         }

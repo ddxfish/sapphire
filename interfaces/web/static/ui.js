@@ -317,7 +317,22 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     } else {
         setAvatarWithFallback(avatar, role);
     }
-    
+    // A chat room's rows (core/rooms.py) carry a speaker + name: a bot's or
+    // a guest's name sits over its bubble; a guest (a door's line, mcp:...)
+    // sits on the left wearing that persona's face if there is one; the
+    // room's own notices are one muted line. The person's rows stay as is.
+    if (msg.speaker && msg.name && msg.speaker !== 'user') {
+        if (msg.speaker === 'room') {
+            msgEl.classList.add('notice');
+        } else {
+            wrapper.insertBefore(createElem('div', { class: 'msg-name' }, msg.name), contentDiv);
+            if (role === 'user') {
+                msgEl.classList.add('guest');
+                setPersonaAvatar(avatar, msg.name);
+            }
+        }
+    }
+
     if (idx !== null) {
         const toolbar = createToolbar(idx, total, role);
         tb.replaceWith(toolbar);
@@ -584,9 +599,13 @@ export const updateStatus = (txt) => {
 // STREAMING
 // =============================================================================
 
-export const startStreaming = () => {
+// who (a chat room's seat turn): {speaker, name, persona} - the live bubble
+// wears THAT face and name, not the chat's persona.
+export const startStreaming = (who = null) => {
     const streamMsg = { role: 'assistant', content: '' };
-    if (currentPersona) streamMsg.persona = currentPersona;
+    const persona = (who && who.persona) || currentPersona;
+    if (persona) streamMsg.persona = persona;
+    if (who && who.speaker && who.name) { streamMsg.speaker = who.speaker; streamMsg.name = who.name; }
     const { clone, contentDiv, msg } = createMessage(streamMsg, null, null, false);
     msg.id = 'streaming-message';
     msg.dataset.streaming = 'true';

@@ -795,7 +795,7 @@ class LLMChat:
             return self._chat_turn(user_input, on_event)
         try:
             return inbox.turn(chat_name, lambda: self._chat_turn(user_input, on_event, chat_name),
-                              source='voice', lane='now')
+                              source='voice', lane='now', text=user_input)
         except inbox.InboxRefused as e:
             # the chat cannot take it (sealed, gone, or this is her own turn
             # asking to wait on itself): say so - running it unqueued on the

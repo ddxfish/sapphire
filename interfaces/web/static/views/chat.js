@@ -8,7 +8,7 @@ import { applyTrimColor, applyBackground } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData, refreshInitData, getInitDataSync } from '../shared/init-data.js';
 import { updateSettingsBatch } from '../shared/settings-api.js';
-import { switchView } from '../core/router.js';
+import { switchView, getCurrentView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 import { initAgentStatus } from '../features/agent-status.js';
 import { mountScenePicker } from '../shared/scene-picker.js';
@@ -501,8 +501,12 @@ export default {
 async function steerOffGameChat() {
     try {
         const data = await api.fetchChatList();
+        // Superseded: the user has already gone on to another view (the Chat
+        // flyout passes THROUGH the chat view on the way to Chat Room). This
+        // steer must not move the pointer under the view they are in now.
+        if (getCurrentView() !== 'chat') return;
         const active = (data.chats || []).find(c => c.name === data.active_chat);
-        if (!active || active.mode !== 'game') return;
+        if (!active || (active.mode !== 'game' && active.mode !== 'room')) return;   // a chat room is Chat > Chat Room's (2026-10-11)
         // !c.mode, not just !=='game' — the picker's filter. mode:limbo
         // ('backrooms', freshest after its landing wipe bumps updated_at)
         // must never be the steer target.

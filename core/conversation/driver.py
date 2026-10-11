@@ -308,7 +308,7 @@ class ConversationDriver:
             _queue_chat = self._chat_name or _active or ''
             if _queue_chat:
                 # (a bound rail's own chat, else the active chat right now)
-                inbox.turn(_queue_chat, _body, source='conversation', lane='now')
+                inbox.turn(_queue_chat, _body, source='conversation', lane='now', text=text)
             else:
                 _body()
         except Exception as e:

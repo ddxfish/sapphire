@@ -174,12 +174,14 @@ def _private(system, name):
 
 
 def _item(system, chat, text, who, where):
-    """(chat name, the text she is told). ValueError for a name that cannot
-    be a chat, and for a private chat."""
+    """(chat name, her line above the text, the text). ValueError for a name
+    that cannot be a chat, and for a private chat. Line and text travel apart
+    (2026-10-11): a chat's wire text is the inbox's header + text, as before;
+    a room (core/rooms.py) keeps the words alone as a line from `who`."""
     name = _chat_ready(system, chat)
     if _private(system, name):
         raise ValueError(f"The chat '{name}' is private; it does not take messages over MCP.")
-    return name, f"{_line(who, where)}\n{str(text)[:TEXT_MAX]}"
+    return name, _line(who, where), str(text)[:TEXT_MAX]
 
 
 def ask(system, args, where='', persona=None):
@@ -189,14 +191,16 @@ def ask(system, args, where='', persona=None):
     drainer thread. A busy chat answers late instead of erroring."""
     from core.chat import inbox
     # who is asking: what the client says, else the persona its key speaks as
-    name, body = _item(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
+    who = args.get('from') or persona
+    name, head, body = _item(system, args.get('chat'), args.get('text'), who, where)
     token = answering.set(True)
     try:
         try:
             # gate: asked again the moment the turn is about to run - the chat may
             # have turned private while the ask waited in line, and the reply
             # would leave over the network (2026-10-07)
-            reply = inbox.ask(name, body, source=f"mcp:{where or 'client'}", timeout=ASK_WAIT,
+            reply = inbox.ask(name, body, source=f"mcp:{where or 'client'}", header_line=head,
+                              who=str(who or ''), timeout=ASK_WAIT,
                               gate=lambda: f"The chat '{name}' is private now." if _private(system, name) else '')
         except inbox.InboxRefused as e:
             raise ValueError(str(e))
@@ -213,10 +217,12 @@ def tell(system, args, where='', persona=None):
     when the chat is free. Not foldable with other items - it carries the
     `answering` flag in its context."""
     from core.chat import inbox
-    name, body = _item(system, args.get('chat'), args.get('text'), args.get('from') or persona, where)
+    who = args.get('from') or persona
+    name, head, body = _item(system, args.get('chat'), args.get('text'), who, where)
     token = answering.set(True)
     try:
-        inbox.tell(name, body, source=f"mcp:{where or 'client'}", coalesce=False,
+        inbox.tell(name, body, source=f"mcp:{where or 'client'}", header_line=head,
+                   who=str(who or ''), coalesce=False,
                    gate=lambda: f"The chat '{name}' is private now." if _private(system, name) else '')
     except inbox.InboxRefused as e:
         raise ValueError(str(e))

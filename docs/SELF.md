@@ -11,6 +11,7 @@ Image upload vision
 CLIP describe fallback
 File attachments
 RAG docs per-chat
+Multi-bot chat rooms
 ### History
 SQLite message rows
 Edit regen delete

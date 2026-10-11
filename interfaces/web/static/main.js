@@ -40,6 +40,7 @@ const VIEW_MODULES = {
     daemons:  `./views/daemons.js${_v}`,
     realtime: `./views/realtime.js${_v}`,
     webhooks: `./views/webhooks.js${_v}`,
+    rooms:    `./views/rooms.js${_v}`,
     // Mind views route through a dispatcher: palace views when the mindpalace
     // plugin is active, classic views otherwise (probed live on each show).
     // 'self' is palace-only (L0) — classic falls back to a pointer placeholder.
@@ -716,7 +717,8 @@ function initEventBus() {
         if (_notMine(data)) return;
         try {
             if (data?.user_text) ui.addUserMessage(data.user_text);
-            ui.startStreaming();
+            // a chat room's seat turn names its speaker: that face, that name
+            ui.startStreaming(data?.speaker ? { speaker: data.speaker, name: data.name, persona: data.persona } : null);
             _voiceTurnActive = true;
             // Send→Stop for the live voice turn (wake/local conversation) —
             // /api/cancel reaches it since the dual-path merge registered

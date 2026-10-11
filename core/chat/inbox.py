@@ -53,6 +53,7 @@ class Item:
     text: str = ''                                  # what she is told (cadence.run_turn), or
     run: Optional[Callable[[], Any]] = None         # a door's own turn: fn() -> her text; begin_stream(exclusive=True) inside
     source: str = 'inbox'                           # 'web' | 'device:<id>' | 'agent:<kind>' | 'mcp:<where>' | 'midi' ...
+    who: str = ''                                   # the author as a room names them (core/rooms.py); '' = the source
     lane: str = 'later'                             # 'now' = a person is waiting · 'later' = a machine
     header: str = ''                                # the line above text; '' when the source wrote its own
     coalesce: bool = False                          # the caller's promise: text only, no context needs, may fold
@@ -161,6 +162,17 @@ def put(chat, item):
     if item.ctx is None:
         item.ctx = contextvars.copy_context()
     item.private_at_put = _chat_private(chat)
+    if item.run is not None and item.source != 'room' and _is_room(chat):
+        # a room takes LINES (text items, handed to core/rooms.py take_line),
+        # never a door's own turn - that would run HER brain on a chat that
+        # has several. A door that brought the person's words (turn(text=))
+        # has them land as a line instead of running: voice, the phone, a
+        # satellite (nothing a line can carry is refused, Krem 2026-10-11).
+        # The room's own seat turns carry source 'room'.
+        if (item.text or '').strip():
+            item.run = item.run_folded = None
+        else:
+            raise InboxRefused(f"'{chat}' is a chat room: open it under Chat > Rooms to talk there.")
     c = _chat(chat)
     with c.lock:
         # The cap is for machines (the `later` lane): a person's typed turn and
@@ -199,14 +211,17 @@ def ask(chat, text, source, header_line='', timeout=None, **kw):
     return _await(chat, item, timeout)
 
 
-def turn(chat, fn, source='door', lane='now', timeout=None):
+def turn(chat, fn, source='door', lane='now', timeout=None, text=''):
     """A door runs its OWN turn when it is this chat's turn: fn() is called on
     the drainer thread under the caller's context and must begin_stream(
     exclusive=True) itself (ChatBusy from inside it means a typed turn won the
     race; the inbox tries again). Blocks the caller until fn returns, and
-    returns what fn returned. The wake word and the conversation driver."""
+    returns what fn returned. The wake word and the conversation driver.
+    `text`: the person's words when the door has them - on a chat room they
+    land as a LINE (core/rooms.py) and fn never runs; the return is the
+    room's note."""
     _refuse_self_wait(chat)
-    item = put(chat, Item(run=fn, source=source, lane=lane))
+    item = put(chat, Item(run=fn, text=str(text or ''), source=source, lane=lane))
     return _await(chat, item, timeout)
 
 
@@ -402,6 +417,18 @@ def _chat_private(chat):
     if s is None:
         return None
     return bool(s.get('private_chat'))
+
+
+def _is_room(chat):
+    """A chat tagged mode:room (core/rooms.py) takes lines, never a door's own turn."""
+    system = _system()
+    if system is None:
+        return False
+    try:
+        s = system.llm_chat.session_manager.read_chat_settings(chat)
+    except Exception:
+        return False
+    return isinstance(s, dict) and s.get('mode') == 'room'
 
 
 def _refuse_self_wait(chat):
@@ -698,6 +725,8 @@ def _run(c, picked):
             result = first.ctx.run(first.run_folded, items[1:])
         elif first.run is not None:
             result = first.ctx.run(first.run)
+        elif _is_room(c.name):
+            result = first.ctx.run(_take_line, c.name, items)       # a room: lines, never her turn
         else:
             text = _compose(c, items)
             # a folded turn speaks on the speakers only when every member asked to
@@ -738,6 +767,11 @@ def _compose(c, items):
         if waiting:
             text += f"\n\n[{waiting} more waiting in the inbox]"
     return text
+
+
+def _take_line(chat, items):
+    from core import rooms
+    return rooms.take_line(chat, items)
 
 
 def _run_turn(chat, text, first, speak):

@@ -797,7 +797,7 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
             finally:
                 box['spoke_ok'] = getattr(_spoke, 'ok', None)
 
-        said = inbox.turn(chat, _body, source=lane, lane='now')
+        said = inbox.turn(chat, _body, source=lane, lane='now', text=heard)   # a room: the words land as a line
         speech = box.get('speech')
         if reply is not None:
             reply.finish(said)

@@ -51,6 +51,9 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
             result["metadata"] = block["metadata"]
         if block.get("persona"):
             result["persona"] = block["persona"]
+        if block.get("speaker"):
+            result["speaker"] = block["speaker"]
+            result["name"] = block.get("name")
         return result
 
     for msg in messages:
@@ -110,6 +113,9 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
             }
             if msg.get("persona"):
                 user_msg["persona"] = msg["persona"]
+            if msg.get("speaker"):
+                user_msg["speaker"] = msg["speaker"]
+                user_msg["name"] = msg.get("name")
 
             if isinstance(content, list):
                 text_parts: List[str] = []
@@ -148,12 +154,22 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
             display_messages.append(user_msg)
 
         elif role == "assistant":
+            # A room (core/rooms.py, 2026-10-11): a line from a different
+            # speaker is a bubble of its own, with its own face and name -
+            # the roll-up folded every bot of a round into one bubble.
+            if current_block is not None and msg.get("speaker") \
+                    and current_block.get("speaker") != msg.get("speaker"):
+                display_messages.append(finalize_block(current_block))
+                current_block = None
             if current_block is None:
                 current_block = {
                     "role": "assistant",
                     "parts": [],
                     "timestamp": msg.get("timestamp"),
                 }
+                if msg.get("speaker"):
+                    current_block["speaker"] = msg["speaker"]
+                    current_block["name"] = msg.get("name")
 
             content = msg.get("content", "")
             if content:

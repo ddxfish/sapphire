@@ -110,6 +110,11 @@ class StreamingChat:
         # set to a non-active chat (a phone call), the turn runs a per-stream brain
         # override so it reads/writes ITS chat, not the UI's active one.
         self.target_chat = None
+        # A caller-built brain (core/rooms.py, 2026-10-11): a complete stream-brain
+        # carrier the A1 block installs INSTEAD of the target chat's stored
+        # settings. Set alongside target_chat; the engine runs it and, on an
+        # ephemeral carrier, persists nothing.
+        self.brain = None
 
     def _effective_enabled_tools(self):
         """A1: the tool list for THIS turn — a per-stream override's tools when the
@@ -368,8 +373,12 @@ class StreamingChat:
                 try:
                     from core.chat import stream_brain
                     from core import prompts as _prompts
-                    sess = self.main_chat.session_manager.make_stream_session(_tgt)
-                    if sess:
+                    # A caller-built brain wins over the chat's stored settings
+                    # (core/rooms.py: a seat's settings, prompt, tools and a
+                    # projected history on an ephemeral carrier, 2026-10-11).
+                    _given = getattr(self, "brain", None)
+                    sess = _given or self.main_chat.session_manager.make_stream_session(_tgt)
+                    if sess and not _given:
                         _pn = sess["settings"].get("prompt", "default")
                         _pd = _prompts.get_prompt(_pn)
                         if not isinstance(_pd, dict):
@@ -381,10 +390,12 @@ class StreamingChat:
                         sess["tools"] = self.main_chat._resolve_toolset_tools(
                             sess["settings"].get("toolset", "all"),
                             sess["settings"].get("extra_toolsets"))
+                    if sess:
                         _brain_token = stream_brain.set_override(sess)
                         _installed = True
                         logger.info(f"[A1] stream brain override → chat '{_tgt}' "
-                                    f"(provider={sess['settings'].get('llm_primary')}, "
+                                    f"({'caller-built' if _given else 'stored'}; "
+                                    f"provider={sess['settings'].get('llm_primary')}, "
                                     f"tools={len(sess['tools']) if sess['tools'] else 0})")
                 except Exception as _e:
                     logger.warning(f"[A1] stream brain override failed for '{_tgt}': {_e}")
@@ -463,8 +474,11 @@ class StreamingChat:
             # Spice rail AFTER the A1 override install: before this, a phone
             # turn's spice cadence read the OPERATOR'S chat settings and turn
             # count (the ContextVar wasn't set yet) and could rewrite the
-            # global prompt from a foreign stream.
-            self.main_chat.refresh_spice_if_needed()
+            # global prompt from a foreign stream. Never under a caller-built
+            # brain: the rail rewrites the GLOBAL prompt and spice state, which
+            # a room's seat must not touch (core/rooms.py, 2026-10-11).
+            if getattr(self, "brain", None) is None:
+                self.main_chat.refresh_spice_if_needed()
 
             # In-place Continue (2026-09-10): the reply's row stays in history.
             # Resolve the prose she resumes from; refuse — nothing touched —

@@ -1320,10 +1320,15 @@ def _delete_one_chat(system, chat_name: str, origin=None):
                 system.agent_manager.chat_deleted(chat_name)
     except Exception:
         pass
-    # Whatever was waiting in its inbox goes with it
+    # Whatever was waiting in its inbox goes with it, and a room's rounds end
     try:
         from core.chat import inbox
         inbox.drop_chat(chat_name, 'chat deleted')
+    except Exception:
+        pass
+    try:
+        from core import rooms
+        rooms.chat_deleted(chat_name)
     except Exception:
         pass
     _fire_chat_hook("chat_deleted", {"name": chat_name})
@@ -1495,10 +1500,15 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
         knowledge.rename_scope(f"__rag__:{chat_name}", f"__rag__:{result}")
     except Exception:
         pass
-    # ...and its inbox, and its agents' rows
+    # ...and its inbox, its room runtime, and its agents' rows
     try:
         from core.chat import inbox
         inbox.rename_chat(chat_name, result)
+    except Exception:
+        pass
+    try:
+        from core import rooms
+        rooms.chat_renamed(chat_name, result)
     except Exception:
         pass
     try:
