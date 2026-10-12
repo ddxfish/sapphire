@@ -610,6 +610,16 @@ async def handle_cancel(request: Request, _=Depends(require_login), system=Depen
             logger.info(f"CANCEL: no-op — '{requested_chat}' belongs to a live phone call")
             return {"status": "no-op",
                     "message": "That chat belongs to a live phone call — web cancel won't touch it."}
+        # a chat room: its seat speaks on HER OWN chat's stream (core/rooms.py, 2026-10-12),
+        # so the room's Stop is the one that reaches her - the round ends, her line is dropped
+        try:
+            from core import rooms
+            if requested_chat and rooms.is_room(requested_chat):
+                st = rooms.stop(requested_chat)
+                logger.info(f"CANCEL: room '{requested_chat}' stopped")
+                return {"status": "cancelled", "message": f"The room '{requested_chat}' was stopped.", "room": st}
+        except Exception as e:
+            logger.warning(f"CANCEL: room stop for '{requested_chat}' failed: {e}")
         count = system.llm_chat.cancel_streams(chat_name=requested_chat,
                                                exclude_chats=(None if requested_chat else _ext))
         if count == 0:
@@ -1058,6 +1068,16 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
         try:
             session_manager = system.llm_chat.session_manager
             chat_name = session_manager.get_active_chat_name()
+            # a chat room clears through its own door (core/rooms.py): the run settles, its
+            # seats' own chats are wiped with it, each guest's box sets hers aside and starts
+            # fresh. The sidebar's x on a bound room used to wipe the room's rows alone.
+            try:
+                from core import rooms
+                if rooms.is_room(chat_name):
+                    rooms.clear(chat_name)                      # publishes CHAT_CLEARED itself
+                    return {"status": "success", "message": "The room was cleared."}
+            except rooms.RoomError as e:
+                raise HTTPException(status_code=409, detail=str(e))
             session_manager.clear()
 
             origin = request.headers.get('X-Session-ID')

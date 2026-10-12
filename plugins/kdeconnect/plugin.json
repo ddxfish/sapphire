@@ -1,0 +1,85 @@
+{
+  "name": "kdeconnect",
+  "short_display_name": "KDE Connect",
+  "version": "0.1.0",
+  "description": "A phone as a device, through the KDE Connect app: share a picture, a document or a link from the phone straight into her chat; she reads the texts on it and, when allowed, answers as its owner; a notification from her on the phone; battery; ring it to find it. Adds the Phone device type to Settings > Devices. Sapphire pairs with the phone like a desktop would; the protocol is spoken here, no fork of theirs.",
+  "author": "sapphire",
+  "icon": "📱",
+  "url": "https://sapphireblue.dev",
+  "priority": 150,
+  "default_enabled": true,
+  "settingsUI": "none",
+  "capabilities": {
+    "devices": [
+      {
+        "driver": "kdeconnect",
+        "label": "Phone (KDE Connect)",
+        "kind": "Phone",
+        "icon": "📱",
+        "module": "device_driver.py",
+        "capabilities": [
+          "link",
+          "battery",
+          "share",
+          "sms",
+          "notify",
+          "contacts"
+        ],
+        "locked_by_default": [
+          "sms"
+        ],
+        "presence": true,
+        "config_schema": [
+          {
+            "key": "phone",
+            "type": "found",
+            "many": false,
+            "label": "Phone",
+            "tab": "Status",
+            "all_label": "Whichever phone is here",
+            "only_label": "This one",
+            "setup": true,
+            "help": "Phones running KDE Connect on this network. Open the app on the phone and it appears here within a few seconds, with its pairing state under it. Pair it right here: press Pair and accept on the phone (the same 8-character key shows on both), or request pairing in the phone's app and press Accept pairing. A phone that is not paired cannot be added."
+          },
+          {
+            "key": "chat",
+            "type": "string",
+            "label": "Talks in chat",
+            "tab": "Status",
+            "help": "The chat its texts and what it shares land in. Empty = the chat that is open. A name that is not a chat yet is made when you save."
+          },
+          {
+            "key": "share_to",
+            "type": "select",
+            "label": "A picture or file shared from the phone",
+            "default": "both",
+            "options": [
+              {
+                "label": "Goes into the chat, and is kept as a file",
+                "value": "both"
+              },
+              {
+                "label": "Goes into the chat",
+                "value": "chat"
+              },
+              {
+                "label": "Is kept as a file only",
+                "value": "files"
+              }
+            ],
+            "help": "Into the chat: she sees the picture, or reads the document, and answers. Kept: the file is saved under user/plugin_state/kdeconnect_inbox, and a document also goes into the chat's documents. Text and links always go into the chat.",
+            "capability": "share"
+          },
+          {
+            "key": "wake_sms",
+            "type": "boolean",
+            "label": "Texts wake her",
+            "default": false,
+            "capability": "sms",
+            "help": "A text message arriving on the phone starts a turn in the chat: she reads it and answers there, and may text back as you. Works only while Sapphire may use this (the switch above). Off = texts are read only when she asks."
+          }
+        ]
+      }
+    ]
+  }
+}

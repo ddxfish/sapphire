@@ -36,6 +36,14 @@ if [ -z "$CSRF" ]; then
 fi
 curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE/login" \
     -d "password=$PASSWORD&csrf_token=$CSRF" -o /dev/null
+# The session rotates after login (session-fixation fix 2026-04-22), so the
+# form token no longer matches: re-scrape the post-login token from / as
+# ask-sapphire.sh does. Without this every non-GET answered 403 (2026-10-12).
+CSRF=$(curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/" | grep -oP 'name="csrf-token"\s+content="\K[^"]+')
+if [ -z "$CSRF" ]; then
+    echo "ERROR: could not fetch the post-login CSRF token from $BASE/ (login failed?)" >&2
+    exit 2
+fi
 
 ARGS=(-sk -b "$COOKIE_JAR" -H "X-CSRF-Token: $CSRF" -X "$METHOD" "$BASE$PATH_")
 if [ -n "$BODY" ]; then

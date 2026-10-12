@@ -373,3 +373,26 @@ def test_a_change_to_a_device_is_never_stopped_by_presence(rig):
         row = _add()
         assert core.update('keyboard', label='Still saved')[0]['label'] == 'Still saved'
         core.remove(row['id'])
+
+
+# --- setting a thing up before it is a device (a phone is paired in the pick list) ----
+
+def test_found_things_carry_notes_and_buttons_and_setup_runs_the_driver(rig):
+    rig.here = [dict(AKM, note='  Not paired.  Press Pair. ', actions=[
+        {'do': 'Pair', 'label': 'Pair'}, {'do': '', 'label': 'no slug'}, 'junk',
+        {'do': 'accept'}, {'do': 'x'}, {'do': 'y', 'label': 'one too many'}]), FM1]
+    things = core.found('keys')
+    akm = next(t for t in things if t['id'] == AKM['id'])
+    assert akm['note'] == 'Not paired. Press Pair.'
+    assert akm['actions'] == [{'do': 'pair', 'label': 'Pair'}, {'do': 'accept', 'label': 'accept'}, {'do': 'x', 'label': 'x'}]
+    fm1 = next(t for t in things if t['id'] == FM1['id'])
+    assert 'note' not in fm1 and 'actions' not in fm1
+    with pytest.raises(core.DeviceError, match='sets nothing up'):
+        core.setup_found('keys', AKM['id'], 'pair')
+    rig.mod.setup = lambda thing, action, config: (f'{action} {thing} {config.get("x")}', True)
+    assert core.setup_found('keys', AKM['id'], 'Pair', {'x': 1}) == {'text': f"pair {AKM['id']} 1", 'ok': True}
+    with pytest.raises(core.DeviceError, match='Say which thing'):
+        core.setup_found('keys', '', 'pair')
+    rig.mod.setup = lambda thing, action, config: 1 / 0
+    with pytest.raises(core.DeviceError, match='could not do that'):
+        core.setup_found('keys', AKM['id'], 'pair')

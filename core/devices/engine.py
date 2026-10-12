@@ -53,7 +53,7 @@ MAX_ROWS = 50            # items in one rows field
 MAX_PICTURES = 4         # pictures one action may answer with
 MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
 PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
-LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage', 'ptz')    # these carry a "Sapphire may use this" switch
+LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage', 'ptz', 'sms')    # these carry a "Sapphire may use this" switch
 MAX_FOUND = 64           # things one driver may report as found
 ALL = 'all'              # the composite device: her voice on every device that can speak
 RESERVED = ('found', ALL, 'firmware', 'provision', 'here', 'flash')   # names a device may not have: the routes and `all` use them
@@ -446,7 +446,10 @@ def _part(row, driver_id):
 
 def found(driver_id, config=None):
     """What a driver can see right now: [{'id', 'name', 'kind'}], by name.
-    A driver without discover() sees nothing. Raises DeviceError."""
+    A thing may carry a `note` (a line under it) and `actions` ([{'do',
+    'label'}], at most three buttons) for what is done to it BEFORE it is a
+    device: a phone is paired in the pick list (setup_found). A driver
+    without discover() sees nothing. Raises DeviceError."""
     mod, _ = _driver(_slug(driver_id))
     look = getattr(mod, 'discover', None)
     if not callable(look):
@@ -462,11 +465,40 @@ def found(driver_id, config=None):
         if not ident or ident in seen:
             continue
         seen.add(ident)
-        out.append({'id': ident, 'name': ' '.join(str(item.get('name') or ident).split())[:80],
-                    'kind': ' '.join(str(item.get('kind') or '').split())[:24]})
+        thing = {'id': ident, 'name': ' '.join(str(item.get('name') or ident).split())[:80],
+                 'kind': ' '.join(str(item.get('kind') or '').split())[:24]}
+        note = ' '.join(str(item.get('note') or '').split())[:200]
+        if note:
+            thing['note'] = note
+        actions = [{'do': _slug(a.get('do')), 'label': ' '.join(str(a.get('label') or a.get('do')).split())[:24]}
+                   for a in (item.get('actions') or []) if isinstance(a, dict) and _slug(a.get('do'))]
+        if actions:
+            thing['actions'] = actions[:3]
+        out.append(thing)
         if len(out) >= MAX_FOUND:
             break
     return sorted(out, key=lambda t: (t['name'].lower(), t['id']))
+
+
+def setup_found(driver_id, thing_id, action, config=None):
+    """One of a found thing's actions, before it is a device: the driver's
+    setup(thing_id, action, config) -> (text, ok). {'text', 'ok'}. Raises
+    DeviceError when the driver sets nothing up, or the words are missing."""
+    mod, spec = _driver(_slug(driver_id))
+    fn = getattr(mod, 'setup', None)
+    if not callable(fn):
+        raise DeviceError(f"The '{driver_id}' driver sets nothing up before a device is added.")
+    thing_id, action = str(thing_id or '').strip()[:200], _slug(action)
+    if not thing_id or not action:
+        raise DeviceError("Say which thing, and what to do with it.")
+    try:
+        told, ok = fn(thing_id, action, dict(config or {}))
+    except DeviceError:
+        raise
+    except Exception as e:
+        logger.error(f"[DEVICES] {driver_id}.setup({action}) failed: {e}", exc_info=True)
+        raise DeviceError(f"The '{driver_id}' driver could not do that ({type(e).__name__}).")
+    return {'text': str(told or ''), 'ok': bool(ok)}
 
 
 def filter_field(spec):
@@ -1049,6 +1081,9 @@ def describe(row):
                                         'wait': _seconds(a.get('wait'))}
             out.append({'capability': cap, 'label': str(info.get('label') or cap),
                         'help': str(info.get('help') or '')[:120],
+                        # tab: the page's tab these actions sit on; '' = one of their own,
+                        # 'Status' = with the device's health (a phone's pair and unpair)
+                        'tab': str(info.get('tab') or '')[:40],
                         'driver': part['driver'], 'actions': actions, 'error': '',
                         'lockable': cap in LOCKABLE, 'locked': cap in shut})
     return out

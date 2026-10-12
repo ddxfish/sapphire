@@ -464,6 +464,17 @@ never sees the filter, only `present`.
 | `"many": false` | The device is ONE thing: `present` holds at most one |
 | `"all_label"`, `"only_label"` | The words for the two choices |
 
+**Setting a thing up before it is a device.** A thing in the list may carry a
+`note` (a line under it, 200 characters) and `actions` (up to three buttons,
+`[{"do": "pair", "label": "Pair"}]`). A button calls your module's
+`setup(thing_id, action, config) -> (text, ok)`; the words come back under
+the list and the list is looked at again. While any thing shows a button the
+list looks again on its own every few seconds, so a state that changes on the
+other side (a phone that asks to pair) shows up by itself. A phone is paired
+this way in the Add window, and its driver's `validate` refuses to add one
+that is not paired: a setup that does not set the thing up is no setup
+(`plugins/kdeconnect`).
+
 ### A board on USB
 
 Two boards are plugged in. Each is its own device, and each device picks its
@@ -590,4 +601,4 @@ These work in any plugin's settings schema.
 - After a save: `engine.tell(row)` calls each part's `apply` and returns problems in words; the routes put them in the save's `warning`. `voice.clock()` = `{now, tz}` (POSIX zone from `/etc/localtime`'s footer) rides on the events stream's `connected` line.
 - Routes (`core/routes/devices.py`; a login session or a Bearer API token, which runs as the owner): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`, `POST /api/devices/provision`, `GET /api/devices/here`, `/api/devices/flash/*`, `GET /api/devices/firmware[/{board}/{part}]`; with the device's own key: `/api/devices/{id}/voice|wake|text|events`. Scheduled Device tasks run as the owner too (locks and owner-only actions pass; `danger` actions cannot be scheduled). Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
 - Presence: `core/devices/presence.py`, started after the plugin scan (`sapphire.py`), stopped before plugin services. Manifest `"presence": true` plus optional module functions `discover(config) -> [{id, name, kind}]`, `watch(changed, stopped)`, `tend(device, config, secrets, present, leaving)`. `tend` is level triggered: called on a poke (watcher, device saved, plugin loaded), on the 15 s heartbeat, and once with `leaving=True, present=[]` when the device is disabled or removed, the plugin unloads (`presence.release(plugin)`, called by the loader before it unregisters the drivers) or the app stops. One keeper thread, one watcher thread per driver with an enabled device, tends on a pool of 4, never two at once for one device. Pokes are gathered for 0.3 s.
-- Filter: a `config_schema` field of `"type": "found"` (one per driver). Stored in the part's config as `{all: bool, only: [{id, name}]}`. `engine.found(driver, config)` cleans what `discover` returns (64 at most). `engine.passing(spec, config, things)` applies the filter. `"many": false` keeps one.
+- Filter: a `config_schema` field of `"type": "found"` (one per driver). Stored in the part's config as `{all: bool, only: [{id, name}]}`. `engine.found(driver, config)` cleans what `discover` returns (64 at most; a thing may carry `note` and `actions: [{do, label}]`). `engine.passing(spec, config, things)` applies the filter. `"many": false` keeps one. `engine.setup_found(driver, thing_id, action, config)` runs the module's `setup()` for a thing's button: `POST /api/devices/found/{driver}/do` `{id, do, config?}`.

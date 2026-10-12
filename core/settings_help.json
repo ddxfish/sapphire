@@ -474,7 +474,7 @@
   },
   "MCP_ROOM_INVITES": {
     "short": "Take chat-room invitations from another Sapphire",
-    "long": "Another Sapphire that holds one of this one's API tokens may invite her into a chat room over there (its room_invite tool). She decides in one turn of her own, with her memory behind her, and joins by calling chatroom_join, which makes the room's chat here with the persona, model and toolset she picked - or the defaults below. The host then sends her the room's lines in that chat on her turns. Off = the tool is not offered and every invitation is refused."
+    "long": "Another Sapphire that holds one of this one's API tokens may invite her into a chat room over there (its room_invite tool). She decides in one turn of her own, with her memory behind her, and joins by calling chatroom_join, which makes the room's chat here with the persona, model and toolset she picked - or the defaults below. The host then sends her the room's lines in that chat on her turns. When the host clears or closes the room, that chat is set aside whole under a dated, archived name and a fresh one starts (room_reset); nothing is wiped. Off = neither tool is offered and every invitation is refused."
   },
   "MCP_ROOM_SHARE_TOOLS": {
     "short": "Tell the host which tools she used (names only)",

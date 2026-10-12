@@ -15,6 +15,13 @@
 # she may look at; chatroom_join is always in reach), or, with no name, an
 # ephemeral turn as her default self that persists nothing. She cannot make
 # a room chat private (Krem 2026-10-11): the host reads every word anyway.
+#
+# When the host clears or closes the room, `room_reset` on the door (reset
+# below) sets the room's chat here aside WHOLE under a dated, archived name
+# and - unless the room was closed - starts a fresh chat of the canonical
+# name dressed as the old one, so her next cue lands clean. Nothing of hers
+# is wiped and no turn of hers runs (Krem 2026-10-12: the host can read, never
+# tamper; she needs a clean chat to work from).
 import json
 import logging
 import socket
@@ -356,6 +363,51 @@ def _room_chat_name(sm, inv):
             return name, True
         n += 1
         name = f"{base}-{n}"
+
+
+def reset(system, args, where=''):
+    """The host's word that the room over there was cleared (closed=False) or
+    closed (True). The room's chat here is renamed `<name>-<stamp>` and
+    archived, whole; unless closed, a fresh `<name>` is made with the same
+    settings (her dressing, the room tag with a new `since`). (text, ok)."""
+    if not enabled():
+        return 'This Sapphire does not take chat-room invitations (Settings > MCP Server, over there).', False
+    args = args if isinstance(args, dict) else {}
+    room, host = _clean(args.get('room'), 200), _clean(args.get('host'), 80)
+    closed = bool(args.get('closed'))
+    if not room or not host:
+        return 'room and host are needed.', False
+    sm = system.llm_chat.session_manager
+    name, tagged = _room_chat_name(sm, {'room': room, 'host': host})
+    if not tagged:
+        return f"There is no chat here for the room '{room}' on {host}.", False
+    st = dict(sm.get_settings_for(name) or {})
+    try:                                             # her turn on the last cue may still be running
+        if sm.is_streaming(name):
+            sm.chat_idle_event(name).wait(timeout=60)
+    except AttributeError:
+        pass
+    kept, n = f"{name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}", 1
+    while sm.get_settings_for(kept) is not None:           # two resets in one second (a clear, then a close)
+        n += 1
+        kept = f"{name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{n}"
+    ok, kept = sm.rename_chat(name, kept)
+    if not ok:
+        return f"The chat '{name}' could not be set aside: {kept}", False
+    sm.set_named_chat_settings(kept, {'archived': True}, touch_updated=False)
+    if closed:
+        logger.info(f"[ROOM GUEST] the room '{room}' on {host} closed: its chat is kept as '{kept}'")
+        return f"The chat for that room is kept whole as '{kept}' (archived). The room is closed, so no fresh chat.", True
+    fresh = {k: v for k, v in st.items() if k != 'archived'}
+    tag = dict(fresh.get(TAG) or {}) if isinstance(fresh.get(TAG), dict) else {}
+    tag.update(host=host, room=room, since=datetime.now().isoformat(timespec='seconds'))
+    if where:
+        tag['where'] = where
+    fresh[TAG] = tag
+    if not sm.create_chat(name, settings=fresh):
+        return f"The old chat is kept whole as '{kept}', but a fresh '{name}' could not be made here.", False
+    logger.info(f"[ROOM GUEST] the room '{room}' on {host} was cleared: '{kept}' kept, '{name}' starts fresh")
+    return f"The chat for that room is kept whole as '{kept}' (archived); '{name}' starts fresh for the next cue.", True
 
 
 def join(args):

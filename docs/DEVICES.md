@@ -11,6 +11,7 @@ Sapphire itself.
 | WiFi gadget | the gadget plugin | A small board with a light, a screen, a button |
 | IP camera (ONVIF) | the IP Cameras plugin | A network camera she sees through, and turns and zooms when it can move |
 | Hardware synth, MIDI keyboard | the MIDI plugin | Instruments she plays and hears |
+| Phone (KDE Connect) | the KDE Connect plugin | A phone running the KDE Connect app: shares to her chat, its texts, a notification from her, battery |
 
 Any plugin can bring more types. A type appears when its plugin is enabled.
 
@@ -626,6 +627,51 @@ chat is made over there the first time it is used.
 Status shows her name when she gave herself one (**MCP Server > This
 Sapphire's name**), how many tools she shares, and says so when her door is
 off or the token is refused.
+
+## Phones
+
+A phone running [KDE Connect](https://kdeconnect.kde.org/) (F-Droid or Play)
+becomes a device. Sapphire shows up in the app as a desktop named
+"Sapphire <hostname>"; nothing is installed on the phone beyond the app.
+
+Add Device > **Phone (KDE Connect)**. Open the app on the phone while it is on
+your network and the phone appears in the pick list within seconds, with its
+pairing state under it. Pairing happens right there, before the phone is
+added, either way round:
+
+- Press **Pair** under the phone. The phone shows an 8-character key, the
+  line under the phone shows the same one. Accept on the phone within 30
+  seconds.
+- Or tap Sapphire in the phone's app and request pairing there. The line
+  under the phone shows the phone's key and an **Accept pairing** button.
+
+The list keeps looking on its own, so the words change as the phone answers.
+Once it reads "Paired", **Add and test**. A phone that is not paired cannot
+be added. Pairing is once; the phone links by itself from then on. The app
+has to be a 2025 or newer build (protocol 8); older ones are refused with a
+word in the log. **Unpair** on the Link tab forgets the phone.
+
+- **Share to her.** In the phone's share sheet pick Sapphire. A picture lands
+  in the chat as a pasted picture would, and she sees it; a document is read
+  out to her; text and links land as words. **A picture or file shared from
+  the phone** on the Share tab says whether it also stays as a file (under
+  `user/plugin_state/kdeconnect_inbox`; a kept document also goes into the
+  chat's documents).
+- **Texts.** The **Text messages** tab is **locked** until you flip its
+  switch: then she can list who texted lately (names, numbers, when), read
+  one conversation by name or number (a number without its area code
+  matches), and send a text as you. **Texts wake her**, on the same tab,
+  starts a turn for every text that arrives on the phone: she reads it and
+  answers in the chat, and may text back. Names come from the phone's
+  contacts when KDE Connect has that permission. SMS permission is needed too.
+- **Notify.** **ping** shows a notification on the phone with your words, and
+  **find** rings the phone until it is found.
+- **Battery** and **Contacts** (a name's numbers, a number's name; texts are
+  shown with names when the app has Contacts permission).
+
+Everything stays on your network. The phone's certificate is pinned at
+pairing; a phone that comes back with another one is refused until it is
+paired again. **Unpair** forgets it.
 
 ## Hosted Sapphire
 

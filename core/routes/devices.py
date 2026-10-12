@@ -125,6 +125,12 @@ def found_things(driver_id, device_id=''):
     return {"found": e.found(driver_id, config)}
 
 
+def setup_found_thing(driver_id, body):
+    """A button under a thing in the pick list (a phone's Pair): the driver
+    sets it up before it is a device."""
+    return _engine().setup_found(driver_id, body.get("id"), body.get("do"), body.get("config"))
+
+
 def sapphire_addresses():
     """Where a board in the house can find Sapphire: her likeliest address
     first, then the others this machine has. A guess the page shows and
@@ -266,6 +272,12 @@ async def devices_add(request: Request, _=Depends(require_login)):
 async def devices_found(driver_id: str, request: Request, device: str = '', _=Depends(require_login)):
     _open(request)
     return await _do(found_things, driver_id, device)
+
+
+@router.post("/api/devices/found/{driver_id}/do")
+async def devices_found_do(driver_id: str, request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    return await _do(setup_found_thing, driver_id, await _body(request))
 
 
 @router.post("/api/devices/provision")

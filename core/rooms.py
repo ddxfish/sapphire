@@ -35,8 +35,8 @@
 # with the lines since her last; her box runs it with her own prompt, model
 # and tools, so her seat here is a name, a face, a device and her chat, no
 # brain; her line's footnote names her tools only when her box shares them
-# (results stay there). Cleared or closed, the room tells her through her
-# door: her chat is hers to keep or clear. A private room keeps its words on
+# (results stay there). Cleared or closed, her box sets her room chat aside
+# whole and starts a fresh one (room_reset). A private room keeps its words on
 # this machine: no inviting, and a guest already seated is skipped with a
 # line (the door's own ruling).
 import logging
@@ -244,7 +244,11 @@ def add_seat(chat, persona, name=None):
                 'color': str(seed.get('trim_color') or ''), 'avatar': p.get('avatar'), 'settings': seed}
         seat_chat(chat, s, seat)                     # her own chat first: no seat without one
         room['seats'].append(seat)
-        _write(chat, room)
+        try:
+            _write(chat, room)
+        except RoomError:
+            _delete_chat(_seat_chat_name(seat))      # ...and no chat without a seat
+            raise
     return _public(seat)
 
 
@@ -326,10 +330,26 @@ def remove_seat(chat, seat_id):
         room['seats'].remove(seat)
         _write(chat, room)
     if seat.get('kind') != GUEST:
-        _delete_chat(_seat_chat_name(seat))          # her chat goes with her seat
+        rt = _rooms.get(chat)
+        if rt is not None and rt.turn == seat_id:    # she is speaking: her turn is cut, then her chat goes
+            s = rt.stream
+            if s is not None:
+                s.cancel_flag = True
+            _wait_idle(_seat_chat_name(seat))
+        _delete_chat(_seat_chat_name(seat))          # her chat goes with her seat, now
 
 
 # --- a seat's own chat ----------------------------------------------------------------
+
+def _wait_idle(name, timeout=15.0):
+    """Until `name` has no stream on it (the store refuses to delete a chat
+    mid-stream, and a seat removed while speaking left hers behind)."""
+    sm = _sm()
+    try:
+        if sm.is_streaming(name):
+            sm.chat_idle_event(name).wait(timeout=timeout)
+    except AttributeError:
+        pass
 
 def _seat_chat_name(seat):
     return f"seat-{seat['id']}"
@@ -382,23 +402,26 @@ def _delete_chat(name):
         logger.warning(f"[ROOM] the seat chat '{name}' was not deleted: {why}")
 
 
-def _tell_guests(chat, room, text):
-    """A word through each guest's door into her room chat, not waited for:
-    the room was cleared or closed, and her chat is hers to keep or clear. A
-    door that fails is a line in the log."""
+def _reset_guests(chat, room, closed):
+    """The room was cleared (or closed): each guest's box sets her room chat
+    aside WHOLE under a dated, archived name and, unless closed, starts a
+    fresh one for the next cue (her door's room_reset). Nothing of hers is
+    wiped, no turn of hers runs, the host can read but never tamper (Krem
+    2026-10-12). Not waited for; a door that fails is a line in the log."""
     for seat in [x for x in room['seats'] if x.get('kind') == GUEST and x.get('chat')]:
         def go(seat=seat):
             try:
                 mod, brief, cfg, secrets = _door(seat.get('device'))
-                mod.notify(brief, cfg, secrets, seat['chat'], text, f"the chat room '{chat}' on {_host()}")
+                said = mod.reset(brief, cfg, secrets, {'room': chat, 'host': _host(), 'closed': bool(closed)})
+                logger.info(f"[ROOM] '{chat}': {seat.get('name')}'s box: {said}")
             except Exception as e:
-                logger.info(f"[ROOM] '{chat}': {seat.get('name')} was not told ({e})")
-        threading.Thread(target=go, daemon=True, name=f"room-tell-{seat['id']}").start()
+                logger.warning(f"[ROOM] '{chat}': {seat.get('name')}'s room chat was not reset over there ({e})")
+        threading.Thread(target=go, daemon=True, name=f"room-reset-{seat['id']}").start()
 
 
 def chat_deleting(chat):
     """The delete route, BEFORE the row goes: a room's seat chats go with it
-    and its guests are told. Any other chat: nothing."""
+    and each guest's box sets her room chat aside. Any other chat: nothing."""
     try:
         _, room = _room(chat)
     except RoomError:
@@ -406,8 +429,7 @@ def chat_deleting(chat):
     _settle(chat)
     for name, _s in _seat_chats(chat):
         _delete_chat(name)
-    _tell_guests(chat, room, f"The chat room '{chat}' on {_host()} was closed by its host. "
-                             "This chat is yours to keep or clear.")
+    _reset_guests(chat, room, closed=True)
 
 
 def sweep():
@@ -452,8 +474,8 @@ def _reset(chat):
 
 def clear(chat):
     """Wipe the transcript. The seats, the rules and the purpose stay. A local
-    seat's own chat is wiped with it; a guest is told through her door, and
-    her chat is hers to keep or clear."""
+    seat's own chat is wiped with it; a guest's box sets hers aside whole and
+    starts a fresh one (room_reset through her door)."""
     _, room = _room(chat)
     _settle(chat)
     if not _sm().clear_chat(chat):
@@ -463,8 +485,7 @@ def clear(chat):
             logger.warning(f"[ROOM] '{chat}': the seat chat '{name}' was not cleared (a turn in flight, or sealed)")
     publish(Events.CHAT_CLEARED, {'chat_name': chat})
     _reset(chat)
-    _tell_guests(chat, room, f"The chat room '{chat}' on {_host()} was cleared by its host. "
-                             "This chat is yours to keep or clear.")
+    _reset_guests(chat, room, closed=False)
     return state(chat)
 
 
@@ -877,6 +898,10 @@ def _loop(rt):
     finally:
         rt.running, rt.turn, rt.waiting, rt.stream = False, None, False, None
         _publish_state(rt)
+        try:
+            sweep()                   # a seat removed mid-turn whose chat could not go then: now it can
+        except Exception as e:
+            logger.warning(f"[ROOM] sweep after the run failed: {e}")
 
 
 def _seat_turn(chat, seat, rt):
@@ -1025,10 +1050,12 @@ def _guest_turn(chat, seat, rt):
         logger.info(f"[ROOM] '{chat}': {name} passed ("
                     f"{'abandoned at Stop' if t.is_alive() else 'her door said: ' + repr(raw[:200])})")
     shared = [str(t) for t in (box.get('tools') or []) if t]           # names only, when her box shares them
+    why = ('' if text else 'abandoned at Stop' if t.is_alive()
+           else f"did not answer: {box['error']}" if 'error' in box else f"her door said: {raw[:120]!r}")
     if text:
         publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign']})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text,
-                                    'tools': shared, **tag})
+                                    'why': why, 'tools': shared, **tag})
     if 'error' in box:
         _notice(chat, f"{name} did not answer: {box['error']}")
         return ''

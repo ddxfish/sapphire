@@ -407,10 +407,14 @@ const lockKey = cap => `lock.${cap}`;
 // A pick list asks its driver what is here. A saved device lends its settings.
 const isFound = f => f.type === 'found' || f.widget === 'found';
 const withLook = (f, driver, device) => !isFound(f) ? f : { ...f,
-    found_url: `${API}/found/${encodeURIComponent(driver)}${device ? '?device=' + encodeURIComponent(device) : ''}` };
+    found_url: `${API}/found/${encodeURIComponent(driver)}${device ? '?device=' + encodeURIComponent(device) : ''}`,
+    found_do_url: `${API}/found/${encodeURIComponent(driver)}/do` };
+
+// The tab a capability's buttons sit on: its own, or the one its driver asks for (Status).
+const tabFor = c => c.tab || c.label || c.capability;
 
 function modalSchema(device) {
-    const tabOf = Object.fromEntries((device.capabilities || []).map(c => [c.capability, c.label || c.capability]));
+    const tabOf = Object.fromEntries((device.capabilities || []).map(c => [c.capability, tabFor(c)]));
     const schema = [
         { key: 'device.label', type: 'string', label: 'Display name', tab: 'Status' },
         { key: 'device.location', type: 'string', label: 'Location', tab: 'Status',
@@ -423,7 +427,7 @@ function modalSchema(device) {
     for (const cap of device.capabilities || []) {
         if (!cap.lockable) continue;
         schema.push({ key: lockKey(cap.capability), type: 'boolean', label: 'Sapphire may use this',
-                      tab: cap.label || cap.capability,
+                      tab: tabFor(cap),
                       help: 'Off = only you can, with the buttons on this tab.' });
         values[lockKey(cap.capability)] = !cap.locked;
     }
@@ -686,7 +690,7 @@ async function openDevice(id, tab, opts = {}) {
             slots.push({ tab: 'Connections', mount: el => mountConnections(el, device, after) });
         for (const b of bindings) slots.push({ tab: b.tab, mount: el => mountBindings(el, b) });
         for (const cap of device.capabilities || [])
-            slots.push({ tab: cap.label || cap.capability, mount: el => mountActions(el, device, cap) });
+            slots.push({ tab: tabFor(cap), mount: el => mountActions(el, device, cap) });
         root = document.createElement('div');
         body.replaceChildren(root);
         renderSettingsForm(root, schema, built.values, { slots });

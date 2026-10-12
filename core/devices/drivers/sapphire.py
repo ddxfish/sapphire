@@ -52,6 +52,7 @@ ASK_WAIT = 180                # seconds her answer may take
 CUE_WAIT = 330                # a room cue: her door's ask waits 300 s for her turn (mcp_server.ASK_WAIT), plus a margin
 INVITE_WAIT = 330             # an invitation: her lobby turn may take 300 s (room_guest.INVITE_WAIT), plus a margin
 TOOL_WAIT = 60
+RESET_WAIT = 90               # a room reset: her box may wait for her last cue's turn to end first
 ABOUT_FRESH = 60              # seconds the far tool list is taken as true
 OWN = ('ask', 'tell')         # the door's own two: the chat capability, not tools
 CORE_ONLY = OWN + ('room_invite',)      # never offered as "her tools": core drives these itself (invite, cue)
@@ -270,13 +271,15 @@ def cue(device, config, secrets, chat, text, who):
     return said or '(nothing came back)', tools
 
 
-def notify(device, config, secrets, chat, text, who):
-    """Core only (core/rooms.py): a word into her room chat, not waited for -
-    the room was cleared or closed; the chat is hers to keep or clear. Raises
-    Problem."""
-    said, ok = _call('tell', {'text': text, 'chat': chat, 'from': who}, config, secrets, QUICK)
+def reset(device, config, secrets, card):
+    """Core only (core/rooms.py): the room here was cleared or closed. `card` =
+    {room, host, closed}. Her box sets the room's chat aside whole and, unless
+    closed, starts a fresh one for the next cue (her door's room_reset). Her
+    words back. Raises Problem."""
+    text, ok = _call('room_reset', card, config, secrets, RESET_WAIT)
     if not ok:
-        raise Problem(said)
+        raise Problem(text)
+    return text
 
 
 def run(device, capability, action, value, config, secrets, call_tool):

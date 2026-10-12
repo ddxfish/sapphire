@@ -363,3 +363,30 @@ def test_screen_picture_resolves_fits_and_posts(home):
     with patch('core.net.request', side_effect=fake), patch.object(images, 'last_image_id', return_value=None):
         said, ok = engine.run('pocket', 'screen', 'picture', '')
         assert ok and said.startswith('There is no image in this chat yet')      # an answer, not a fault
+
+
+# --- said(): a device hands her words with neither microphone nor screen ------------
+
+def test_said_lands_in_the_chat_with_its_pictures_kept(home):
+    """A phone shares a picture (plugins/kdeconnect): the turn runs in the
+    device's chat with the picture kept like a pasted one, her reply stays
+    in the chat (mute: no Reply, no Speech), and the line is the caller's."""
+    got = {}
+
+    def run(chat, text, speak=None, source=None, on_event=None, stream_speech=False, images=None, keep_images=False):
+        got.update(chat=chat, text=text, speak=speak, images=images, keep_images=keep_images)
+        return 'A lovely sunset.'
+    picture = {'type': 'image', 'data': 'aGVsbG8=', 'media_type': 'image/jpeg'}
+    with patch('core.cadence.run_turn', side_effect=run):
+        out = voice.said('pocket', '[Picture shared from phone "pocket". Your reply stays in the chat.]',
+                         'IMG_1.jpg', [picture])
+        assert out['ok'] and out['accepted'] and out['chat']
+        for _ in range(100):
+            if got:
+                break
+            time.sleep(0.02)
+    assert got['text'] == '[Picture shared from phone "pocket". Your reply stays in the chat.]\nIMG_1.jpg'
+    assert got['images'] == [picture] and got['keep_images'] is True
+    assert got['speak'] is None                      # nothing is spoken: a phone has no speaker of hers
+    assert voice.said('pocket', '', '')['error'] == 'Nothing was said.'
+    assert 'no device' in voice.said('nobody', 'x', 'y')['error'].lower()

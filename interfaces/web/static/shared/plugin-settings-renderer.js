@@ -23,7 +23,8 @@ const psSel = key => '#' + CSS.escape('ps-' + key);
  * Render a settings form from a manifest schema array.
  * @param {HTMLElement} container - Where to render
  * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?, tab?}]
- *   type "found": a live pick list. found_url answers {found: [{id, name, kind}]},
+ *   type "found": a live pick list. found_url answers {found: [{id, name, kind, note?, actions?}]};
+ *     a thing's actions ([{do, label}]) are buttons that POST {id, do} to found_do_url,
  *   the value is {all, only: [{id, name}]}. many:false makes it "pick one".
  * @param {Object} values - Current setting values (merged with defaults by backend)
  * @param {Object} [opts] - {onChange: (key, value) => void, managed, slots}
@@ -379,12 +380,24 @@ export function foundPicks(value) {
 // What is here, then what was picked and is away.
 export function foundRows(picks, found) {
     const here = (found || []).filter(t => t && t.id)
-        .map(t => ({ id: String(t.id), name: String(t.name || t.id), kind: String(t.kind || '') }));
-    const away = picks.only.filter(p => !here.some(t => t.id === p.id)).map(p => ({ ...p, kind: '', away: true }));
+        .map(t => ({ id: String(t.id), name: String(t.name || t.id), kind: String(t.kind || ''),
+                     note: String(t.note || ''), actions: Array.isArray(t.actions) ? t.actions : [] }));
+    const away = picks.only.filter(p => !here.some(t => t.id === p.id))
+        .map(p => ({ ...p, kind: '', note: '', actions: [], away: true }));
     return [...here, ...away];
 }
 
-export function foundHTML(field, picks, found, problem = '') {
+// A thing may be set up before it is a device (a phone is paired): the words
+// under it and its buttons come from the driver (`note`, `actions`).
+function foundAbout(t) {
+    const buttons = (t.actions || []).map(a => `<button type="button" class="btn-action ps-found-do"
+        data-id="${escapeHtml(t.id)}" data-do="${escapeHtml(a.do)}" style="margin:4px 6px 0 0">${escapeHtml(a.label || a.do)}</button>`).join('');
+    if (!t.note && !buttons) return '';
+    return `<div class="ps-found-about" style="margin:4px 0 6px 0;font-size:var(--font-sm,13px)">
+            ${t.note ? `<span style="color:var(--text-muted)">${escapeHtml(t.note)}</span>` : ''}${buttons ? `<div>${buttons}</div>` : ''}</div>`;
+}
+
+export function foundHTML(field, picks, found, problem = '', word = '') {
     const name = `ps-${field.key}-mode`;
     const every = field.all_label || 'Everything that is found';
     const rows = foundRows(picks, found);
@@ -393,13 +406,16 @@ export function foundHTML(field, picks, found, problem = '') {
     const again = `<button type="button" class="btn-action ps-found-look" style="margin-top:6px">Look again</button>`;
     const trouble = problem
         ? `<div style="color:var(--error,#e53935);font-size:var(--font-sm,13px)">${escapeHtml(problem)}</div>` : '';
+    const said = word ? `<div class="ps-found-word" style="font-size:var(--font-sm,13px);margin-top:4px">${escapeHtml(word)}</div>` : '';
     if (field.many === false) {
         const chosen = picks.all ? '' : (picks.only[0]?.id || '');
+        const about = rows.filter(t => !t.away && (t.note || t.actions.length)).map(t =>
+            `<div style="margin-top:6px"><b style="font-size:var(--font-sm,13px)">${escapeHtml(t.name)}</b>${foundAbout(t)}</div>`).join('');
         return `<select class="ps-found-one">
                 <option value="">${escapeHtml(field.all_label || 'Whichever is found')}</option>
                 ${rows.map(t => `<option value="${escapeHtml(t.id)}" ${t.id === chosen ? 'selected' : ''}>${
                     escapeHtml(t.name)}${note(t) ? ` (${escapeHtml(note(t))})` : ''}</option>`).join('')}
-            </select> ${again}${trouble}`;
+            </select> ${again}${about}${said}${trouble}`;
     }
     const ticked = t => picks.all ? !t.away : picks.only.some(p => p.id === t.id);
     const list = looking ? '<span style="color:var(--text-muted)">Looking...</span>'
@@ -407,10 +423,10 @@ export function foundHTML(field, picks, found, problem = '') {
                 <input type="checkbox" class="ps-found-tick" data-id="${escapeHtml(t.id)}" data-name="${escapeHtml(t.name)}"
                     ${ticked(t) ? 'checked' : ''} ${picks.all ? 'disabled' : ''}>
                 ${escapeHtml(t.name)} <span style="color:var(--text-muted);font-size:var(--font-sm,13px)">${escapeHtml(note(t))}</span>
-            </label>`).join('') || '<span style="color:var(--text-muted)">Nothing is here right now.</span>';
+            </label>${t.away ? '' : foundAbout(t)}`).join('') || '<span style="color:var(--text-muted)">Nothing is here right now.</span>';
     return `<label style="display:block"><input type="radio" name="${escapeHtml(name)}" value="all" ${picks.all ? 'checked' : ''}> ${escapeHtml(every)}</label>
             <label style="display:block"><input type="radio" name="${escapeHtml(name)}" value="only" ${picks.all ? '' : 'checked'}> ${escapeHtml(field.only_label || 'Only these')}</label>
-            <div class="ps-found-list" style="margin:6px 0 0 22px">${list}</div>${again}${trouble}`;
+            <div class="ps-found-list" style="margin:6px 0 0 22px">${list}</div>${again}${said}${trouble}`;
 }
 
 function wireFoundField(container, field) {
@@ -418,26 +434,60 @@ function wireFoundField(container, field) {
     if (!wrap) return;
     const hidden = wrap.querySelector(psSel(field.key));
     const body = wrap.querySelector('.ps-found-body');
-    let found = null, problem = '';           // null = still looking
+    let found = null, problem = '', word = '';           // null = still looking; word = the last button's answer
 
     const read = () => foundPicks(hidden.value);
-    const draw = () => { body.innerHTML = foundHTML(field, read(), found, problem); };
+    const draw = () => { body.innerHTML = foundHTML(field, read(), found, problem, word); };
     const write = picks => {
         hidden.value = JSON.stringify(picks);
         draw();
         hidden.dispatchEvent(new Event('change', { bubbles: true }));
     };
-    const look = async () => {
-        found = null; problem = '';
-        draw();
+    // quiet=true: a look on the clock, redrawn only when something changed
+    const look = async (quiet = false) => {
+        const before = JSON.stringify(found);
+        if (!quiet) { found = null; problem = ''; draw(); }
         try {
             if (field.found_url) {
                 const res = await fetch(field.found_url);
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.detail || `The look failed (${res.status}).`);
                 found = Array.isArray(data.found) ? data.found : [];
+                problem = '';
             } else found = [];
-        } catch (e) { found = []; problem = String(e.message || e); }
+        } catch (e) { if (!quiet) { found = []; problem = String(e.message || e); } }
+        if (!quiet || JSON.stringify(found) !== before) draw();
+    };
+    // a thing with a button is a thing whose state changes on the other side
+    // (a phone answering a pairing): keep looking while one is shown
+    const clock = setInterval(() => {
+        if (!document.body.contains(wrap)) return clearInterval(clock);
+        if ((found || []).some(t => Array.isArray(t.actions) && t.actions.length)) look(true);
+    }, 3000);
+    const press = async btn => {
+        if (!field.found_do_url) return;
+        // acting on a thing means this thing: it is picked (a paired phone that
+        // was never chosen in the dropdown refused to be added, 2026-10-12)
+        const { id, do: action } = btn.dataset;
+        const row = foundRows(read(), found).find(t => t.id === id);
+        if (row) {
+            const picks = read();
+            hidden.value = JSON.stringify(field.many === false
+                ? { all: false, only: [{ id: row.id, name: row.name }] }
+                : { all: false, only: [...picks.only.filter(p => p.id !== row.id), { id: row.id, name: row.name }] });
+            hidden.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        word = 'One moment...'; draw();
+        try {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            const res = await fetch(field.found_do_url, { method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                body: JSON.stringify({ id, do: action }) });
+            const data = await res.json().catch(() => ({}));
+            word = res.ok ? String(data.text || (data.ok ? 'Done.' : 'That did not work.'))
+                          : String(data.detail || `That did not work (${res.status}).`);
+        } catch (e) { word = String(e.message || e); }
+        await look(true);
         draw();
     };
     // The inner inputs carry no value of their own: the hidden input speaks.
@@ -457,7 +507,11 @@ function wireFoundField(container, field) {
             write({ all: false, only });
         }
     });
-    body.addEventListener('click', e => { if (e.target.closest('.ps-found-look')) look(); });
+    body.addEventListener('click', e => {
+        const btn = e.target.closest('.ps-found-do');
+        if (btn) return press(btn);
+        if (e.target.closest('.ps-found-look')) look();
+    });
     look();
 }
 

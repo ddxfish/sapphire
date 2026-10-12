@@ -23,6 +23,13 @@ if [ -z "$CSRF" ]; then
 fi
 curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE/login" \
     -d "password=$PASSWORD&csrf_token=$CSRF" -o /dev/null
+# The session rotates after login, so the form token is stale for the PUT:
+# re-scrape the post-login token from / (same as ask-sapphire.sh). 2026-10-12.
+CSRF=$(curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/" | grep -oP 'name="csrf-token"\s+content="\K[^"]+')
+if [ -z "$CSRF" ]; then
+    echo "could not fetch the post-login CSRF token (login failed?)" >&2
+    exit 2
+fi
 
 CURRENT=$(curl -sk -b "$COOKIE_JAR" -H "X-CSRF-Token: $CSRF" "$BASE/api/webui/plugins" \
     | python3 -c "

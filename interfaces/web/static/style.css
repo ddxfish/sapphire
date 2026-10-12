@@ -9383,6 +9383,7 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
     border-radius: var(--radius-sm); color: var(--text); font-size: var(--font-sm);
 }
 .rm-hint { font-size: var(--font-xs); color: var(--text-muted); }
+.rm-field select { flex: 1; min-width: 0; font-size: var(--font-sm); }
 .rm-run { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rm-skip { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .rm-run button:disabled { opacity: 0.45; cursor: default; }

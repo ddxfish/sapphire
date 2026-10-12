@@ -25,6 +25,7 @@ ASK_WAIT = 300                 # seconds an ask waits in the chat's inbox for it
 TEXT_MAX = 8000                # characters of one ask or tell
 OWN = ('ask', 'tell')          # this door's own tools, always offered
 INVITE = 'room_invite'         # the third, offered while Settings > MCP Server takes room invitations
+RESET = 'room_reset'           # the fourth, with it: the host's word that a room she sits in was cleared or closed
 
 # True while a turn that came in through `ask` or `tell` runs: a tool that
 # would ask another Sapphire checks it and says "answer in your message"
@@ -80,13 +81,28 @@ _TOOLS = {
             'required': ['room'],
         },
     },
+    RESET: {
+        'name': RESET,
+        'description': "The host's word that a chat room she sits in was cleared (closed=false) or closed (true). "
+                       "Her chat for that room here is kept whole under a dated, archived name; unless closed, a "
+                       "fresh chat of the same name starts for the next cue. Nothing is wiped, no turn runs.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'room': {'type': 'string', 'description': "The room's name over there."},
+                'host': {'type': 'string', 'description': 'The host Sapphire, as she sees it (the invitation\'s host).'},
+                'closed': {'type': 'boolean', 'description': 'True when the room was deleted, not cleared.'},
+            },
+            'required': ['room', 'host'],
+        },
+    },
 }
 
 
 def own():
     """This door's own tools right now."""
     from core import room_guest
-    return OWN + ((INVITE,) if room_guest.enabled() else ())
+    return OWN + ((INVITE, RESET) if room_guest.enabled() else ())
 
 
 def _version():
@@ -301,9 +317,12 @@ def call(system, name, args, where='', persona=None):
         return ask(system, args, where, persona)
     if name == 'tell':
         return tell(system, args, where, persona)
-    if name == INVITE:
-        if INVITE not in own():
+    if name in (INVITE, RESET):
+        if name not in own():
             return 'This Sapphire does not take chat-room invitations (Settings > MCP Server, over there).', False
+        if name == RESET:
+            from core import room_guest
+            return room_guest.reset(system, args, where)
         return room_invite(system, args, where, persona)
     from core import mcp_persona
     if name in mcp_persona.NAMES:

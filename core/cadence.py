@@ -287,7 +287,8 @@ def armed():
 # ── the turn ────────────────────────────────────────────────────────────────
 
 def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=None,
-             stream_speech=False, keep_prompt=False, brain=None, on_stream=None, quiet=False):
+             stream_speech=False, keep_prompt=False, brain=None, on_stream=None, quiet=False,
+             keep_images=False):
     """One unprompted turn on `chat` through THE engine, live to the wire.
     Raises ChatBusy when the chat has a turn in flight. Returns her text.
     on_event(event) sees every event of THIS turn as it happens (the bus
@@ -305,7 +306,10 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
     settings on her own chat's session). on_stream(stream): the stream the
     moment it exists, for a caller that must be able to cut it (Stop, a seat
     clock). quiet=True: no VOICE_TURN events from here - the caller paints
-    the turn itself from on_event (a room, under the seat's name)."""
+    the turn itself from on_event (a room, under the seat's name).
+    keep_images=True: the images are a pasted picture, not a glance - they go
+    into the chat's image store and stay in history (a photo shared from a
+    phone, 2026-10-12). Default False keeps them model-only for this turn."""
     system = _system
     if system is None:
         raise RuntimeError('cadence organ not started')
@@ -364,7 +368,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
             stream.tts_chat_settings = sm.get_settings_for(chat) or {'private_chat': True}
         else:
             stream.suppress_tts = True        # the pump stays inert; the lane below speaks
-        stream.images_ephemeral = True        # frames reach the model this turn only
+        stream.images_ephemeral = not keep_images   # frames reach the model this turn only; a shared photo stays
         try:
             active = sm.get_active_chat_name()
         except Exception:

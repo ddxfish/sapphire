@@ -23,6 +23,10 @@
 #           writes it and rings the device's stream with a `text` doorbell
 #           ({msg, rev, have, done}); the device pulls what it lacks from
 #           reply_text(). A doorbell can be dropped, the text never is.
+#   said()  a device hands her words with neither microphone nor screen: a
+#           phone sharing a picture, a text message that arrived on it. The
+#           turn runs in the device's chat; her reply stays there. Pictures
+#           that come with the words are kept like a pasted picture.
 #   pressed() a device's button was pressed and its press is set to send her
 #           a message (the device's Buttons tab). The words set there land
 #           in the device's chat as a turn; her reply goes where the device
@@ -69,6 +73,7 @@ TELL = 'tell'              # a press that sends her a message; any other job is 
 SPEECH_WAIT = 600          # seconds a turn waits for the last sentence to finish playing
 SAY_ALL_WAIT = 180         # seconds say_all waits for the slowest device
 TYPED_MAX = 2000           # chars a device may type at once
+SAID_MAX = 24000           # chars a device may hand her at once (a shared document)
 TEXT_MAX = 12000           # chars of one reply kept for a screen
 TEXT_KEEP = 4              # replies kept per device, for a pull that comes late
 DOORBELL_GAP = 0.25        # seconds between doorbells while she writes
@@ -856,7 +861,7 @@ def _free_slot(device_id):
             _waiting.pop(device_id, None)
 
 
-def _turn(row, chat, heard, reply=None, line=None, mute=False):
+def _turn(row, chat, heard, reply=None, line=None, mute=False, images=None):
     """One question from start to finish, on its own thread. Never raises.
     Her reply is spoken on the device as it is made (Speech); a device whose
     driver cannot take sound that way hears it whole at the end, through
@@ -864,6 +869,8 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
     text goes to the device's screen as she writes it. `mute` is a device
     that can do neither (a button and a light): her reply stays in the chat.
     `line` is the line above the words when it is neither heard nor typed.
+    `images` are pictures that came with the words (a photo shared from a
+    phone): kept in the chat like a pasted picture, not a glance.
     The light ends on idle, or on error when the person got no answer."""
     device_id, failed, speech, box = row['id'], False, None, {}
     lane = f"device:{device_id}"
@@ -893,9 +900,10 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
             with _lock:
                 _running[device_id] = (box, chat)
             try:
+                with_pictures = {'images': images, 'keep_images': True} if images else {}   # the old call shape otherwise
                 return cadence.run_turn(chat, text, speak=lane if sp else None, source=lane,
                                         on_event=lambda ev: _follow(device_id, ev, sp, reply),
-                                        stream_speech=bool(sp and sp.ready))
+                                        stream_speech=bool(sp and sp.ready), **with_pictures)
             finally:
                 box['spoke_ok'] = getattr(_spoke, 'ok', None)
                 with _lock:
@@ -1016,6 +1024,54 @@ def typed(device_id, text):
         return {'ok': True, 'accepted': True, 'chat': chat, 'msg': reply.msg}
     except Exception as e:
         logger.error(f"[DEVICES] typed({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
+
+
+def _chat_part(row):
+    """The part whose settings name the device's chat: the one with a `chat`
+    field, else the first. A phone has neither microphone nor keyboard."""
+    parts = row.get('parts') or []
+    return next((p for p in parts if 'chat' in (p.get('config') or {})), parts[0] if parts else None)
+
+
+def said(device_id, line, text, images=None):
+    """A device hands her words with no microphone and no screen (a phone
+    through KDE Connect: a shared picture, a text message). The turn runs in
+    the device's chat; her reply stays there. `line` is the line she reads
+    above the words: what this is, which device, how to answer. `images`:
+    [{'type': 'image', 'data': <base64>, 'media_type'}], kept in the chat as
+    a pasted picture would be. {'ok', 'accepted', 'chat'} or {'ok': False,
+    'error'}; busy = the device already has MAX_WAITING waiting. Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        text = str(text or '').strip()[:SAID_MAX]
+        images = [i for i in (images or []) if isinstance(i, dict) and i.get('data')][:4]
+        if not text and not images:
+            return {'ok': False, 'error': 'Nothing was said.'}
+        part = _chat_part(row)
+        chat, settings, why = chat_for((part or {}).get('config'), row['id'])
+        if settings is None:
+            return {'ok': False, 'error': why}
+        logger.info(f"[DEVICES] {row['id']} said {len(text)} chars"
+                    + (f" and {len(images)} picture(s)" if images else '') + f" for chat '{chat}'")
+        if not _take_slot(row['id']):
+            return {'ok': False, 'busy': True, 'chat': chat,
+                    'error': f"'{row['id']}' already has {MAX_WAITING} questions waiting."}
+        try:
+            _spawn(_turn, row, chat, text or 'A picture.', None, str(line or '').strip() or origin_line(row),
+                   True, images)
+        except Exception:
+            _free_slot(row['id'])
+            raise
+        return {'ok': True, 'accepted': True, 'chat': chat}
+    except Exception as e:
+        logger.error(f"[DEVICES] said({device_id}) failed: {e}", exc_info=True)
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 

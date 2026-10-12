@@ -35,6 +35,14 @@ class FakeSM:
         self.chats[name].update(patch)
         return True
 
+    def rename_chat(self, old, new):
+        if old not in self.chats:
+            return False, f"Chat '{old}' not found"
+        if new in self.chats:
+            return False, f"Chat '{new}' already exists"
+        self.chats[new] = self.chats.pop(old)
+        return True, new
+
     def make_stream_session(self, name):
         s = self.get_settings_for(name)
         return None if s is None else {'chat': name, 'settings': s, 'system_prompt': None, 'tools': None, 'history': []}
@@ -274,13 +282,46 @@ def test_the_door_offers_the_tool_only_while_invitations_are_on(world, monkeypat
     system = SimpleNamespace(llm_chat=SimpleNamespace(function_manager=fm, session_manager=world.sm))
     monkeypatch.setattr(config, 'MCP_SERVER_TOOLS', [], raising=False)
     names = [t['name'] for t in mcp.exposed(system)]
-    assert names == ['ask', 'tell', 'room_invite']
-    assert [r['name'] for r in mcp.catalogue(system) if r['own']] == ['ask', 'tell', 'room_invite']
+    assert names == ['ask', 'tell', 'room_invite', 'room_reset']
+    assert [r['name'] for r in mcp.catalogue(system) if r['own']] == ['ask', 'tell', 'room_invite', 'room_reset']
     monkeypatch.setattr(config, 'MCP_ROOM_INVITES', False, raising=False)
     assert [t['name'] for t in mcp.exposed(system)] == ['ask', 'tell']
     text, ok = mcp.call(system, 'room_invite', INVITE)
+    assert not ok and 'does not take chat-room invitations' in text
+    text, ok = mcp.call(system, 'room_reset', {'room': 'salon', 'host': 'dev'})
     assert not ok and 'does not take chat-room invitations' in text
     with patch.object(rg, '_turn') as turn:
         out = mcp.handle(system, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
                                   'params': {'name': 'room_invite', 'arguments': INVITE}})
     assert out['result']['isError'] is True and turn.call_count == 0
+
+
+def test_the_hosts_clear_sets_her_room_chat_aside_whole_and_starts_fresh(world, monkeypatch):
+    """room_reset (Krem 2026-10-12): nothing of hers is wiped and no turn runs. The chat
+    is renamed with a stamp and archived; a fresh one of the canonical name starts with
+    the same dressing unless the room was closed. The next cue lands clean."""
+    patcher, _ = her(lambda text: {'accept': True})
+    with patcher:
+        mcp.room_invite(world.system, INVITE, where='192.168.1.5')
+    whole = world.sm.chats['room-dev-salon']                 # the fake store moves the very object on rename
+    old = dict(whole)
+    text, ok = mcp.handle(world.system, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                         'params': {'name': 'room_reset', 'arguments': {'room': 'salon', 'host': 'dev'}}},
+                          where='192.168.1.5')['result']['content'][0]['text'], True
+    kept = next(n for n in world.sm.chats if n.startswith('room-dev-salon-'))
+    assert 'kept whole' in text and kept in text and "'room-dev-salon' starts fresh" in text
+    assert world.sm.chats[kept] is whole and whole['archived'] is True                                # the old, whole, archived
+    fresh = world.sm.chats['room-dev-salon']
+    assert fresh is not whole and 'archived' not in fresh                                             # the new, clean
+    assert fresh['persona'] == old['persona'] and fresh['custom_context'] == old['custom_context']   # dressed the same
+    assert fresh['room_guest'] is not whole['room_guest'] and fresh['room_guest']['host'] == 'dev' \
+           and fresh['room_guest']['room'] == 'salon' and fresh['room_guest']['since']       # a tag of its own
+    # closed: set aside, no fresh chat; a rejoin later makes one through chatroom_join
+    text, ok = rg.reset(world.system, {'room': 'salon', 'host': 'dev', 'closed': True})
+    assert ok and 'no fresh chat' in text and 'room-dev-salon' not in world.sm.chats
+    assert len([n for n in world.sm.chats if n.startswith('room-dev-salon-')]) == 2
+    # no chat for that room, or a chat of that name that is not the room's: nothing is touched
+    assert rg.reset(world.system, {'room': 'salon', 'host': 'dev'}) == ("There is no chat here for the room 'salon' on dev.", False)
+    world.sm.chats['room-dev-parlour'] = {'rows': [], 'persona': 'x'}
+    assert rg.reset(world.system, {'room': 'parlour', 'host': 'dev'})[1] is False and 'room-dev-parlour' in world.sm.chats
+    assert rg.reset(world.system, {'room': '', 'host': 'dev'}) == ('room and host are needed.', False)

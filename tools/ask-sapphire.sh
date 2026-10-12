@@ -29,7 +29,10 @@ rm -f "$COOKIE_JAR"
 LOGIN_CSRF=$(curl -sk -c "$COOKIE_JAR" "$BASE/login" | grep -oP 'name="csrf_token"\s+value="\K[^"]+')
 curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE/login" \
     -d "password=$PASSWORD&csrf_token=$LOGIN_CSRF" -o /dev/null
-CSRF=$(curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/" | grep -oP 'name="csrf-token"\s+content="\K[^"]+')
+# `|| true`: under set -e + pipefail an empty grep killed the script with no
+# message at all (the login rate limit answers 302 to /login?error=rate and
+# / then 307s) — the check below is the one that should speak. 2026-10-12.
+CSRF=$(curl -sk -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$BASE/" | grep -oP 'name="csrf-token"\s+content="\K[^"]+' || true)
 if [ -z "$CSRF" ]; then
     echo "ERROR: could not fetch post-login CSRF token from / — login may have failed" >&2
     exit 4

@@ -128,22 +128,23 @@ function skeleton() {
         sidebarBody: `
             <div class="rm-body" id="rm-body">
                 <div class="sidebar-section rm-quick">
+                    <!-- one sentence for the rules that matter (Krem 2026-10-12): none = Bots off;
+                         a number = human every N; "until you stop them" = never wait. Stop is the
+                         chat bar's Stop while a bot speaks; One round is the old Go. -->
                     <div class="rm-field">
-                        <label for="rm-human-every">human every</label>
-                        <input type="number" id="rm-human-every" min="0" max="99" title="The bots go this many rounds, then wait for you. 0 = never wait (use Stop, or a round cap under the gear).">
-                        <span class="rm-hint">rounds</span>
+                        <label for="rm-rounds">After your line, the bots take</label>
+                        <select id="rm-rounds" title="How many rounds the bots talk after each line of yours. None: your lines land, nobody answers. Until you stop them: the chat bar's Stop ends it, and a round cap under the gear is the brake.">
+                            <option value="off">none (bots off)</option>
+                            <option value="1">1 round</option>
+                            <option value="2">2 rounds</option>
+                            <option value="3">3 rounds</option>
+                            <option value="5">5 rounds</option>
+                            <option value="0">until you stop them</option>
+                        </select>
                     </div>
                     <div class="rm-run">
-                        <button type="button" id="rm-go" class="sb-btn-sm" title="One more round without you">&#x25B6; Go</button>
-                        <button type="button" id="rm-stop" class="sb-btn-sm" title="Stop now - the bot mid-sentence is cut and its line dropped">&#x23F9; Stop</button>
-                        <span class="rm-skip">
-                            <input type="number" id="rm-skip-n" min="1" max="99" value="1" title="rounds">
-                            <button type="button" id="rm-skip" class="sb-btn-sm" title="Let the bots go this many rounds without you">skip me</button>
-                        </span>
+                        <button type="button" id="rm-go" class="sb-btn-sm" title="The bots talk one more round without you">&#x25B6; One round</button>
                     </div>
-                </div>
-                <div class="sb-toggles rm-bots-row">
-                    <button type="button" class="sb-toggle" id="rm-bots" data-active="true" title="Off: your lines land, nobody answers">Bots enabled</button>
                 </div>
                 <div class="rm-add">
                     <select id="rm-add-persona" title="A persona to seat in this room"></select>
@@ -171,10 +172,10 @@ function skeleton() {
     $('#rm-import').onclick = () => { $('#rm-kebab').classList.remove('open'); if (R) importRoom(); };
     $('#rm-export').onclick = () => { $('#rm-kebab').classList.remove('open'); if (R) exportRoom(); };
     $('#rm-go').onclick = () => run('/start', {});
-    $('#rm-stop').onclick = () => run('/stop', {});
-    $('#rm-skip').onclick = () => run('/start', { rounds: Math.max(1, parseInt($('#rm-skip-n').value, 10) || 1) });
-    $('#rm-human-every').onchange = (e) => updateRoom({ human_every: Math.max(0, parseInt(e.target.value, 10) || 0) });
-    $('#rm-bots').onclick = () => { if (R) updateRoom({ bots_enabled: !R.info.bots_enabled }); };
+    $('#rm-rounds').onchange = (e) => {
+        const v = e.target.value;
+        updateRoom(v === 'off' ? { bots_enabled: false } : { bots_enabled: true, human_every: Math.max(0, parseInt(v, 10) || 0) });
+    };
     $('#rm-add').onclick = addSeat;
     // a room renamed elsewhere (Chat Manager, another tab): the last-open key follows it
     eventBus.on(eventBus.Events.CHAT_RENAMED, (d) => {
@@ -323,6 +324,17 @@ async function say() {
 function onState(d) {
     if (!R || d?.chat !== R.chat) return;
     R.info.state = d;
+    if (d.turn) R.passed = null;                           // someone is speaking: the last pass is old news
+    paintTurn();
+}
+
+// A seat's turn that left no line (she passed, said nothing, hit her model's
+// ceiling, was stopped): the bubble goes (main.js), and the strip says so until
+// the next seat speaks - a bubble that opened and vanished read as a lost line
+// twice (field reports 2026-10-12).
+function onTurnEnd(d) {
+    if (!R || d?.chat !== R.chat || d?.source !== 'room' || !d?.dropped || !d?.speaker) return;
+    R.passed = { name: d.name || seatOf(d.speaker)?.name || 'a bot', why: d.why || '' };
     paintTurn();
 }
 
@@ -337,6 +349,7 @@ function bindBus() {
     bound = true;
     eventBus.on('room_state', onState);
     eventBus.on('room_changed', onChanged);
+    eventBus.on('voice_turn_end', onTurnEnd);
 }
 
 function unbindBus() {
@@ -344,6 +357,7 @@ function unbindBus() {
     bound = false;
     eventBus.off('room_state', onState);
     eventBus.off('room_changed', onChanged);
+    eventBus.off('voice_turn_end', onTurnEnd);
 }
 
 // ------------------------------------------------------------------ paint
@@ -357,15 +371,24 @@ function paintAll() {
     const purpose = $('#rm-purpose');
     purpose.textContent = info.purpose || 'No purpose yet - every bot reads what you write under the gear.';
     purpose.classList.toggle('empty', !info.purpose);
-    $('#rm-human-every').value = String(info.human_every ?? 1);
-    const bots = $('#rm-bots');
-    bots.classList.toggle('active', !!info.bots_enabled);
-    bots.dataset.active = info.bots_enabled ? 'true' : 'false';
-    bots.textContent = info.bots_enabled ? 'Bots enabled' : 'Bots off';
+    paintRounds();
     paintTurn();
     paintRoster();
     paintGuests();
     fillPersonas();
+}
+
+function paintRounds() {
+    const sel = $('#rm-rounds');
+    const info = R.info;
+    const v = !info.bots_enabled ? 'off' : String(info.human_every ?? 1);
+    if (![...sel.options].some(o => o.value === v)) {      // a number the list does not offer (set earlier): shown as it is
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = `${v} rounds`;
+        sel.insertBefore(o, sel.querySelector('option[value="0"]'));
+    }
+    sel.value = v;
 }
 
 function paintTurn() {
@@ -373,16 +396,15 @@ function paintTurn() {
     const st = R.info.state || {};
     const n = (R.info.seats || []).filter(s => s.enabled !== false).length;
     let text;
+    const passed = R.passed ? `${R.passed.name} passed` : '';
     if (!R.info.bots_enabled) text = 'Bots are off';
     else if (st.running && st.turn) text = `Round ${st.round} · ${seatOf(st.turn)?.name || 'a bot'} is speaking`;
-    else if (st.running && st.waiting) text = `Round ${st.round} · your turn`;
-    else if (st.running) text = `Round ${st.round}`;
-    else text = n ? `${n} bot${n === 1 ? '' : 's'} · idle` : 'No bots seated';
+    else if (st.running && st.waiting) text = `Round ${st.round} · ${passed ? passed + ' · ' : ''}your turn`;
+    else if (st.running) text = `Round ${st.round}${passed ? ' · ' + passed : ''}`;
+    else text = (passed ? passed + ' · ' : '') + (n ? `${n} bot${n === 1 ? '' : 's'} · idle` : 'No bots seated');
     $('#rm-turn').textContent = text;
-    $('#rm-stop').disabled = !st.running;
-    const idle = !R.info.bots_enabled || !n;
-    $('#rm-go').disabled = idle;
-    $('#rm-skip').disabled = idle;
+    $('#rm-turn').title = R.passed?.why || '';
+    $('#rm-go').disabled = !R.info.bots_enabled || !n;
     root.querySelectorAll('.rm-seat').forEach(el => el.classList.toggle('speaking', !!st.turn && el.dataset.seat === st.turn));
 }
 
@@ -498,9 +520,10 @@ async function fillPersonas(force = false) {
     try { hers = ((await fetchWithTimeout('/api/devices', {}, 10000)).devices || []).filter(d => d.driver === 'sapphire' && d.enabled !== false); }
     catch (e) { /* no devices page, no guests */ }
     if (seq !== fillSeq) return;                              // a newer fill is on its way
-    sel.innerHTML = (personas.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') || '<option value="">no personas</option>')
-        + (hers.length ? `<optgroup label="Another Sapphire">${hers.map(d =>
-            `<option value="${esc(DEVICE + d.id)}" data-label="${esc(d.label || d.id)}">\u{1F48E} ${esc(d.label || d.id)}</option>`).join('')}</optgroup>` : '');
+    // another Sapphire first (Krem 2026-10-12), then the personas of this one
+    sel.innerHTML = (hers.length ? `<optgroup label="Another Sapphire">${hers.map(d =>
+            `<option value="${esc(DEVICE + d.id)}" data-label="${esc(d.label || d.id)}">\u{1F48E} ${esc(d.label || d.id)}</option>`).join('')}</optgroup>` : '')
+        + `<optgroup label="Personas">${personas.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') || '<option value="">no personas</option>'}</optgroup>`;
     if (was && [...sel.options].some(o => o.value === was)) sel.value = was;
 }
 
@@ -609,13 +632,12 @@ function openSettings() {
     const r = R.info;
     showModal('Room settings', [
         { id: 'purpose', label: 'What this room is for (every bot reads it)', type: 'textarea', value: r.purpose || '', rows: 4 },
-        { id: 'human_every', label: 'Require a human every N rounds (0 = never wait)', type: 'number', value: String(r.human_every ?? 1) },
-        { id: 'max_rounds', label: 'Stop after N rounds (0 = no cap)', type: 'number', value: String(r.max_rounds ?? 0) },
+        { id: 'max_rounds', label: 'Round cap: stop after N rounds in one run (0 = no cap; the brake for "until you stop them")', type: 'number', value: String(r.max_rounds ?? 0) },
         { id: 'pause_s', label: 'Pause between bots, seconds', type: 'number', value: String(r.pause_s ?? 0) },
         { id: 'shuffle', label: 'Speaking order', type: 'select', options: ['fixed', 'shuffle'],
           labels: ['Roster order', 'Shuffle every round'], value: r.shuffle ? 'shuffle' : 'fixed' },
     ], (data) => updateRoom({
-        purpose: data.purpose, human_every: parseInt(data.human_every, 10) || 0,
+        purpose: data.purpose,
         max_rounds: parseInt(data.max_rounds, 10) || 0, pause_s: parseFloat(data.pause_s) || 0,
         shuffle: data.shuffle === 'shuffle',
     }), { saveLabel: 'Save' });

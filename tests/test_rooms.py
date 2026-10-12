@@ -567,10 +567,11 @@ class FakeDoor:
             raise RuntimeError(self.fail)
         return self.answer, list(self.tools)
 
-    def notify(self, device, config, secrets, chat, text, who):
-        self.told.append((chat, text, who))
+    def reset(self, device, config, secrets, card):
+        self.told.append(card)
         if self.fail:
             raise RuntimeError(self.fail)
+        return 'kept whole; fresh'
 
 
 def _with_door(monkeypatch, door):
@@ -693,13 +694,13 @@ def test_her_turn_is_one_ask_with_the_lines_since_her_last(world, monkeypatch, c
     rooms.say(chat, 'Secret.')
     assert _wait(lambda: 'private' in rows[-2]['content'] and not rooms.state(chat)['running'])
     assert rows[-2]['speaker'] == 'room' and len(door.cues) == 5
-    # the room cleared: she is told through her door, in her room chat; hers to keep or clear
+    # the room cleared: her box sets her room chat aside and starts a fresh one (room_reset
+    # through her door, nothing of hers wiped); closed: set aside only
     rooms.clear(chat)
     assert _wait(lambda: door.told)
-    assert door.told == [('room-dev-salon', "The chat room 'salon' on dev was cleared by its host. This chat is yours to keep or clear.",
-                          "the chat room 'salon' on dev")]
+    assert door.told == [{'room': 'salon', 'host': 'dev', 'closed': False}]
     rooms.chat_deleting(chat)
-    assert _wait(lambda: len(door.told) == 2) and 'was closed by its host' in door.told[1][1]
+    assert _wait(lambda: len(door.told) == 2) and door.told[1] == {'room': 'salon', 'host': 'dev', 'closed': True}
 
 
 def _seat_turn_with(world, monkeypatch, chat, events, text='', rows_after=()):
@@ -813,9 +814,20 @@ def test_every_local_seat_has_a_chat_of_her_own(world, monkeypatch):
     rooms.append_line(chat, 'user', 'hi', 'user', 'Krem')
     rooms.clear(chat)
     assert sm.chats[chat]['rows'] == [] and sm.chats[own]['rows'] == []
-    # remove: gone
+    # remove: gone - and the seat that is SPEAKING has her turn cut first (the store
+    # refuses to delete a chat mid-stream; hers used to stay behind until the next boot)
+    rt = rooms._rt(chat)
+    rt.turn, rt.stream = b['id'], type('S', (), {'cancel_flag': False})()
     rooms.remove_seat(chat, b['id'])
-    assert f"seat-{b['id']}" not in sm.chats and own in sm.chats
+    assert rt.stream.cancel_flag is True and f"seat-{b['id']}" not in sm.chats and own in sm.chats
+    rt.turn = rt.stream = None
+    # a seat whose record cannot be written takes its chat back out: no chat without a seat
+    write = rooms._write
+    monkeypatch.setattr(rooms, '_write', lambda c, r: (_ for _ in ()).throw(rooms.RoomError('no')))
+    with pytest.raises(rooms.RoomError):
+        rooms.add_seat(chat, 'cobalt')
+    assert not [n for n in sm.chats if n.startswith('seat-') and n != own]
+    monkeypatch.setattr(rooms, '_write', write)
     # the room renamed: retagged, reshown
     sm.chats['parlour'] = sm.chats.pop(chat)
     rooms.chat_renamed(chat, 'parlour')
@@ -834,6 +846,39 @@ def test_every_local_seat_has_a_chat_of_her_own(world, monkeypatch):
     assert own not in sm.chats
     rooms.chat_deleting('not-a-room')
 
+
+
+def test_her_silent_turn_says_why_on_the_wire_and_the_view_shows_it(world, monkeypatch):
+    """A guest's END carries `why` like a local seat's; the room view listens for a
+    dropped room turn and says "<name> passed" in the strip until the next seat
+    speaks (the vanishing bubble read as a lost line twice, 2026-10-12)."""
+    chat, a, b = _salon(two=False)
+    door = _with_door(monkeypatch, FakeDoor(answer='(pass)'))
+    seat = rooms.invite_sapphire(chat, 'prime', name='Prime')['seat']
+    published = []
+    monkeypatch.setattr(rooms, 'publish', lambda et, data=None, **k: published.append((et, data)))
+    s_room, room = rooms._room(chat)
+    assert rooms._guest_turn(chat, next(s for s in room['seats'] if s['id'] == seat['id']), rooms._rt(chat)) == ''
+    end = next(d for et, d in published if et == Events.VOICE_TURN_END)
+    assert end['dropped'] is True and end['why'] == "her door said: '(pass)'" and end['tools'] == []
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent.parent / 'interfaces' / 'web' / 'static' / 'views' / 'rooms.js').read_text(encoding='utf-8')
+    assert "eventBus.on('voice_turn_end', onTurnEnd)" in js and "eventBus.off('voice_turn_end', onTurnEnd)" in js
+    assert "d?.source !== 'room' || !d?.dropped" in js and "`${R.passed.name} passed`" in js
+    assert "if (d.turn) R.passed = null;" in js
+    # the top bar is one sentence and one button (Krem 2026-10-12): the select maps to the
+    # rules (none = bots off, N = human every N, 0 = until you stop them); Go is "One round";
+    # Stop is the chat bar's (the cancel route stops a room); skip-me and the toggle are gone
+    assert 'id="rm-rounds"' in js and '<option value="off">none (bots off)</option>' in js
+    assert "updateRoom(v === 'off' ? { bots_enabled: false } : { bots_enabled: true, human_every:" in js
+    assert '&#x25B6; One round' in js and 'id="rm-go"' in js
+    for gone in ('rm-skip', 'rm-human-every', 'id="rm-bots"', 'rm-stop'):
+        assert gone not in js, gone
+    route = (Path(__file__).resolve().parent.parent / 'core' / 'routes' / 'chat.py').read_text(encoding='utf-8')
+    assert "if requested_chat and rooms.is_room(requested_chat):" in route and "rooms.stop(requested_chat)" in route
+    # the sidebar's x (DELETE /api/history/messages) and the Chat Manager's bulk clear both go
+    # through rooms.clear for a room: seat chats wiped, guests reset (Krem hit the gap, 2026-10-12)
+    assert route.count("rooms.clear(") >= 2 and "if rooms.is_room(chat_name):" in route
 
 
 def test_stop_abandons_her_answer(world, monkeypatch):
