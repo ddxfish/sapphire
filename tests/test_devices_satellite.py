@@ -114,7 +114,7 @@ def test_validate():
 def test_the_key_rides_the_header_never_the_address(pi):
     run('wake', 'read')
     call = pi[0]
-    assert call.kw['headers'] == {'Authorization': 'Bearer body-key-abcdefgh'}
+    assert call.kw['headers'] == {'Authorization': 'Bearer body-key-abcdefgh', 'Connection': 'close'}
     assert 'body-key' not in call.path
     text, ok = run('wake', 'read', key=Secrets())
     assert not ok and text.startswith('No key is stored') and len(pi) == 1
@@ -425,7 +425,7 @@ def test_a_board_gets_her_voice_in_the_format_it_stated(board):
     call = board[-1]
     assert (call.method, call.path) == ('POST', '/audio/speak')
     assert call.kw['data'] == b'RIFF-fitted' and 'files' not in call.kw        # the sound itself, no form
-    assert call.kw['headers'] == {'Content-Type': 'audio/wav', 'Authorization': 'Bearer body-key-abcdefgh'}
+    assert call.kw['headers'] == {'Content-Type': 'audio/wav', 'Authorization': 'Bearer body-key-abcdefgh', 'Connection': 'close'}
 
 
 def test_a_format_that_cannot_be_made_is_said_and_nothing_is_sent(board):

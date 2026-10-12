@@ -190,6 +190,17 @@ const setAvatarWithFallback = async (img, role) => {
 // Cache: persona name → resolved avatar URL (or null if no custom avatar)
 const _personaAvatarCache = new Map();
 
+// Another Sapphire's rows and live bubble (core/rooms.py, kind 'sapphire'):
+// the gem, never the host chat's own persona face.
+const GEM_AVATAR = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><text x="50%" y="54%" font-size="26" text-anchor="middle" dominant-baseline="middle">\u{1F48E}</text></svg>');
+const setGemAvatar = (img) => {
+    if (!avatarsInChat) { img.style.display = 'none'; return; }
+    img.loading = 'lazy';
+    img.src = GEM_AVATAR;
+    img.onerror = () => { img.style.display = 'none'; };
+};
+
 const setPersonaAvatar = (img, personaName) => {
     if (!avatarsInChat) {
         img.style.display = 'none';
@@ -312,7 +323,9 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     
     const role = msg.role || 'user';
     msgEl.classList.add(role);
-    if (role === 'assistant' && msg.persona) {
+    if (msg.kind === 'sapphire') {
+        setGemAvatar(avatar);
+    } else if (role === 'assistant' && msg.persona) {
         setPersonaAvatar(avatar, msg.persona);
     } else {
         setAvatarWithFallback(avatar, role);
@@ -606,6 +619,7 @@ export const startStreaming = (who = null) => {
     const persona = (who && who.persona) || currentPersona;
     if (persona) streamMsg.persona = persona;
     if (who && who.speaker && who.name) { streamMsg.speaker = who.speaker; streamMsg.name = who.name; }
+    if (who && who.kind) streamMsg.kind = who.kind;
     const { clone, contentDiv, msg } = createMessage(streamMsg, null, null, false);
     msg.id = 'streaming-message';
     msg.dataset.streaming = 'true';

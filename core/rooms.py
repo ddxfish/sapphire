@@ -21,7 +21,16 @@
 # turn is an Item(run) on the room chat, so a line typed mid-round lands in
 # order, between seats, and a seat turn never races a line (Krem 2026-10-11:
 # the queue was built so we never reject). Record: tmp/chat-room-plan.md.
+#
+# A seat may also be ANOTHER SAPPHIRE (`kind: sapphire`): a device (the
+# Another Sapphire driver) invited through her MCP door, who decided over
+# there and named the chat on her side to cue her in. Her turn is one `ask`
+# with the lines since her last; her box runs it with her own prompt, model
+# and tools, so her seat here is a name, a face, a device and her chat, no
+# brain. A private room keeps its words on this machine: no inviting, and a
+# guest already seated is skipped with a line (the door's own ruling).
 import logging
+import socket
 import threading
 import uuid
 
@@ -39,6 +48,8 @@ MIND = ('memory', 'knowledge', 'people', 'goals')   # categories whose WRITERS a
 OFF = ('meta_danger', 'agents')                     # never a seat's: the tools that change HER, and agents
 OFF_NAMES = ('ask_user',)                           # a card has no surface in a room
 SEAT_FIELDS = ('name', 'context', 'memory_write', 'enabled', 'color')
+GUEST = 'sapphire'              # seat kind: another Sapphire, reached through her door
+CUE_CAP = 7000                  # characters of a guest's cue (her door takes 8000 with the header)
 # The rules, with their defaults. human_every: the seats go this many rounds
 # since the PERSON's last line, then wait for them (0 = never wait; a door's
 # line - MCP, an agent, another room - never stands in for the person, so
@@ -118,7 +129,13 @@ def _write(chat, room):
 def _public(seat):
     out = {k: seat.get(k) for k in ('id', 'name', 'persona', 'context', 'memory_write', 'enabled', 'color', 'avatar')}
     out['settings'] = dict(seat.get('settings') or {})
+    if seat.get('kind') == GUEST:
+        out.update(kind=GUEST, device=seat.get('device'), label=seat.get('label'), chat=seat.get('chat'))
     return out
+
+
+def _is_seat(x):
+    return isinstance(x, dict) and x.get('id') and (x.get('persona') or x.get('kind') == GUEST)
 
 
 def _find(room, seat_id):
@@ -175,16 +192,19 @@ def describe(chat):
 
 def update_room(chat, patch):
     """The purpose and the rules. Bots switched off stops a run; switched
-    back on with an unanswered line, the seats answer it."""
+    back on with an unanswered line, the seats answer it. Every edit of the
+    record (here, the seats, an import) reads and writes under _lock: two
+    PUTs in flight used to write the whole record over each other."""
     patch = patch if isinstance(patch, dict) else {}
-    _, room = _room(chat)
-    if 'purpose' in patch:
-        room['purpose'] = str(patch['purpose'] or '')[:2000]
-    for k in RULES:
-        if k in patch:
-            room[k] = patch[k]
-    room.update(_rules(room))
-    _write(chat, room)
+    with _lock:
+        _, room = _room(chat)
+        if 'purpose' in patch:
+            room['purpose'] = str(patch['purpose'] or '')[:2000]
+        for k in RULES:
+            if k in patch:
+                room[k] = patch[k]
+        room.update(_rules(room))
+        _write(chat, room)
     if 'bots_enabled' in patch:
         if not room['bots_enabled']:
             stop(chat)
@@ -201,36 +221,90 @@ def add_seat(chat, persona, name=None):
     p = persona_manager.get(str(persona or ''))
     if not p:
         raise RoomError(f"There is no persona named '{persona}'.")
-    _, room = _room(chat)
     seed = dict(p.get('settings') or {})
     shown = str(persona)[:1].upper() + str(persona)[1:]            # 'sapphire' sits as 'Sapphire'
-    seat = {'id': uuid.uuid4().hex[:8], 'name': _unique_name(room, str(name or '').strip() or shown),
-            'persona': str(persona), 'context': '', 'memory_write': False, 'enabled': True,
-            'color': str(seed.get('trim_color') or ''), 'avatar': p.get('avatar'), 'settings': seed}
-    room['seats'].append(seat)
-    _write(chat, room)
+    with _lock:
+        _, room = _room(chat)
+        seat = {'id': uuid.uuid4().hex[:8], 'name': _unique_name(room, str(name or '').strip() or shown),
+                'persona': str(persona), 'context': '', 'memory_write': False, 'enabled': True,
+                'color': str(seed.get('trim_color') or ''), 'avatar': p.get('avatar'), 'settings': seed}
+        room['seats'].append(seat)
+        _write(chat, room)
     return _public(seat)
+
+
+# --- another Sapphire's seat ---------------------------------------------------------
+
+def _host():
+    import config
+    return str(getattr(config, 'INSTANCE_NAME', '') or '').strip() or socket.gethostname()
+
+
+def _door(device_id):
+    """(module, brief, config, secrets) of the Another Sapphire device, enabled
+    or not online, or RoomError."""
+    from core.devices import engine
+    for mod, brief, cfg, secrets in engine.doors('chat', 'invite', online=False):
+        if brief.get('id') == device_id:
+            return mod, brief, cfg, secrets
+    raise RoomError(f"There is no Sapphire device named '{device_id}' (Settings > Devices > Add > Another Sapphire).")
+
+
+def invite_sapphire(chat, device_id, name=None, instructions=''):
+    """Invite another Sapphire to sit here. She decides on her box (minutes);
+    joined, her seat is added. {'joined', 'said', 'seat'?}."""
+    s, room = _room(chat)
+    if s.get('private_chat'):
+        raise RoomError('This room is private: its words stay on this machine, so another Sapphire cannot sit here.')
+    mod, brief, cfg, secrets = _door(str(device_id or ''))
+    taken = next((x for x in room['seats'] if x.get('kind') == GUEST and x.get('device') == brief['id']), None)
+    if taken:
+        raise RoomError(f"{brief.get('label') or brief['id']} is already seated here as '{taken.get('name')}'. "
+                        "Remove that seat to invite her again.")
+    names = _names(room)
+    shown = str(name or '').strip()[:80] or str(brief.get('label') or 'Sapphire')
+    card = {'room': chat, 'host': _host(), 'purpose': room['purpose'],
+            'people': [names[USER]] + [names[x['id']] for x in room['seats'] if x.get('enabled', True)],
+            'instructions': str(instructions or '')[:4000], 'private': False, 'name': shown}
+    try:
+        out = mod.invite(brief, cfg, secrets, card)
+    except Exception as e:                           # the driver's Problem, in words
+        raise RoomError(str(e) or type(e).__name__)
+    said = str(out.get('said') or '').strip()[:2000]
+    if not out.get('joined') or not out.get('chat'):
+        return {'joined': False, 'said': said}
+    with _lock:
+        _, room = _room(chat)                        # read again: the invitation took a while
+        seat = {'id': uuid.uuid4().hex[:8], 'kind': GUEST, 'device': brief['id'], 'label': brief.get('label'),
+                'chat': str(out['chat'])[:200], 'name': _unique_name(room, str(out.get('name') or shown)[:80]),
+                'persona': '', 'context': card['instructions'], 'memory_write': False, 'enabled': True,
+                'color': '', 'avatar': None, 'settings': {}}
+        room['seats'].append(seat)
+        _write(chat, room)
+    return {'joined': True, 'said': said, 'seat': _public(seat)}
 
 
 def update_seat(chat, seat_id, patch):
     patch = patch if isinstance(patch, dict) else {}
-    _, room = _room(chat)
-    seat = _find(room, seat_id)
-    for k in SEAT_FIELDS:
-        if k in patch:
-            seat[k] = bool(patch[k]) if k in ('memory_write', 'enabled') else str(patch[k] or '')[:4000]
-    if isinstance(patch.get('settings'), dict):
-        from core.chat.history import normalize_llm_pin
-        cur = dict(seat.get('settings') or {})
-        seat['settings'] = {**cur, **normalize_llm_pin(cur, dict(patch['settings']))}
-    _write(chat, room)
+    with _lock:
+        _, room = _room(chat)
+        seat = _find(room, seat_id)
+        for k in SEAT_FIELDS:
+            if k in patch:
+                seat[k] = bool(patch[k]) if k in ('memory_write', 'enabled') else str(patch[k] or '')[:4000]
+        if isinstance(patch.get('settings'), dict) and seat.get('kind') != GUEST:      # a guest's brain is hers
+            from core.chat.history import normalize_llm_pin
+            cur = dict(seat.get('settings') or {})
+            seat['settings'] = {**cur, **normalize_llm_pin(cur, dict(patch['settings']))}
+        _write(chat, room)
     return _public(seat)
 
 
 def remove_seat(chat, seat_id):
-    _, room = _room(chat)
-    room['seats'].remove(_find(room, seat_id))
-    _write(chat, room)
+    with _lock:
+        _, room = _room(chat)
+        room['seats'].remove(_find(room, seat_id))
+        _write(chat, room)
 
 
 def _settle(chat):
@@ -266,18 +340,19 @@ def import_room(chat, data):
     record when given, so a room travels whole."""
     data = data if isinstance(data, dict) else {}
     _room(chat)
-    rec = data.get('room')
-    if isinstance(rec, dict):
-        seats = [dict(x) for x in (rec.get('seats') or [])
-                 if isinstance(x, dict) and x.get('id') and x.get('persona')]
-        _write(chat, {'purpose': str(rec.get('purpose') or '')[:2000], 'seats': seats, **_rules(rec)})
     msgs = data.get('messages')
-    if isinstance(msgs, list):
+    if isinstance(msgs, list):                      # the transcript first: it can refuse (a seat still streaming)
         _settle(chat)
         ok, err = _sm().replace_messages(chat, [m for m in msgs if isinstance(m, dict)])
         if not ok:
             raise RoomError(f"The transcript could not be imported: {err}")
         _reset(chat)
+    rec = data.get('room')
+    if isinstance(rec, dict):
+        seats = [dict(x) for x in (rec.get('seats') or []) if _is_seat(x)]
+        with _lock:
+            _room(chat)
+            _write(chat, {'purpose': str(rec.get('purpose') or '')[:2000], 'seats': seats, **_rules(rec)})
     return describe(chat)
 
 
@@ -405,11 +480,13 @@ def seat_brain(chat, s_room, room, seat):
 
 # --- lines ----------------------------------------------------------------------------
 
-def append_line(chat, role, text, speaker, name, persona=None):
+def append_line(chat, role, text, speaker, name, persona=None, kind=None):
     """One prose row on the room, by name. False when the store refused."""
     row = {'role': role, 'content': text, 'speaker': speaker, 'name': name}
     if persona:
         row['persona'] = persona
+    if kind:
+        row['kind'] = kind
     ok = _sm().append_messages_to_chat(chat, [row])
     if not ok:
         logger.error(f"[ROOM] a line was not written to '{chat}' (sealed, degraded, or still busy)")
@@ -489,6 +566,7 @@ class _Runtime:
         self.since_human = 0      # rounds since the person's last line (the human_every count)
         self.rounds_run = 0       # rounds this run (the max_rounds count)
         self.stream = None
+        self.guests = {}         # guest seat id -> the worker thread of her last cue (one in flight per seat)
 
 
 def _rt(chat):
@@ -572,6 +650,7 @@ def _loop(rt):
                 random.shuffle(seats)
             rt.round += 1
             rt.rounds_run += 1
+            spoke = False
             for seat in seats:
                 if rt.stop_flag.is_set():
                     break
@@ -581,7 +660,8 @@ def _loop(rt):
                 rt.turn, rt.waiting = seat['id'], False
                 _publish_state(rt)
                 try:
-                    inbox.turn(chat, lambda s=seat: _seat_turn(chat, s, rt), source=SOURCE, lane='now')
+                    if inbox.turn(chat, lambda s=seat: _seat_turn(chat, s, rt), source=SOURCE, lane='now'):
+                        spoke = True
                 except inbox.InboxRefused as e:
                     logger.warning(f"[ROOM] '{chat}': the inbox refused a seat turn: {e}")
                     rt.stop_flag.set()
@@ -591,6 +671,12 @@ def _loop(rt):
                     _notice(chat, f"{seat.get('name')} could not take a turn ({type(e).__name__}).")
                 rt.turn = None
             if rt.stop_flag.is_set():
+                break
+            if not spoke:
+                # every seat passed, failed or was skipped: nothing to answer, so the
+                # run ends instead of asking the same question forever (human every 0
+                # used to spin here, one full-context call per seat, all night)
+                _notice(chat, 'Nobody spoke this round, so the room stopped. Say something to start it again.')
                 break
             rt.since_human += 1
             if room['max_rounds'] and rt.rounds_run >= room['max_rounds']:
@@ -617,6 +703,8 @@ def _seat_turn(chat, seat, rt):
     from core.cadence import visible_text, Unreachable
     if rt.stop_flag.is_set():
         return ''
+    if seat.get('kind') == GUEST:
+        return _guest_turn(chat, seat, rt)
     system = _system()
     llm = system.llm_chat
     sm = llm.session_manager
@@ -643,11 +731,11 @@ def _seat_turn(chat, seat, rt):
 
     timer = threading.Timer(SEAT_TURN_S, _cut)
     timer.daemon = True
-    timer.start()
     rt.stream = stream
     gen = None
-    publish(Events.VOICE_TURN_START, {'message_id': mid, **tag})
     try:
+        timer.start()
+        publish(Events.VOICE_TURN_START, {'message_id': mid, **tag})
         gen = stream.chat_stream(cue)
         for ev in gen:
             if not isinstance(ev, dict):
@@ -699,6 +787,64 @@ def _seat_turn(chat, seat, rt):
     if cancelled or not text or text.strip('() .').lower() == 'pass':
         return ''
     append_line(chat, 'assistant', text, seat['id'], seat.get('name'), persona=seat.get('persona'))
+    return text
+
+
+def _guest_turn(chat, seat, rt):
+    """Another Sapphire's turn: the lines since her last, through her door
+    into the room's chat on her side; her answer is her line. Her box runs
+    the turn - nothing of hers is set here. Stop abandons the wait and her
+    late answer is dropped. Never raises: a miss is a line in the room."""
+    from core.cadence import visible_text
+    s_room, room = _room(chat)
+    name = seat.get('name')
+    if s_room.get('private_chat'):
+        _notice(chat, f"{name} was skipped: this room is private, and her box is across the network.")
+        return ''
+    try:
+        mod, brief, cfg, secrets = _door(seat.get('device'))
+    except RoomError as e:
+        _notice(chat, f"{name} was skipped: {e}")
+        return ''
+    last = rt.guests.get(seat['id'])
+    if last is not None and last.is_alive():
+        _notice(chat, f"{name} is still answering the last cue, so this round skipped her.")
+        return ''
+    _, cue = projection(rows_of(chat), seat, _names(room))
+    if len(cue) > CUE_CAP:
+        cue = '(earlier lines left out)\n\n' + cue[-CUE_CAP:]
+    mid = uuid.uuid4().hex
+    try:
+        active = _sm().get_active_chat_name()
+    except Exception:
+        active = None
+    tag = {'chat': chat, 'foreign': bool(chat != active), 'source': SOURCE,
+           'speaker': seat['id'], 'name': name, 'persona': '', 'kind': GUEST}
+    box = {}
+
+    def go():
+        try:
+            box['text'] = mod.cue(brief, cfg, secrets, seat.get('chat'), cue, f"the chat room '{chat}' on {_host()}")
+        except Exception as e:
+            box['error'] = str(e) or type(e).__name__
+
+    publish(Events.VOICE_TURN_START, {'message_id': mid, **tag})
+    t = threading.Thread(target=go, daemon=True, name=f"room-guest-{seat['id']}")
+    rt.guests[seat['id']] = t
+    t.start()
+    while t.is_alive() and not rt.stop_flag.wait(0.2):
+        pass
+    text = '' if t.is_alive() or 'error' in box else visible_text(str(box.get('text') or '')).strip()[:8000]
+    if text.strip('() .').lower() in ('pass', 'she said nothing', 'nothing came back'):
+        text = ''                       # her pass, or her door's words for an empty answer
+    if text:
+        publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign']})
+    publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text, **tag})
+    if 'error' in box:
+        _notice(chat, f"{name} did not answer: {box['error']}")
+        return ''
+    if text:
+        append_line(rt.chat, 'assistant', text, seat['id'], name, kind=GUEST)      # rt.chat: the room may have been renamed meanwhile
     return text
 
 

@@ -317,14 +317,14 @@ async function doBulkExport() {
 // chat-activated event) — all of it targets persistent DOM, so it runs fine
 // from this view; then we navigate to the freshly painted transcript.
 async function openChat(name) {
-    if (getIsProc()) {
-        ui.showToast('Cannot switch chats while generating', 'error');
-        return;
-    }
     const c = chats.find(x => x.name === name);
-    if ((c?.mode ?? c?.settings?.mode) === 'room') {        // a room opens in Chat Room, never the chat view
+    if ((c?.mode ?? c?.settings?.mode) === 'room') {        // a room opens in Chat Room, never the chat view (no pointer switch: its bots may be talking)
         localStorage.setItem('sapphire-room-last', name);
         switchView('rooms');
+        return;
+    }
+    if (getIsProc()) {
+        ui.showToast('Cannot switch chats while generating', 'error');
         return;
     }
     const sel = document.getElementById('chat-select');

@@ -464,3 +464,27 @@ def test_a_wake_said_over_her_ends_that_turn():
         with voice._lock:
             voice._live.pop('esp-over', None)
             voice._running.pop('esp-over', None)
+
+
+def test_a_board_asks_for_a_job_and_a_stop_drops_what_waits():
+    """0.7.2: POST .../ask. `stop` ends her turn for that board and drops its questions still waiting."""
+    waiting, running, chatter = {}, {}, MagicMock()
+    chatter.cancel_streams.return_value = 1
+    row = {'id': 'esp-ask', 'enabled': True}
+    eng = SimpleNamespace(refusal=lambda: '', rows=lambda: {'esp-ask': row})
+    with voice._lock:
+        voice._running['esp-ask'] = (running, 'den')
+        voice._turns['esp-ask'] = [running, waiting]
+    try:
+        with patch.object(voice, '_system', return_value=SimpleNamespace(llm_chat=chatter)), \
+             patch.object(voice, '_engine', return_value=eng):
+            assert voice.asked('esp-ask', 'stop') == {'ok': True, 'accepted': True, 'job': 'stop', 'said': 'Stopped'}
+            chatter.cancel_streams.assert_called_once_with('den')
+            assert waiting.get('dropped') is True and not running.get('dropped')
+            assert voice.asked('esp-ask', 'dance')['ok'] is False
+            assert voice.asked('nobody', 'stop')['ok'] is False
+        assert set(voice.ASKS) == {'backup', 'stop'}
+    finally:
+        with voice._lock:
+            voice._running.pop('esp-ask', None)
+            voice._turns.pop('esp-ask', None)

@@ -119,8 +119,12 @@ def local_tz():
                 return foot.decode('ascii', 'replace')
     except (OSError, ValueError):
         pass
-    name = ''.join(c for c in (time.tzname[0] or 'UTC') if c.isalpha())[:5] or 'UTC'
-    hours = time.timezone / 3600                      # POSIX counts west as positive
+    # the offset as it is NOW, summer time and all (a Windows host has no zone file): right until
+    # the next change of the clocks, and sent again whenever the board's stream opens
+    here = time.localtime()
+    name = ''.join(c for c in (here.tm_zone or 'UTC') if c.isalpha())[:5] or 'UTC'
+    name = name if len(name) >= 3 else 'LOC'          # POSIX wants three letters or more
+    hours = -(here.tm_gmtoff or 0) / 3600             # POSIX counts west as positive
     return f"{name}{int(hours) if hours == int(hours) else hours:g}"
 
 
@@ -627,6 +631,7 @@ def halt(device_id):
 
 
 _running = {}        # device id -> (its turn's box, chat): the turn she is answering that device with, while it runs
+_turns = {}          # device id -> [box, ...]: every turn of that device not yet over, the waiting ones too
 
 
 def answering(device_id):
@@ -658,6 +663,10 @@ def interrupt(device_id, only=None):
         was = halt(device_id)
     with _lock:
         turn, chat = _running.get(device_id, (None, None))
+        if only is None:                 # and the questions still waiting their turn: asked, then asked over
+            for box in _turns.get(device_id, ()):
+                if box is not turn and not box.get('dropped'):
+                    box['dropped'] = was = True
     if turn is None or (only is not None and turn is not only):
         return was
     try:
@@ -787,7 +796,38 @@ def _ask_backup(row):
     return bool(ok), ('Backup is on its way' if ok and 'already' not in text else 'A backup is already on its way' if ok else text[:60])
 
 
-ASKS = {'backup': _ask_backup}     # press jobs that are Sapphire's work, with no chat turn
+def _ask_stop(row):
+    """She was stopped at the device (a tap, a button) with nothing playing to
+    refuse: the turn she is making for it ends, and the ones waiting."""
+    return True, ('Stopped' if interrupt(row['id']) else 'Nothing to stop')
+
+
+# Work a board asks of Sapphire, with no chat turn: POST /api/devices/{id}/ask {"job": ...}
+# (asked(), below), or the `job` of a press left to the board (pressed()). A new one is a
+# function (row) -> (taken, a line short enough for a small screen) and a name here.
+ASKS = {'backup': _ask_backup, 'stop': _ask_stop}
+
+
+def asked(device_id, job):
+    """A board asks Sapphire for a job that is hers to do (ASKS). {'ok',
+    'accepted', 'job', 'said'}, or {'ok': False, 'error'}. Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        job = str(job or '').strip().lower()[:24]
+        if job not in ASKS:
+            return {'ok': False, 'error': f"'{job}' is not a job a board can ask for. Known: {', '.join(sorted(ASKS))}."}
+        ok, said = ASKS[job](row)
+        logger.info(f"[DEVICES] {row['id']} asked for {job}: {said}")
+        return {'ok': True, 'accepted': bool(ok), 'job': job, 'said': said}
+    except Exception as e:
+        logger.error(f"[DEVICES] asked({device_id}, {job}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
 def press_text(row, button, how):
@@ -827,6 +867,8 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
     The light ends on idle, or on error when the person got no answer."""
     device_id, failed, speech, box = row['id'], False, None, {}
     lane = f"device:{device_id}"
+    with _lock:
+        _turns.setdefault(device_id, []).append(box)
     try:
         from core import cadence
         from core.chat import inbox
@@ -841,6 +883,8 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
             # threading.local set by voice.say inside run_turn - is read on
             # this same thread before returning.
             _spoke.ok = None
+            if box.get('dropped'):       # cut off while it waited: the person has asked something else since
+                return ''
             sp = Speech(device_id) if reply is None and not mute else None
             box['speech'] = sp
             if sp:
@@ -860,6 +904,11 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
 
         said = inbox.turn(chat, _body, source=lane, lane='now', text=heard)   # a room: the words land as a line
         speech = box.get('speech')
+        if box.get('dropped') and speech is None:
+            if reply is not None:
+                reply.finish('')
+            logger.info(f"[DEVICES] {device_id}: a question that was waiting was cut off at the device, not answered")
+            return
         if reply is not None:
             reply.finish(said)
             failed = not said
@@ -893,6 +942,11 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False):
         _free_slot(device_id)
         wake.release(device_id)
         with _lock:
+            held = _turns.get(device_id, [])
+            if box in held:
+                held.remove(box)
+            if not held:
+                _turns.pop(device_id, None)
             more = _waiting.get(device_id, 0) > 0
         # Its next question is already waiting (asked over this one): that turn said
         # 'thinking' before this one ended, and an 'idle' now would land on top of it.

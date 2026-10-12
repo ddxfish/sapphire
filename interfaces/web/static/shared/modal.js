@@ -78,6 +78,7 @@ export function showModal(title, fields, onSave = null, options = {}) {
             id="${field.id}" 
             rows="${field.rows || defaultTextareaRows}"
             ${field.readonly ? 'readonly' : ''}
+            ${field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : ''}
           >${escapeHtml(field.value || '')}</textarea>
         </div>
       `;

@@ -617,6 +617,12 @@ function initEventBus() {
         if (bound) return !!(data?.chat && data.chat !== bound);
         return !!data?.foreign;
     };
+    // A chat room's turn (core/rooms.py, source 'room') paints only into a
+    // rail BOUND to that room. Unbound, it is never ours: `foreign` was
+    // frozen at the turn's start, so a turn in flight when the room view
+    // closed kept streaming into the Chat view (scout, 2026-10-11).
+    const _roomsNotMine = (data) => data?.source === 'room' && getBoundChat() !== data?.chat;
+    let _voiceTurnId = null;      // the live turn's message id: its END settles the rail even after the view moved on
 
     eventBus.on(eventBus.Events.AI_TYPING_START, (data) => {
         if (_notMine(data)) return;
@@ -714,12 +720,13 @@ function initEventBus() {
         // render into the chat being viewed — it used to stream in, then vanish on
         // the end-of-turn reconcile (2026-07-04 outbound-call bug). Chunks/end are
         // gated on _voiceTurnActive, so skipping start skips the whole turn.
-        if (_notMine(data)) return;
+        if (_notMine(data) || _roomsNotMine(data)) return;
         try {
             if (data?.user_text) ui.addUserMessage(data.user_text);
             // a chat room's seat turn names its speaker: that face, that name
-            ui.startStreaming(data?.speaker ? { speaker: data.speaker, name: data.name, persona: data.persona } : null);
+            ui.startStreaming(data?.speaker ? { speaker: data.speaker, name: data.name, persona: data.persona, kind: data.kind } : null);
             _voiceTurnActive = true;
+            _voiceTurnId = data?.message_id ?? null;
             // Send→Stop for the live voice turn (wake/local conversation) —
             // /api/cancel reaches it since the dual-path merge registered
             // these turns as real streams. Skip if a typed turn owns the
@@ -732,25 +739,33 @@ function initEventBus() {
     // paint the start bubble, then get no chunks and no end — Stop lit and
     // every refresh suppressed until reload (scout 3, 2026-09-10).
     eventBus.on('voice_turn_chunk', (data) => {
-        if (_notMine(data) || !_voiceTurnActive) return;
+        if (_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive) return;
         try { ui.appendStream(data?.text || ''); } catch (e) { /* ignore */ }
     });
     // A tool call inside the turn: the same accordion the typed path paints
     // (an agent's report turn used to show think › think › prose live, the
     // tools between them only after a refresh; 2026-10-08).
     eventBus.on('voice_turn_tool', (data) => {
-        if (_notMine(data) || !_voiceTurnActive) return;
+        if (_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive) return;
         try {
             if (data?.phase === 'start') ui.startTool(data.id, data.name, data.args || {});
             else if (data?.phase === 'end') ui.endTool(data.id, data.name, data.result ?? '', !!data.error);
         } catch (e) { /* ignore */ }
     });
     eventBus.on('voice_turn_end', async (data) => {
-        if (_notMine(data) || !_voiceTurnActive) return;
+        if (!_voiceTurnActive) return;
+        const mine = !_notMine(data) && !_roomsNotMine(data);
+        // not ours and not the turn we are showing: another chat's end
+        if (!mine && (data?.message_id ?? null) !== _voiceTurnId) return;
         _voiceTurnActive = false;
+        _voiceTurnId = null;
         try {
             if (!getAbortController()) setProc(false);
-            await ui.finishStreaming();
+            // dropped (a seat passed, was cut, or Stop): there is no row to swap
+            // in, and the swap used to paint a copy of the PREVIOUS bot's line.
+            // Not ours any more (the room view closed mid-turn): the bubble goes.
+            await ui.finishStreaming(!mine || !!data?.dropped);
+            if (!mine && data?.source === 'room') eventBus.dispatch('room_turn_settled', { chat: data.chat });
         } catch (e) { console.warn('[VOICE_TURN] end failed', e); }
     });
 
@@ -852,6 +867,15 @@ function initEventBus() {
         // the direct chat-activated sidebar paint and wipe a Custom Context
         // box mid-typing — the 8th door around softSidebar (D2#3, 2026-09-08).
         if (name && sel && !hasPendingActivate() && sel.value !== name) {
+            // a chat room or a game session belongs to its own view: another
+            // tab opening one must not drag this tab's Chat view onto it
+            if (![...sel.options].some(o => o.value === name)) {
+                try {
+                    const list = await api.fetchChatList(undefined, { slim: true });
+                    const mode = (list?.chats || []).find(c => c.name === name)?.mode;
+                    if (mode && mode !== 'chat') { populateChatDropdown(); return; }
+                } catch (e) { /* no list: adopt as before */ }
+            }
             if (![...sel.options].some(o => o.value === name)) {
                 const opt = document.createElement('option');
                 opt.value = name;

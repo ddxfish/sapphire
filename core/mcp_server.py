@@ -2,9 +2,10 @@
 #
 # The Model Context Protocol, served: a client with one of her API tokens can
 # list and call the tools the user ticked under Settings > MCP Server, plus
-# two tools of this door's own - `ask` and `tell`, a conversation in a named
-# chat. Another Sapphire is the first client (the "Another Sapphire" device);
-# Claude Code is the second. A token that speaks as a persona also gets that
+# the tools of this door's own - `ask` and `tell`, a conversation in a named
+# chat, and `room_invite` while the user takes chat-room invitations
+# (core/room_guest.py). Another Sapphire is the first client (the "Another
+# Sapphire" device); Claude Code is the second. A token that speaks as a persona also gets that
 # persona's voice and memory here (core/mcp_persona.py).
 #
 # The shape is the smallest the protocol allows: Streamable HTTP, one POST,
@@ -23,6 +24,7 @@ PROTOCOL = '2025-06-18'        # the version this door speaks; a client's older 
 ASK_WAIT = 300                 # seconds an ask waits in the chat's inbox for its turn and her answer
 TEXT_MAX = 8000                # characters of one ask or tell
 OWN = ('ask', 'tell')          # this door's own tools, always offered
+INVITE = 'room_invite'         # the third, offered while Settings > MCP Server takes room invitations
 
 # True while a turn that came in through `ask` or `tell` runs: a tool that
 # would ask another Sapphire checks it and says "answer in your message"
@@ -59,7 +61,32 @@ _TOOLS = {
             'required': ['text', 'chat'],
         },
     },
+    INVITE: {
+        'name': INVITE,
+        'description': "Invite this Sapphire into a chat room on your side (core/rooms.py). She decides in one "
+                       "turn of her own and, if she joins, names the chat here to cue her in with `ask` on her "
+                       "turns. Returns JSON: {joined, chat, name, said}. Takes minutes.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'room': {'type': 'string', 'description': "The room's name over there."},
+                'host': {'type': 'string', 'description': 'Who invites: the host Sapphire, as she should see it.'},
+                'purpose': {'type': 'string', 'description': 'What the room is for (every bot there reads it).'},
+                'people': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Who is in the room.'},
+                'instructions': {'type': 'string', 'description': 'What the host asks of her in that room.'},
+                'private': {'type': 'boolean', 'description': 'Whether the host marked the room private.'},
+                'name': {'type': 'string', 'description': 'What the host would call her there.'},
+            },
+            'required': ['room'],
+        },
+    },
 }
+
+
+def own():
+    """This door's own tools right now."""
+    from core import room_guest
+    return OWN + ((INVITE,) if room_guest.enabled() else ())
 
 
 def _version():
@@ -94,7 +121,7 @@ def catalogue(system):
     two first."""
     fm = getattr(getattr(system, 'llm_chat', None), 'function_manager', None)
     out = [{'name': n, 'description': _TOOLS[n]['description'], 'module': 'mcp', 'plugin': 'core',
-            'emoji': '', 'scoped': False, 'exposed': True, 'own': True} for n in OWN]
+            'emoji': '', 'scoped': False, 'exposed': True, 'own': True} for n in own()]
     if fm is None:
         return out
     scoped, hidden, on = _scoped_plugins(), fm.get_hidden_functions(), set(ticked())
@@ -103,7 +130,7 @@ def catalogue(system):
         for tool in info.get('tools') or []:
             f = tool.get('function') or {}
             name = f.get('name')
-            if not name or name in hidden or name in OWN:
+            if not name or name in hidden or name in _TOOLS:
                 continue
             out.append({'name': name, 'description': str(f.get('description') or '')[:200],
                         'module': module, 'plugin': plugin, 'emoji': info.get('emoji') or '',
@@ -116,12 +143,12 @@ def exposed(system, persona=None):
     [{name, description, inputSchema}]. Own two first, then what the caller's
     persona gives it, then the ticked ones that are still here and not scoped."""
     from core import mcp_persona
-    tools = [dict(_TOOLS[n]) for n in OWN] + mcp_persona.offered(persona)
+    tools = [dict(_TOOLS[n]) for n in own()] + mcp_persona.offered(persona)
     fm = getattr(getattr(system, 'llm_chat', None), 'function_manager', None)
     if fm is None:
         return tools
     scoped, hidden, on = _scoped_plugins(), fm.get_hidden_functions(), set(ticked())
-    seen = set(OWN) | mcp_persona.NAMES
+    seen = set(_TOOLS) | mcp_persona.NAMES
     for info in fm.function_modules.values():
         if (info.get('_plugin') or 'core') in scoped:
             continue
@@ -231,6 +258,19 @@ def tell(system, args, where='', persona=None):
     return f"Told her, in the chat '{name}'.", True
 
 
+def room_invite(system, args, where='', persona=None):
+    """Another Sapphire's invitation into her chat room: this one decides in a
+    turn of her own (core/room_guest.py) under the `answering` flag - she
+    may not ask a Sapphire back from it. (JSON text, ok); a reason in words
+    rides ValueError/RuntimeError like ask's."""
+    from core import room_guest
+    token = answering.set(True)
+    try:
+        return room_guest.invite(system, args, where)
+    finally:
+        answering.reset(token)
+
+
 # --- a call -----------------------------------------------------------------
 
 def call(system, name, args, where='', persona=None):
@@ -241,6 +281,10 @@ def call(system, name, args, where='', persona=None):
         return ask(system, args, where, persona)
     if name == 'tell':
         return tell(system, args, where, persona)
+    if name == INVITE:
+        if INVITE not in own():
+            return 'This Sapphire does not take chat-room invitations (Settings > MCP Server, over there).', False
+        return room_invite(system, args, where, persona)
     from core import mcp_persona
     if name in mcp_persona.NAMES:
         return mcp_persona.call(system, persona, name, args)

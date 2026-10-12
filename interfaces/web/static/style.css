@@ -9400,6 +9400,10 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 .rm-seat-meta { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rm-seat-on { margin-left: auto; display: flex; }
 .rm-seat.speaking .rm-face { box-shadow: 0 0 0 2px var(--trim, var(--accent-blue)); animation: rm-pulse 1.1s ease-in-out infinite alternate; }
+.rm-face-gem { display: inline-flex; align-items: center; justify-content: center; font-size: 17px; background: var(--bg-tertiary, rgba(127,127,127,0.15)); }
+.rm-guest-note { font-size: var(--font-xs); color: var(--text-muted); margin: 6px 0 8px; line-height: 1.4; }
+.rm-pending { display: flex; align-items: center; gap: 8px; padding: 6px 8px; opacity: 0.7; }
+.rm-pending .rm-face-gem { animation: rm-pulse 1.1s ease-in-out infinite alternate; }
 @keyframes rm-pulse { from { box-shadow: 0 0 0 2px var(--trim, var(--accent-blue)); } to { box-shadow: 0 0 0 5px transparent; } }
 .rm-seat .sidebar-accordion-content { padding-top: 6px; }
 .rm-seat input[type="color"] { width: 40px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--input-bg); }

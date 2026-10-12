@@ -516,6 +516,17 @@ async def devices_press(device_id: str, request: Request):
     return await asyncio.to_thread(voice.pressed, device_id, body.get('button'), body.get('how'), body.get('job'))
 
 
+@router.post("/api/devices/{device_id}/ask")
+async def devices_ask(device_id: str, request: Request):
+    """A board asks for work that is Sapphire's to do, with no chat turn:
+    {"job": "stop" | "backup"} (voice.ASKS). Answered {"ok", "accepted",
+    "job", "said"}; `said` is a line short enough for a small screen."""
+    await _device_key(device_id, request, 'ask')
+    from core.devices import voice
+    body = await _body(request)
+    return await asyncio.to_thread(voice.asked, device_id, body.get('job'))
+
+
 @router.get("/api/devices/{device_id}/text")
 async def devices_text_read(device_id: str, request: Request):
     """A piece of her reply, for the device's screen: ?msg=&from=&max=.

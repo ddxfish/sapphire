@@ -211,7 +211,7 @@ def ask(chat, text, source, header_line='', timeout=None, **kw):
     return _await(chat, item, timeout)
 
 
-def turn(chat, fn, source='door', lane='now', timeout=None, text=''):
+def turn(chat, fn, source='door', lane='now', timeout=None, text='', gate=None):
     """A door runs its OWN turn when it is this chat's turn: fn() is called on
     the drainer thread under the caller's context and must begin_stream(
     exclusive=True) itself (ChatBusy from inside it means a typed turn won the
@@ -219,9 +219,10 @@ def turn(chat, fn, source='door', lane='now', timeout=None, text=''):
     returns what fn returned. The wake word and the conversation driver.
     `text`: the person's words when the door has them - on a chat room they
     land as a LINE (core/rooms.py) and fn never runs; the return is the
-    room's note."""
+    room's note. `gate`: the door's own run-time rule, like ask's (a lobby
+    that turned private while the item waited)."""
     _refuse_self_wait(chat)
-    item = put(chat, Item(run=fn, text=str(text or ''), source=source, lane=lane))
+    item = put(chat, Item(run=fn, text=str(text or ''), source=source, lane=lane, gate=gate))
     return _await(chat, item, timeout)
 
 

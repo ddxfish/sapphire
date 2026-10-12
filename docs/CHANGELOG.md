@@ -1,3 +1,7 @@
+# 2.14.2 - Group chat room
+- Multiple personas can chat in app
+- Can invite other sapphires in device manager
+- Added firmware repo and internal flasher for ESP32 smart speaker
 # 2.14.1 - Toolset metadata and cleanup
 - Every tool in core is categorized (web, memory etc)
 - Toolsets are grouped by this new category

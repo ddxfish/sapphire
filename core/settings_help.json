@@ -472,6 +472,18 @@
     "short": "Let persona keys listen on this machine's microphone",
     "long": "A client whose API token speaks as a persona gets a listen tool: a chime plays, this machine's microphone records until the speaker stops (60 seconds at most), and the words heard go back to the client. The audio goes through your speech-to-text provider like any other. Off = the tool is not offered, and no key can open the microphone."
   },
+  "MCP_ROOM_INVITES": {
+    "short": "Take chat-room invitations from another Sapphire",
+    "long": "Another Sapphire that holds one of this one's API tokens may invite her into a chat room over there (its room_invite tool). She decides in one turn of her own, with her memory behind her, and joins by calling chatroom_join, which makes the room's chat here with the persona, model and toolset she picked - or the defaults below. The host then sends her the room's lines in that chat on her turns. Off = the tool is not offered and every invitation is refused."
+  },
+  "MCP_ROOM_LOBBY": {
+    "short": "The chat she decides in",
+    "long": "Each invitation is one turn in this chat (made if missing): its persona says how to decide and what to say no to, its toolset adds what she may look at; chatroom_join is always in reach. Her decisions stay there to read. Empty = a fresh turn as her default self that keeps nothing."
+  },
+  "MCP_ROOM_PERSONA": {
+    "short": "Room chats start as this persona",
+    "long": "The prompt, model, toolset and custom context a room's chat gets when she joins without picking her own. Make a persona for rooms - a local model and a toolset that only reads memory is a good start. Empty = her default persona. She can never make a room chat private: the host reads every word of it anyway."
+  },
   "METRICS_ENABLED": {
     "short": "Record local token-usage metrics",
     "long": "Records per-LLM-call token usage in a local SQLite database (user/metrics/) for the dashboard's usage charts. Purely on-device either way — this only controls whether the local table is written at all."

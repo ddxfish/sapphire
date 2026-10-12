@@ -34,6 +34,7 @@ def world(monkeypatch):
     monkeypatch.setattr(config, 'TTS_PROVIDER', 'kokoro', raising=False)
     monkeypatch.setattr(config, 'MCP_SERVER_TOOLS', [], raising=False)
     monkeypatch.setattr(config, 'MCP_SERVER_MIC', False, raising=False)     # never the user's own switch
+    monkeypatch.setattr(config, 'MCP_ROOM_INVITES', False, raising=False)   # nor the user's room door (test_room_guest.py has it)
     order = []
     tts = MagicMock()
     tts.render.return_value = (b'OggS-audio', 'audio/ogg')

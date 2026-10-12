@@ -12,6 +12,7 @@ CLIP describe fallback
 File attachments
 RAG docs per-chat
 Multi-bot chat rooms
+Remote Sapphire guests
 ### History
 SQLite message rows
 Edit regen delete

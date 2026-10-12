@@ -64,8 +64,13 @@ async def update_room(chat: str, request: Request, _=Depends(require_login)):
 
 @router.post("/api/rooms/{chat}/seats")
 async def add_seat(chat: str, request: Request, _=Depends(require_login)):
+    """{persona, name?} seats a persona. {device, name?, instructions?} invites
+    another Sapphire (a device) and waits for her decision - minutes;
+    the answer is {joined, said, seat?}."""
     await _room_or_404(chat)
     body = await _json(request)
+    if body.get('device'):
+        return await _call(rooms.invite_sapphire, chat, body.get('device'), body.get('name'), body.get('instructions') or '')
     return await _call(rooms.add_seat, chat, body.get('persona'), body.get('name'))
 
 

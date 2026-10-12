@@ -7,6 +7,7 @@ driver and no plugin. A Raspberry Pi speaks it, and so can an ESP32.
 ```
 board    --POST /api/devices/<name>/voice-->   Sapphire   what it heard
 board    --POST /api/devices/<name>/press-->   Sapphire   a button set to send her a message
+board    --POST /api/devices/<name>/ask----->   Sapphire   work that is hers to do: stop, backup
 board    --GET  /api/devices/<name>/events-->  Sapphire   what its light should show
 Sapphire --GET /health, POST /audio/speak--->  board      status, say, light, ...
 ```
@@ -302,6 +303,31 @@ like any other, and when the press is that job it posts
 set for the press wins; `job` counts only for a press left to the board. The
 one job so far is `backup`: a fresh backup, sealed, onto that device's own
 card (it needs `storage`). Any other word is `accepted: false`.
+
+### The board asks for a job
+
+A board may ask for such work without a press behind it:
+
+```
+POST /api/devices/pocket/ask
+Authorization: Bearer <the key the satellite sends>
+
+{"job": "stop"}
+```
+
+answered `{"ok": true, "accepted": true, "job": "stop", "said": "Stopped"}`.
+`said` is a line short enough for a small screen. The jobs:
+
+- `stop`: she was stopped at the board (a tap, a button) while her turn was
+  going on. Sapphire ends that turn, spoken and written, and drops the
+  questions from that board still waiting behind it. A board that only cut
+  the sound playing has no need to ask: the next sentence it answers
+  `stopped` says the same. The wake word said over her needs no ask either:
+  claiming the wake ends her turn.
+- `backup`: a fresh backup, sealed, onto that board's own card.
+
+An unknown job is `{"ok": false, "error": "..."}`. A Sapphire without the door
+answers 404. A new job is one function and one name in `voice.ASKS`.
 | `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
 
 **Her reply, for a screen.** Her words never ride the events stream: a

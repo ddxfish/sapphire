@@ -23,6 +23,7 @@ import base64
 import hashlib
 import io
 import logging
+import os
 import re
 import threading
 import time
@@ -141,6 +142,7 @@ QUICK = 8                     # seconds for a plain request
 ABOUT_FRESH = 60              # seconds what a satellite said about itself is taken as true
 SPEAK_WAIT = 150              # the satellite answers only when it has finished playing
 LOOK_WAIT = 25                # a picture: 2 s of warning light and sound, then the shot
+ROOM_SPARE = 16 * 2**20       # the board wants this much left over (its own check before a PUT)
 STORE_WAIT = 120              # one blocked send or the answer after a 70 MB backup onto a card
 UPDATE_WAIT = 300             # a 2 MB program over WiFi, written and checked on the board
 _NAME = re.compile(r'^[A-Za-z0-9_.-]{1,96}$')
@@ -274,8 +276,10 @@ def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
         raise Problem(WAITING)
     where = urlsplit(base).netloc or base
     try:
+        # Connection: close. A small board has a handful of sockets; kept open, ours were held on
+        # it for good, and after it restarted or lost WiFi the next call met a dead one (scouts, 2026-10-11).
         r = net.request(method, base + path, timeout=timeout,
-                        headers=dict(headers or {}, Authorization='Bearer ' + key), **kw)
+                        headers=dict(headers or {}, Authorization='Bearer ' + key, Connection='close'), **kw)
     except requests.exceptions.Timeout:
         raise Problem(f"No answer from {where} within {timeout}s.")
     except requests.exceptions.RequestException:
@@ -1067,8 +1071,19 @@ class SatelliteTarget(Target):
             for chunk in iter(lambda: f.read(1024 * 1024), b''):
                 h.update(chunk)
         sha = h.hexdigest()
+        # Asked before it is sent: a board that refuses still has to take every byte we send to
+        # throw it away, deaf for a minute. And the wait for its answer grows with the backup: it
+        # reads the whole file back from its card (about 1 MB/s at worst) before it says anything.
+        size = os.path.getsize(path)
+        try:
+            told = self.info()
+        except Missing:
+            told = {}
+        room = told.get('free_bytes')
+        if isinstance(room, (int, float)) and room < size + ROOM_SPARE:
+            raise Problem(f"Not enough room on the card in {self.label}: {size // 2**20} MB to send, {int(room) // 2**20} MB free.")
         with open(path, 'rb') as f:
-            r = _call('PUT', f'/storage/{name}', self._config, self._secrets, timeout=STORE_WAIT,
+            r = _call('PUT', f'/storage/{name}', self._config, self._secrets, timeout=STORE_WAIT + size // 2**20,
                       headers={'Content-Type': 'application/octet-stream', 'X-Sha256': sha}, data=f)
         told = _json(r)
         if told.get('sha256') and str(told['sha256']).lower() != sha:

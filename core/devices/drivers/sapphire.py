@@ -9,6 +9,11 @@
 #
 # A turn that itself came in over MCP may not ask a Sapphire back: that is
 # how two of them would talk in circles. mcp_server.answering says so.
+#
+# Core's own two hooks, never her tools: `invite` seats her in a chat room
+# here (her door's `room_invite`, core/room_guest.py over there decides) and
+# `cue` is one room turn - the lines since her last, into the room's chat on
+# her side, her answer back (core/rooms.py drives both).
 import json
 import logging
 import socket
@@ -44,9 +49,12 @@ SPEC = {
 
 QUICK = 8                     # seconds for health and a tool list
 ASK_WAIT = 180                # seconds her answer may take
+CUE_WAIT = 330                # a room cue: her door's ask waits 300 s for her turn (mcp_server.ASK_WAIT), plus a margin
+INVITE_WAIT = 330             # an invitation: her lobby turn may take 300 s (room_guest.INVITE_WAIT), plus a margin
 TOOL_WAIT = 60
 ABOUT_FRESH = 60              # seconds the far tool list is taken as true
 OWN = ('ask', 'tell')         # the door's own two: the chat capability, not tools
+CORE_ONLY = OWN + ('room_invite',)      # never offered as "her tools": core drives these itself (invite, cue)
 _about = {}                   # device id -> (monotonic, [tools])
 _lock = threading.Lock()
 
@@ -127,7 +135,7 @@ def _tools(device, config, secrets, fresh=False):
         with _lock:
             _about.pop(device['id'], None)
         out = _rpc('tools/list', {}, config, secrets)
-        told = [t for t in (out.get('tools') or []) if isinstance(t, dict) and t.get('name') not in OWN]
+        told = [t for t in (out.get('tools') or []) if isinstance(t, dict) and t.get('name') not in CORE_ONLY]
         with _lock:
             _about[device['id']] = (time.monotonic(), told)
     return told
@@ -225,6 +233,35 @@ def status(device, config, secrets):
         return {'online': True, 'detail': f"{detail}. {e}", 'has': [], 'readings': {}}
     return {'online': True, 'detail': detail, 'has': ['chat'] + (['tools'] if tools else []),
             'readings': {'tools shared': str(len(tools))}}
+
+
+def invite(device, config, secrets, card):
+    """Core only (core/rooms.py): invite her into a chat room here. `card` =
+    {room, host, purpose, people, instructions, private, name}. Her answer:
+    {'joined', 'chat', 'name', 'said'}. Raises Problem, in words."""
+    out = _rpc('tools/list', {}, config, secrets)
+    names = {t.get('name') for t in (out.get('tools') or []) if isinstance(t, dict)}
+    if 'room_invite' not in names:
+        raise Problem("She does not take chat-room invitations. Over there: Settings > MCP Server > Chat rooms.")
+    text, ok = _call('room_invite', card, config, secrets, INVITE_WAIT)
+    if not ok:
+        raise Problem(text)
+    try:
+        out = json.loads(text)
+    except ValueError:
+        raise Problem(f"Her answer to the invitation had no shape: {text[:200]}")
+    if not isinstance(out, dict):
+        raise Problem('Her answer to the invitation had no shape.')
+    return out
+
+
+def cue(device, config, secrets, chat, text, who):
+    """Core only (core/rooms.py): one room turn. `text` lands in `chat` on her
+    side from `who`; her answer comes back as it is. Raises Problem."""
+    said, ok = _call('ask', {'text': text, 'chat': chat, 'from': who}, config, secrets, CUE_WAIT)
+    if not ok:
+        raise Problem(said)
+    return said
 
 
 def run(device, capability, action, value, config, secrets, call_tool):

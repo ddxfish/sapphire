@@ -498,6 +498,11 @@ export default {
 // SERVER-active chat must not render it here: steer to the most recent
 // regular chat instead (the list is updated_at DESC). No eligible target,
 // or a turn mid-stream → leave things alone; the picker still hides it.
+// A room's turn that was in flight when the user came here kept the steer
+// from running (a turn mid-stream leaves things alone); when it settles, try
+// again (main.js dispatches this on the END of a room turn the rail no longer owns).
+eventBus.on('room_turn_settled', () => { if (getCurrentView() === 'chat') steerOffGameChat(); });
+
 async function steerOffGameChat() {
     try {
         const data = await api.fetchChatList();

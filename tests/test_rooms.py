@@ -473,7 +473,7 @@ def test_pause_between_seats(world, monkeypatch):
 
     def stamp(chat_, seat, rt):
         stamps.append(time.monotonic())
-        return ''
+        return 'said'
     monkeypatch.setattr(rooms, '_seat_turn', stamp)
     rooms.update_room(chat, {'pause_s': 0.15})
     rooms.start(chat)
@@ -516,6 +516,180 @@ def test_import_transcript_and_whole_room(world):
     assert [s['id'] for s in rooms.describe(chat)['seats']] == [a['id'], b['id']]  # the salon untouched
     with pytest.raises(rooms.RoomError):
         rooms.import_room('nope', exported)
+
+
+# ── another Sapphire's seat ─────────────────────────────────────────────────
+
+class FakeDoor:
+    """The Another Sapphire driver's two core hooks, played."""
+    def __init__(self, decision=None, answer='Evening from the server.', fail=None):
+        self.decision = decision or {'joined': True, 'chat': 'room-dev-salon', 'name': 'Prime', 'said': 'Happy to.'}
+        self.answer, self.fail, self.cards, self.cues = answer, fail, [], []
+
+    def invite(self, device, config, secrets, card):
+        self.cards.append(card)
+        if self.fail:
+            raise RuntimeError(self.fail)
+        return self.decision
+
+    def cue(self, device, config, secrets, chat, text, who):
+        self.cues.append((chat, text, who))
+        if self.fail:
+            raise RuntimeError(self.fail)
+        return self.answer
+
+
+def _with_door(monkeypatch, door):
+    brief = {'id': 'prime', 'label': 'Sapph Prime', 'location': ''}
+    monkeypatch.setattr(rooms, '_door', lambda device_id: (door, brief, {'url': 'https://x'}, {'token': 't'})
+                        if device_id == 'prime' else (_ for _ in ()).throw(rooms.RoomError(f"no device '{device_id}'")))
+    monkeypatch.setattr('config.INSTANCE_NAME', 'dev', raising=False)
+    return door
+
+
+def test_inviting_another_sapphire_seats_her_when_she_joins(world, monkeypatch):
+    chat, a, b = _salon()
+    door = _with_door(monkeypatch, FakeDoor())
+    out = rooms.invite_sapphire(chat, 'prime', name='Prime', instructions='Be the sceptic.')
+    assert out['joined'] is True and out['said'] == 'Happy to.'
+    card = door.cards[0]
+    assert card == {'room': 'salon', 'host': 'dev', 'purpose': 'Talk about the boat.', 'people': ['Krem', 'Sapphire', 'Sapphire 2'],
+                    'instructions': 'Be the sceptic.', 'private': False, 'name': 'Prime'}
+    seat = out['seat']
+    assert (seat['kind'], seat['device'], seat['label'], seat['chat'], seat['name']) == ('sapphire', 'prime', 'Sapph Prime', 'room-dev-salon', 'Prime')
+    assert seat['persona'] == '' and seat['settings'] == {} and seat['context'] == 'Be the sceptic.'
+    d = rooms.describe(chat)
+    assert [x['name'] for x in d['seats']] == ['Sapphire', 'Sapphire 2', 'Prime'] and d['seats'][2]['kind'] == 'sapphire'
+    # her settings are hers: a brain patch is ignored, her name and colour are ours to set
+    rooms.update_seat(chat, seat['id'], {'name': 'Prime!', 'color': '#f0f', 'settings': {'llm_model': 'claude'}})
+    s3 = rooms.describe(chat)['seats'][2]
+    assert (s3['name'], s3['color'], s3['settings']) == ('Prime!', '#f0f', {})
+    # she declined: no seat, her words back (her first seat removed: one seat per Sapphire)
+    rooms.remove_seat(chat, seat['id'])
+    door.decision = {'joined': False, 'said': 'Not today.'}
+    out = rooms.invite_sapphire(chat, 'prime')
+    assert out == {'joined': False, 'said': 'Not today.'} and len(rooms.describe(chat)['seats']) == 2
+    # her door refused, or there is no such device, or the room is private: a reason in words
+    door.fail = 'She does not take chat-room invitations.'
+    with pytest.raises(rooms.RoomError, match='does not take'):
+        rooms.invite_sapphire(chat, 'prime')
+    with pytest.raises(rooms.RoomError, match="no device"):
+        rooms.invite_sapphire(chat, 'nobody')
+    world.llm_chat.session_manager.chats[chat]['settings']['private_chat'] = True
+    with pytest.raises(rooms.RoomError, match='private'):
+        rooms.invite_sapphire(chat, 'prime')
+    # a guest seat survives an export and import
+    world.llm_chat.session_manager.chats[chat]['settings']['private_chat'] = False
+    door.fail = None
+    door.decision = {'joined': True, 'chat': 'room-dev-salon', 'name': 'Prime', 'said': 'Back.'}
+    rooms.invite_sapphire(chat, 'prime')
+    rec = world.llm_chat.session_manager.chats[chat]['settings']['room']
+    other = rooms.create('other')
+    d = rooms.import_room(other, {'room': rec})
+    assert [x.get('kind') for x in d['seats']] == [None, None, 'sapphire']
+
+
+def test_her_turn_is_one_ask_with_the_lines_since_her_last(world, monkeypatch):
+    chat, a, b = _salon(two=False)
+    door = _with_door(monkeypatch, FakeDoor())
+    seat = rooms.invite_sapphire(chat, 'prime', name='Prime')['seat']
+    rooms.update_seat(chat, a['id'], {'enabled': False})                  # only she speaks
+    rows = world.llm_chat.session_manager.chats[chat]['rows']
+    rooms.say(chat, 'Evening, Prime.')
+    assert _wait(lambda: rooms.state(chat)['waiting'])
+    assert [r['speaker'] for r in rows] == ['user', seat['id']]
+    assert rows[1] == {'role': 'assistant', 'content': 'Evening from the server.', 'speaker': seat['id'], 'name': 'Prime', 'kind': 'sapphire'}
+    far_chat, cue, who = door.cues[0]
+    assert far_chat == 'room-dev-salon' and who == "the chat room 'salon' on dev"
+    assert cue == 'Krem: Evening, Prime.\n\n(Your turn, Prime.)'
+    assert rows[1]['kind'] == 'sapphire'
+    # her pass is no line; a round nobody spoke in stops the room with a line of its own
+    door.answer = '(pass)'
+    rooms.say(chat, 'Anything?')
+    assert _wait(lambda: len(door.cues) == 2 and not rooms.state(chat)['running'])
+    assert [r['speaker'] for r in rows] == ['user', seat['id'], 'user', 'room']
+    assert rows[-1]['content'].startswith('Nobody spoke this round, so the room stopped.')
+    assert door.cues[1][1] == 'Krem: Anything?\n\n(Your turn, Prime.)'    # since HER last line, her own left out
+    # her door's words for an empty answer are a pass too, never her line
+    door.answer = '(she said nothing)'
+    rooms.say(chat, 'Hm?')
+    assert _wait(lambda: len(door.cues) == 3 and not rooms.state(chat)['running'])
+    assert [r['speaker'] for r in rows][-3:] == ['room', 'user', 'room']
+    # her miss is a line in the room, not a failed turn
+    door.fail = 'Could not reach her. Is she running?'
+    rooms.say(chat, 'Still there?')
+    assert _wait(lambda: len(door.cues) == 4 and not rooms.state(chat)['running'])
+    assert rows[-2]['speaker'] == 'room' and rows[-2]['content'] == 'Prime did not answer: Could not reach her. Is she running?'
+    # a room turned private skips her with a line and never calls her door
+    door.fail = None
+    world.llm_chat.session_manager.chats[chat]['settings']['private_chat'] = True
+    rooms.say(chat, 'Secret.')
+    assert _wait(lambda: 'private' in rows[-2]['content'] and not rooms.state(chat)['running'])
+    assert rows[-2]['speaker'] == 'room' and len(door.cues) == 4
+
+
+def test_stop_abandons_her_answer(world, monkeypatch):
+    chat, a, b = _salon(two=False)
+    gate = threading.Event()
+
+    class SlowDoor(FakeDoor):
+        def cue(self, *args):
+            self.cues.append(args)
+            gate.wait(timeout=3)
+            return 'too late'
+    door = _with_door(monkeypatch, SlowDoor())
+    seat = rooms.invite_sapphire(chat, 'prime', name='Prime')['seat']
+    rooms.update_seat(chat, a['id'], {'enabled': False})
+    rows = world.llm_chat.session_manager.chats[chat]['rows']
+    rooms.say(chat, 'Go.')
+    assert _wait(lambda: len(door.cues) == 1)
+    rooms.stop(chat)
+    assert _wait(lambda: not rooms.state(chat)['running'])
+    # her worker is still waiting on her door: the next round skips her with a line
+    rooms.say(chat, 'Again.')
+    assert _wait(lambda: any('still answering' in r['content'] for r in rows))
+    assert len(door.cues) == 1 and not rooms.state(chat)['running']
+    gate.set()
+    time.sleep(0.1)
+    assert [r['speaker'] for r in rows] == ['user', 'user', 'room', 'room']    # her late answer is dropped
+    assert 'too late' not in ' '.join(r['content'] for r in rows)
+
+
+def test_a_round_nobody_spoke_in_stops_the_run(world, monkeypatch):
+    chat, a, b = _salon()
+    rooms.update_room(chat, {'human_every': 0})                              # the case that used to spin forever
+    calls = []
+
+    def passing(chat_, seat, rt):
+        calls.append(seat['name'])
+        return ''
+    monkeypatch.setattr(rooms, '_seat_turn', passing)
+    rows = world.llm_chat.session_manager.chats[chat]['rows']
+    rooms.start(chat)
+    assert _wait(lambda: not rooms.state(chat)['running'])
+    assert calls == ['Sapphire', 'Sapphire 2']                                # one round, not one more
+    assert rows[-1]['speaker'] == 'room' and rows[-1]['content'].startswith('Nobody spoke this round')
+    rooms.say(chat, 'wake up')                                               # the person's line starts it again
+    assert _wait(lambda: len(calls) == 4)
+
+
+def test_the_same_sapphire_is_seated_once(world, monkeypatch):
+    chat, a, b = _salon(two=False)
+    door = _with_door(monkeypatch, FakeDoor())
+    rooms.invite_sapphire(chat, 'prime', name='Prime')
+    with pytest.raises(rooms.RoomError, match='already seated'):
+        rooms.invite_sapphire(chat, 'prime')
+    assert len(door.cards) == 1                                              # her door was not asked twice
+
+
+def test_import_writes_the_record_only_after_the_transcript_took(world, monkeypatch):
+    chat, a, b = _salon()
+    sm = world.llm_chat.session_manager
+    monkeypatch.setattr(sm, 'replace_messages', lambda *a, **k: (False, 'Chat is streaming'))
+    with pytest.raises(rooms.RoomError, match='streaming'):
+        rooms.import_room(chat, {'messages': [], 'room': {'purpose': 'Replaced', 'seats': []}})
+    d = rooms.describe(chat)
+    assert d['purpose'] == 'Talk about the boat.' and len(d['seats']) == 2    # untouched: the record waits for the rows
 
 
 def test_a_speakerless_row_is_labelled_the_rooms(world):

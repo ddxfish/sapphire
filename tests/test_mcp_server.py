@@ -37,6 +37,7 @@ def world(monkeypatch):
     system = SimpleNamespace(llm_chat=SimpleNamespace(function_manager=fm, session_manager=sm))
     monkeypatch.setattr(config, 'MCP_SERVER_ENABLED', True, raising=False)
     monkeypatch.setattr(config, 'MCP_SERVER_TOOLS', ['get_weather', 'device_action', 'remember', 'secret_probe', 'gone'], raising=False)
+    monkeypatch.setattr(config, 'MCP_ROOM_INVITES', False, raising=False)     # room_invite has tests of its own (test_room_guest.py)
     with patch.object(mcp, '_scoped_plugins', return_value={'memory'}):
         yield SimpleNamespace(system=system, fm=fm, sm=sm, chats=chats)
 

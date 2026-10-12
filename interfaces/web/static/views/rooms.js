@@ -34,10 +34,16 @@ const ACC_NS = 'rooms-sidebar';
 const SEAT_SECTIONS = ['prompt', 'toolset', 'brain', 'mind'];     // voice and sysprompt wait for per-seat voices
 const PLACEHOLDER = 'Say something to the room';
 const ECHO_MS = 1500;           // a room_changed this soon after our own save is our echo, not news
+const INVITE_MS = 330000;       // an invitation waits on her lobby turn over there (the server gives up at 300 s)
+const DEVICE = 'device:';       // the Add bot list: a Sapphire device's option value is this + its id
 
 let root = null;
 let R = null;                   // the open room: {chat, info, placeholder, mute}
 let bound = false;              // bus handlers live
+let epoch = 0;                  // bumped by hide(): an open() still awaiting must not claim the rail into a hidden view
+let pointerBefore = null;       // the chat the pointer was on when the view was entered: handed back on hide (voice follows you out)
+let fillSeq = 0;                // the Add bot list's latest fill
+const PENDING = new Map();      // room chat -> {device, label}: an invitation still waiting on her decision
 
 const $ = (sel) => root?.querySelector(sel);
 const enc = encodeURIComponent;
@@ -59,11 +65,24 @@ export default {
     },
     async show() {
         bindBus();
+        if (pointerBefore === null) {
+            const cur = document.getElementById('chat-select')?.value || '';
+            pointerBefore = cur || '';
+        }
+        fillPersonas(true);
         await openLast();
     },
     hide() {
+        epoch++;
         leave();
         unbindBus();
+        // the pointer went into the room with us (voice follows): it comes back
+        // out, so the wake word and the Chat view are not left in the room.
+        // Refused while a seat streams (the server's rule) - the Chat view's
+        // steer takes over when that turn settles.
+        const back = pointerBefore;
+        pointerBefore = null;
+        if (back) api.activateChat(back).catch(() => {});
     },
 };
 
@@ -157,6 +176,10 @@ function skeleton() {
     $('#rm-human-every').onchange = (e) => updateRoom({ human_every: Math.max(0, parseInt(e.target.value, 10) || 0) });
     $('#rm-bots').onclick = () => { if (R) updateRoom({ bots_enabled: !R.info.bots_enabled }); };
     $('#rm-add').onclick = addSeat;
+    // a room renamed elsewhere (Chat Manager, another tab): the last-open key follows it
+    eventBus.on(eventBus.Events.CHAT_RENAMED, (d) => {
+        if (d?.old && d?.new && localStorage.getItem(LAST_KEY) === d.old) localStorage.setItem(LAST_KEY, d.new);
+    });
 
     $('#rm-picker-btn').onclick = async (e) => {
         e.stopPropagation();
@@ -175,9 +198,11 @@ function skeleton() {
 // ------------------------------------------------------------------ open / leave
 
 async function openLast() {
+    const my = epoch;
     let rooms = [];
     try { rooms = (await call('/api/rooms')).rooms || []; }
     catch (e) { ui.showToast(`Chat Room: ${e.message}`, 'error'); }
+    if (my !== epoch) return;                                // the view closed while we fetched
     const names = rooms.map(r => r.chat);
     const last = localStorage.getItem(LAST_KEY);
     const pick = (R && names.includes(R.chat)) ? R.chat : (names.includes(last) ? last : names[0]);
@@ -187,10 +212,12 @@ async function openLast() {
 }
 
 async function open(chat) {
+    const my = epoch;
     leave();
     let info;
     try { info = await call(`/api/rooms/${enc(chat)}`); }
     catch (e) { ui.showToast(`Could not open "${chat}": ${e.message}`, 'error'); paintEmpty('That room would not open.', 'Chat Room', openLast); return; }
+    if (my !== epoch) return;                                // the view closed meanwhile: nothing is claimed
     R = { chat, info, placeholder: null, mute: 0 };
     localStorage.setItem(LAST_KEY, chat);
     // Voice follows you into the room: the wake word and the local mic land
@@ -198,7 +225,7 @@ async function open(chat) {
     // still opens, voice just stays where it was.
     try { await api.activateChat(chat); }
     catch (e) { ui.showToast(`Voice stays on the previous chat: ${e.message}`, 'warning'); }
-    if (!R || R.chat !== chat) return;
+    if (my !== epoch || !R || R.chat !== chat) return;
     claim();
     paintAll();
 }
@@ -254,6 +281,9 @@ function onClick(e) {
     if (e.target?.closest?.('#send-btn')) {
         e.preventDefault(); e.stopPropagation();
         say();
+    } else if (e.target?.closest?.('#stop-btn')) {
+        e.preventDefault(); e.stopPropagation();           // the chat's Stop cancels one seat and the round goes on
+        run('/stop');
     }
 }
 
@@ -282,7 +312,10 @@ async function say() {
     input.dispatchEvent(new Event('input'));
     ui.addUserMessage(txt);
     try { await call(roomUrl('/say'), 'POST', { text: txt }); }
-    catch (e) { ui.showToast(e.message, 'error'); }
+    catch (e) {
+        ui.showToast(e.message, 'error');
+        if (input && !input.value) { input.value = txt; input.dispatchEvent(new Event('input')); }   // the words come back
+    }
 }
 
 // ------------------------------------------------------------------ the bus
@@ -355,10 +388,12 @@ function paintTurn() {
 
 function seatHeadHtml(s) {
     const st = s.settings || {};
-    const meta = `${modelShort(st)} · ${s.memory_write ? 'mem on' : 'mem off'} · ${st.toolset || 'all'}`;
+    const guest = s.kind === 'sapphire';
+    const meta = guest ? `another Sapphire · ${s.label || s.device}`
+        : `${modelShort(st)} · ${s.memory_write ? 'mem on' : 'mem off'} · ${st.toolset || 'all'}`;
     return `
         <span class="accordion-arrow">▶</span>
-        ${avatarImg(s.persona, s.color || '', 'rm-face', s.avatar)}
+        ${guest ? '<span class="rm-face rm-face-gem">\u{1F48E}</span>' : avatarImg(s.persona, s.color || '', 'rm-face', s.avatar)}
         <span class="rm-seat-text">
             <span class="rm-seat-name" style="${s.color ? `color:${esc(s.color)}` : ''}">${esc(s.name)}</span>
             <span class="rm-seat-meta">${esc(meta)}</span>
@@ -369,6 +404,20 @@ function seatHeadHtml(s) {
 }
 
 function seatHtml(s) {
+    if (s.kind === 'sapphire') return `
+        <div class="sidebar-accordion rm-seat rm-guest" data-acc="room:seat:${esc(s.id)}" data-seat="${esc(s.id)}">
+            <div class="sidebar-accordion-header rm-seat-head">${seatHeadHtml(s)}</div>
+            <div class="sidebar-accordion-content" style="display:none">
+                <div class="sb-field"><label>name</label><input type="text" data-f="name" value="${esc(s.name)}"></div>
+                <div class="sb-field"><label>colour</label><input type="color" data-f="color" value="${esc(s.color || '#4a9eff')}"></div>
+                <div class="sb-field sb-field-stack">
+                    <label>sent with the invitation</label>
+                    <textarea rows="3" readonly>${esc(s.context || '')}</textarea>
+                </div>
+                <p class="rm-guest-note">She answers from her own box with her own prompt, model and tools, in her chat "${esc(s.chat || '?')}". Nothing of hers is set here.</p>
+                <button type="button" class="sb-btn-full rm-seat-remove">Remove from the room</button>
+            </div>
+        </div>`;
     return `
         <div class="sidebar-accordion rm-seat" data-acc="room:seat:${esc(s.id)}" data-seat="${esc(s.id)}">
             <div class="sidebar-accordion-header rm-seat-head">${seatHeadHtml(s)}</div>
@@ -394,7 +443,9 @@ async function paintRoster() {
     const seats = R.info.seats || [];
     const open = new Set([...roster.querySelectorAll('.rm-seat')].filter(el =>
         el.querySelector('.sidebar-accordion-header')?.classList.contains('open')).map(el => el.dataset.seat));
-    roster.innerHTML = seats.map(seatHtml).join('') || '<div class="rm-none">Nobody seated. Add a bot above.</div>';
+    const waiting = PENDING.get(R.chat);
+    roster.innerHTML = (seats.map(seatHtml).join('') || (waiting ? '' : '<div class="rm-none">Nobody seated. Add a bot above.</div>'))
+        + (waiting ? `<div class="rm-pending"><span class="rm-face rm-face-gem">\u{1F48E}</span><span class="rm-seat-text"><span class="rm-seat-name">${esc(waiting.label)}</span><span class="rm-seat-meta">invited · she is deciding</span></span></div>` : '');
     initAccordions(roster, ACC_NS);
     for (const id of open) {                                // keep what was open through a repaint
         const el = roster.querySelector(`.rm-seat[data-seat="${CSS.escape(id)}"]`);
@@ -404,6 +455,7 @@ async function paintRoster() {
     }
     const me = R;
     for (const seat of seats) {
+        if (seat.kind === 'sapphire') continue;                 // her brain is hers: no sections
         const el = roster.querySelector(`.rm-seat[data-seat="${CSS.escape(seat.id)}"]`);
         if (!el) continue;
         const ctx = {
@@ -435,13 +487,21 @@ function paintGuests() {
     $('#rm-guests').textContent = who.length ? `also here: ${who.join(' · ')}` : '';
 }
 
-async function fillPersonas() {
+async function fillPersonas(force = false) {
     const sel = $('#rm-add-persona');
-    if (sel.options.length) return;
-    try {
-        const data = await listPersonas();
-        sel.innerHTML = (data.personas || []).map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
-    } catch (e) { sel.innerHTML = '<option value="">no personas</option>'; }
+    if (!force && sel.options.length) return;
+    const seq = ++fillSeq;
+    const was = sel.value;
+    let personas = [], hers = [];
+    try { personas = (await listPersonas()).personas || []; } catch (e) { /* listed as none */ }
+    // another Sapphire: every Another Sapphire device, whatever its state (she answers or she does not)
+    try { hers = ((await fetchWithTimeout('/api/devices', {}, 10000)).devices || []).filter(d => d.driver === 'sapphire' && d.enabled !== false); }
+    catch (e) { /* no devices page, no guests */ }
+    if (seq !== fillSeq) return;                              // a newer fill is on its way
+    sel.innerHTML = (personas.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') || '<option value="">no personas</option>')
+        + (hers.length ? `<optgroup label="Another Sapphire">${hers.map(d =>
+            `<option value="${esc(DEVICE + d.id)}" data-label="${esc(d.label || d.id)}">\u{1F48E} ${esc(d.label || d.id)}</option>`).join('')}</optgroup>` : '');
+    if (was && [...sel.options].some(o => o.value === was)) sel.value = was;
 }
 
 async function fillPicker() {
@@ -492,11 +552,44 @@ function onRosterClick(e) {
 
 async function addSeat() {
     if (!R) return;
-    const persona = $('#rm-add-persona').value;
+    const sel = $('#rm-add-persona');
+    const persona = sel.value;
     if (!persona) return;
+    if (persona.startsWith(DEVICE)) return inviteSapphire(persona.slice(DEVICE.length), sel.selectedOptions[0]?.dataset.label || persona.slice(DEVICE.length));
     R.mute = Date.now() + ECHO_MS;
     try { await call(roomUrl('/seats'), 'POST', { persona }); await reload(); }
     catch (e) { ui.showToast(e.message, 'error'); }
+}
+
+function inviteSapphire(device, label) {
+    const chat = R.chat;
+    if (PENDING.has(chat)) { ui.showToast(`${PENDING.get(chat).label} is still deciding; one invitation at a time.`, 'warning'); return; }
+    showModal(`Invite ${label}`, [
+        { type: 'html', value: `<p style="margin:0 0 8px;color:var(--text-secondary);font-size:var(--font-sm)">She decides on her own box, with her memory behind her, and picks what she brings: her persona, model and tools. This can take a few minutes; her seat appears when she joins, and what she said shows then. The room's purpose, the names here and these instructions are sent to her.</p>` },
+        { id: 'name', label: 'Call her', type: 'text', value: label },
+        { id: 'instructions', label: 'What you ask of her in this room', type: 'textarea', rows: 3, value: '',
+          placeholder: 'e.g. You hold that a hot dog IS a sandwich.' },
+    ], (data) => {
+        // nothing returned: the dialog closes now; the wait is a roster row
+        PENDING.set(chat, { device, label });
+        if (R && R.chat === chat) paintRoster();
+        ui.showToast(`Inviting ${label}... she is deciding.`, 'info', 6000);
+        fetchWithTimeout(roomUrl('/seats'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+            body: JSON.stringify({ device, name: data.name, instructions: data.instructions }),
+        }, INVITE_MS).then(async (out) => {
+            PENDING.delete(chat);
+            const who = out.joined ? (out.seat?.name || label) : label;
+            const words = `${who} ${out.joined ? 'joined' : 'declined'} "${chat}". She says: ${out.said || '(nothing)'}`;
+            if (!R || R.chat !== chat) { ui.showToast(words, 'info', 12000); return; }
+            if (out.joined) await reload(); else paintRoster();
+            showConfirm(words, () => {}, { title: out.joined ? 'Joined' : 'Declined', saveLabel: 'OK' });
+        }).catch((e) => {
+            PENDING.delete(chat);
+            if (R && R.chat === chat) paintRoster();
+            ui.showToast(`Inviting ${label}: ${e.message}`, 'error');
+        });
+    }, { saveLabel: 'Invite' });
 }
 
 async function updateRoom(patch) {
@@ -558,7 +651,7 @@ async function exportRoom() {
 function importRoom() {
     const chat = R.chat;
     showImportDialog({
-        type: `into the room "${chat}"`,
+        type: `to REPLACE the transcript of the room "${chat}"`,
         overwrites: [{ key: 'room', label: 'Also restore the bots, rules and purpose from the file (a room export)' }],
         existingNames: [],
         validate: (p) => (Array.isArray(p) || Array.isArray(p?.messages)) ? null : 'Not a chat export: no messages array',
