@@ -547,6 +547,23 @@ def _with_door(monkeypatch, door):
     return door
 
 
+def test_the_door_lookup_speaks_the_engines_words(world, monkeypatch):
+    """Her door off, unreachable, a refused token: the driver says which when
+    the invitation is sent. The lookup before it only has to find the device
+    and pass the engine's own words through."""
+    from core.devices import engine
+    calls = []
+
+    def door(device_id, capability, hook):
+        calls.append((device_id, capability, hook))
+        raise engine.DeviceError("There is no device named 'prime'.")
+    monkeypatch.setattr(engine, 'door', door)
+    chat, _, _ = _salon()
+    with pytest.raises(rooms.RoomError, match="no device named 'prime'"):
+        rooms.invite_sapphire(chat, 'prime')
+    assert calls == [('prime', 'chat', 'invite')]
+
+
 def test_inviting_another_sapphire_seats_her_when_she_joins(world, monkeypatch):
     chat, a, b = _salon()
     door = _with_door(monkeypatch, FakeDoor())

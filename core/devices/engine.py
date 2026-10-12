@@ -1346,6 +1346,32 @@ def doors(capability, hook, online=True):
     return out
 
 
+def door(device_id, capability, hook):
+    """Core only: (module, brief, config, secrets) of ONE device, for a part
+    whose driver has `capability` and a callable `hook`. What the health
+    keeper believes about the device - offline, or that it said it has
+    nothing - is not consulted: the caller is about to ask the device itself,
+    and the device's own words are the better answer. DeviceError, in words,
+    when there is no such device, it is switched off here, no part fits, or
+    its secrets cannot be read on this machine."""
+    row = get(device_id)
+    who = row.get('label') or row['id']
+    if not row.get('enabled', True):
+        raise DeviceError(f"{who} is switched off here (Settings > Devices).")
+    for part in row.get('parts', []):
+        try:
+            mod, spec = _driver(part['driver'], part.get('plugin', ''))
+        except DeviceError:
+            continue
+        if capability in (spec.get('capabilities') or []) and callable(getattr(mod, hook, None)):
+            try:
+                secrets = _part_secrets(row['id'], part['driver'])
+            except DeviceError as e:
+                raise DeviceError(f"{who}'s secrets cannot be read on this machine: {e}")
+            return mod, _brief(row), dict(part.get('config') or {}), secrets
+    raise DeviceError(f"{who} is not that kind of device.")
+
+
 _unreadable = set()           # (device, driver) already said to have secrets this machine cannot read
 
 

@@ -241,13 +241,15 @@ def _host():
 
 
 def _door(device_id):
-    """(module, brief, config, secrets) of the Another Sapphire device, enabled
-    or not online, or RoomError."""
+    """(module, brief, config, secrets) of the Another Sapphire device, or
+    RoomError. Whatever the health keeper believes about her: the invitation
+    goes to her door itself, and the driver says in words what it found there
+    (off, unreachable, a refused token, no invitations taken)."""
     from core.devices import engine
-    for mod, brief, cfg, secrets in engine.doors('chat', 'invite', online=False):
-        if brief.get('id') == device_id:
-            return mod, brief, cfg, secrets
-    raise RoomError(f"There is no Sapphire device named '{device_id}' (Settings > Devices > Add > Another Sapphire).")
+    try:
+        return engine.door(device_id, 'chat', 'invite')
+    except engine.DeviceError as e:
+        raise RoomError(str(e))
 
 
 def invite_sapphire(chat, device_id, name=None, instructions=''):

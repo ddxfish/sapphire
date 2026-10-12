@@ -915,6 +915,28 @@ def test_a_device_shows_only_what_it_said_it_has(host):
     assert 'lamp' in core.list_text()[0] and 'shell' not in core.list_text()[0]
 
 
+def test_one_door_is_handed_over_whatever_the_keeper_believes(host):
+    """doors() holds a device to what it last said it has: a Sapphire whose
+    MCP door was off said she has nothing. door() for ONE device does not: the
+    caller asks the device itself, whose words are the real answer."""
+    _add()
+    _says([])
+    core.status('desktop')
+    assert [b['id'] for _, b, _, _ in core.doors('lamp', 'run', online=False)] == []
+    mod, brief, config, secrets = core.door('desktop', 'lamp', 'run')
+    assert mod is sys.modules[MOD] and brief['id'] == 'desktop' and config['host'] == 'tower'
+    assert secrets.get('password') == 'hunter2-long'
+    with pytest.raises(core.DeviceError, match='not that kind'):
+        core.door('desktop', 'speaker', 'run')
+    with pytest.raises(core.DeviceError, match='not that kind'):
+        core.door('desktop', 'lamp', 'no_such_hook')
+    with pytest.raises(core.DeviceError, match="no device named 'ghost'"):
+        core.door('ghost', 'lamp', 'run')
+    core.update('desktop', enabled=False)
+    with pytest.raises(core.DeviceError, match='switched off'):
+        core.door('desktop', 'lamp', 'run')
+
+
 def test_what_it_said_holds_while_it_is_away_and_follows_when_it_says_otherwise(host):
     _add()
     _says(['lamp'])
