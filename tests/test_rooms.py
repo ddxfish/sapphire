@@ -7,9 +7,11 @@ import threading
 import time
 from unittest.mock import patch
 
+import logging
 import pytest
 
 from core import rooms
+from core.event_bus import Events
 from core.chat import inbox
 from core.chat.display_format import format_messages_for_display
 
@@ -64,14 +66,24 @@ class FakeSM:
         return (list(s['rows']) if s else None), None, 0
 
     def list_chat_files(self, stats=False):
-        return [{'name': n, 'mode': s['settings'].get('mode') or ''} for n, s in self.chats.items()]
+        return [{'name': n, 'mode': s['settings'].get('mode') or '', 'settings': dict(s['settings'])}
+                for n, s in self.chats.items()]
+
+    def make_stream_session(self, c):
+        s = self.chats.get(c)
+        if s is None:
+            return None
+        return {'chat': c, 'settings': dict(s['settings']), 'system_prompt': None, 'tools': None, 'history': list(s['rows'])}
+
+    def delete_chat(self, c):
+        return self.chats.pop(c, None) is not None
 
     def get_active_chat_name(self):
         return self.active
 
 
 class FakeFM:
-    META = {'search_memory': ('memory', False), 'save_memory': ('memory', True),
+    META = {'search_memory': ('memory', False), 'read_self': ('memory', False), 'save_memory': ('memory', True),
             'web_search': ('web', False), 'reset_chat': ('meta_danger', True),
             'agent_spawn': ('agents', True), 'ask_user': ('meta', False), 'save_goal': ('goals', True)}
 
@@ -118,6 +130,7 @@ def world(monkeypatch):
                         lambda n: {'content': f'PROMPT[{n}]'} if n in ('sapphire', 'cobalt', 'default') else None)
     monkeypatch.setattr('core.chat.history.normalize_llm_pin', lambda cur, p: p)
     monkeypatch.setattr('config.DEFAULT_USERNAME', 'Krem', raising=False)
+    monkeypatch.setattr(rooms, '_delete_chat', lambda name: sysm.llm_chat.session_manager.delete_chat(name))
     inbox._chats.clear()
     rooms._rooms.clear()
     yield sysm
@@ -209,24 +222,31 @@ def test_seat_brain_scopes_tools_context_privacy(world):
     seat = next(s for s in room['seats'] if s['id'] == a['id'])
     brain, cue = rooms.seat_brain(chat, s_room, room, seat)
     st = brain['settings']
-    assert brain['chat'] == chat and brain['ephemeral'] is True and brain['seat'] == a['id']
+    # on HER OWN chat's session, never ephemeral: the engine saves there (2026-10-12)
+    assert brain['chat'] == f"seat-{a['id']}" and 'ephemeral' not in brain
+    assert brain['seat'] == a['id'] and brain['room'] == chat
     assert st['memory_scope'] == 'default'                                   # the persona's own: reads allowed
     assert all(st[k] == 'none' for k in scope_setting_keys() if k != 'memory_scope')   # unlisted = OFF, never hers
     assert st['private_chat'] is True and st['spice_enabled'] is False and st['rag_context'] == 'off'
     assert st['custom_context'] == 'Likes boats.\n\nYou are the optimist.'
     names = {t['function']['name'] for t in brain['tools']}
-    assert names == {'search_memory', 'web_search'}          # writers, meta_danger, agents and the card are gone
+    assert names == {'search_memory', 'read_self', 'web_search'}   # writers, meta_danger, agents and the card are gone
     assert brain['system_prompt'].startswith('PROMPT[sapphire]\n\n[Chat room "salon"]')
     assert 'What this room is for: Talk about the boat.' in brain['system_prompt']
     assert 'You are Sapphire. Also here: Krem, Sapphire 2 (sapphire).' in brain['system_prompt']
-    assert brain['history'].messages == [] and cue.startswith('(Nobody has spoken yet.)')
+    assert 'This is your first turn here: read your self-sheet (read_self)' in brain['system_prompt']
+    assert brain['history'] == [] and cue.startswith('(Nobody has spoken yet.)')
+    # her second turn: her chat has her rows, the first-turn line is gone
+    world.llm_chat.session_manager.chats[brain['chat']]['rows'].append({'role': 'assistant', 'content': 'Hi.'})
+    brain, _ = rooms.seat_brain(chat, s_room, room, seat)
+    assert 'first turn' not in brain['system_prompt'] and brain['history'] == [{'role': 'assistant', 'content': 'Hi.'}]
     # memory writes on for THIS seat only
     rooms.update_seat(chat, a['id'], {'memory_write': True})
     s_room, room = rooms._room(chat)
     seat = next(s for s in room['seats'] if s['id'] == a['id'])
     brain, _ = rooms.seat_brain(chat, s_room, room, seat)
     names = {t['function']['name'] for t in brain['tools']}
-    assert names == {'search_memory', 'save_memory', 'save_goal', 'web_search'}
+    assert names == {'search_memory', 'read_self', 'save_memory', 'save_goal', 'web_search'}
     # a 'none' toolset is no tools at all
     s_room, room = rooms._room(chat)
     c = rooms.add_seat(chat, 'cobalt')
@@ -378,6 +398,15 @@ def test_display_splits_bubbles_per_speaker():
     assert [p['text'] for p in out[2]['parts']] == ['b1', 'b2']          # the same speaker still rolls up
     plain = format_messages_for_display([{'role': 'assistant', 'content': 'x'}, {'role': 'assistant', 'content': 'y'}])
     assert len(plain) == 1 and 'speaker' not in plain[0]                  # a normal chat is unchanged
+    # a line's footnote (2026-10-12): the tools she used, before her words; a local seat's
+    # with inputs and results, a guest's by name only; no tool_call_id (no x button)
+    noted = format_messages_for_display([{'role': 'assistant', 'content': 'line', 'speaker': 'a', 'name': 'Purple',
+                                          'tools': [{'id': 'c1', 'name': 'web_search', 'args': {'q': 'boats'}, 'result': 'Boats.'},
+                                                    {'name': 'read_self'}, 'junk', {'args': {}}]}])
+    assert noted[0]['parts'] == [
+        {'type': 'tool_result', 'name': 'web_search', 'tool_call_id': None, 'result': 'Boats.', 'inputs': {'q': 'boats'}},
+        {'type': 'tool_result', 'name': 'read_self', 'tool_call_id': None, 'result': '(ran on her machine; the result stays there)'},
+        {'type': 'content', 'text': 'line'}]
 
 
 def test_mcp_header_and_text_travel_apart_with_who():
@@ -524,7 +553,7 @@ class FakeDoor:
     """The Another Sapphire driver's two core hooks, played."""
     def __init__(self, decision=None, answer='Evening from the server.', fail=None):
         self.decision = decision or {'joined': True, 'chat': 'room-dev-salon', 'name': 'Prime', 'said': 'Happy to.'}
-        self.answer, self.fail, self.cards, self.cues = answer, fail, [], []
+        self.answer, self.fail, self.cards, self.cues, self.tools, self.told = answer, fail, [], [], [], []
 
     def invite(self, device, config, secrets, card):
         self.cards.append(card)
@@ -536,7 +565,12 @@ class FakeDoor:
         self.cues.append((chat, text, who))
         if self.fail:
             raise RuntimeError(self.fail)
-        return self.answer
+        return self.answer, list(self.tools)
+
+    def notify(self, device, config, secrets, chat, text, who):
+        self.told.append((chat, text, who))
+        if self.fail:
+            raise RuntimeError(self.fail)
 
 
 def _with_door(monkeypatch, door):
@@ -606,16 +640,20 @@ def test_inviting_another_sapphire_seats_her_when_she_joins(world, monkeypatch):
     assert [x.get('kind') for x in d['seats']] == [None, None, 'sapphire']
 
 
-def test_her_turn_is_one_ask_with_the_lines_since_her_last(world, monkeypatch):
+def test_her_turn_is_one_ask_with_the_lines_since_her_last(world, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger='core.rooms')
     chat, a, b = _salon(two=False)
     door = _with_door(monkeypatch, FakeDoor())
     seat = rooms.invite_sapphire(chat, 'prime', name='Prime')['seat']
     rooms.update_seat(chat, a['id'], {'enabled': False})                  # only she speaks
     rows = world.llm_chat.session_manager.chats[chat]['rows']
+    door.tools = ['read_self']                     # her box shares the names of her tools: the line's footnote
     rooms.say(chat, 'Evening, Prime.')
     assert _wait(lambda: rooms.state(chat)['waiting'])
     assert [r['speaker'] for r in rows] == ['user', seat['id']]
-    assert rows[1] == {'role': 'assistant', 'content': 'Evening from the server.', 'speaker': seat['id'], 'name': 'Prime', 'kind': 'sapphire'}
+    assert rows[1] == {'role': 'assistant', 'content': 'Evening from the server.', 'speaker': seat['id'], 'name': 'Prime',
+                       'kind': 'sapphire', 'tools': [{'name': 'read_self'}]}
+    door.tools = []
     far_chat, cue, who = door.cues[0]
     assert far_chat == 'room-dev-salon' and who == "the chat room 'salon' on dev"
     assert cue == 'Krem: Evening, Prime.\n\n(Your turn, Prime.)'
@@ -632,17 +670,170 @@ def test_her_turn_is_one_ask_with_the_lines_since_her_last(world, monkeypatch):
     rooms.say(chat, 'Hm?')
     assert _wait(lambda: len(door.cues) == 3 and not rooms.state(chat)['running'])
     assert [r['speaker'] for r in rows][-3:] == ['room', 'user', 'room']
+    # ...and so are her door's words WITH the reason (her box's turn report, 2026-10-12)
+    door.answer = '(she said nothing: thinking never finished (past 6000 chars with no words, cut off here))'
+    rooms.say(chat, 'Hm?')
+    assert _wait(lambda: len(door.cues) == 4 and not rooms.state(chat)['running'])
+    assert [r['speaker'] for r in rows][-3:] == ['room', 'user', 'room']
+    # silent turns are lines in the LOG, with what her door said (three silent turns in a
+    # row looked like lost lines once, field report 2026-10-12)
+    said = [r.getMessage() for r in caplog.records if 'passed' in r.getMessage()]
+    assert "[ROOM] 'salon': Prime passed (her door said: '(pass)')" in said
+    assert "[ROOM] 'salon': Prime passed (her door said: '(she said nothing)')" in said
+    assert "[ROOM] 'salon': Prime passed (her door said: '(she said nothing: thinking never finished " \
+           "(past 6000 chars with no words, cut off here))')" in said
     # her miss is a line in the room, not a failed turn
     door.fail = 'Could not reach her. Is she running?'
     rooms.say(chat, 'Still there?')
-    assert _wait(lambda: len(door.cues) == 4 and not rooms.state(chat)['running'])
+    assert _wait(lambda: len(door.cues) == 5 and not rooms.state(chat)['running'])
     assert rows[-2]['speaker'] == 'room' and rows[-2]['content'] == 'Prime did not answer: Could not reach her. Is she running?'
     # a room turned private skips her with a line and never calls her door
     door.fail = None
     world.llm_chat.session_manager.chats[chat]['settings']['private_chat'] = True
     rooms.say(chat, 'Secret.')
     assert _wait(lambda: 'private' in rows[-2]['content'] and not rooms.state(chat)['running'])
-    assert rows[-2]['speaker'] == 'room' and len(door.cues) == 4
+    assert rows[-2]['speaker'] == 'room' and len(door.cues) == 5
+    # the room cleared: she is told through her door, in her room chat; hers to keep or clear
+    rooms.clear(chat)
+    assert _wait(lambda: door.told)
+    assert door.told == [('room-dev-salon', "The chat room 'salon' on dev was cleared by its host. This chat is yours to keep or clear.",
+                          "the chat room 'salon' on dev")]
+    rooms.chat_deleting(chat)
+    assert _wait(lambda: len(door.told) == 2) and 'was closed by its host' in door.told[1][1]
+
+
+def _seat_turn_with(world, monkeypatch, chat, events, text='', rows_after=()):
+    """One local seat turn against a faked cadence lane: `events` reach the
+    room's hook, `text` is her line back, `rows_after` are rows the lane
+    'saved' on her own chat. Returns (the line, the END event or None, the
+    room's rows, what the lane was called with)."""
+    from core import cadence
+    seen = {}
+
+    def run_turn(own, cue, **kw):
+        seen.update(chat=own, cue=cue, **kw)
+        kw['on_stream'](type('S', (), {'cancel_flag': False})())
+        world.llm_chat.session_manager.chats[own]['rows'].extend(dict(r) for r in rows_after)
+        for ev in events:
+            kw['on_event'](ev)
+        return text
+    monkeypatch.setattr(cadence, 'run_turn', run_turn)
+    published = []
+    monkeypatch.setattr(rooms, 'publish', lambda et, data=None, **k: published.append((et, data)))
+    _, room = rooms._room(chat)
+    out = rooms._seat_turn(chat, room['seats'][0], rooms._rt(chat))
+    end = next((d for et, d in published if et == Events.VOICE_TURN_END), None)
+    seen['wire'] = [et for et, _ in published]
+    return out, end, world.llm_chat.session_manager.chats[chat]['rows'], seen
+
+
+def test_a_seat_turn_runs_on_her_own_chat_and_says_why_when_silent(world, monkeypatch, caplog):
+    """The cadence lane on HER chat (keep_prompt, quiet, the room's brain), painted here
+    under her name. No line in the room when she is silent, Krem's rule - but the journal
+    and the END event name the reason: tools and no words, the model's token ceiling, the
+    pass word. Her line carries the tools she used, lifted from her own chat's rows."""
+    caplog.set_level(logging.INFO, logger='core.rooms')
+    chat, a, b = _salon(two=False)
+    own = f"seat-{a['id']}"
+    report = lambda **k: {'type': 'turn_report', 'text': '', 'tools': [], 'finish': None, 'why': '', **k}
+    # tools, then no words
+    out, end, rows, seen = _seat_turn_with(world, monkeypatch, chat, [
+        {'type': 'tool_start', 'id': 't1', 'name': 'read_self', 'args': {}},
+        {'type': 'tool_end', 'id': 't1', 'name': 'read_self', 'result': '...', 'error': False},
+        report(tools=['read_self', 'search_memory'], why='ran read_self, search_memory and ended without words')])
+    assert out == '' and rows == []
+    assert end['dropped'] is True and end['tools'] == ['read_self', 'search_memory'] and end['speaker'] == a['id']
+    assert end['why'] == 'ran read_self, search_memory and ended without words'
+    assert seen['chat'] == own and seen['keep_prompt'] is True and seen['quiet'] is True and seen['source'] == 'room'
+    assert seen['brain']['chat'] == own and seen['cue'].startswith('(Nobody has spoken yet.)')
+    assert seen['wire'] == ['voice_turn_start', 'voice_turn_tool', 'voice_turn_tool', 'voice_turn_end']
+    # the model's ceiling
+    out, end, rows, _ = _seat_turn_with(world, monkeypatch, chat, [
+        report(finish='length', why='the model hit its reply token limit (finish=length) before any words')])
+    assert out == '' and rows == [] and end['dropped'] is True
+    assert end['why'] == 'the model hit its reply token limit (finish=length) before any words'
+    # the pass word: her own choice, dropped on the wire too (the swap used to paint the
+    # previous bot's line for a text that has no row)
+    out, end, rows, _ = _seat_turn_with(world, monkeypatch, chat, [report(text='(pass)')], text='(pass)')
+    assert out == '' and rows == [] and end['dropped'] is True and end['text'] == '' and end['why'] == "said: '(pass)'"
+    # words: a line, with the tools she used as its footnote - lifted from HER chat's rows,
+    # inputs off the tool_calls row and results off the tool row
+    hers = [{'role': 'user', 'content': 'cue'},
+            {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': 'c1', 'type': 'function', 'function': {'name': 'web_search', 'arguments': '{"q": "boats"}'}},
+                {'id': 'c2', 'type': 'function', 'function': {'name': 'read_self', 'arguments': ''}}]},
+            {'role': 'tool', 'tool_call_id': 'c1', 'name': 'web_search', 'content': 'Boats are good.'},
+            {'role': 'tool', 'tool_call_id': 'c2', 'name': 'read_self', 'content': 'You are Sapphire.'},
+            {'role': 'assistant', 'content': 'Found it.'}]
+    out, end, rows, _ = _seat_turn_with(world, monkeypatch, chat, [
+        {'type': 'content', 'text': 'Found it.'}, report(text='Found it.', tools=['web_search', 'read_self'])],
+        text='Found it.', rows_after=hers)
+    assert out == 'Found it.' and rows[-1]['content'] == 'Found it.' and rows[-1]['speaker'] == a['id']
+    assert rows[-1]['tools'] == [{'id': 'c1', 'name': 'web_search', 'args': {'q': 'boats'}, 'result': 'Boats are good.'},
+                                 {'id': 'c2', 'name': 'read_self', 'args': {}, 'result': 'You are Sapphire.'}]
+    assert end['dropped'] is False and end['why'] == '' and end['tools'] == ['web_search', 'read_self']
+    # her chat kept everything the lane saved; her next cue is the lines since her line
+    assert world.llm_chat.session_manager.chats[own]['rows'] == hers
+    rooms.append_line(chat, 'user', 'Nice.', 'user', 'Krem')
+    _, _, _, seen = _seat_turn_with(world, monkeypatch, chat, [report(text='Ta.')], text='Ta.')
+    assert seen['cue'] == 'Krem: Nice.\n\n(Your turn, Sapphire.)'
+    # a lane that raises (a refused chat, ChatBusy for the inbox to retry) raises here too
+    from core import cadence
+
+    def busy(own, cue, **kw):
+        raise RuntimeError('turn refused')
+    monkeypatch.setattr(cadence, 'run_turn', busy)
+    with pytest.raises(RuntimeError):
+        rooms._seat_turn(chat, rooms._room(chat)[1]['seats'][0], rooms._rt(chat))
+    said = [r.getMessage() for r in caplog.records if 'passed' in r.getMessage()]
+    assert said[:3] == ["[ROOM] 'salon': Sapphire passed (ran read_self, search_memory and ended without words)",
+                        "[ROOM] 'salon': Sapphire passed (the model hit its reply token limit (finish=length) before any words)",
+                        "[ROOM] 'salon': Sapphire passed (said: '(pass)')"]
+
+
+def test_every_local_seat_has_a_chat_of_her_own(world, monkeypatch):
+    """Made with the seat (mode seat, tagged to the room, shown as "room · name", her
+    persona's settings on it); renamed with her; wiped with the room; gone with her
+    seat; retagged when the room is renamed; gone with the room, BEFORE the row goes
+    (chat_deleting); swept when orphaned."""
+    sm = world.llm_chat.session_manager
+    chat, a, b = _salon()
+    own = f"seat-{a['id']}"
+    assert a['chat'] == own
+    s = sm.chats[own]['settings']
+    assert (s['mode'], s['room'], s['seat'], s['persona'], s['private_display_name'], s['private_chat']) == \
+           ('seat', chat, a['id'], 'sapphire', 'salon · Sapphire', False)
+    assert s['prompt'] == 'sapphire' and s['memory_scope'] == 'default'      # her persona's: a typed turn there is her too
+    rooms.update_seat(chat, a['id'], {'name': 'Purple', 'settings': {'llm_model': 'claude'}})
+    s = sm.chats[own]['settings']
+    assert s['private_display_name'] == 'salon · Purple' and s['llm_model'] == 'claude'
+    assert next(x for x in rooms.describe(chat)['seats'] if x['id'] == a['id'])['chat'] == own
+    # clear: hers too
+    sm.chats[own]['rows'].append({'role': 'user', 'content': 'cue'})
+    rooms.append_line(chat, 'user', 'hi', 'user', 'Krem')
+    rooms.clear(chat)
+    assert sm.chats[chat]['rows'] == [] and sm.chats[own]['rows'] == []
+    # remove: gone
+    rooms.remove_seat(chat, b['id'])
+    assert f"seat-{b['id']}" not in sm.chats and own in sm.chats
+    # the room renamed: retagged, reshown
+    sm.chats['parlour'] = sm.chats.pop(chat)
+    rooms.chat_renamed(chat, 'parlour')
+    s = sm.chats[own]['settings']
+    assert s['room'] == 'parlour' and s['private_display_name'] == 'parlour · Purple'
+    # orphans are swept (a seat that is gone, a room that is gone); hers stays
+    sm.chats['seat-ghost'] = {'settings': {'mode': 'seat', 'room': 'parlour', 'seat': 'ghost'}, 'rows': []}
+    sm.chats['seat-lost'] = {'settings': {'mode': 'seat', 'room': 'nowhere', 'seat': 'x'}, 'rows': []}
+    assert sorted(rooms.sweep()) == ['seat-ghost', 'seat-lost'] and own in sm.chats
+    # a seat chat deleted by hand comes back at her turn (seat_chat makes it)
+    sm.chats.pop(own)
+    s_room, room = rooms._room('parlour')
+    assert rooms.seat_chat('parlour', s_room, room['seats'][0]) == own and own in sm.chats
+    # the room goes: hers goes first; any other chat: nothing happens
+    rooms.chat_deleting('parlour')
+    assert own not in sm.chats
+    rooms.chat_deleting('not-a-room')
+
 
 
 def test_stop_abandons_her_answer(world, monkeypatch):

@@ -30,7 +30,7 @@ _loop_guard_skew_warned = False
 
 
 _FILLER = frozenset(string.punctuation + string.whitespace + '\u2026\u2014\u2013\u00b7\u2022')
-_LENGTH_FINISH = ('length', 'max_tokens', 'incomplete')   # openai-compat / anthropic / responses
+from core.chat.llm_providers.base import LENGTH_FINISH as _LENGTH_FINISH   # openai-compat / anthropic / responses
 
 
 def visible_answer(text: str) -> str:

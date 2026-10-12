@@ -311,7 +311,30 @@ def test_think_loop_is_cancelled_and_the_pair_dropped():
     llm.session_manager.remove_last_messages.assert_called_once_with(2)     # the cue + the think-only row
     end = published[-1][1]
     assert end['text'] == '' and end['speak'] is None and end['dropped'] is True
+    assert end['why'] == f'thinking never finished (past {cadence.THINK_BUDGET_CHARS} chars with no words, cut off here)'
     sysobj.tts.speak.assert_not_called()
+
+
+def test_a_length_death_is_named_for_the_asker():
+    """A reasoning model that thinks to the model's own ceiling (finish=length, no words)
+    is not the budget cut and not a pass: the END event and the turn report say which
+    (a room host across the network got '(she said nothing)' for all three, 2026-10-12)."""
+    events = [{'type': 'content', 'text': '<think>and on and on'},
+              {'type': 'final', 'text': '<think>and on and on', 'cancelled': False, 'finish': 'length'}]
+    sysobj, stream, llm = _system(events, active='c', rows=2)
+    llm.session_manager.remove_last_messages.return_value = True
+    cadence._system = sysobj
+    published, seen = [], []
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))):
+        out = cadence.run_turn('c', 'cue', on_event=seen.append)
+    assert out == ''
+    end = published[-1][1]
+    assert end['dropped'] is True and end['tools'] == []
+    assert end['why'] == 'the model hit its reply token limit (finish=length) before any words'
+    # the report comes after the engine's events, for a door's asker (an MCP ask)
+    assert seen[-1] == {'type': 'turn_report', 'text': '', 'tools': [], 'finish': 'length',
+                        'why': 'the model hit its reply token limit (finish=length) before any words'}
+    assert [e['type'] for e in seen] == ['content', 'final', 'turn_report']
 
 
 def test_think_only_answer_is_a_no_answer_and_stays_when_not_live():
@@ -406,6 +429,7 @@ def test_tool_only_turn_is_an_answer_not_a_drop():
     llm.session_manager.remove_last_messages.assert_not_called()
     end = published[-1][1]
     assert end['dropped'] is False and end['speak'] is None and end['text'] == ''
+    assert end['why'] == 'ran poker_move and ended without words' and end['tools'] == ['poker_move']
     sysobj.tts.speak.assert_not_called()
 
 
@@ -444,6 +468,27 @@ def test_run_turn_device_lane_speaks_on_that_device():
     assert published[-1][1]['speak'] == 'device:kitchen'
 
 
+def test_run_turn_takes_a_brain_hands_out_the_stream_and_can_run_quiet():
+    """A room's seat turn (core/rooms.py, 2026-10-12): the caller's brain goes on the
+    stream, the stream is handed out the moment it exists (Stop, a seat clock), and
+    quiet=True publishes no VOICE_TURN event - the caller paints the turn itself."""
+    events = [{'type': 'content', 'text': 'Hi.'}, {'type': 'final', 'text': 'Hi.', 'cancelled': False}]
+    sysobj, stream, llm = _system(events)
+    cadence._system = sysobj
+    held, published = [], []
+    brain = {'chat': 'c', 'settings': {}, 'system_prompt': 'p', 'tools': None, 'history': []}
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))):
+        out = cadence.run_turn('c', 'cue', brain=brain, on_stream=held.append, quiet=True)
+    assert out == 'Hi.' and held == [stream] and stream.brain is brain and published == []
+    # loud by default, no brain set
+    sysobj2, stream2, _ = _system(events)
+    cadence._system = sysobj2
+    with patch('core.cadence.publish', side_effect=lambda et, data=None: published.append((et, data))):
+        cadence.run_turn('c', 'cue')
+    assert not hasattr(stream2, 'brain')
+    assert [et for et, _ in published] == ['voice_turn_start', 'voice_turn_chunk', 'voice_turn_end']
+
+
 def test_run_turn_shows_its_own_events_to_the_hook():
     events = [{'type': 'tool_start', 'name': 'web_search'}, {'type': 'tool_end', 'name': 'web_search'},
               {'type': 'final', 'text': 'Done.', 'cancelled': False}]
@@ -452,7 +497,9 @@ def test_run_turn_shows_its_own_events_to_the_hook():
     seen = []
     with patch('core.cadence.publish'):
         assert cadence.run_turn('c', 'cue', on_event=seen.append) == 'Done.'
-    assert [e['type'] for e in seen] == ['tool_start', 'tool_end', 'final']
+    # ...and, after them, the turn's own report (what she said, the tools, why nothing)
+    assert [e['type'] for e in seen] == ['tool_start', 'tool_end', 'final', 'turn_report']
+    assert seen[-1] == {'type': 'turn_report', 'text': 'Done.', 'why': '', 'tools': ['web_search'], 'finish': None}
     sysobj2, _, _ = _system(events)
     cadence._system = sysobj2
 
@@ -616,7 +663,7 @@ def test_run_turn_publishes_its_tool_calls_so_the_tab_paints_them_live():
     from pathlib import Path
     js = (Path(__file__).resolve().parent.parent / 'interfaces' / 'web' / 'static' / 'main.js').read_text(encoding='utf-8')
     handler = js.split("eventBus.on('voice_turn_tool'")[1].split("eventBus.on('voice_turn_end'")[0]
-    assert '_notMine(data) || !_voiceTurnActive' in handler and 'ui.startTool(' in handler and 'ui.endTool(' in handler
+    assert '_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive' in handler and 'ui.startTool(' in handler and 'ui.endTool(' in handler
 
 
 # ── touch: a player turn restarts her clock (2026-10-10) ────────────────────

@@ -390,6 +390,11 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         if (meta.duration_seconds) {
             parts.push(`${meta.duration_seconds}s`);
         }
+        // the generation hit the model's reply token ceiling (a reasoning model
+        // thinking to max_tokens, a cut-off answer) - the row carries finish
+        if (['length', 'max_tokens', 'incomplete'].includes(meta.finish)) {
+            parts.push('hit the token limit');
+        }
         if (meta.tokens_per_second) {
             const label = tok.estimated ? 'tok/s est' : 'tok/s';
             parts.push(`${meta.tokens_per_second} ${label}`);

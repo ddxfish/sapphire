@@ -121,7 +121,11 @@ def test_organ_voice_honors_the_mute_gates():
 def test_bound_rail_gates_every_voice_turn_event_alike():
     # start/chunk/tool/end all gate on _notMine — a bound rail whose turn is
     # `foreign` (pointer elsewhere) used to paint the start and then freeze.
-    # chunk, tool (2026-10-08) and end share the one line; start gates alone.
-    assert MAIN.count("if (_notMine(data) || !_voiceTurnActive) return;") == 3
+    # chunk and tool (2026-10-08) share the one line; start gates alone; end
+    # computes `mine` from the same two gates (a room's seat turn is a bound
+    # rail's too: _roomsNotMine, 2026-10-11).
+    assert MAIN.count("if (_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive) return;") == 2
+    assert "if (_notMine(data) || _roomsNotMine(data)) return;" in MAIN
+    assert "const mine = !_notMine(data) && !_roomsNotMine(data);" in MAIN
     assert MAIN.count("eventBus.on('voice_turn_") == 4
     assert "data?.foreign || !_voiceTurnActive" not in MAIN

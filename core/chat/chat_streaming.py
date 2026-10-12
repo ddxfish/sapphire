@@ -704,6 +704,7 @@ class StreamingChat:
             current_content = ""
             current_thinking = ""
             metadata = None
+            finish = None          # how the last LLM call ended (finish_reason); rides on the row and on `final`
 
             for iteration in range(config.MAX_TOOL_ITERATIONS):
                 if self.cancel_flag:
@@ -818,6 +819,14 @@ class StreamingChat:
                                 metadata = event["metadata"]
                     
                     logger.info(f"[STREAM] Stream iteration complete ({chunk_count} chunks)")
+                    # how the call ended and how much of it was thinking: the line that tells
+                    # a length-death (a reasoning model thinking to max_tokens, no words) from
+                    # a short answer. The blocking lane has had it since 2026-04-24; here a
+                    # silent turn left nothing to read (room field report, 2026-10-12).
+                    finish = getattr(final_response, 'finish_reason', None)
+                    _said, _thought = _think.split(current_content)
+                    logger.info(f"[STREAM] iteration {iteration + 1} ended: finish={finish or '?'}, "
+                                f"{len(_said)} chars said, {len(_thought) + len(current_thinking)} chars thinking")
                     self._cleanup_stream()
                     
                     if self.cancel_flag:
@@ -888,6 +897,9 @@ class StreamingChat:
                             if resp_usage.get(k):
                                 metadata["tokens"][k] = resp_usage[k]
                 
+                if metadata is not None and finish:
+                    metadata["finish"] = finish        # the row remembers how its generation ended
+
                 # Accumulate tokens across iterations
                 if metadata and metadata.get("tokens"):
                     t = metadata["tokens"]
@@ -1259,7 +1271,7 @@ class StreamingChat:
                         yield tts_ev
 
                     yield {"type": "final", "text": full_content,
-                           "cancelled": False, "error": False}
+                           "cancelled": False, "error": False, "finish": finish}
                     return
             
             # If cancelled, KEEP whatever she generated before the interrupt (was:
@@ -1299,7 +1311,7 @@ class StreamingChat:
                     except Exception as e:
                         logger.warning(f"[STREAMING] partial save on cancel failed: {e}")
                 yield {"type": "final", "text": save_content,
-                       "cancelled": True, "error": False}
+                       "cancelled": True, "error": False, "finish": finish}
                 return
 
             # Loop exhausted - force final response

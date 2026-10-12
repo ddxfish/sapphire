@@ -35,14 +35,6 @@ export default {
                 ${ctx.renderFields(this.essentialKeys)}
             </div>
             <div class="settings-group">
-                <h3>Tools shared over MCP</h3>
-                <p class="text-muted" style="font-size:var(--font-sm)">
-                    Besides ask and tell. Nothing is shared until you tick it. Tools of plugins
-                    that keep their own memory scopes are not offered yet.
-                </p>
-                <div id="mcp-tools"><p class="text-muted">Loading...</p></div>
-            </div>
-            <div class="settings-group">
                 <h3>\u{1FA91} Chat rooms</h3>
                 <p class="text-muted" style="font-size:var(--font-sm);line-height:1.5">
                     Another Sapphire that holds one of her tokens may invite her into a chat room
@@ -52,12 +44,21 @@ export default {
                     from the persona below. The host then sends her the room's lines in a chat made
                     here, <code>room-&lt;host&gt;-&lt;room&gt;</code>, and her answers are her lines.
                     A room's chat is never private: the host reads every word of it anyway.
+                    Her tools run here and their results stay here; the host can be told their names.
                 </p>
-                ${ctx.renderFields(['MCP_ROOM_INVITES'])}
+                ${ctx.renderFields(['MCP_ROOM_INVITES', 'MCP_ROOM_SHARE_TOOLS'])}
                 <div class="settings-grid">
                     ${this._row(ctx, 'MCP_ROOM_LOBBY', 'Decides in', 'mcp-room-lobby')}
                     ${this._row(ctx, 'MCP_ROOM_PERSONA', 'Room chats start as', 'mcp-room-persona')}
                 </div>
+            </div>
+            <div class="settings-group">
+                <h3>Tools shared over MCP</h3>
+                <p class="text-muted" style="font-size:var(--font-sm)">
+                    Besides ask and tell. Nothing is shared until you tick it. Tools of plugins
+                    that keep their own memory scopes are not offered yet.
+                </p>
+                <div id="mcp-tools"><p class="text-muted">Loading...</p></div>
             </div>`;
     },
 

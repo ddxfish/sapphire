@@ -51,7 +51,7 @@ const chatTab = c => {
     if (c.private_chat) return 'private';
     const m = c.mode || c.settings?.mode;
     if (m === 'game') return 'game';
-    if (m === 'room') return 'room';          // Chat > Chat Room's (core/rooms.py, 2026-10-11)
+    if (m === 'room' || m === 'seat') return 'room';   // Chat > Chat Room's; a seat's own chat sits under its room (core/rooms.py)
     // mode stamp = new plumbing (librarian stamps at claim since 2026-08-05);
     // the name regex stays for the pre-stamp generations.
     if (m === 'librarian' || LIB_RE.test(c.name)) return 'librarian';
@@ -147,13 +147,26 @@ async function refresh() {
 
 function sortedChats() {
     const key = sortKey;
-    return visibleChats().sort((a, b) => {
+    const sorted = visibleChats().sort((a, b) => {
         let va = a[key], vb = b[key];
         if (key === 'display_name') { va = (va || '').toLowerCase(); vb = (vb || '').toLowerCase(); }
         if (va == null) va = 0;
         if (vb == null) vb = 0;
         return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
     });
+    if (tab !== 'room') return sorted;
+    // a seat's own chat (core/rooms.py, 2026-10-12) sits under its room whatever the sort
+    const isSeat = c => (c.mode ?? c.settings?.mode) === 'seat';
+    const seatsOf = new Map();
+    for (const c of sorted) if (isSeat(c)) {
+        const r = c.settings?.room || '';
+        if (!seatsOf.has(r)) seatsOf.set(r, []);
+        seatsOf.get(r).push(c);
+    }
+    const out = [];
+    for (const c of sorted) if (!isSeat(c)) { out.push(c, ...(seatsOf.get(c.name) || [])); seatsOf.delete(c.name); }
+    for (const left of seatsOf.values()) out.push(...left);    // a seat whose room is gone (the boot sweep takes it)
+    return out;
 }
 
 function render() {
@@ -205,7 +218,7 @@ function render() {
         const canVault = !vaultState.exists || vaultState.unlocked;
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${(c.mode ?? c.settings?.mode) === 'room' ? ' <span class="cm-badge">\u{1FA91} room</span>' : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.degraded ? ' <span class="cm-badge" title="Some messages could not be read — chat is read-only until repaired">⚠ degraded</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
+            <td class="cm-name"${(c.mode ?? c.settings?.mode) === 'seat' ? ' style="padding-left:28px"' : ''}><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${(c.mode ?? c.settings?.mode) === 'room' ? ' <span class="cm-badge">\u{1FA91} room</span>' : ''}${(c.mode ?? c.settings?.mode) === 'seat' ? ' <span class="cm-badge" title="A seat\'s own chat: her tools, her memory, her rows">\u{1FA91} seat</span>' : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.degraded ? ' <span class="cm-badge" title="Some messages could not be read — chat is read-only until repaired">⚠ degraded</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>

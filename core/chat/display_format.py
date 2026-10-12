@@ -171,6 +171,21 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
                     current_block["speaker"] = msg["speaker"]
                     current_block["name"] = msg.get("name")
 
+            # A room line's footnote (core/rooms.py, 2026-10-12): the tools the
+            # seat used that turn, before her words like a chat's own tool rows.
+            # A local seat's carry inputs and results (they ran here); a guest's
+            # are names only (they ran on her box, where the results stay). No
+            # tool_call_id: the x button would try to remove a row that is not here.
+            for t in msg.get("tools") or []:
+                if not isinstance(t, dict) or not t.get("name"):
+                    continue
+                part = {"type": "tool_result", "name": t["name"], "tool_call_id": None,
+                        "result": t["result"] if t.get("result") is not None
+                        else "(ran on her machine; the result stays there)"}
+                if isinstance(t.get("args"), dict) and t["args"]:
+                    part["inputs"] = t["args"]
+                current_block["parts"].append(part)
+
             content = msg.get("content", "")
             if content:
                 current_block["parts"].append({

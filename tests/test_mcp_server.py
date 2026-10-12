@@ -107,6 +107,42 @@ def test_ask_runs_a_turn_in_the_named_chat_with_her_line_and_returns_the_answer(
     world.sm.create_chat.assert_not_called()              # the chat was there
 
 
+def test_ask_says_why_she_said_nothing(world):
+    # a silent turn names its reason (cadence's turn report, 2026-10-12): the host of a
+    # chat room across the network used to get '(she said nothing)' for a think loop,
+    # a token ceiling and a pass alike
+    def silent(chat, text, source=None, on_event=None, **kw):
+        on_event({'type': 'turn_report', 'text': '', 'tools': [], 'finish': 'length',
+                  'why': 'the model hit its reply token limit (finish=length) before any words'})
+        return ''
+    with patch('core.cadence.run_turn', side_effect=silent):
+        out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'desk-sapph'}))
+    assert out['result'] == {'content': [{'type': 'text', 'text':
+                             '(she said nothing: the model hit its reply token limit (finish=length) before any words)'}],
+                             'isError': False}
+    # no report (an older engine, a refused hook): the old words
+    with patch('core.cadence.run_turn', return_value=''):
+        out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'desk-sapph'}))
+    assert out['result']['content'][0]['text'] == '(she said nothing)'
+
+
+def test_ask_names_her_tools_only_when_she_shares_them(world, monkeypatch):
+    # names only, as structuredContent, and only with the switch on (Settings > MCP Server >
+    # Chat rooms); a room host shows them on her line over there (2026-10-12)
+    def ran(chat, text, source=None, on_event=None, **kw):
+        on_event({'type': 'turn_report', 'text': 'Done.', 'tools': ['read_self', 'web_search'], 'finish': 'stop', 'why': ''})
+        return 'Done.'
+    monkeypatch.setattr('config.MCP_ROOM_SHARE_TOOLS', False, raising=False)
+    with patch('core.cadence.run_turn', side_effect=ran):
+        out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'desk-sapph'}))
+    assert out['result'] == {'content': [{'type': 'text', 'text': 'Done.'}], 'isError': False}      # the names stay home
+    monkeypatch.setattr('config.MCP_ROOM_SHARE_TOOLS', True, raising=False)
+    with patch('core.cadence.run_turn', side_effect=ran):
+        out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'desk-sapph'}))
+    assert out['result'] == {'content': [{'type': 'text', 'text': 'Done.'}], 'isError': False,
+                             'structuredContent': {'tools': ['read_self', 'web_search']}}
+
+
 def test_ask_makes_the_chat_when_it_is_missing(world):
     with patch('core.cadence.run_turn', return_value='Hello.') as run_turn:
         out = mcp.handle(world.system, rpc('tools/call', name='ask', arguments={'text': 'hi', 'chat': 'New Room'}))

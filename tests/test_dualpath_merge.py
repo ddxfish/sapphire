@@ -370,7 +370,7 @@ class TestEngineFinalEvent:
         finals = _finals(out)
         assert len(finals) == 1
         assert finals[0] == {"type": "final", "text": "Hello world",
-                             "cancelled": False, "error": False}
+                             "cancelled": False, "error": False, "finish": None}   # finish: how the last call ended (2026-10-12)
         content = "".join(e.get("text", "") for e in out
                           if isinstance(e, dict) and e.get("type") == "content")
         assert content == finals[0]["text"]

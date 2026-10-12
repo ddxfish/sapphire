@@ -246,7 +246,8 @@ def test_h8_cadence_turn_end_survives_an_engine_raise():
     src = _src("core/cadence.py")
     body = src[src.index("def run_turn("):src.index("def fire_once(")]
     assert "except Exception as e:" in body and body.index("except Exception as e:") < body.index("finally:")
-    assert "publish(Events.VOICE_TURN_END" in body
+    # _pub: the lane's own publisher (publish, or nothing on a quiet run for a room seat, 2026-10-12)
+    assert "_pub(Events.VOICE_TURN_END" in body and body.index("_pub(Events.VOICE_TURN_END") > body.index("finally:")
 
 
 def test_h9_barge_in_cancel_is_scoped_to_one_chat():

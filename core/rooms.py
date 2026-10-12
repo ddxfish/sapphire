@@ -12,23 +12,33 @@
 # the seats go before the floor is the person's, a pause between seats, a
 # round cap per run, the Bots switch, shuffle (Krem's votes, 2026-10-11).
 #
-# A seat's turn rides THE stream engine with a caller-built brain
-# (StreamingChat.brain): an ephemeral carrier - the seat's settings, its
-# system prompt, its tools, and a PROJECTION of the room (its own lines as
-# assistant, everyone else's as speaker-labelled user text; no tool rows, no
-# thinking - a room keeps prose only). The engine persists nothing; the room
-# appends one prose row after. The runner is a client of the inbox: each seat
-# turn is an Item(run) on the room chat, so a line typed mid-round lands in
-# order, between seats, and a seat turn never races a line (Krem 2026-10-11:
-# the queue was built so we never reject). Record: tmp/chat-room-plan.md.
+# Every seat is her own Sapphire with a chat of her own (Krem 2026-10-12). A
+# local seat's is `seat-<id>` here (mode `seat`, shown as "room · name"): made
+# with the seat, cleared and deleted with the room, swept at boot when its room
+# or seat is gone. Her turn is the cadence lane on THAT chat (run_turn with a
+# caller-built brain: the seat's settings, her prompt plus the room preamble,
+# her fenced tools), quiet - the room paints it here under her name. The cue
+# is the room's lines since her last line (projection); her chat keeps the
+# cue, her tool calls and results and her thinking, so what she read on her
+# first turn she still has on her tenth; the room gets one prose row - her
+# line - with a footnote naming the tools she used (inputs and results too:
+# they ran here). Seats never see each other's tools, and never the room's
+# rows as rows: a seat's view of the room is her own chat. The runner is a
+# client of the inbox: each seat turn is an Item(run) on the room chat, so a
+# line typed mid-round lands in order, between seats, and a seat turn never
+# races a line (Krem 2026-10-11: the queue was built so we never reject).
+# Record: tmp/chat-room-plan.md.
 #
 # A seat may also be ANOTHER SAPPHIRE (`kind: sapphire`): a device (the
 # Another Sapphire driver) invited through her MCP door, who decided over
 # there and named the chat on her side to cue her in. Her turn is one `ask`
 # with the lines since her last; her box runs it with her own prompt, model
 # and tools, so her seat here is a name, a face, a device and her chat, no
-# brain. A private room keeps its words on this machine: no inviting, and a
-# guest already seated is skipped with a line (the door's own ruling).
+# brain; her line's footnote names her tools only when her box shares them
+# (results stay there). Cleared or closed, the room tells her through her
+# door: her chat is hers to keep or clear. A private room keeps its words on
+# this machine: no inviting, and a guest already seated is skipped with a
+# line (the door's own ruling).
 import logging
 import socket
 import threading
@@ -49,6 +59,8 @@ OFF = ('meta_danger', 'agents')                     # never a seat's: the tools 
 OFF_NAMES = ('ask_user',)                           # a card has no surface in a room
 SEAT_FIELDS = ('name', 'context', 'memory_write', 'enabled', 'color')
 GUEST = 'sapphire'              # seat kind: another Sapphire, reached through her door
+SEAT = 'seat'                   # the mode of a local seat's own chat: her tools, her memory, her rows
+TOOL_NOTE_CAP = 8000            # characters of one tool result on a room line's footnote
 CUE_CAP = 7000                  # characters of a guest's cue (her door takes 8000 with the header)
 # The rules, with their defaults. human_every: the seats go this many rounds
 # since the PERSON's last line, then wait for them (0 = never wait; a door's
@@ -131,6 +143,8 @@ def _public(seat):
     out['settings'] = dict(seat.get('settings') or {})
     if seat.get('kind') == GUEST:
         out.update(kind=GUEST, device=seat.get('device'), label=seat.get('label'), chat=seat.get('chat'))
+    else:
+        out['chat'] = _seat_chat_name(seat)          # her own chat here (Chat Manager > Chat Rooms)
     return out
 
 
@@ -224,10 +238,11 @@ def add_seat(chat, persona, name=None):
     seed = dict(p.get('settings') or {})
     shown = str(persona)[:1].upper() + str(persona)[1:]            # 'sapphire' sits as 'Sapphire'
     with _lock:
-        _, room = _room(chat)
+        s, room = _room(chat)
         seat = {'id': uuid.uuid4().hex[:8], 'name': _unique_name(room, str(name or '').strip() or shown),
                 'persona': str(persona), 'context': '', 'memory_write': False, 'enabled': True,
                 'color': str(seed.get('trim_color') or ''), 'avatar': p.get('avatar'), 'settings': seed}
+        seat_chat(chat, s, seat)                     # her own chat first: no seat without one
         room['seats'].append(seat)
         _write(chat, room)
     return _public(seat)
@@ -289,7 +304,7 @@ def invite_sapphire(chat, device_id, name=None, instructions=''):
 def update_seat(chat, seat_id, patch):
     patch = patch if isinstance(patch, dict) else {}
     with _lock:
-        _, room = _room(chat)
+        s, room = _room(chat)
         seat = _find(room, seat_id)
         for k in SEAT_FIELDS:
             if k in patch:
@@ -299,14 +314,124 @@ def update_seat(chat, seat_id, patch):
             cur = dict(seat.get('settings') or {})
             seat['settings'] = {**cur, **normalize_llm_pin(cur, dict(patch['settings']))}
         _write(chat, room)
+        if seat.get('kind') != GUEST and _sm().chat_exists(_seat_chat_name(seat)):
+            _sm().set_named_chat_settings(_seat_chat_name(seat), _seat_chat_settings(chat, s, seat))   # her name, her settings
     return _public(seat)
 
 
 def remove_seat(chat, seat_id):
     with _lock:
         _, room = _room(chat)
-        room['seats'].remove(_find(room, seat_id))
+        seat = _find(room, seat_id)
+        room['seats'].remove(seat)
         _write(chat, room)
+    if seat.get('kind') != GUEST:
+        _delete_chat(_seat_chat_name(seat))          # her chat goes with her seat
+
+
+# --- a seat's own chat ----------------------------------------------------------------
+
+def _seat_chat_name(seat):
+    return f"seat-{seat['id']}"
+
+
+def _seat_chat_settings(chat, s_room, seat):
+    """A local seat's own chat: her persona's settings (a typed turn there is
+    her too), tagged to the room and the seat, shown as "room · name", as
+    private as the room."""
+    st = dict(seat.get('settings') or {})
+    st.update({'mode': SEAT, 'room': chat, 'seat': seat['id'], 'persona': seat.get('persona') or '',
+               'private_display_name': f"{chat} · {seat.get('name') or seat['id']}",
+               'private_chat': bool(s_room.get('private_chat'))})
+    return st
+
+
+def seat_chat(chat, s_room, seat):
+    """The name of a local seat's own chat, made if missing (an imported seat,
+    a chat deleted by hand). None for a guest: hers is on her box."""
+    if seat.get('kind') == GUEST:
+        return None
+    sm = _sm()
+    name = _seat_chat_name(seat)
+    if not sm.chat_exists(name):
+        if not sm.create_chat(name, settings=_seat_chat_settings(chat, s_room, seat)):
+            raise RoomError(f"{seat.get('name')}'s own chat could not be made.")
+    return name
+
+
+def _seat_chats(chat):
+    """[(name, settings)] of every seat chat tagged to `chat`, from the store's
+    listing: a room being deleted has no record left to ask."""
+    out = []
+    for c in _sm().list_chat_files() or []:
+        s = c.get('settings') if isinstance(c, dict) else None
+        if isinstance(s, dict) and s.get('mode') == SEAT and s.get('room') == chat and c.get('name'):
+            out.append((c['name'], s))
+    return out
+
+
+def _delete_chat(name):
+    """A seat's own chat, gone: the chat route's one true delete (the inbox,
+    agents, the active pointer), never a bare row delete."""
+    try:
+        from core.routes.chat import _delete_one_chat
+        ok, why = _delete_one_chat(_system(), name, origin='room')
+    except Exception as e:
+        ok, why = False, f"{type(e).__name__}: {e}"
+    if not ok:
+        logger.warning(f"[ROOM] the seat chat '{name}' was not deleted: {why}")
+
+
+def _tell_guests(chat, room, text):
+    """A word through each guest's door into her room chat, not waited for:
+    the room was cleared or closed, and her chat is hers to keep or clear. A
+    door that fails is a line in the log."""
+    for seat in [x for x in room['seats'] if x.get('kind') == GUEST and x.get('chat')]:
+        def go(seat=seat):
+            try:
+                mod, brief, cfg, secrets = _door(seat.get('device'))
+                mod.notify(brief, cfg, secrets, seat['chat'], text, f"the chat room '{chat}' on {_host()}")
+            except Exception as e:
+                logger.info(f"[ROOM] '{chat}': {seat.get('name')} was not told ({e})")
+        threading.Thread(target=go, daemon=True, name=f"room-tell-{seat['id']}").start()
+
+
+def chat_deleting(chat):
+    """The delete route, BEFORE the row goes: a room's seat chats go with it
+    and its guests are told. Any other chat: nothing."""
+    try:
+        _, room = _room(chat)
+    except RoomError:
+        return
+    _settle(chat)
+    for name, _s in _seat_chats(chat):
+        _delete_chat(name)
+    _tell_guests(chat, room, f"The chat room '{chat}' on {_host()} was closed by its host. "
+                             "This chat is yours to keep or clear.")
+
+
+def sweep():
+    """Seat chats whose room or seat is gone are deleted: a room deleted while
+    the app was down, an import that replaced the seats. At boot, and after an
+    import. Returns the names that went."""
+    gone, seats_of = [], {}
+    for c in _sm().list_chat_files() or []:
+        s = c.get('settings') if isinstance(c, dict) else None
+        if not isinstance(s, dict) or s.get('mode') != SEAT or not c.get('name'):
+            continue
+        room = str(s.get('room') or '')
+        if room not in seats_of:
+            try:
+                seats_of[room] = {x['id'] for x in _room(room)[1]['seats'] if x.get('kind') != GUEST} if room else set()
+            except RoomError:
+                seats_of[room] = set()
+        if s.get('seat') not in seats_of[room]:
+            gone.append(c['name'])
+    for name in gone:
+        _delete_chat(name)
+    if gone:
+        logger.info(f"[ROOM] swept {len(gone)} seat chat(s) whose room or seat is gone: {', '.join(gone)}")
+    return gone
 
 
 def _settle(chat):
@@ -326,13 +451,20 @@ def _reset(chat):
 
 
 def clear(chat):
-    """Wipe the transcript. The seats, the rules and the purpose stay."""
-    _room(chat)
+    """Wipe the transcript. The seats, the rules and the purpose stay. A local
+    seat's own chat is wiped with it; a guest is told through her door, and
+    her chat is hers to keep or clear."""
+    _, room = _room(chat)
     _settle(chat)
     if not _sm().clear_chat(chat):
         raise RoomError(f"The room '{chat}' could not be cleared (a seat is still speaking, or it is sealed).")
+    for name, _s in _seat_chats(chat):
+        if not _sm().clear_chat(name):
+            logger.warning(f"[ROOM] '{chat}': the seat chat '{name}' was not cleared (a turn in flight, or sealed)")
     publish(Events.CHAT_CLEARED, {'chat_name': chat})
     _reset(chat)
+    _tell_guests(chat, room, f"The chat room '{chat}' on {_host()} was cleared by its host. "
+                             "This chat is yours to keep or clear.")
     return state(chat)
 
 
@@ -355,6 +487,7 @@ def import_room(chat, data):
         with _lock:
             _room(chat)
             _write(chat, {'purpose': str(rec.get('purpose') or '')[:2000], 'seats': seats, **_rules(rec)})
+        sweep()                                      # the seats that went took their chats; new ones get theirs at their turn
     return describe(chat)
 
 
@@ -422,7 +555,7 @@ def projection(rows, seat, names):
     return out, f"{cue}\n\n(Your turn, {names.get(seat['id'], seat.get('name', ''))}.)"
 
 
-def _preamble(chat, room, seat, names):
+def _preamble(chat, room, seat, names, first=False):
     others = [s for s in room['seats'] if s.get('id') != seat['id'] and s.get('enabled', True)]
     who = ', '.join(f"{names[s['id']]} ({s['persona']})"
                     if s.get('persona') and str(s['persona']).lower() != str(names[s['id']]).lower()
@@ -434,21 +567,30 @@ def _preamble(chat, room, seat, names):
     lines.append('Other speakers\' lines reach you as "Name: text". Speak only as yourself, in your own words; '
                  'never write lines for anyone else, and do not start your line with your own name. '
                  f'If you have nothing to add this turn, answer exactly {PASS}.')
+    if first:
+        lines.append('This is your first turn here: read your self-sheet (read_self) before your line, so you '
+                     'speak as yourself. What you read stays in this chat of yours.')
     return '\n'.join(lines)
 
 
 def seat_brain(chat, s_room, room, seat):
-    """The ephemeral carrier for one seat turn, and its cue. `ephemeral` makes
-    every engine save a no-op; `chat` keeps the room's name for the gate,
-    Stop and tool context. Scopes: an unlisted key is OFF, never her own
-    (the task lane's force-None rule). Tools: the seat's toolset minus the
-    tools that change her, agents, the card, and - unless this seat's box is
-    ticked - every writer of the mind categories (§29 metadata, no name lists)."""
+    """The stream brain for one local seat's turn, on HER OWN chat's session
+    (seat_chat): the engine saves there - the cue, her tool calls and results,
+    her thinking - so what she read on her first turn she still has on her
+    tenth. The brain fences the turn: the seat's settings (an unlisted scope
+    is OFF, never her own - the task lane's force-None rule), her persona's
+    prompt plus the room preamble, and her toolset minus the tools that
+    change her, agents, the card, and - unless this seat's box is ticked -
+    every writer of the mind categories (§29 metadata, no name lists).
+    Returns (brain, cue): the cue is the room's lines since her last line."""
     from core.chat.function_manager import scope_setting_keys
-    from core.chat.history import ConversationHistory
     from core import prompts
     llm = _system().llm_chat
     fm = llm.function_manager
+    own = seat_chat(chat, s_room, seat)
+    sess = llm.session_manager.make_stream_session(own)
+    if sess is None:
+        raise RoomError(f"{seat.get('name')}'s own chat '{own}' cannot be read right now (missing, sealed, or unreadable rows).")
     st = dict(seat.get('settings') or {})
     for k in scope_setting_keys():
         if not st.get(k):
@@ -473,22 +615,61 @@ def seat_brain(chat, s_room, room, seat):
         for cat in MIND:
             drop |= set(fm.tools_in_category(cat, writes=True))
     tools = fm.resolve_tools(st.get('toolset') or 'none', st.get('extra_toolsets'), drop_tools=drop)
-    hist = ConversationHistory(max_history=llm.session_manager.max_history)
-    hist.messages, cue = projection(rows_of(chat), seat, names)
-    return {'chat': chat, 'ephemeral': True, 'settings': st,
-            'system_prompt': f"{base}\n\n{_preamble(chat, room, seat, names)}",
-            'tools': tools, 'history': hist, 'room': chat, 'seat': seat['id']}, cue
+    hist = sess.get('history')
+    rows = getattr(hist, 'messages', hist) or []
+    first = not any(isinstance(m, dict) and m.get('role') == 'assistant' for m in rows)
+    has_self = any((t.get('function') or {}).get('name') == 'read_self' for t in (tools or []) if isinstance(t, dict))
+    sess.update({'settings': st, 'tools': tools, 'room': chat, 'seat': seat['id'],
+                 'system_prompt': f"{base}\n\n{_preamble(chat, room, seat, names, first=first and has_self)}"})
+    _, cue = projection(rows_of(chat), seat, names)
+    return sess, cue
+
+
+def _rows(chat):
+    msgs, _state, _skips = _sm()._read_store_messages(chat)
+    return [m for m in (msgs or []) if isinstance(m, dict)]
+
+
+def _tools_of(chat, before):
+    """The tools a local seat used this turn, lifted from HER chat's rows past
+    `before` (the row count before the turn): [{id, name, args, result}] in
+    the order they ran. Inputs come off the tool_calls row, results off the
+    tool rows; a call without a result row (Stop mid-cycle) is listed without one."""
+    import json
+    calls, out = {}, []
+    for m in _rows(chat)[before:]:
+        if m.get('role') == 'assistant':
+            for tc in m.get('tool_calls') or []:
+                fn = tc.get('function') if isinstance(tc, dict) and isinstance(tc.get('function'), dict) else None
+                if not fn or not tc.get('id') or not fn.get('name'):
+                    continue
+                args = fn.get('arguments')
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {'arguments': args}
+                calls[tc['id']] = {'id': tc['id'], 'name': fn['name'], 'args': args if isinstance(args, dict) else {}}
+                out.append(calls[tc['id']])
+        elif m.get('role') == 'tool':
+            t = calls.get(m.get('tool_call_id'))
+            if t is not None:
+                t['result'] = str(m.get('content') or '')[:TOOL_NOTE_CAP]
+    return out
 
 
 # --- lines ----------------------------------------------------------------------------
 
-def append_line(chat, role, text, speaker, name, persona=None, kind=None):
-    """One prose row on the room, by name. False when the store refused."""
+def append_line(chat, role, text, speaker, name, persona=None, kind=None, tools=None):
+    """One prose row on the room, by name; `tools` is the line's footnote (the
+    tools the seat used that turn). False when the store refused."""
     row = {'role': role, 'content': text, 'speaker': speaker, 'name': name}
     if persona:
         row['persona'] = persona
     if kind:
         row['kind'] = kind
+    if tools:
+        row['tools'] = tools
     ok = _sm().append_messages_to_chat(chat, [row])
     if not ok:
         logger.error(f"[ROOM] a line was not written to '{chat}' (sealed, degraded, or still busy)")
@@ -699,96 +880,94 @@ def _loop(rt):
 
 
 def _seat_turn(chat, seat, rt):
-    """One seat's turn through THE engine. Raises ChatBusy from begin_stream
-    (the inbox puts the item back and tries again). Returns the seat's line
-    ('' when it passed, was cut off, stopped, or said nothing)."""
-    from core.cadence import visible_text, Unreachable
+    """One seat's turn: the cadence lane on HER OWN chat with the room's brain
+    (seat_brain), quiet - the room paints it here under her name from the
+    engine's events. Raises ChatBusy from begin_stream (the inbox puts the
+    item back and tries again). Returns the seat's line ('' when she passed,
+    was cut off, stopped, or said nothing: a line in the log, never in the room)."""
+    from core import cadence
     if rt.stop_flag.is_set():
         return ''
     if seat.get('kind') == GUEST:
         return _guest_turn(chat, seat, rt)
-    system = _system()
-    llm = system.llm_chat
-    sm = llm.session_manager
     s_room = settings_of(chat)
     if s_room is None:
-        raise Unreachable(f"'{chat}' is not a reachable room (missing, sealed, or no longer a room)")
+        raise cadence.Unreachable(f"'{chat}' is not a reachable room (missing, sealed, or no longer a room)")
     _, room = _room(chat)
     brain, cue = seat_brain(chat, s_room, room, seat)
-    stream, sid, name = llm.begin_stream(chat, exclusive=True)
-    stream.brain = brain
-    stream.suppress_tts = True
+    own = brain['chat']
     mid = uuid.uuid4().hex
     try:
-        active = sm.get_active_chat_name()
+        active = _sm().get_active_chat_name()
     except Exception:
         active = None
     tag = {'chat': chat, 'foreign': bool(chat != active), 'source': SOURCE,
            'speaker': seat['id'], 'name': seat.get('name'), 'persona': seat.get('persona')}
-    parts, blocks, cancelled, errored, cut = [], [], False, None, []
+    cut, report, timer, started = [], {}, [], []
 
-    def _cut():
-        cut.append(True)
-        stream.cancel_flag = True
+    def hold(stream):
+        # the stream exists: Stop can cut it, the seat clock runs, and the turn is
+        # on the wire (a ChatBusy from begin_stream never gets this far: no bubble)
+        rt.stream = stream
 
-    timer = threading.Timer(SEAT_TURN_S, _cut)
-    timer.daemon = True
-    rt.stream = stream
-    gen = None
-    try:
-        timer.start()
+        def _cut():
+            cut.append(True)
+            stream.cancel_flag = True
+        t = threading.Timer(SEAT_TURN_S, _cut)
+        t.daemon = True
+        t.start()
+        timer.append(t)
+        started.append(True)
         publish(Events.VOICE_TURN_START, {'message_id': mid, **tag})
-        gen = stream.chat_stream(cue)
-        for ev in gen:
-            if not isinstance(ev, dict):
-                continue
-            et = ev.get('type')
-            if et == 'content':
-                parts.append(ev.get('text') or '')
-                publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': ev.get('text', ''),
-                                                  'chat': chat, 'foreign': tag['foreign']})
-            elif et == 'tool_start':
-                if visible_text(''.join(parts)):
-                    blocks.append(''.join(parts))
-                parts = []
-                publish(Events.VOICE_TURN_TOOL, {'message_id': mid, 'chat': chat, 'foreign': tag['foreign'],
-                                                 'phase': 'start', 'id': ev.get('id'), 'name': ev.get('name'),
-                                                 'args': ev.get('args')})
-            elif et == 'tool_end':
-                publish(Events.VOICE_TURN_TOOL, {'message_id': mid, 'chat': chat, 'foreign': tag['foreign'],
-                                                 'phase': 'end', 'id': ev.get('id'), 'name': ev.get('name'),
-                                                 'result': ev.get('result'), 'error': bool(ev.get('error'))})
-            elif et == 'final':
-                cancelled = bool(ev.get('cancelled'))
-                if ev.get('error'):
-                    errored = ev.get('text') or 'turn refused'
-                    parts, blocks = [], []
-                elif ev.get('text'):
-                    parts = [ev['text']]
-            elif et == 'error':
-                errored = ev.get('text') or 'stream error'
+
+    def seen(ev):
+        et = ev.get('type') if isinstance(ev, dict) else None
+        if et == 'content':
+            publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': ev.get('text', ''),
+                                              'chat': chat, 'foreign': tag['foreign']})
+        elif et == 'tool_start':
+            publish(Events.VOICE_TURN_TOOL, {'message_id': mid, 'chat': chat, 'foreign': tag['foreign'],
+                                             'phase': 'start', 'id': ev.get('id'), 'name': ev.get('name'),
+                                             'args': ev.get('args')})
+        elif et == 'tool_end':
+            publish(Events.VOICE_TURN_TOOL, {'message_id': mid, 'chat': chat, 'foreign': tag['foreign'],
+                                             'phase': 'end', 'id': ev.get('id'), 'name': ev.get('name'),
+                                             'result': ev.get('result'), 'error': bool(ev.get('error'))})
+        elif et == 'turn_report':
+            report.update(ev)
+
+    before = len(_rows(own))
+    text, failed = '', None
+    try:
+        text = str(cadence.run_turn(own, cue, source=SOURCE, on_event=seen, keep_prompt=True,
+                                    brain=brain, on_stream=hold, quiet=True) or '').strip()
     except Exception as e:
-        errored = errored or f"{type(e).__name__}: {e}"
+        failed = e
     finally:
-        timer.cancel()
+        for t in timer:
+            t.cancel()
         rt.stream = None
-        if gen is not None:
-            try:
-                gen.close()          # the engine's finally (end_streaming) runs HERE, before the row below
-            except Exception as e:
-                logger.warning(f"[ROOM] '{chat}': engine close failed: {e}")
-        llm.end_stream(sid, name)
-    rounds = [visible_text(b) for b in blocks + [''.join(parts)]]
-    text = ('\n\n'.join(r for r in rounds if r)).strip() if not cancelled else ''
-    publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text, **tag})
-    if errored:
-        raise RuntimeError(errored)
+    passed = bool(text) and text.strip('() .').lower() == 'pass'
+    # why there is no line: her own word (pass), the seat clock, or what the lane saw
+    # (stopped, the model's token ceiling, tools and no words, nothing at all); '' when she spoke
+    why = ('said: ' + repr(text) if passed else 'ran out of time' if cut else '' if text
+           else str(report.get('why') or (f"failed: {type(failed).__name__}" if failed is not None else 'no answer')))
+    if started:
+        publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': '' if passed else text, 'speak': None,
+                                        'dropped': passed or not text, 'why': why,
+                                        'tools': list(report.get('tools') or []), **tag})
+    if failed is not None:
+        raise failed
     if cut:
         _notice(chat, f"{seat.get('name')} ran out of time and was skipped.")
         return ''
-    if cancelled or not text or text.strip('() .').lower() == 'pass':
+    if why:
+        # a silent turn is nothing in the room (Krem's rule) but a line in the log: three
+        # silent turns in a row looked like lost lines once (field report 2026-10-12)
+        logger.info(f"[ROOM] '{chat}': {seat.get('name')} passed ({why})")
         return ''
-    append_line(chat, 'assistant', text, seat['id'], seat.get('name'), persona=seat.get('persona'))
+    append_line(chat, 'assistant', text, seat['id'], seat.get('name'), persona=seat.get('persona'),
+                tools=_tools_of(own, before))
     return text
 
 
@@ -826,7 +1005,8 @@ def _guest_turn(chat, seat, rt):
 
     def go():
         try:
-            box['text'] = mod.cue(brief, cfg, secrets, seat.get('chat'), cue, f"the chat room '{chat}' on {_host()}")
+            box['text'], box['tools'] = mod.cue(brief, cfg, secrets, seat.get('chat'), cue,
+                                                f"the chat room '{chat}' on {_host()}")
         except Exception as e:
             box['error'] = str(e) or type(e).__name__
 
@@ -836,17 +1016,25 @@ def _guest_turn(chat, seat, rt):
     t.start()
     while t.is_alive() and not rt.stop_flag.wait(0.2):
         pass
-    text = '' if t.is_alive() or 'error' in box else visible_text(str(box.get('text') or '')).strip()[:8000]
-    if text.strip('() .').lower() in ('pass', 'she said nothing', 'nothing came back'):
-        text = ''                       # her pass, or her door's words for an empty answer
+    raw = str(box.get('text') or '')
+    text = '' if t.is_alive() or 'error' in box else visible_text(raw).strip()[:8000]
+    low = text.strip('() .').lower()
+    if low == 'pass' or low.startswith('she said nothing') or low.startswith('nothing came back'):
+        text = ''                       # her pass, or her door's words for an empty answer (and why)
+    if not text and 'error' not in box:
+        logger.info(f"[ROOM] '{chat}': {name} passed ("
+                    f"{'abandoned at Stop' if t.is_alive() else 'her door said: ' + repr(raw[:200])})")
+    shared = [str(t) for t in (box.get('tools') or []) if t]           # names only, when her box shares them
     if text:
         publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign']})
-    publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text, **tag})
+    publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text,
+                                    'tools': shared, **tag})
     if 'error' in box:
         _notice(chat, f"{name} did not answer: {box['error']}")
         return ''
     if text:
-        append_line(rt.chat, 'assistant', text, seat['id'], name, kind=GUEST)      # rt.chat: the room may have been renamed meanwhile
+        append_line(rt.chat, 'assistant', text, seat['id'], name, kind=GUEST,      # rt.chat: the room may have been renamed meanwhile
+                    tools=[{'name': n} for n in shared])
     return text
 
 
@@ -869,3 +1057,10 @@ def chat_renamed(old, new):
         if rt is not None and new:
             rt.chat = new
             _rooms[new] = rt
+    try:
+        _, room = _room(new)
+    except RoomError:
+        return
+    names = {s['id']: s.get('name') or s['id'] for s in room['seats']}
+    for name, s in _seat_chats(old):                 # her chat is tagged to the room by name: retag, reshow
+        _sm().set_named_chat_settings(name, {'room': new, 'private_display_name': f"{new} · {names.get(s.get('seat'), s.get('seat'))}"})

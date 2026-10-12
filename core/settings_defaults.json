@@ -38,6 +38,7 @@
     "MCP_SERVER_TOOLS": [],
     "MCP_SERVER_MIC": false,
     "MCP_ROOM_INVITES": false,
+    "MCP_ROOM_SHARE_TOOLS": false,
     "MCP_ROOM_LOBBY": "",
     "MCP_ROOM_PERSONA": ""
   },

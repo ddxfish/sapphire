@@ -131,7 +131,7 @@ def test_she_joins_with_defaults_on_an_ephemeral_turn(world):
     assert 'What the host asks of you there: You are the sceptic.' in chat['custom_context']
     assert 'answer exactly (pass)' in chat['custom_context']
     assert 'private_chat' not in chat
-    assert chat['toolset'] == 'none'                 # no room persona, no pick of hers: no tools behind the room's cues
+    assert chat['toolset'] == 'all'                  # no room persona, no pick of hers: her defaults stand - her toolkit, her memory (2026-10-12)
     assert rg.current.get() is None                                            # the invitation is closed after
 
 

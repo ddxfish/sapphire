@@ -211,6 +211,14 @@ def _item(system, chat, text, who, where):
     return name, _line(who, where), str(text)[:TEXT_MAX]
 
 
+def share_tools():
+    """Whether an ask's answer also names the tools she used (names only; her
+    inputs and results never leave): Settings > MCP Server > Chat rooms. A
+    room host shows the names on her line over there."""
+    import config
+    return bool(getattr(config, 'MCP_ROOM_SHARE_TOOLS', False))
+
+
 def ask(system, args, where='', persona=None):
     """Her answer, waited for. The turn waits its turn in the chat's inbox
     (core/chat/inbox.py) and runs under the `answering` flag - the inbox runs
@@ -220,6 +228,11 @@ def ask(system, args, where='', persona=None):
     # who is asking: what the client says, else the persona its key speaks as
     who = args.get('from') or persona
     name, head, body = _item(system, args.get('chat'), args.get('text'), who, where)
+    report = {}                    # the turn's report (cadence.run_turn): why she said nothing, if she did
+
+    def seen(ev):
+        if isinstance(ev, dict) and ev.get('type') == 'turn_report':
+            report.update(ev)
     token = answering.set(True)
     try:
         try:
@@ -227,7 +240,7 @@ def ask(system, args, where='', persona=None):
             # have turned private while the ask waited in line, and the reply
             # would leave over the network (2026-10-07)
             reply = inbox.ask(name, body, source=f"mcp:{where or 'client'}", header_line=head,
-                              who=str(who or ''), timeout=ASK_WAIT,
+                              who=str(who or ''), timeout=ASK_WAIT, on_event=seen,
                               gate=lambda: f"The chat '{name}' is private now." if _private(system, name) else '')
         except inbox.InboxRefused as e:
             raise ValueError(str(e))
@@ -236,7 +249,14 @@ def ask(system, args, where='', persona=None):
     finally:
         answering.reset(token)
     logger.info(f"[MCP] ask in '{name}' from {where or 'a client'}: {len(reply or '')} chars back")
-    return reply or '(she said nothing)', True
+    tools = [str(t)[:80] for t in (report.get('tools') or []) if t]
+    extra = {'tools': tools} if tools and share_tools() else None      # structuredContent, when she shares
+    if reply:
+        return reply, True, extra
+    # no words: say why, so the asker (a room host across the network) is not left
+    # guessing between a pass, a think loop and a token ceiling (2026-10-12)
+    why = str(report.get('why') or '').strip()
+    return (f'(she said nothing: {why})' if why else '(she said nothing)'), True, extra
 
 
 def tell(system, args, where='', persona=None):
@@ -344,13 +364,17 @@ def handle(system, message, where='', persona=None):
         if not isinstance(name, str) or not name:
             return _error(ident, -32602, 'tools/call needs a name.')
         try:
-            text, ok = call(system, name, params.get('arguments') or {}, where, persona)
+            out = call(system, name, params.get('arguments') or {}, where, persona)
+            text, ok, extra = out[0], out[1], (out[2] if len(out) > 2 else None)
         except (ValueError, RuntimeError) as e:          # a reason in words: a busy chat, a turn that failed
-            text, ok = str(e), False
+            text, ok, extra = str(e), False, None
         except Exception as e:
             logger.error(f"[MCP] {name} failed: {e}", exc_info=True)
-            text, ok = f"{name} failed: {type(e).__name__}", False
-        return _result(ident, {'content': [{'type': 'text', 'text': text}], 'isError': not ok})
+            text, ok, extra = f"{name} failed: {type(e).__name__}", False, None
+        value = {'content': [{'type': 'text', 'text': text}], 'isError': not ok}
+        if extra:
+            value['structuredContent'] = extra        # an ask's tool names, when she shares them (share_tools)
+        return _result(ident, value)
     return _error(ident, -32601, f"Method not found: {method}")
 
 

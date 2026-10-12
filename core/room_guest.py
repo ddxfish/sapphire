@@ -267,7 +267,7 @@ def _turn(system, chat, text, brain):
 
 # --- chatroom_join -------------------------------------------------------------------------
 
-def _preamble(inv, shown, mine):
+def _preamble(inv, shown, mine, has_self=False):
     lines = [f'[Chat room "{inv["room"]}" on {inv["host"]}]',
              'Several speakers share that conversation and take turns. The host sends you the lines since '
              'your last turn; your answer is your line there.']
@@ -279,6 +279,9 @@ def _preamble(inv, shown, mine):
     lines.append('Other speakers\' lines reach you as "Name: text". Speak only as yourself, in your own words; '
                  'never write lines for anyone else, and do not start your line with your own name. '
                  f'If you have nothing to add this turn, answer exactly {PASS}.')
+    if has_self:
+        lines.append('Read your self-sheet (read_self) before your first line there, so you speak as yourself; '
+                     'what you read stays in this chat.')
     if mine:
         lines.append(mine)
     return '\n'.join(lines)
@@ -297,15 +300,15 @@ def _dressing(args, notes):
     key (a merge kept last time's model). A persona whose prompt is private
     is never worn here: the chat is public by rule, every turn would be
     refused. With no room persona and no toolset of her choosing the chat
-    carries NO tools (Krem 2026-10-11): the cues are text from strangers at
-    the host's table, and her whole default toolkit was behind them."""
+    wears her defaults - her own toolkit and memory, so she can read_self and
+    search_memory there like anywhere (Krem 2026-10-12, reversing the bare
+    chat of the 11th: each Sapphire in a room is her own)."""
     from core.personas import persona_manager
     from core.chat.llm_providers.resolve import normalize_pair, providers_config
     from core.chat.history import get_user_defaults
     from core import toolsets
     st = {k: v for k, v in get_user_defaults().items() if k != 'private_chat'}
     pick = str(args.get('persona') or '').strip()
-    dressed = False
     for name, hers in ((default_persona(), False), (pick, True)):
         if not name:
             continue
@@ -318,7 +321,6 @@ def _dressing(args, notes):
             continue
         st.update(dict(p.get('settings') or {}))
         st['persona'] = name
-        dressed = True
     provider = str(args.get('provider') or '').strip()
     model = str(args.get('model') or '').strip()
     if provider:
@@ -334,9 +336,6 @@ def _dressing(args, notes):
     else:
         if ts:
             notes.append(f"there is no toolset named '{ts}', so the default is used")
-        if not dressed:
-            st['toolset'] = 'none'               # nobody chose tools for this chat: it has none
-            st.pop('extra_toolsets', None)
     st.pop('private_chat', None)                 # never: a room's words are the host's too
     return st
 
@@ -380,7 +379,10 @@ def join(args):
     shown = _clean(args.get('name'), 80) or inv['name'] or _me()
     mine = _clean(args.get('instructions'), 2000)
     own = str(st.get('custom_context') or '').strip()
-    st['custom_context'] = '\n\n'.join(t for t in (own, _preamble(inv, shown, mine)) if t)
+    fm = _system().llm_chat.function_manager
+    has_self = any(t.get('function', {}).get('name') == 'read_self'
+                   for t in (fm.resolve_tools(st.get('toolset') or 'none', st.get('extra_toolsets')) or []))
+    st['custom_context'] = '\n\n'.join(t for t in (own, _preamble(inv, shown, mine, has_self)) if t)
     st[TAG] = {'host': inv['host'], 'room': inv['room'], 'where': inv['where'],
                'since': datetime.now().isoformat(timespec='seconds')}
     name, again = _room_chat_name(sm, inv)

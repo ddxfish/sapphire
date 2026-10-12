@@ -40,7 +40,9 @@ EVENT_FLOOR_S = 3.0      # event mode's only clock: a breath between her turns, 
 # of unfinished thinking the turn is cancelled and the pair dropped — an
 # unattended turn has no one to wait for it (Krem's 8K-token think loop
 # that then read the inside of the tag aloud, 2026-09-09).
-THINK_BUDGET_CHARS = 6000
+THINK_BUDGET_CHARS = 32000
+# (6000 until 2026-10-12: Qwen spends 3K in think tags on an ordinary turn; a room guest was
+# cut off three turns running. 32000 is about 8K tokens: a brake for a true runaway, no more.)
 
 _lock = threading.RLock()
 _records = {}                   # chat -> dict
@@ -87,6 +89,27 @@ def _unfinished_thinking(buf):
     """Chars of thinking still open at the end of `buf` (0 = none open)."""
     from core import think
     return think.unfinished(buf)
+
+
+def silence(text, errored, cancelled, overthought, finish, tools):
+    """Why a turn has no words, in words ('' when it has words, or failed):
+    the one thing a door's asker, a room's log and the END event can say
+    about a silent turn. Three silent guest turns in a row once looked like
+    lost lines, and nothing on either box said why (field report 2026-10-12).
+    The budget cut is this lane's own; a length finish is the model's ceiling
+    (a reasoning model thinking to max_tokens); tools with no words is a move."""
+    from core.chat.llm_providers.base import LENGTH_FINISH
+    if text or errored:
+        return ''
+    if overthought:
+        return f'thinking never finished (past {THINK_BUDGET_CHARS} chars with no words, cut off here)'
+    if cancelled:
+        return 'stopped'
+    if finish in LENGTH_FINISH:
+        return f'the model hit its reply token limit (finish={finish}) before any words'
+    if tools:
+        return f"ran {', '.join(tools)} and ended without words"
+    return 'empty answer'
 
 
 def _live_row_count(sm, chat):
@@ -264,7 +287,7 @@ def armed():
 # ── the turn ────────────────────────────────────────────────────────────────
 
 def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=None,
-             stream_speech=False, keep_prompt=False):
+             stream_speech=False, keep_prompt=False, brain=None, on_stream=None, quiet=False):
     """One unprompted turn on `chat` through THE engine, live to the wire.
     Raises ChatBusy when the chat has a turn in flight. Returns her text.
     on_event(event) sees every event of THIS turn as it happens (the bus
@@ -276,10 +299,17 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
     stream_speech=True (a device lane): her voice is made sentence by
     sentence while she writes, as `tts_chunk` events on_event takes to the
     device; the lane below speaks the whole reply only when no sentence was
-    made (no voice engine, a refused chat, every sentence dropped)."""
+    made (no voice engine, a refused chat, every sentence dropped).
+    brain: a caller-built stream brain the engine takes over the chat's
+    stored settings (core/rooms.py: a seat's fenced prompt, tools and
+    settings on her own chat's session). on_stream(stream): the stream the
+    moment it exists, for a caller that must be able to cut it (Stop, a seat
+    clock). quiet=True: no VOICE_TURN events from here - the caller paints
+    the turn itself from on_event (a room, under the seat's name)."""
     system = _system
     if system is None:
         raise RuntimeError('cadence organ not started')
+    _pub = (lambda *a, **k: None) if quiet else publish
     llm = system.llm_chat
     sm = llm.session_manager
     # Reachable first, before anything is published: a missing, sealed or
@@ -302,11 +332,19 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         # no brain there (which seat would it be?). A failed turn, not a drop.
         raise RuntimeError(f"'{chat}' is a chat room; nothing runs an unprompted turn on it")
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
+    if brain is not None:
+        stream.brain = brain
+    if on_stream is not None:
+        try:
+            on_stream(stream)
+        except Exception as e:
+            logger.debug(f"[CADENCE] on_stream hook failed: {e}")
     sentences = 0                         # tts_chunk events this turn made
     parts, cancelled, errored, overthought = [], False, None, False
     blocks = []                    # the prose of each round that ended in a tool call: her message is all of them
     thinking_chars = 0             # provider-side thinking events (Claude-style)
     tools_ran = False              # a tool-only turn (a move, no words) is an answer
+    tools, finish = [], None       # the tools that ran, in order; how the last LLM call ended
     final, dropped, rows_before = '', False, None
     mid = uuid.uuid4().hex
     foreign = False
@@ -332,7 +370,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         except Exception:
             active = None
         foreign = bool(chat and chat != active)
-        publish(Events.VOICE_TURN_START, {"message_id": mid, "user_text": text,
+        _pub(Events.VOICE_TURN_START, {"message_id": mid, "user_text": text,
                                           "chat": chat, "foreign": foreign, "source": source})
         rows_before = _live_row_count(sm, chat)
         for ev in stream.chat_stream(text, images=images or None):
@@ -346,7 +384,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
             et = ev.get('type')
             if et == 'content':
                 parts.append(ev.get('text') or '')
-                publish(Events.VOICE_TURN_CHUNK, {"message_id": mid, "text": ev.get('text', ''),
+                _pub(Events.VOICE_TURN_CHUNK, {"message_id": mid, "text": ev.get('text', ''),
                                                   "chat": chat, "foreign": foreign})
             elif et == 'thinking':
                 thinking_chars += len(ev.get('text') or '')
@@ -360,17 +398,19 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
                 # the tab paints the accordion as it happens - before this the
                 # tools of an agent-report turn appeared only after a refresh
                 # (Krem, 2026-10-08). Same exposure class as the chunks above.
-                publish(Events.VOICE_TURN_TOOL, {"message_id": mid, "chat": chat, "foreign": foreign, "phase": "start",
+                _pub(Events.VOICE_TURN_TOOL, {"message_id": mid, "chat": chat, "foreign": foreign, "phase": "start",
                                                  "id": ev.get('id'), "name": ev.get('name'), "args": ev.get('args')})
             elif et == 'tool_end':
                 tools_ran = True
-                publish(Events.VOICE_TURN_TOOL, {"message_id": mid, "chat": chat, "foreign": foreign, "phase": "end",
+                tools.append(str(ev.get('name') or '?'))
+                _pub(Events.VOICE_TURN_TOOL, {"message_id": mid, "chat": chat, "foreign": foreign, "phase": "end",
                                                  "id": ev.get('id'), "name": ev.get('name'),
                                                  "result": ev.get('result'), "error": bool(ev.get('error'))})
             elif et == 'tts_chunk':
                 sentences += 1
             elif et == 'final':
                 cancelled = bool(ev.get('cancelled'))
+                finish = ev.get('finish')
                 if ev.get('error'):
                     # a refused turn (🔒 chat unreachable): the engine yields
                     # its notice as content — that is NOT her answer; it used
@@ -418,10 +458,20 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         except Exception as e:
             logger.warning(f"[CADENCE] '{chat}': end-of-turn history work failed: {e}")
         llm.end_stream(sid, chat_name)
-    publish(Events.VOICE_TURN_END, {"message_id": mid, "chat": chat, "foreign": foreign,
+    why = silence(final, errored, cancelled, overthought, finish, tools)
+    if why and not overthought:                         # the budget cut warned above as it happened
+        (logger.warning if 'token limit' in why else logger.info)(f"[CADENCE] '{chat}': no answer - {why}")
+    if on_event is not None:
+        # the turn's report, after the engine's own events: what she said, why she
+        # said nothing, the tools that ran - for the asker at a door (an MCP ask)
+        try:
+            on_event({'type': 'turn_report', 'text': final, 'why': why, 'tools': list(tools), 'finish': finish})
+        except Exception as e:
+            logger.debug(f"[CADENCE] on_event hook failed: {e}")
+    _pub(Events.VOICE_TURN_END, {"message_id": mid, "chat": chat, "foreign": foreign,
                                     "text": final,
                                     "speak": (speak if (final and not errored) else None),
-                                    "source": source, "dropped": dropped})
+                                    "source": source, "dropped": dropped, "why": why, "tools": list(tools)})
     if errored:
         raise RuntimeError(errored)
     if speak == 'speakers' and final:

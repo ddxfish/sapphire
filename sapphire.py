@@ -1386,6 +1386,13 @@ def run():
         from core import cadence as _cadence
         _cadence.start(voice_chat)
 
+        # a chat room's seat chats whose room or seat is gone (core/rooms.py)
+        try:
+            from core import rooms as _rooms
+            _rooms.sweep()
+        except Exception as e:
+            logger.warning(f"room seat-chat sweep failed: {e}")
+
         # Wire scheduler into plugin loader for plugin schedule tasks
         from core.plugin_loader import plugin_loader
         plugin_loader.set_scheduler(continuity_scheduler)

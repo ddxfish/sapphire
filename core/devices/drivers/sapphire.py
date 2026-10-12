@@ -257,11 +257,26 @@ def invite(device, config, secrets, card):
 
 def cue(device, config, secrets, chat, text, who):
     """Core only (core/rooms.py): one room turn. `text` lands in `chat` on her
-    side from `who`; her answer comes back as it is. Raises Problem."""
-    said, ok = _call('ask', {'text': text, 'chat': chat, 'from': who}, config, secrets, CUE_WAIT)
+    side from `who`; back come (her answer as it is, the names of the tools
+    she used - only when her box shares them, else []). Raises Problem."""
+    out = _rpc('tools/call', {'name': 'ask', 'arguments': {'text': text, 'chat': chat, 'from': who}},
+               config, secrets, timeout=CUE_WAIT)
+    said = '\n'.join(str(c.get('text') or '') for c in (out.get('content') or []) if isinstance(c, dict)).strip()
+    if out.get('isError'):
+        raise Problem(said or '(nothing came back)')
+    shared = out.get('structuredContent')
+    names = shared.get('tools') if isinstance(shared, dict) else None
+    tools = [str(t)[:80] for t in names if isinstance(t, str) and t] if isinstance(names, list) else []
+    return said or '(nothing came back)', tools
+
+
+def notify(device, config, secrets, chat, text, who):
+    """Core only (core/rooms.py): a word into her room chat, not waited for -
+    the room was cleared or closed; the chat is hers to keep or clear. Raises
+    Problem."""
+    said, ok = _call('tell', {'text': text, 'chat': chat, 'from': who}, config, secrets, QUICK)
     if not ok:
         raise Problem(said)
-    return said
 
 
 def run(device, capability, action, value, config, secrets, call_tool):

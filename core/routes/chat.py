@@ -1296,6 +1296,13 @@ def _delete_one_chat(system, chat_name: str, origin=None):
     operator's persona/tools/scopes. Refuse until the call ends."""
     if chat_name in _live_call_chats(system):
         return False, f"'{chat_name}' has a live phone call — hang up before deleting."
+    # a chat room's seats have chats of their own and its guests a word coming
+    # (core/rooms.py): the record is read BEFORE the row goes
+    try:
+        from core import rooms
+        rooms.chat_deleting(chat_name)
+    except Exception as e:
+        logger.warning(f"rooms.chat_deleting('{chat_name}') failed: {e}")
     was_active = (chat_name == system.llm_chat.get_active_chat())
     if not system.llm_chat.delete_chat(chat_name):
         return False, f"Cannot delete '{chat_name}'"
@@ -1388,6 +1395,17 @@ async def bulk_clear_chats(request: Request, _=Depends(require_login), system=De
         name = str(name)
         if name in live:
             results[name] = {"ok": False, "message": "live phone call — hang up first"}
+            continue
+        # a chat room clears through its own door (core/rooms.py): the run settles,
+        # its seats' own chats are wiped with it, its guests are told (2026-10-12)
+        try:
+            from core import rooms
+            if rooms.is_room(name):
+                rooms.clear(name)
+                results[name] = {"ok": True, "message": "Cleared"}
+                continue
+        except Exception as e:
+            results[name] = {"ok": False, "message": str(e) or type(e).__name__}
             continue
         ok = system.llm_chat.session_manager.clear_chat(name)
         results[name] = {"ok": ok, "message": "Cleared" if ok else "Not found or failed"}

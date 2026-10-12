@@ -182,6 +182,11 @@ class ToolCall:
         }
 
 
+# finish reasons that mean the reply hit the token ceiling: openai-compat says
+# 'length', Claude/anthropic-compat pass 'max_tokens', openai_responses 'incomplete'
+LENGTH_FINISH = ('length', 'max_tokens', 'incomplete')
+
+
 @dataclass
 class LLMResponse:
     """
