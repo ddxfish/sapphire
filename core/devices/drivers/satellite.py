@@ -737,6 +737,10 @@ def status(device, config, secrets):
         readings['wake word'] = ('paused while a backup lands' if wake.get('paused') else
                                  'listening' if wake.get('enabled') and wake.get('running') else 'off') \
             + (f" for {wake['model']}" if wake.get('model') else '')
+    cap = h.get('capture') if isinstance(h.get('capture'), dict) else {}
+    if cap.get('active'):                                              # the room in pieces to the Wakeword Maker (0.7.6)
+        readings['capturing'] = (f"room to Sapphire: {cap.get('sent', 0)} pieces, {cap.get('fires', 0)} wake fires"
+                                 + (', test mode' if cap.get('test') else ''))[:80]
     led = h.get('led') if isinstance(h.get('led'), dict) else {}
     if led:
         readings['light'] = 'turned off: dark through every state' if led.get('off') else \
@@ -1013,6 +1017,29 @@ def _listen(value, config, secrets):
     if not heard:
         return "Listened, and heard no speech.", True
     return f'Heard: "{heard}"', True
+
+
+def capture(device, config, secrets, seconds=0, chunk_s=30, test=False):
+    """The room in pieces to Sapphire's room door (POST /api/devices/{id}/room), for `seconds`: the board posts
+    every `chunk_s` seconds of its clean microphone stream from its own task, with the wake fires that fell in
+    each piece, and keeps hearing its wake word meanwhile. With `test` its fires are counted and not acted on.
+    `seconds` 0 ends a capture (DELETE /capture). What the Wakeword Maker's room watch asks of an ESP32.
+    Answers the board's capture block. Raises Missing on a board without the door."""
+    from urllib.parse import urlencode
+    if int(seconds or 0) <= 0:
+        out = _json(_call('DELETE', '/capture', config, secrets))
+    else:
+        q = urlencode({'seconds': int(seconds), 'chunk': int(chunk_s), 'test': 'true' if test else 'false'})
+        out = _json(_call('POST', '/capture?' + q, config, secrets))
+    with _lock:
+        _about.pop(device['id'], None)
+    return out.get('capture') if isinstance(out.get('capture'), dict) else out
+
+
+def capture_state(device, config, secrets):
+    """How a capture goes (GET /capture): {'active', 'test', 'seconds', 'left_s', 'sent', 'dropped', 'lost', 'fires'}."""
+    out = _json(_call('GET', '/capture', config, secrets))
+    return out.get('capture') if isinstance(out.get('capture'), dict) else out
 
 
 def put_model(device, config, secrets, name, data, fmt, threshold, phrase=None, sliding_window=None, step_ms=None):

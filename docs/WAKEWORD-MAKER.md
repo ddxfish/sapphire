@@ -21,9 +21,9 @@ One afternoon, start to finish. Each step is a tab on the page, left to right.
 2. **Wakewords.** New wake word, type the phrase. Two or three syllables with a hard consonant hear best:
    "hey marcus" beats "hi sam".
 3. **Voices.** Standard, Generate all samples. Ten minutes on a GPU. Record meanwhile.
-4. **Record.** About 120 takes of the phrase is the floor; 220 made the first clean models. Forty per
+4. **Record.** About 240 takes of the phrase is the floor; 440 is the target. Eighty per
    microphone across three microphones, the list behind the **?** on *Says it*. Then near misses and other
-   words, and fifteen minutes of your room with nobody saying the phrase. Details in the next section.
+   words, and thirty minutes of your room with nobody saying the phrase. Details in the next section.
 5. **Check.** Rate. Listen to the lowest few, keep or drop by hand.
 6. **Train.** Leave the preset on Standard, tick both model families, set Repeats to 3 and press Train.
    Then open *Advanced*, choose model `rnn`, preset Thorough, Repeats 3, Train again. Go do something else.
@@ -40,29 +40,29 @@ One afternoon, start to finish. Each step is a tab on the page, left to right.
 The models learn your voice from these takes, so the takes have to be the real you, not a careful reading.
 
 - **Every microphone she will hear you through.** The satellites in the rooms where you talk to her, your
-  headset, the webcam, a phone. About forty takes each. Three or more microphones teach the phrase, not the
+  headset, the webcam, a phone. About eighty takes each. Three or more microphones teach the phrase, not the
   microphone.
-- **Per microphone:** fifteen normal, five fast, five from far away, five soft or whispered, five loud or
-  excited, five with the TV or music on.
+- **Per microphone:** thirty normal, ten fast, ten from far away, ten soft or whispered, ten loud or
+  excited, ten with the TV or music on.
 - **Move while you do the normal ones.** Face the microphone, then a little left, a little right. Look up at
   the ceiling, then down at your hands. Say it from the doorway and from the couch. You are never square to a
   microphone when you really call her.
 - **Change something every take.** Speed, distance, mood, where you face. Thirty identical takes teach
   nothing new.
 - **Say it like you mean it,** as if she were across the room. No words before or after it.
-- **Other people in the house:** ten each, any way they like. One other voice is worth more than fifty more
+- **Other people in the house:** twenty each, any way they like. One other voice is worth more than fifty more
   of yours.
 - **Near misses** are words that sound like the phrase but are not it, in your own voice: "hey mark us",
   "they marcus", "hey marco". The page proposes them. Say the last word alone and the first word alone too.
-  These are the hardest negatives and the best teachers. Sixty is the floor, two hundred is good.
+  These are the hardest negatives and the best teachers. One hundred and twenty is the floor, four hundred is good.
 - **Other words** are ordinary talk near her: a sentence or two per take, from several microphones, some
-  whispered, some shouted. Forty is the floor.
+  whispered, some shouted. Eighty is the floor.
 - **Room sound** is minutes of your rooms with nobody saying the phrase: the TV, the dishwasher, a
-  conversation. Fifteen minutes is the floor, forty-five is good. A satellite records it in one press.
+  conversation. Thirty minutes is the floor, ninety is good. A satellite records it in one press.
 - **Test this mic** before a session: it listens to the room for two seconds and tells you if the microphone
   is noisy, quiet, or clipping.
 
-A slice of your takes (15% unless you change it on Train) is held back and never trained on. Every model is
+A slice of your takes (25% unless you change it on Train) is held back and never trained on. Every model is
 judged on that slice, so *Hears you* is honest. A thin style gets a thin judge: if you only whispered twice,
 the judge knows nothing about whispers.
 
@@ -106,8 +106,11 @@ the judge knows nothing about whispers.
   changed since a verdict was written.
 - **Test.** *Try it*: press, say it, see what each ticked model heard. *Room watch*: a satellite or this
   browser listens for hours while you live; every fire is kept with its audio for you to sort into a negative
-  (a false alarm, now a training clip) or a positive. The breakdown shows which held-out clip each model
-  missed or fired on.
+  (a false alarm, now a training clip) or a positive. *Keep it all as room sound* turns every piece it hears
+  into a room take: a day of your room through the device's own microphone. An ESP32 with the capture door
+  (firmware 0.7.6) pushes its room in pieces from its own task, keeps hearing its wake word, and its own fires
+  are counted beside the models'; *board test mode* makes it count and answer nothing. The breakdown shows
+  which held-out clip each model missed or fired on.
 - **Install.** *This computer*: copies the ★ desktop model to `user/wakeword/models/` and switches the wake
   word setting to it, live, with a *Put back* button. *Satellites*: sends the right family to each one through
   its model door; a body without the door says so and you copy the files by hand. *Files*: the model, its

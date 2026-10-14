@@ -103,7 +103,7 @@ function draw(el, ctx, p, pr, ds, ho) {
       <div class="wwm-card">
         <div class="wwm-row wwm-between">
           <h2 style="margin:0">Held out for testing ${qbtn('holdout')}</h2>
-          <button class="wwm-btn ghost" id="wwm-reshuffle">Reshuffle</button> <label class="wwm-muted">holding out <input type="number" id="wwm-hofrac" min="5" max="40" step="5" value="${Math.round(100 * ((ho?.holdout?.fraction ?? ho?.fraction ?? 0.15)))}" style="width:56px">% of your recordings</label>
+          <button class="wwm-btn ghost" id="wwm-reshuffle">Reshuffle</button> <label class="wwm-muted">holding out <input type="number" id="wwm-hofrac" min="5" max="40" step="5" value="${Math.round(100 * ((ho?.holdout?.fraction ?? ho?.fraction ?? 0.25)))}" style="width:56px">% of your recordings</label>
         </div>
         <div class="wwm-muted" id="wwm-holdout">${h ? `${h.counts.positive[0]} of ${h.counts.positive[1]} of your positives · ${h.counts.near[0]} of ${h.counts.near[1]} near misses · ${h.counts.negative[0]} of ${h.counts.negative[1]} negatives · ${h.counts.ambient_minutes[0]} of ${h.counts.ambient_minutes[1]} min of room (${h.counts.ambient[0]} takes). Never trained on, never varied: Test grades on these.` : 'made when the first run starts'}</div>
       </div>

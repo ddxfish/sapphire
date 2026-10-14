@@ -89,6 +89,8 @@ _listeners = {}            # device id -> [(loop, queue)] of open light streams
 _live = {}                 # device id -> [Speech] with sentences still to play
 _replies = {}              # device id -> [Reply] to typed questions, newest last
 wake.told = lambda device_id: cue(device_id, 'standdown')   # the main app took a satellite's claim
+room_sink = None           # callable(device_id, audio_bytes, meta) -> {'ok', 'accepted'}: who collects room sound (the Wakeword Maker's room watch sets it)
+ROOM_FIRES_MAX = 50        # wake fires a board may stamp into one piece of the room
 _spoke = threading.local() # did the reply lane manage to speak, on this thread
 
 
@@ -965,6 +967,39 @@ def _turn(row, chat, heard, reply=None, line=None, mute=False, images=None):
         # Its next question is already waiting (asked over this one): that turn said
         # 'thinking' before this one ended, and an 'idle' now would land on top of it.
         cue(device_id, 'thinking' if more else 'error' if failed else 'idle')
+
+
+def room(device_id, audio, meta=None):
+    """A device sends a piece of its room (POST /api/devices/{id}/room): the
+    seconds its microphone heard since the last piece, capture after capture,
+    with the wake fires that fell in it (meta['fires']: [[seconds, score]]).
+    Handed to whoever collects room sound (`room_sink`); with nobody there
+    the answer says `accepted: false` and the board ends its capture. Never
+    raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        if not _voice_part(row):
+            return {'ok': False, 'error': f"'{row['id']}' has no microphone."}
+        if not audio:
+            return {'ok': False, 'error': 'No audio arrived.'}
+        if len(audio) > MAX_AUDIO:
+            return {'ok': False, 'error': 'The audio is too large.'}
+        sink = room_sink
+        if sink is None:
+            return {'ok': True, 'accepted': False, 'error': 'Nobody is collecting room sound from this device.'}
+        out = sink(row['id'], audio, dict(meta or {}))
+        if not isinstance(out, dict):
+            out = {'ok': True, 'accepted': bool(out)}
+        return out
+    except Exception as e:
+        logger.error(f"[DEVICES] room({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
 def woke(device_id):

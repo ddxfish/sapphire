@@ -528,3 +528,51 @@ def test_judge_summary_without_positives_says_so():
     rows = [{'kind': 'negative', 'near': True, 'score': 0.2}, {'kind': 'negative', 'near': False, 'score': 0.1}]
     v = judge.summary(rows, [], 'oww')
     assert v['recall'] is None and v['threshold'] is None and v['n_pos'] == 0
+
+
+# --- room watch: pieces a board pushes (capture.c, firmware 0.7.6) ---------------------------------------
+
+def test_watch_keeps_pushed_pieces_and_counts_the_boards_fires(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey test')
+    pdir = paths.project_dir(root, p['slug'])
+    armed = []
+    listen_fn = lambda wav: {'r1': {'peaks': [(2.0, 0.3)], 'threshold': 0.5}}      # the candidate on the PC: a weak peak at 2 s
+    st = watch.start(pdir, p['slug'], 'board1', 1, 'r1', listen_fn, capture_fn=lambda s: watch.take('board1', timeout=s),
+                     chunk_seconds=5, keep=True, test=True, arm=lambda seconds: armed.append(seconds), disarm=lambda: armed.append(0))
+    assert st['pushed'] and st['keep'] and st['test'] and armed == [60]
+    assert watch.sink('nobody', wav_bytes(tone(3.0)), {})['accepted'] is False         # no watch on that device: the board stops
+    rep = watch.sink('board1', wav_bytes(tone(6.0)), {'chunk': 3, 'fires': [[2.1, 0.98]], 'fire_count': 1, 'test': True, 'model': 'hey_test'})
+    assert rep['accepted'] is True
+    for _ in range(100):
+        if store.counts(pdir).get('ambient/recorded'):
+            break
+        time.sleep(0.1)
+    watch.stop(pdir, p['slug'])
+    watch._live[p['slug']]['thread'].join(5)
+    assert armed[-1] == 0                                                              # the board was told to stop
+    st = watch.read(pdir, st['id'])
+    assert st['kept'] == 1 and store.counts(pdir)['ambient/recorded'] == 1 and st['ended']
+    side = store.list_clips(pdir, 'ambient/recorded', 0, 10)[0][0]
+    assert side['via'] == 'capture' and side['watch'] == st['id'] and side['piece'] == 3 and side['board_fires'] == 1
+    assert st['board'] == 'hey_test' and st['board_fires'] == 1
+    assert len(st['fires']) == 1
+    by = st['fires'][0]['runs']
+    assert by['board:hey_test'] == {'score': 0.98, 'fires': True}
+    assert by['r1']['fires'] is False and by['r1']['score'] == 0.3                    # the same moment, both verdicts side by side
+    assert (pdir / 'watch' / st['id'] / f"{st['fires'][0]['id']}.wav").is_file()
+
+
+def test_watch_sink_refuses_a_bad_piece_and_pause_frees_a_take(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey pause')
+    pdir = paths.project_dir(root, p['slug'])
+    st = watch.start(pdir, p['slug'], 'board2', 1, 'r1', lambda wav: {}, capture_fn=lambda s: watch.take('board2', timeout=s),
+                     chunk_seconds=5, arm=lambda seconds: None, disarm=lambda: None)
+    assert watch.sink('board2', b'not a wav', {})['ok'] is False
+    watch.pause_all()
+    watch._live[p['slug']]['thread'].join(5)
+    assert not watch._live[p['slug']]['thread'].is_alive()
+    assert watch.read(pdir, st['id']).get('paused')

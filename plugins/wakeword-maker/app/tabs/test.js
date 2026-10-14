@@ -56,9 +56,11 @@ function draw(el, ctx, p, data) {
         <div class="wwm-row">
           <label>Listen through <select id="wwm-watch-mic"><option value="browser">this browser's mic</option></select></label>
           <label>for <input type="number" id="wwm-watch-min" min="1" max="1440" value="60" style="width:70px"> minutes</label>
+          <label title="every piece of what it hears becomes a room take: hours of this room through this microphone, for training and for judging false alarms"><input type="checkbox" id="wwm-watch-keep"> keep it all as room sound</label>
+          <label id="wwm-watch-test-l" style="display:none" title="the board counts its own fires and answers nothing: a candidate model judged on a day of the room without her talking to the TV"><input type="checkbox" id="wwm-watch-test"> board test mode</label>
           <button class="wwm-btn primary" id="wwm-watch-go" ${runs.length ? '' : 'disabled'}>Start watching</button>
         </div>
-        <div class="wwm-muted" id="wwm-watch-note">The ticked models listen to your room: typing, TV, music, people. Every time one would have answered, the moment is kept for you to sort. While a satellite watches, it won't answer its own wake word.</div>
+        <div class="wwm-muted" id="wwm-watch-note">The ticked models listen to your room: typing, TV, music, people. Every time one would have answered, the moment is kept for you to sort. A Pi won't answer its wake word while it watches; an ESP32 that pushes its room keeps answering unless board test mode is on, and its own fires are counted beside the models'.</div>
         <div id="wwm-watch-out"></div>
       </div>`;
     bindHelp(el);
@@ -150,10 +152,12 @@ let watchPoll = null, watchRec = null;
 
 function watchCard(el, ctx, p, runs, sel, satsFn) {
     const micSel = el.querySelector('#wwm-watch-mic'), go = el.querySelector('#wwm-watch-go'), out = el.querySelector('#wwm-watch-out'), note = el.querySelector('#wwm-watch-note');
-    const fillSats = () => { const keep = micSel.value; micSel.innerHTML = `<option value="browser">this browser's mic</option>` + satsFn().map(m => `<option value="${esc(m.id)}" ${m.online ? '' : 'disabled'}>${esc(m.id)}${m.online ? '' : ' (offline)'}</option>`).join(''); micSel.value = keep || 'browser'; };
+    const testRow = () => { const m = satsFn().find(x => x.id === micSel.value); el.querySelector('#wwm-watch-test-l').style.display = m && m.capture ? '' : 'none'; };
+    const fillSats = () => { const keep = micSel.value; micSel.innerHTML = `<option value="browser">this browser's mic</option>` + satsFn().map(m => `<option value="${esc(m.id)}" ${m.online ? '' : 'disabled'}>${esc(m.id)}${m.online ? '' : ' (offline)'}${m.capture ? ' · pushes its room' : ''}</option>`).join(''); micSel.value = keep || 'browser'; testRow(); };
     setTimeout(fillSats, 800);
+    micSel.addEventListener('change', testRow);
     const fmt = (s) => s >= 3600 ? `${(s / 3600).toFixed(1)} h` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
-    const label = (rid) => { const r = runs.find(x => x.id === rid); return r ? (r.label || rid) + (r.trainer === 'mww' ? ' (ESP32)' : '') : rid; };
+    const label = (rid) => { if (rid.startsWith('board:')) return `the board itself · ${rid.slice(6)}`; const r = runs.find(x => x.id === rid); return r ? (r.label || rid) + (r.trainer === 'mww' ? ' (ESP32)' : '') : rid; };
     const draw = (w) => {
         if (!w) { out.innerHTML = ''; go.textContent = 'Start watching'; return; }
         const live = w.running && !w.ended;
@@ -162,9 +166,9 @@ function watchCard(el, ctx, p, runs, sel, satsFn) {
         const per = {};
         for (const f of w.fires) for (const [rid, x] of Object.entries(f.runs)) if (x.fires) per[rid] = (per[rid] || 0) + 1;
         const open = w.fires.filter(f => !f.fate);
-        out.innerHTML = `<div class="wwm-muted" style="margin:8px 0">${live ? '● watching' : 'watched'} through <b>${esc(w.device)}</b>: ${fmt(w.seconds)} heard, ${w.fires.length} fire${w.fires.length === 1 ? '' : 's'}${w.errors?.length ? ` · <span class="wwm-error">${esc(w.errors[w.errors.length - 1])}</span>` : ''}</div>
+        out.innerHTML = `<div class="wwm-muted" style="margin:8px 0">${live ? '● watching' : 'watched'} through <b>${esc(w.device)}</b>${w.pushed ? ' (pushed by the board' + (w.test ? ', test mode' : '') + ')' : ''}: ${fmt(w.seconds)} heard, ${w.fires.length} fire${w.fires.length === 1 ? '' : 's'}${w.kept ? ` · ${w.kept} piece${w.kept === 1 ? '' : 's'} kept as room sound (${fmt(w.kept_seconds || 0)})` : ''}${w.errors?.length ? ` · <span class="wwm-error">${esc(w.errors[w.errors.length - 1])}</span>` : ''}</div>
           ${Object.keys(per).length || w.seconds > 60 ? `<table class="wwm-table"><thead><tr><th>Model</th><th class="num">Fires</th><th class="num">Per hour</th></tr></thead><tbody>
-            ${(w.runs || '').split(',').filter(Boolean).map(rid => `<tr><td>${esc(label(rid))}</td><td class="num">${per[rid] || 0}</td><td class="num">${hours > 0 ? ((per[rid] || 0) / hours).toFixed(1) : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
+            ${(w.runs || '').split(',').filter(Boolean).concat(w.board ? [`board:${w.board}`] : []).map(rid => `<tr><td>${esc(label(rid))}</td><td class="num">${per[rid] || 0}</td><td class="num">${hours > 0 ? ((per[rid] || 0) / hours).toFixed(1) : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
           ${open.length ? `<h3>To sort (${open.length})</h3>` + open.slice(-30).reverse().map(f => `<div class="wwm-fire" data-fire="${esc(f.id)}">
               <audio controls preload="none" src="/api/plugin/wakeword-maker/projects/${p.slug}/watch/${w.id}/${f.id}/audio"></audio>
               <span>at ${fmt(f.at)} · ${Object.entries(f.runs).filter(([, x]) => x.fires).map(([rid, x]) => `${esc(label(rid))} ${x.score.toFixed(2)}`).join(', ')}</span>
@@ -207,8 +211,9 @@ function watchCard(el, ctx, p, runs, sel, satsFn) {
         if (go.textContent === 'Stop') return stopAll();
         if (!sel.size) return ctx.toast('Tick at least one model above.', 'warning');
         const device = micSel.value, minutes = parseInt(el.querySelector('#wwm-watch-min').value) || 60;
+        const keep = el.querySelector('#wwm-watch-keep').checked, test = el.querySelector('#wwm-watch-test').checked && el.querySelector('#wwm-watch-test-l').style.display !== 'none';
         try {
-            const r = await api(`/projects/${p.slug}/watch`, { method: 'POST', body: { device, minutes, runs: [...sel].join(',') } });
+            const r = await api(`/projects/${p.slug}/watch`, { method: 'POST', body: { device, minutes, runs: [...sel].join(','), keep, test } });
             draw(r.watch);
             if (device === 'browser') { watchRec = { timer: null }; browserLoop(minutes); }
             else watchPoll = setInterval(refresh, 15000);

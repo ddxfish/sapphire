@@ -7,8 +7,8 @@ winner installs from the page. User guide, with the short road and how to record
 
 ## Easy training, in one paragraph
 Settings: build the environment, download the datasets. Wakewords: new phrase. Voices: Standard, generate.
-Record: about 120 takes of the phrase over three microphones (the list is behind the **?** on *Says it*),
-near misses, other words, fifteen minutes of room. Check: rate. Train: Standard with Repeats 3, then
+Record: about 240 takes of the phrase over three microphones (the list is behind the **?** on *Says it*),
+near misses, other words, thirty minutes of room. Check: rate. Train: Standard with Repeats 3, then
 `rnn` + Thorough with Repeats 3. Read the scoreboard, run a Room watch on Test for an evening, ★ the winner,
 Install. The first clean models came from 223 takes over four microphones and ten ways of speaking, 219 near
 misses, 175 other words and 48 minutes of room: 100% of the held-out takes heard, zero sound-alikes, zero

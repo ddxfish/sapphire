@@ -238,7 +238,7 @@ def delete_dataset(did, settings=None, **_):
 # --- projects ------------------------------------------------------------------------------------------
 
 SYNTH_ENOUGH = 2000      # the quick set: past this the Voices step counts as done on its own
-RECORDED_ENOUGH = 120    # your own voice, the floor worth training on: three mics, forty takes each
+RECORDED_ENOUGH = 240    # your own voice, the floor worth training on: three mics, eighty takes each; a quarter is held back to judge
 STEPS = [('voices', 'Voices'), ('record', 'Record'), ('check', 'Check'), ('train', 'Train'), ('test', 'Test'), ('install', 'Install')]
 
 
@@ -633,7 +633,7 @@ async def record_test(slug, request=None, settings=None, **_):
 
 # (floor, good). The good column is what made the first clean models (2026-10-05: 223 takes over 4 mics and 10 ways of
 # speaking, 219 near misses, 175 other words, 48 minutes of room, held-out 25%); the floor is about half of that.
-TARGETS = {'positive': (120, 220), 'negative': (40, 160), 'near': (60, 200), 'ambient_minutes': (15, 45)}
+TARGETS = {'positive': (240, 440), 'negative': (80, 320), 'near': (120, 400), 'ambient_minutes': (30, 90)}   # floor, good: twice what made the first clean models, so a quarter can be held back to judge
 
 
 def guide(slug, settings=None, **_):
@@ -836,7 +836,8 @@ def mics(**_):
             # a cap reads "mic", "mic (locked)" (she may not; the user may) or "mic (driver off)"
             caps = {c.partition(' ')[0]: c.partition(' ')[2] for c in (d.get('caps') or [])}
             if 'mic' in caps and caps['mic'] != '(driver off)' and not d.get('every'):
-                out.append({'id': d['id'], 'location': d.get('location', ''), 'online': d.get('online'), 'format': _wake_format(d['id'])})
+                h = _health_of(d['id'])
+                out.append({'id': d['id'], 'location': d.get('location', ''), 'online': d.get('online'), 'format': _wake_format(d['id'], h), 'capture': _pushes(h)})
     except Exception as e:
         logger.debug(f"[WWM] mics: {e}")
     return {'mics': out}
@@ -870,19 +871,36 @@ def mic_settings(device, body=None, query=None, settings=None, **_):
     return {**out, 'supported': True, 'gain_db': float(m.group(1)), 'gain_max_db': float(m.group(2)), 'agc': m.group(3) == 'on'}
 
 
-def _wake_format(device):
+def _board_parts(device):
+    """(row, config, secrets) of a satellite, what the driver's doors take."""
+    from core.devices import engine
+    row = engine._usable(device)
+    part = engine._part(row, 'satellite')
+    if not part:
+        raise ValueError(f"{device} is not a satellite")
+    return row, dict(part.get('config') or {}), engine._part_secrets(row['id'], 'satellite')
+
+
+def _health_of(device):
+    """What a satellite says about itself (the driver keeps it a minute); {} when it cannot be asked."""
+    try:
+        from core.devices.drivers import satellite
+        row, cfg, secrets = _board_parts(device)
+        return satellite._health(row, cfg, secrets) or {}
+    except Exception:
+        return {}
+
+
+def _pushes(h):
+    """A board with the capture door (an ESP32 from firmware 0.7.6) pushes its room in pieces (`capture` in its health)."""
+    return isinstance((h or {}).get('capture'), dict)
+
+
+def _wake_format(device, h=None):
     """Which model family a satellite runs: 'tflite' (microWakeWord, an ESP32) or 'onnx' (openWakeWord, a Pi). The
     board states it in its health (`wakeword.format`); a body that does not is read from its board name, then its
     device name, and a Pi is the default."""
-    h = {}
-    try:
-        from core.devices import engine
-        from core.devices.drivers import satellite
-        row = engine._usable(device)
-        part = engine._part(row, 'satellite')
-        h = satellite._health(row, dict(part.get('config') or {}), engine._part_secrets(row['id'], 'satellite')) or {}
-    except Exception:
-        pass
+    h = _health_of(device) if h is None else h
     fmt = str((h.get('wakeword') or {}).get('format') or '').lower()
     if fmt in ('tflite', 'onnx'):
         return fmt
@@ -1055,7 +1073,7 @@ def check_report(slug, settings=None, **_):
         add('bad', f"{len(says)} negative(s) actually say the phrase. They are dropped; check the lowest list for more.")
     n_own, n_syn = len(own_pos), counts['positive']['synth']
     if n_own < TARGETS['positive'][0]:
-        add('warn', f"Only {n_own} of your own positives; {TARGETS['positive'][0]} is the floor, {TARGETS['positive'][1]} made the first clean models.")
+        add('warn', f"Only {n_own} of your own positives; {TARGETS['positive'][0]} is the floor, {TARGETS['positive'][1]} is the target.")
     elif n_syn and n_own / max(1, n_syn) < 0.005:
         add('info', f"{n_own} real against {n_syn:,} synthetic: the trainers weight yours up, but another fifty of yours still moves the needle more than anything else.")
     if len([r for r in near if r.get('source') != 'synth']) < 10:
@@ -1227,7 +1245,7 @@ async def try_runs(slug, request=None, settings=None, **_):
     if 'json' in (request.headers.get('content-type') or ''):
         body = await request.json()
         runs = str(body.get('runs') or '')
-        if not _safe(runs):
+        if not _safe(*runs.split(',')):          # several ticked models ride as one comma list
             return {'error': 'runs?'}, 400
         device, data, key, via = str(body.get('device') or ''), None, False, 'satellite'
     else:
@@ -1237,7 +1255,7 @@ async def try_runs(slug, request=None, settings=None, **_):
             return {'error': 'no audio part'}, 400
         data = await up.read()
         runs = str(form.get('runs') or '')
-        if not _safe(runs):
+        if not _safe(*runs.split(',')):          # several ticked models ride as one comma list
             return {'error': 'runs?'}, 400
         device, key, via = '', form.get('key') == '1', 'browser'
     return await asyncio.to_thread(_try_runs, root, slug, py, runs, device, data, key, via, settings)   # the satellite wait and the scoring off the loop
@@ -1297,38 +1315,64 @@ def watch_start(slug, body=None, settings=None, **_):
         return err
     body = body or {}
     runs = str(body.get('runs') or '')
-    if not _safe(runs):
+    if not _safe(*runs.split(',')):          # several ticked models ride as one comma list
         return {'error': 'pick at least one model'}, 400
     try:
         minutes = max(1, min(24 * 60, int(body.get('minutes') or 30)))
     except ValueError:
         minutes = 30
     device = str(body.get('device') or 'browser')[:60]
+    keep = body.get('keep') in (True, 'true', 1, '1')          # every piece becomes a room take
+    test = body.get('test') in (True, 'true', 1, '1')          # a pushing board counts its fires and answers nothing
     pdir = paths.project_dir(root, slug)
     try:
         if device == 'browser':
-            st = _watch.start(pdir, slug, device, minutes, runs, _watch_scorer(root, slug, runs, settings))
+            st = _watch.start(pdir, slug, device, minutes, runs, _watch_scorer(root, slug, runs, settings), keep=keep)
         else:
             from core.devices import engine
             row = engine._usable(device)
-            listen_fn, capture_fn, chunk_s = _watch_fns(root, slug, device, runs, settings)
-            st = _watch.start(pdir, slug, row['id'], minutes, runs, listen_fn, capture_fn, chunk_seconds=chunk_s)
+            listen_fn, capture_fn, chunk_s, arm, disarm = _watch_fns(root, slug, device, runs, settings, keep=keep, test=test)
+            st = _watch.start(pdir, slug, row['id'], minutes, runs, listen_fn, capture_fn, chunk_seconds=chunk_s,
+                              keep=keep, test=test and arm is not None, arm=arm, disarm=disarm)
     except Exception as e:
         return {'error': f"watch: {getattr(e, 'args', [e])[0]}"}, 502
     st['running'] = True
     return {'watch': st}
 
 
-def _watch_fns(root, slug, device, runs, settings):
-    """A satellite watch's two hands: the scorer and the capture. Built on start and again on resume."""
-    chunk_s = 60 if _wake_format(device) == 'tflite' else 300     # an ESP32 holds a minute of audio, a Pi five
+CAPTURE_CHUNK_S = 30     # a pushing board's piece: two per minute, a megabyte each
+
+
+def _capture(device, seconds, chunk_s=CAPTURE_CHUNK_S, test=False):
+    """Ask a board to push its room for `seconds` (0 = stop), through the driver's door. A board already
+    capturing (Sapphire restarted under it) is left alone."""
+    from core.devices.drivers import satellite
+    row, cfg, secrets = _board_parts(device)
+    if seconds > 0:
+        try:
+            if (satellite.capture_state(row, cfg, secrets) or {}).get('active'):
+                return None
+        except Exception:
+            pass
+    return satellite.capture(row, cfg, secrets, seconds, chunk_s, test)
+
+
+def _watch_fns(root, slug, device, runs, settings, keep=False, test=False):
+    """A satellite watch's hands: the scorer and the capture, and for a board that pushes its room (an ESP32 with
+    the capture door) the arm and disarm. Built on start and again on resume."""
+    h = _health_of(device)
+    scorer = _watch_scorer(root, slug, runs, settings)
+    if _pushes(h):
+        return (scorer, lambda seconds: _watch.take(device, timeout=seconds + 30), CAPTURE_CHUNK_S,
+                lambda seconds: _capture(device, seconds, CAPTURE_CHUNK_S, test), lambda: _capture(device, 0))
+    chunk_s = 60 if _wake_format(device, h) == 'tflite' else 300     # an ESP32 holds a minute of audio, a Pi five
 
     def capture_fn(seconds):
         data, _ = _listen(device, int(min(seconds, chunk_s)), vad=False)
         audio, sr = store.decode(data)
         audio = store.to_16k(audio, sr)
         return store.boost_if_faint(audio, store.mic_report(audio)['floor_db'])[0]
-    return _watch_scorer(root, slug, runs, settings), capture_fn, chunk_s
+    return scorer, capture_fn, chunk_s, None, None
 
 
 def watch_resume(settings):
@@ -1340,7 +1384,8 @@ def watch_resume(settings):
     for pr in store.list_projects(root):
         slug = pr['slug']
         try:
-            st = _watch.resume(paths.project_dir(root, slug), slug, lambda d, r, s=slug: _watch_fns(root, s, d, r, settings))
+            st = _watch.resume(paths.project_dir(root, slug), slug,
+                               lambda d, r, w, s=slug: _watch_fns(root, s, d, r, settings, keep=bool(w.get('keep')), test=bool(w.get('test'))))
             if st == 'busy':
                 busy = True
             elif st:

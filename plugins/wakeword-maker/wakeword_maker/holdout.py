@@ -1,4 +1,4 @@
-# holdout.py - the slice that judges: about 15% of your own positives (spread over mics and styles), of your own
+# holdout.py - the slice that judges: about 25% of your own positives (spread over mics and styles), of your own
 # negatives (near misses and ordinary apart), and of the room takes (whole takes), chosen once per wake word and
 # frozen in <project>/holdout.json. Never trained on, never varied, never used as background. Test grades on it.
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 from . import store
 from .paths import write_json
 
-FRACTION = 0.15
+FRACTION = 0.25
 
 
 def path(pdir):

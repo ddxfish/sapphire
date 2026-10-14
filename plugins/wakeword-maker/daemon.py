@@ -35,6 +35,12 @@ def start(plugin_loader, settings):
         except Exception as e:
             logger.warning(f"[WWM] could not re-attach jobs: {e}")
         threading.Thread(target=_resume_watches, args=(plugin_loader, settings), name='wwm-watch-resume', daemon=True).start()
+    try:
+        from core.devices import voice
+        from wakeword_maker import watch
+        voice.room_sink = watch.sink          # a board pushing its room (capture.c) lands in the watch on that device
+    except Exception as e:
+        logger.debug(f"[WWM] room sink: {e}")
 
 
 def _resume_watches(plugin_loader, settings):
@@ -65,4 +71,10 @@ def stop():
     from wakeword_maker import watch
     jobs.detach_all()       # this module's tails stop following and promoting; the next load attaches its own
     watch.pause_all()       # a room watch is a thread: it pauses here and resumes on the next load
+    try:
+        from core.devices import voice
+        if getattr(voice, 'room_sink', None) is watch.sink:
+            voice.room_sink = None          # with no plugin loaded, a pushing board is told to stop
+    except Exception:
+        pass
     sampler_client.stop()   # the jobs keep running on purpose; the sampler is a helper and goes with the plugin

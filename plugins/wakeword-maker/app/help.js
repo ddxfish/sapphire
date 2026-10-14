@@ -16,12 +16,12 @@ Press ▶ to hear one.`],
     other_packs: ['Other-language packs', `Voices made for other languages, speaking English with an accent.
 Some are good variety, some mangle the word. Listen before you keep them.`],
     record: ['Recording yourself', `Press, say it, press again. That's one sample.
-The floor is about 120 takes of the phrase (three mics, forty each); 220 across ten ways of speaking made the first clean models. The way you really talk to her: fast, soft, from the next room, facing away.
+The floor is about 240 takes of the phrase (three mics, eighty each); 440 across ten ways of speaking is the target: twice what made the first clean models, so a quarter can be held back to judge. The way you really talk to her: fast, soft, from the next room, facing away.
 Your own voice counts for more than a thousand computer clips.
 Use several microphones: the satellites that will listen for it, a webcam, a headset. The list behind the Says it ? button has the whole shopping list.`],
     upload: ['Uploading files', `wav, mp3, flac, ogg, or a zip of them.
 They stay marked as yours.`],
-    guide: ['The guide', `Targets, floor and good: 120 and 220 of your phrase, 60 and 200 near misses, 40 and 160 other words, 15 and 45 minutes of room. The good column is what made the first clean models.
+    guide: ['The guide', `Targets, floor and good: 240 and 440 of your phrase, 120 and 400 near misses, 80 and 320 other words, 30 and 90 minutes of room. The good column is twice what made the first clean models: a quarter of it is held back to judge.
 ✗ fix before training. ⚠ should fix. ℹ would make it better.
 "Test this mic" listens to the room for two seconds and tells you if the mic is noisy or quiet.`],
     satmic: ['Satellite microphone', `Mic gain: how loud the device's microphone is. Raise it until "Test this mic" reads good.
@@ -44,7 +44,7 @@ Nothing is written to disk; change it and train again anytime. A saved "harsh" f
     dryrun: ['The dry run', `Tries the recipe on 300 of your clips and asks the speech recognizer if it still hears the phrase.
 A high number means the clips stay understandable. A low number means they're being buried.
 Listen to the five harshest ones: if you can still hear the word, it's fine.`],
-    holdout: ['Held out for testing', `A slice of your recordings and room sound (15% unless you set another share on Reshuffle) is set aside and never trained on.
+    holdout: ['Held out for testing', `A slice of your recordings and room sound (25% unless you set another share on Reshuffle) is set aside and never trained on.
 After training, every model is judged on these, so Hears you and Sound-alikes are honest.
 Reshuffle draws a different slice; the verdicts of older runs are then marked stale until you Re-judge.`],
     v_room: ['Rooms', `Plays the clip through a real room's echo.`],
@@ -86,7 +86,9 @@ A red bar says where the model is weak: record more of that, or lower the thresh
 Try near misses and other words too. Pick a satellite to test through its own microphone.`],
     watch: ['Room watch', `Your room, for as long as you like, through a mic or a satellite. Every time a ticked model would have answered, that moment is kept with its sound.
 Sort the fires: False alarm keeps it as a negative (the next training learns from it). That was me keeps it as a phrase sample.
-Hours of quiet with no fires is the best news a wake word can get.`],
+Hours of quiet with no fires is the best news a wake word can get.
+Keep it all as room sound: every piece it hears becomes a room take. A day of your room through the device's own microphone is the honest judge of false alarms, and the next training draws its background from it.
+An ESP32 that pushes its room keeps hearing its wake word, and its own fires are counted beside the models'. Board test mode: it counts and answers nothing, so a candidate can be judged on a day of the room without her talking to the TV.`],
 };
 
 export function qbtn(topic) {

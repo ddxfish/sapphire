@@ -45,6 +45,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `mac` | The chip's own id, `"aa:bb:cc:dd:ee:01"`. The flasher reads the same over USB: a board is known by it whatever it is called |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now. A ring that can be turned off for good adds `"off"` (true = dark through every state until it is turned on) and `"level"`, its own brightness in percent |
 | `buttons` | With `buttons` in `has`: `{"list": [{"name": "boot", "short": "keyboard", "long": "clear"}], "can": {"keyboard": "Show or hide the keyboard", "clear": "Clear the chat window"}}`. `list` names each button and the job it does by itself for a short, long or double press (left out = nothing). An entry may state `"ways": ["short"]`: the only ways that button can be pressed (a place on a touch screen is tapped, never held), and the page offers no others. `can` is every job the board can do by itself, with the words the Devices page shows for it. See "A button was pressed" |
+| `capture` | `{"active", "test", "sent", "dropped", "lost", "fires"}` and, while one goes on, `id`, `seconds`, `left_s`, `chunk_s`: how the room-in-pieces capture goes (`POST /capture`, below). A board with this key has the door; the Wakeword Maker's room watch asks it of an ESP32 |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
 
@@ -86,6 +87,7 @@ A board answers only the addresses of what it has.
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
 | `speaker` | `POST /volume?level=80` | Sets it, kept across restarts. A board without it answers 404. A board with volume buttons states `volume_step` in `/health` and takes `step=10` here too (1 to 50): what one press adds or takes, set per device in Settings > Devices |
 | `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav. A body may also take `lead_in` (seconds before the mic opens, default its own cue) and `tone=false` (no ping): the Wakeword Maker asks for `lead_in=0&tone=false` because it tells the person itself when to speak |
+| `mic` | `POST /capture?seconds=36000&chunk=30&test=false`, `GET /capture`, `DELETE /capture` | The room in pieces: for `seconds` (up to a day) the board posts every `chunk` seconds (5 to 60) of its clean microphone stream to Sapphire's room door (below), from its own task, so its other doors keep answering and it keeps hearing its wake word; the wake fires that fell in each piece ride along with their scores. With `test=true` a fire is only counted: nothing is recorded or sent, so a candidate model is judged on a day of the room without her answering the television. Answers `{"ok": true, "capture": {...}}` (the same block as `capture` in `/health`); 409 while one goes on. `DELETE` ends it: what was gathered of the last piece is sent. A board without the door answers 404; the room watch then pulls `GET /audio/listen?vad=false` a minute at a time |
 | `mic` | `GET /mic`, `POST /mic?gain=36`, `POST /mic?agc=on`, `POST /mic?max_s=30` | The microphones' gain in dB (`gain_db`, `gain_max_db`), the board's automatic gain control, and `max_s`: the seconds at which a question is cut off however long the talk (5 to 60, kept). A board that takes `max_s` states it in `/health` as `mic.max_s`, and only such a board is sent it, when the device is saved. Optional: a body without the door answers 404 and the driver says so |
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
 | `light` | `GET /led/spec` | Its colors and animations |
@@ -236,6 +238,38 @@ A form with the file field `audio` works too.
 
 The best recording is 16000 Hz, one channel, 16 bit. Limit: 30 requests a
 minute.
+
+### A piece of the room
+
+While a capture goes on (`POST /capture`), the board sends every piece as it fills:
+
+```
+POST /api/devices/den/room
+Authorization: Bearer <voice key>
+Content-Type: audio/wav
+X-Capture: 184233
+X-Chunk: 7
+X-Fires: [[203520,991],[371200,978]]
+X-Fire-Count: 2
+X-Test: 0
+X-Model: hey_marcus
+
+<the piece>
+```
+
+`X-Capture` names the capture (the board's clock at its start), `X-Chunk` the piece's number in it, `X-Fires`
+the wake fires that fell in the piece as `[sample offset, score x 1000]` (up to 40; `X-Fire-Count` counts them
+all), `X-Test` whether fires were only counted, `X-Model` the wake word model that was listening.
+
+| Answer | Meaning |
+|---|---|
+| `{"ok": true, "accepted": true}` | Taken. Send the next piece when it fills |
+| `{"ok": true, "accepted": false}` | Taken, and nobody on Sapphire's side is collecting the room: end the capture |
+| `{"ok": false, "error": "..."}` | Her side had trouble with this piece. Count it lost and send the next |
+| 401, 404 | Wrong key, no such device, or a Sapphire without the door: end the capture |
+
+Who collects is `voice.room_sink`: the Wakeword Maker's room watch keeps every piece as a room take and sorts
+the fires. Limit: 30 requests a minute, so pieces are 5 to 60 seconds.
 
 ### What was typed
 

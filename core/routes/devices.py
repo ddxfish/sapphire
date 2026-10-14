@@ -490,6 +490,33 @@ async def devices_voice(device_id: str, request: Request):
     return await asyncio.to_thread(voice.hear, device_id, data, suffix)
 
 
+@router.post("/api/devices/{device_id}/room")
+async def devices_room(device_id: str, request: Request):
+    """A satellite sends a piece of its room while a capture runs on it: the
+    audio as the body, and in headers X-Capture (the capture's id), X-Chunk
+    (the piece's number), X-Fires (JSON [[sample offset, score x 1000]] of
+    the wake fires in it), X-Fire-Count, X-Test (1 = fires were only
+    counted) and X-Model (the wake word model listening). Handed to whoever
+    collects room sound; `accepted: false` tells the board to stop."""
+    await _device_key(device_id, request, 'room')
+    from core.devices import voice
+    data, suffix = await _heard(request, voice.MAX_AUDIO)
+    h = request.headers
+    try:
+        raw = json.loads(h.get('x-fires') or '[]')
+    except ValueError:
+        raw = []
+    fires = []
+    for f in (raw if isinstance(raw, list) else [])[:voice.ROOM_FIRES_MAX]:
+        if isinstance(f, list) and len(f) == 2 and all(isinstance(x, (int, float)) for x in f):
+            fires.append([round(float(f[0]) / 16000.0, 3), round(float(f[1]) / 1000.0, 3)])
+    digits = lambda s: str(s or '0').strip().isdigit()
+    meta = {'capture': str(h.get('x-capture') or '')[:32], 'chunk': int(h.get('x-chunk')) if digits(h.get('x-chunk')) else 0,
+            'fires': fires, 'fire_count': int(h.get('x-fire-count')) if digits(h.get('x-fire-count')) else len(fires),
+            'test': str(h.get('x-test') or '') in ('1', 'true'), 'model': str(h.get('x-model') or '')[:48], 'suffix': suffix}
+    return await asyncio.to_thread(voice.room, device_id, data, meta)
+
+
 TYPED_BODY_MAX = 16 * 1024
 
 

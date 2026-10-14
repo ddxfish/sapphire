@@ -8,12 +8,12 @@ import { showHelpModal, showPrompt } from '/static/shared/modal.js';
 const MODES = {
     'positive/recorded': {
         say: 'the wake word, the way you really call her', avoid: 'saying it the same way every time',
-        help: ['Says it', `These teach her your voice saying the phrase. The whole list, so you only do this once (about 120 takes is the floor; 220 made the first clean models):
-• every mic she will hear you through, about 40 takes each: the satellites, your headset, the webcam, a phone
-• per mic: 15 normal, 5 fast, 5 far away, 5 soft or whispered, 5 loud or excited, 5 with the TV or music on
-• move while you do the 15 normal ones: face the mic, then face a little left, a little right, look up at the ceiling, look down at your hands, from the doorway, from the couch
-• anyone else in the house: 10 each, any way they like
-• a slice (15% unless you change it) is held back to judge the model, so a thin style gets a thin judge
+        help: ['Says it', `These teach her your voice saying the phrase. The whole list, so you only do this once (about 240 takes is the floor; 440 is the target: twice what made the first clean models, so a quarter can be held back to judge):
+• every mic she will hear you through, about 80 takes each: the satellites, your headset, the webcam, a phone
+• per mic: 30 normal, 10 fast, 10 far away, 10 soft or whispered, 10 loud or excited, 10 with the TV or music on
+• move while you do the 30 normal ones: face the mic, then face a little left, a little right, look up at the ceiling, look down at your hands, from the doorway, from the couch
+• anyone else in the house: 20 each, any way they like
+• a slice (25% unless you change it) is held back to judge the model, so a thin style gets a thin judge
 Do:
 • say it like you mean it, as if she were across the room
 • change speed, distance, mood and where you face between takes; the real you is never square to the mic
