@@ -157,8 +157,8 @@ def put(chat, item):
     why = _refusal(chat, item.lane)
     if why and why is not _HOLD:
         raise InboxRefused(why)
-    if item.run is None and not (item.text or '').strip():
-        raise InboxRefused('An item needs text or a run().')
+    if item.run is None and not (item.text or '').strip() and not item.images:
+        raise InboxRefused('An item needs text, images or a run().')
     if item.ctx is None:
         item.ctx = contextvars.copy_context()
     item.private_at_put = _chat_private(chat)
@@ -173,6 +173,12 @@ def put(chat, item):
             item.run = item.run_folded = None
         else:
             raise InboxRefused(f"'{chat}' is a chat room: open it under Chat > Rooms to talk there.")
+    seat_room = _seat_room(chat)
+    if seat_room:
+        # a seat's own chat (core/rooms.py SEAT: her tools, her memory, her rows) takes
+        # nothing from outside: a turn or a line put there would run her bare - no room
+        # block, no tool fence - into her seat history (Krem 2026-10-13)
+        raise InboxRefused(f"'{chat}' is a bot's own seat in the chat room '{seat_room}': talk to her there (Chat > Rooms).")
     c = _chat(chat)
     with c.lock:
         # The cap is for machines (the `later` lane): a person's typed turn and
@@ -430,6 +436,18 @@ def _is_room(chat):
     except Exception:
         return False
     return isinstance(s, dict) and s.get('mode') == 'room'
+
+
+def _seat_room(chat):
+    """The room a chat tagged mode:seat (core/rooms.py) belongs to, else None."""
+    system = _system()
+    if system is None:
+        return None
+    try:
+        s = system.llm_chat.session_manager.read_chat_settings(chat)
+    except Exception:
+        return None
+    return (str(s.get('room') or '') or None) if isinstance(s, dict) and s.get('mode') == 'seat' else None
 
 
 def _refuse_self_wait(chat):

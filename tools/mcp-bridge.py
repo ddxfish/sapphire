@@ -20,6 +20,10 @@ Setup:
 
 Two clients on one machine each need a key of their own: give each its token
 in its config, as SAPPHIRE_MCP_TOKEN or as a file named by SAPPHIRE_MCP_TOKEN_FILE.
+
+Another Sapphire on the network (SAPPHIRE_BASE=https://her-host:8073) with her
+default self-signed certificate: copy her certificate file here and name it as
+SAPPHIRE_MCP_CA. It is pinned - that one certificate verifies, nothing else does.
 """
 import json
 import os
@@ -34,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOKEN_FILE = Path(os.environ.get('SAPPHIRE_MCP_TOKEN_FILE') or PROJECT_ROOT / 'user' / 'mcp-persona.token')
 TOOLS_FILE = TOKEN_FILE.with_suffix('.tools.json')                # the last tool list she gave this key
 BASE = os.environ.get('SAPPHIRE_BASE', 'https://localhost:8073').rstrip('/')
+CA = os.environ.get('SAPPHIRE_MCP_CA', '').strip()         # her certificate (PEM) on another host: pinned, never trust-all
 ENDPOINT = f'{BASE}/mcp'
 PROTOCOL = '2025-06-18'
 QUICK, LONG = 5, 150           # seconds: the handshake and lists; a call (speak plays to its end, listen waits on a person)
@@ -46,6 +51,9 @@ _ctx = ssl.create_default_context()
 if (urlparse(BASE).hostname or '').lower() in ('localhost', '127.0.0.1', '::1'):
     _ctx.check_hostname = False
     _ctx.verify_mode = ssl.CERT_NONE
+elif CA:
+    _ctx = ssl.create_default_context(cafile=CA)        # only her certificate; the name on it is not checked (a LAN address)
+    _ctx.check_hostname = False
 
 
 def _token():

@@ -53,6 +53,7 @@ CUE_WAIT = 330                # a room cue: her door's ask waits 300 s for her t
 INVITE_WAIT = 330             # an invitation: her lobby turn may take 300 s (room_guest.INVITE_WAIT), plus a margin
 TOOL_WAIT = 60
 RESET_WAIT = 90               # a room reset: her box may wait for her last cue's turn to end first
+UPDATE_WAIT = 30              # a room update: a settings write on her side
 ABOUT_FRESH = 60              # seconds the far tool list is taken as true
 OWN = ('ask', 'tell')         # the door's own two: the chat capability, not tools
 CORE_ONLY = OWN + ('room_invite',)      # never offered as "her tools": core drives these itself (invite, cue)
@@ -277,6 +278,17 @@ def reset(device, config, secrets, card):
     closed, starts a fresh one for the next cue (her door's room_reset). Her
     words back. Raises Problem."""
     text, ok = _call('room_reset', card, config, secrets, RESET_WAIT)
+    if not ok:
+        raise Problem(text)
+    return text
+
+
+def update(device, config, secrets, card):
+    """Core only (core/rooms.py): the room here changed. `card` = {room, host,
+    purpose, people, instructions}. Her box swaps the room block in her room
+    chat for the new words (her door's room_update). Her words back. Raises
+    Problem."""
+    text, ok = _call('room_update', card, config, secrets, UPDATE_WAIT)
     if not ok:
         raise Problem(text)
     return text

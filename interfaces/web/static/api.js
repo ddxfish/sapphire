@@ -119,6 +119,12 @@ export const activateChat = async (name) => {
         _pendingActivates--;
     }
 };
+// Where the person's VOICE lands while a surface other than Chat has them (a room,
+// while open): the wake word, a satellite, the browser conversation. The Chat view's
+// chat never moves for it - the one pointer used to play both parts (2026-10-13).
+export const setLanding = (name, on = true) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/landing`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }),
+}, 10000);
 export const clearChat = () => fetchWithTimeout('/api/history/messages' + _boundQS(), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },

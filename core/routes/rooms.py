@@ -64,14 +64,15 @@ async def update_room(chat: str, request: Request, _=Depends(require_login)):
 
 @router.post("/api/rooms/{chat}/seats")
 async def add_seat(chat: str, request: Request, _=Depends(require_login)):
-    """{persona, name?} seats a persona. {device, name?, instructions?} invites
-    another Sapphire (a device) and waits for her decision - minutes;
-    the answer is {joined, said, seat?}."""
+    """{persona, name?} seats a persona; with door: true she sits AT the MCP
+    door, answered by whoever holds an API key that speaks as her. {device,
+    name?, instructions?} invites another Sapphire (a device) and waits for her
+    decision - minutes; the answer is {joined, said, seat?}."""
     await _room_or_404(chat)
     body = await _json(request)
     if body.get('device'):
         return await _call(rooms.invite_sapphire, chat, body.get('device'), body.get('name'), body.get('instructions') or '')
-    return await _call(rooms.add_seat, chat, body.get('persona'), body.get('name'))
+    return await _call(rooms.add_seat, chat, body.get('persona'), body.get('name'), door=bool(body.get('door')))
 
 
 @router.put("/api/rooms/{chat}/seats/{seat_id}")
@@ -92,8 +93,12 @@ async def say(chat: str, request: Request, _=Depends(require_login)):
     """The person's line. It lands between seat turns and wakes the room."""
     await _room_or_404(chat)
     body = await _json(request)
+    images = body.get('images')
+    if images is not None and not (isinstance(images, list) and len(images) <= 8 and all(
+            isinstance(i, dict) and isinstance(i.get('data'), str) and len(i['data']) <= 14_000_000 for i in images)):
+        raise HTTPException(status_code=400, detail='images: up to 8 of {data, media_type}, 10 MB each')
     try:
-        ticket = await asyncio.to_thread(rooms.say, chat, body.get('text'))
+        ticket = await asyncio.to_thread(rooms.say, chat, body.get('text'), images=images)
     except rooms.RoomError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:                     # the inbox's own refusal (sealed, full)

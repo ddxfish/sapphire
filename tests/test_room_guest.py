@@ -282,8 +282,8 @@ def test_the_door_offers_the_tool_only_while_invitations_are_on(world, monkeypat
     system = SimpleNamespace(llm_chat=SimpleNamespace(function_manager=fm, session_manager=world.sm))
     monkeypatch.setattr(config, 'MCP_SERVER_TOOLS', [], raising=False)
     names = [t['name'] for t in mcp.exposed(system)]
-    assert names == ['ask', 'tell', 'room_invite', 'room_reset']
-    assert [r['name'] for r in mcp.catalogue(system) if r['own']] == ['ask', 'tell', 'room_invite', 'room_reset']
+    assert names == ['ask', 'tell', 'room_invite', 'room_reset', 'room_update']
+    assert [r['name'] for r in mcp.catalogue(system) if r['own']] == ['ask', 'tell', 'room_invite', 'room_reset', 'room_update']
     monkeypatch.setattr(config, 'MCP_ROOM_INVITES', False, raising=False)
     assert [t['name'] for t in mcp.exposed(system)] == ['ask', 'tell']
     text, ok = mcp.call(system, 'room_invite', INVITE)
@@ -325,3 +325,40 @@ def test_the_hosts_clear_sets_her_room_chat_aside_whole_and_starts_fresh(world, 
     world.sm.chats['room-dev-parlour'] = {'rows': [], 'persona': 'x'}
     assert rg.reset(world.system, {'room': 'parlour', 'host': 'dev'})[1] is False and 'room-dev-parlour' in world.sm.chats
     assert rg.reset(world.system, {'room': '', 'host': 'dev'}) == ('room and host are needed.', False)
+
+
+def test_the_hosts_edit_rewrites_the_room_block_in_her_chat(world, monkeypatch):
+    """room_update (Krem 2026-10-13): a new purpose, new people or new instructions from the
+    host swap the room block in her room chat's custom context - the block kept on the tag
+    at join - and nothing else of hers moves; no turn runs. A chat joined before the block
+    was kept apart gets the new block added. The door offers the tool with the other two."""
+    assert 'room_update' in mcp.own()
+    patcher, _ = her(lambda text: {'accept': True, 'instructions': 'Stay dry.'})
+    with patcher:
+        mcp.room_invite(world.system, INVITE, where='192.168.1.5')
+    st = world.sm.chats['room-dev-salon']
+    before = st['custom_context']
+    assert 'What this room is for: Talk about the boat.' in before and 'You are the sceptic.' in before
+    assert st['room_guest']['block'] in before and st['room_guest']['mine'] == 'Stay dry.'
+    out = mcp.handle(world.system, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                    'params': {'name': 'room_update', 'arguments': {
+                                        'room': 'salon', 'host': 'dev', 'purpose': 'Boats only.',
+                                        'people': ['Krem', 'Cobalt', 'Anita'], 'instructions': 'Be brief.',
+                                        'rules': 'House rules: one round per line of Krem.'}}},
+                     where='192.168.1.5')['result']
+    assert not out.get('isError') and "carries the room's new words" in out['content'][0]['text']
+    cc = world.sm.chats['room-dev-salon']['custom_context']
+    assert cc.count('[Chat room "salon" on dev]') == 1
+    assert 'What this room is for: Boats only.' in cc and 'Talk about the boat.' not in cc
+    assert 'What the host asks of you there: Be brief.' in cc and 'You are the sceptic.' not in cc
+    assert 'House rules: one round per line of Krem.' in cc                      # the host's rules, in her block (2026-10-13)
+    assert 'Also here: Krem, Cobalt, Anita.' in cc and 'You are Prime.' in cc and 'Stay dry.' in cc
+    assert cc.split('[Chat room')[0] == before.split('[Chat room')[0]                  # her own dressing, untouched
+    assert world.sm.chats['room-dev-salon']['room_guest']['block'] in cc
+    # joined before the block was kept apart: the new block is added, the old words stay
+    del world.sm.chats['room-dev-salon']['room_guest']['block']
+    text, ok = rg.update(world.system, {'room': 'salon', 'host': 'dev', 'purpose': 'Planes.'})
+    assert ok and world.sm.chats['room-dev-salon']['custom_context'].count('[Chat room "salon" on dev]') == 2
+    # no such room here, or no room named: nothing is touched
+    assert rg.update(world.system, {'room': 'parlour', 'host': 'dev'}) == ("There is no chat here for the room 'parlour' on dev.", False)
+    assert rg.update(world.system, {'host': 'dev'}) == ('An invitation names its room.', False)

@@ -80,6 +80,7 @@ DOORBELL_GAP = 0.25        # seconds between doorbells while she writes
 PULL_MAX = 2000            # chars one pull may ask for
 
 _speaking_for = contextvars.ContextVar('device_voice_chat_settings', default=None)
+_voice_for = contextvars.ContextVar('device_voice_own', default=None)      # {voice, speed, pitch} inside say(): a chat-room seat's own
 _lane = contextvars.ContextVar('device_voice_reply_lane', default=False)   # inside say(): the reply lane, not her tool call
 _lock = threading.Lock()
 _waiting = {}              # device id -> questions waiting or running
@@ -147,7 +148,7 @@ def render(text):
     tts = getattr(_system(), 'tts', None)
     if tts is None or not hasattr(tts, 'render'):
         return None, "Speech is not available right now."
-    return tts.render(text, chat_settings=_speaking_for.get())
+    return tts.render(text, chat_settings=_speaking_for.get(), **(_voice_for.get() or {}))
 
 
 def wanted(plays):
@@ -294,9 +295,10 @@ def chat_for(config, device_id=''):
     else the last chat used. A name that is no chat yet is made here (Krem
     2026-10-09: a typed name makes the chat). (chat, None, why) when the
     chat cannot be used: it is locked, or it could not be made."""
+    from core.chat.history import landing_chat
     sm = _system().llm_chat.session_manager
     named = str((config or {}).get('chat') or '').strip()
-    chat = named or sm.get_active_chat_name()
+    chat = named or landing_chat(sm)            # unnamed: where voice lands (a chat room open on the screen, else the active chat)
     settings = sm.get_settings_for(chat)
     if settings is None and named and not sm.chat_exists(named):
         from core.chat.history import sanitize_chat_name
@@ -612,14 +614,18 @@ class Speech:
 
 # --- the halves ----------------------------------------------------------------
 
-def say(device_id, text, chat_settings=None):
-    """Speak on a device. Returns (what happened, ok)."""
-    token, lane = _speaking_for.set(chat_settings), _lane.set(True)
+def say(device_id, text, chat_settings=None, voice=None, speed=None, pitch=None):
+    """Speak on a device. Returns (what happened, ok). voice/speed/pitch: a
+    chat-room seat's own (core/rooms.py), within the active engine; None = the
+    live client's."""
+    own = {k: v for k, v in (('voice', voice), ('speed', speed), ('pitch', pitch)) if v} or None
+    token, lane, mine = _speaking_for.set(chat_settings), _lane.set(True), _voice_for.set(own)
     try:
         said, ok = _engine().run(device_id, 'speaker', 'say', text, owner=True)
     finally:
         _speaking_for.reset(token)
         _lane.reset(lane)
+        _voice_for.reset(mine)
     _spoke.ok = bool(ok)
     return _engine().text_of(said), ok
 

@@ -723,7 +723,14 @@ function initEventBus() {
         if (_notMine(data) || _roomsNotMine(data)) return;
         try {
             if (data?.user_text) ui.addUserMessage(data.user_text);
-            // a chat room's seat turn names its speaker: that face, that name
+            // a chat room's seat turn names its speaker: that face, that name - and says who is
+            // working until her words arrive (a slow provider or a guest's door looked like
+            // nothing happening; the typing events that paint "Generating..." for a typed turn
+            // name HER chat, never the room's, so the rail never sees them; Krem 2026-10-12)
+            if (data?.speaker) {
+                ui.showStatus(data.persona || null);
+                ui.updateStatus(`${data.name || 'a bot'} is generating...${data.kind === 'sapphire' ? ' (on her machine)' : ''}`);
+            }
             ui.startStreaming(data?.speaker ? { speaker: data.speaker, name: data.name, persona: data.persona, kind: data.kind } : null);
             _voiceTurnActive = true;
             _voiceTurnId = data?.message_id ?? null;
@@ -740,7 +747,10 @@ function initEventBus() {
     // every refresh suppressed until reload (scout 3, 2026-09-10).
     eventBus.on('voice_turn_chunk', (data) => {
         if (_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive) return;
-        try { ui.appendStream(data?.text || ''); } catch (e) { /* ignore */ }
+        try {
+            if (data?.source === 'room' && data?.text) ui.hideStatus();   // her words are here: the status line goes
+            ui.appendStream(data?.text || '');
+        } catch (e) { /* ignore */ }
     });
     // A tool call inside the turn: the same accordion the typed path paints
     // (an agent's report turn used to show think › think › prose live, the
@@ -753,13 +763,23 @@ function initEventBus() {
         } catch (e) { /* ignore */ }
     });
     eventBus.on('voice_turn_end', async (data) => {
-        if (!_voiceTurnActive) return;
+        if (!_voiceTurnActive) {
+            // a room turn's end we were not tracking must never leave Stop lit or a
+            // status line standing (Krem saw Stop after generation, 2026-10-12)
+            if (data?.source === 'room' && getIsProc() && !getAbortController()) {
+                console.warn('[VOICE_TURN] end of an untracked room turn with Stop lit - releasing');
+                setProc(false);
+                ui.hideStatus();
+            }
+            return;
+        }
         const mine = !_notMine(data) && !_roomsNotMine(data);
         // not ours and not the turn we are showing: another chat's end
         if (!mine && (data?.message_id ?? null) !== _voiceTurnId) return;
         _voiceTurnActive = false;
         _voiceTurnId = null;
         try {
+            if (data?.source === 'room') ui.hideStatus();
             if (!getAbortController()) setProc(false);
             // dropped (a seat passed, was cut, or Stop): there is no row to swap
             // in, and the swap used to paint a copy of the PREVIOUS bot's line.

@@ -81,7 +81,8 @@ def _invitation(args, where):
         raise ValueError('An invitation names its room.')
     return {'room': room, 'host': _clean(args.get('host'), 80) or 'another Sapphire', 'where': _clean(where, 60),
             'purpose': _clean(args.get('purpose')), 'people': people,
-            'instructions': _clean(args.get('instructions'), 4000), 'private': args.get('private') is True,
+            'instructions': _clean(args.get('instructions'), 4000), 'rules': _clean(args.get('rules'), 1000),
+            'private': args.get('private') is True,
             'name': _clean(args.get('name'), 80), 'decision': None}
 
 
@@ -283,6 +284,8 @@ def _preamble(inv, shown, mine, has_self=False):
     lines.append(f"You are {shown}." + (f" Also here: {', '.join(inv['people'])}." if inv['people'] else ''))
     if inv['instructions']:
         lines.append(f"What the host asks of you there: {inv['instructions']}")
+    if inv.get('rules'):
+        lines.append(inv['rules'])
     lines.append('Other speakers\' lines reach you as "Name: text". Speak only as yourself, in your own words; '
                  'never write lines for anyone else, and do not start your line with your own name. '
                  f'If you have nothing to add this turn, answer exactly {PASS}.')
@@ -410,6 +413,39 @@ def reset(system, args, where=''):
     return f"The chat for that room is kept whole as '{kept}' (archived); '{name}' starts fresh for the next cue.", True
 
 
+def update(system, args, where=''):
+    """The host's word that the room over there changed: its purpose, who is
+    there, or what the host asks of her. The room block in her room chat's
+    custom context is swapped for one with the new words (the block kept on
+    the tag at join); her own dressing and her instructions to herself stay.
+    A chat joined before the block was kept apart gets the new one added.
+    No turn runs. (text, ok)."""
+    if not enabled():
+        return 'This Sapphire does not take chat-room invitations (Settings > MCP Server, over there).', False
+    try:
+        inv = _invitation(args, where)
+    except ValueError as e:
+        return str(e), False
+    sm = system.llm_chat.session_manager
+    name, tagged = _room_chat_name(sm, inv)
+    if not tagged:
+        return f"There is no chat here for the room '{inv['room']}' on {inv['host']}.", False
+    st = dict(sm.get_settings_for(name) or {})
+    tag = dict(st.get(TAG) or {}) if isinstance(st.get(TAG), dict) else {}
+    block = _preamble(inv, tag.get('shown') or inv['name'] or _me(), tag.get('mine') or '', bool(tag.get('has_self')))
+    cc = str(st.get('custom_context') or '')
+    old = tag.get('block')
+    if old and old in cc:
+        cc = cc.replace(old, block, 1)
+    else:
+        cc = '\n\n'.join(t for t in (cc.strip(), block) if t)
+    tag.update(block=block, changed=datetime.now().isoformat(timespec='seconds'))
+    if not sm.set_named_chat_settings(name, {'custom_context': cc, TAG: tag}):
+        return f"The chat '{name}' could not take the room's new words.", False
+    logger.info(f"[ROOM GUEST] the room '{inv['room']}' on {inv['host']} changed: '{name}' carries the new words")
+    return f"'{name}' now carries the room's new words.", True
+
+
 def join(args):
     """The tool's body. (text for her, ok)."""
     inv = current.get()
@@ -434,9 +470,13 @@ def join(args):
     fm = _system().llm_chat.function_manager
     has_self = any(t.get('function', {}).get('name') == 'read_self'
                    for t in (fm.resolve_tools(st.get('toolset') or 'none', st.get('extra_toolsets')) or []))
-    st['custom_context'] = '\n\n'.join(t for t in (own, _preamble(inv, shown, mine, has_self)) if t)
+    block = _preamble(inv, shown, mine, has_self)
+    st['custom_context'] = '\n\n'.join(t for t in (own, block) if t)
     st[TAG] = {'host': inv['host'], 'room': inv['room'], 'where': inv['where'],
-               'since': datetime.now().isoformat(timespec='seconds')}
+               'since': datetime.now().isoformat(timespec='seconds'),
+               # what room_update swaps and what only she knew: the block as written, her name there,
+               # her own instructions to herself, whether she was asked to read her sheet
+               'block': block, 'shown': shown, 'mine': mine, 'has_self': has_self}
     name, again = _room_chat_name(sm, inv)
     if again and bool((sm.get_settings_for(name) or {}).get('private_chat')):
         inv['decision'] = {'joined': False, 'reason': 'the chat for that room here is private now'}

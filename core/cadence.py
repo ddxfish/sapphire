@@ -440,7 +440,11 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         # the browser — which only clears its voice-turn latch on END — sat
         # wedged in Stop with every refresh suppressed (broadsword H8). The
         # error still surfaces: END carries it, then the raise below fires.
-        errored = errored or f"{type(e).__name__}: {e}"
+        from core.chat.chat import friendly_llm_error
+        # in words where the error has a known shape (the app's one voice for
+        # these, core/chat/chat.py): a room's notice and a door's asker read the
+        # cause, not a provider's dump (a seat with no model loaded, 2026-10-13)
+        errored = errored or friendly_llm_error(e) or f"{type(e).__name__}: {e}"
     finally:
         # The history work happens HERE, while this turn still holds the chat:
         # _drop_last_turn removes the last N live rows whoever wrote them, and

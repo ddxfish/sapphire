@@ -76,6 +76,8 @@ class StreamingTTSPump:
 
     def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None,
                  voice_override: Optional[str] = None,
+                 speed_override: Optional[float] = None,
+                 pitch_override: Optional[float] = None,
                  split_override: Optional[str] = None,
                  disabled: bool = False,
                  chat_settings: Optional[dict] = None,
@@ -111,8 +113,9 @@ class StreamingTTSPump:
         # to read live client state at synth time, so a chat switch, a
         # continuity task's set→restore, or a second concurrent stream retuned
         # the remaining chunks of THIS stream mid-speech (2026-08-08).
-        self._speed = getattr(self.tts, "speed", None) or 1.0
-        self._pitch = getattr(self.tts, "pitch_shift", None) or 1.0
+        # ...or the caller's own (a chat-room seat's voice, /api/tts/stream speed/pitch).
+        self._speed = speed_override or getattr(self.tts, "speed", None) or 1.0
+        self._pitch = pitch_override or getattr(self.tts, "pitch_shift", None) or 1.0
         self._default_voice = getattr(self.tts, "voice_name", None) or "af_heart"
         self._provider_pitch = getattr(self.provider, "supports_pitch", False)
         # Chunker bounds — user-tunable via Settings → TTS. Sensible

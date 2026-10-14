@@ -152,7 +152,6 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         raise HTTPException(status_code=400, detail="Invalid output_mode")
 
 
-@router.post("/api/tts/stream")
 def _gate_settings_for(system, chat):
     """Settings the TTS privacy gate should judge: the named chat's when the
     caller says which chat produced the text, else None (= the effective
@@ -167,6 +166,7 @@ def _gate_settings_for(system, chat):
         return {'private_chat': True}
 
 
+@router.post("/api/tts/stream")
 async def handle_tts_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Streaming TTS for known text (Replay button, future re-synth flows).
 
@@ -200,13 +200,21 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
     voice = (data.get('voice') or '').strip() or None
     if voice:
         voice = _validate_tts_voice(voice)
+
+    def _num(key, lo, hi):          # a seat's own speed/pitch (a chat room's voices); None = the live client's
+        try:
+            return min(hi, max(lo, float(data.get(key))))
+        except (TypeError, ValueError):
+            return None
+    speed, pitch = _num('speed', 0.5, 2.5), _num('pitch', 0.5, 1.5)
     # The producing chat, when the caller names one (a room's bound session)
     # — the pump's privacy gate judges it instead of the active chat (H3).
     gate_settings = _gate_settings_for(system, data.get('chat'))
 
     def generate():
         from core.tts.stream_pump import StreamingTTSPump
-        pump = StreamingTTSPump(system=system, voice_override=voice, chat_settings=gate_settings)
+        pump = StreamingTTSPump(system=system, voice_override=voice, speed_override=speed, pitch_override=pitch,
+                                chat_settings=gate_settings)
         try:
             # Whole text in one push — chunker splits at sentence boundaries.
             # The final sentence (no trailing uppercase) emerges from flush.

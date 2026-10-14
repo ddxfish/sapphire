@@ -58,6 +58,7 @@ NEEDS = {'battery': ('out', 'kdeconnect.battery'), 'share': ('in', 'kdeconnect.s
          'contacts': ('in', 'kdeconnect.contacts.request_all_uids_timestamps')}
 LIST_DEFAULT = 15        # conversations shown
 LIST_MOST = 40
+LIST_WORDS = 400         # characters of a conversation's last text shown in the list ([...] after)
 
 _lock = threading.RLock()
 _link = None             # the one Link, while it runs
@@ -412,13 +413,18 @@ def _to_knowledge(config, row, filename, text):
 # --- text messages -------------------------------------------------------------------
 
 def _arm(peer, config):
-    """Ask the phone for its conversations once per link: from then on it
-    pushes every new text by itself (SMSPlugin.haveMessagesBeenRequested).
-    Done when texts wake her or when she may read them; the answer doubles
-    as the conversations cache."""
+    """Ask the phone for its conversations once: from then on it pushes every
+    new text by itself (SMSPlugin.haveMessagesBeenRequested, kept on the
+    phone across re-links). The answer doubles as the conversations cache.
+    Not again on every re-link: listing is the slow job on the phone's one
+    worker, and a `read` behind it waited or timed out (Krem, 2026-10-12).
+    Asked again only when the cache is older than CONV_FRESH."""
     if peer.extra.get('armed') or 'kdeconnect.sms.request_conversations' not in peer.caps_in:
         return
     peer.extra['armed'] = True
+    cache = _cache(peer)
+    if cache['by'] and time.time() - cache['ts'] < CONV_FRESH:
+        return
     threading.Thread(target=_conversations, args=(peer, True), daemon=True, name='kdeconnect-arm').start()
 
 
@@ -445,13 +451,15 @@ def _conversations(peer, refresh=False):
     waits for the first instead of timing out behind it)."""
     cache = _cache(peer)
     fresh = lambda: cache['by'] and time.time() - cache['ts'] < CONV_FRESH
+    # a COPY goes out: the reader thread adds to the cache as the phone talks, and a
+    # caller walking the live dict blew up on 'changed size during iteration' (Krem, 2026-10-12)
     if not refresh and fresh():
-        return cache['by']
+        return dict(cache['by'])
     if not cache['lock'].acquire(timeout=CONV_FIRST + CONV_QUIET + 5):
-        return cache['by']
+        return dict(cache['by'])
     try:
         if not refresh and fresh():
-            return cache['by']
+            return dict(cache['by'])
         began = time.monotonic()
         got = peer.ask('kdeconnect.sms.request_conversations', {}, 'kdeconnect.sms.messages',
                        timeout=CONV_FIRST, quiet=CONV_QUIET)
@@ -464,7 +472,7 @@ def _conversations(peer, refresh=False):
         if msgs:
             cache['ts'] = time.time()
         _mark_seen(peer, msgs)
-        return cache['by']
+        return dict(cache['by'])
     finally:
         cache['lock'].release()
 
@@ -584,9 +592,21 @@ def _who(address, names):
     return f"{name} ({address})" if name else address
 
 
+def _addresses(message):
+    """The numbers on a text, each once (an MMS lists the same number twice)."""
+    out, seen = [], set()
+    for a in (message.get('addresses') or []):
+        address = str(a.get('address') or '').strip() if isinstance(a, dict) else ''
+        key = _digits(address) or address.lower()
+        if address and key not in seen:
+            seen.add(key)
+            out.append(address)
+    return out
+
+
 def _senders(message, names):
-    """The other side of a text: every address, named when known."""
-    return ', '.join(_who(a.get('address'), names) for a in (message.get('addresses') or []) if isinstance(a, dict))
+    """The other side of a text: every number once, named when known."""
+    return ', '.join(_who(a, names) for a in _addresses(message))
 
 
 def _contacts(peer, refresh=False):
@@ -675,8 +695,7 @@ def _thread_of(peer, who):
         return tid, threads[tid], ''
     newest = lambda hits: max(hits, key=lambda kv: kv[1].get('date') or 0)
     if _NUMBER.match(who):
-        hits = [(tid, m) for tid, m in threads.items()
-                if any(_same_number(a.get('address'), who) for a in (m.get('addresses') or []) if isinstance(a, dict))]
+        hits = [(tid, m) for tid, m in threads.items() if any(_same_number(a, who) for a in _addresses(m))]
         if hits:
             tid, m = newest(hits)
             return tid, m, ''
@@ -687,7 +706,7 @@ def _thread_of(peer, who):
         names = {}
     want = who.lower()
     hits = [(tid, m) for tid, m in threads.items()
-            if want in ' '.join(_name_of(a.get('address'), names) for a in (m.get('addresses') or []) if isinstance(a, dict)).lower()]
+            if want in ' '.join(_name_of(a, names) for a in _addresses(m)).lower()]
     if hits:
         tid, m = newest(hits)
         return tid, m, ''
@@ -734,7 +753,9 @@ def _sms_list(peer, value=''):
     for tid, m in rows:
         who = _senders(m, names) or 'an unknown number'
         you = 'you: ' if m.get('type') != 1 else ''
-        body = ' '.join(str(m.get('body') or '').split())[:80]
+        body = ' '.join(str(m.get('body') or '').split())
+        if len(body) > LIST_WORDS:
+            body = body[:LIST_WORDS].rstrip() + ' [...]'
         if m.get('attachments') and not body:
             body = f"[{len(m['attachments'])} attachment(s)]"
         out.append(f"{who} · {_ago(m.get('date'))} · {you}{body}")
@@ -758,8 +779,11 @@ def _sms_read(peer, value):
     tid, latest, why = _thread_of(peer, who)
     if tid is None:
         return f"read: {why}.", False
+    def mine(pkt):               # the answer is the packet whose texts are all of this conversation
+        msgs = [m for m in (pkt['body'].get('messages') or []) if isinstance(m, dict)]
+        return bool(msgs) and all(str(m.get('thread_id')) == str(tid) for m in msgs)
     got = peer.ask('kdeconnect.sms.request_conversation', {'threadID': tid, 'numberToRequest': count},
-                   'kdeconnect.sms.messages', timeout=CONV_FIRST)
+                   'kdeconnect.sms.messages', timeout=CONV_FIRST, accept=mine)
     msgs = sorted((m for p in got for m in (p['body'].get('messages') or []) if isinstance(m, dict)),
                   key=lambda m: m.get('date') or 0)
     logger.info(f"[kdeconnect] asked {peer.name} for one conversation: {len(msgs)} message(s) came back")
@@ -771,12 +795,12 @@ def _sms_read(peer, value):
         pass
     with_whom = _senders(latest, names) or 'an unknown number'
     if not msgs:
-        return f"The phone sent nothing back for the texts with {with_whom}.", False
+        return (f"The phone sent nothing back for the texts with {with_whom} within {CONV_FIRST} seconds. "
+                f"It may be asleep, or busy sending its conversation list; try again in a moment."), False
     out = [f"Texts with {with_whom}, the last {len(msgs)}, oldest first:"]
     for m in msgs:
         who_ = 'you' if m.get('type') != 1 else (
-            ', '.join(_name_of(a.get('address'), names) or str(a.get('address') or '?')
-                      for a in (m.get('addresses') or []) if isinstance(a, dict)) or '?')
+            ', '.join(_name_of(a, names) or a for a in _addresses(m)) or '?')
         body = str(m.get('body') or '').strip()
         if m.get('attachments'):
             body = (body + ' ' if body else '') + f"[{len(m['attachments'])} attachment(s)]"
@@ -791,7 +815,8 @@ def _sms_send(peer, value):
     who, sep, text = str(value or '').partition('|')
     who, text = who.strip(), text.strip()
     if not sep or not who or not text:
-        return 'send: the number or contact, a pipe, then the words: "+15551234567 | On my way".', False
+        return ('send: a phone number, or a contact\'s exact name, then a pipe, then the words: '
+                '"555-123-4567 | On my way".'), False
     if len(text) > 1600:
         return 'send: that is over 1600 characters; texts are short.', False
     number, why = _number_of(peer, who)
@@ -971,8 +996,9 @@ def describe(device, config):
                                       "'fresh' asks the phone again", 'example': '15', 'wait': 30},
             'read': {'help': "one conversation: a contact's name or a number, loosely matched (no area code is "
                              "fine), then how many", 'example': 'Dad 30', 'wait': 30},
-            'send': {'help': "send a text as the phone's owner: the name or number, a pipe, the words",
-                     'example': 'Dad | On my way'}}},
+            'send': {'help': "send a text as the phone's owner: a phone number, or a contact's exact name "
+                             "(case aside), then a pipe, then the words",
+                     'example': '555-123-4567 | On my way'}}},
         'notify': {'label': 'Notify', 'help': 'reach the phone', 'actions': {
             'ping': {'help': 'a notification on the phone with these words (empty = a plain ping)',
                      'example': 'Dinner is ready'},

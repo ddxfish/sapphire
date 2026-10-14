@@ -588,12 +588,13 @@ export const renderHistory = (hist) => {
 // STATUS MESSAGES
 // =============================================================================
 
-export const showStatus = () => {
+export const showStatus = (persona = null) => {           // persona: a room seat's face, else the chat's
     if (!document.getElementById('status-message')) {
         const clone = statusTpl.content.cloneNode(true);
         const avatar = clone.querySelector('.msg-avatar');
-        if (avatar && currentPersona) {
-            setPersonaAvatar(avatar, currentPersona);
+        const face = persona || currentPersona;
+        if (avatar && face) {
+            setPersonaAvatar(avatar, face);
         }
         chat.appendChild(clone);
         scrollToBottomIfSticky();

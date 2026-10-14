@@ -421,7 +421,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
 }
 
 // Update image/file preview area in DOM
-function updateImagePreviewArea() {
+export function updateImagePreviewArea() {
     const previewArea = document.getElementById('image-preview-area');
     if (!previewArea) return;
 

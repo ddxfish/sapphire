@@ -25,6 +25,17 @@ import { setBoundChat, clearBoundChat } from '../core/bound-chat.js';
 let _holder = null;
 let _records = [];   // {node, parent, next} in claim order
 
+// The rail carries ROWS with it, and rows belong to a chat. Lent to a room
+// or a game it still held the Chat view's transcript; brought home it still
+// held the room's - and the Chat view never repainted on show, so a room's
+// transcript sat on the Chat page under the right picker (Krem, 2026-10-12
+// and again 2026-10-13). A hand-over wipes the transcript: the next owner
+// paints its own chat or nothing. The live bubble goes with it; the END of
+// that turn finds no bubble and does nothing (ui.finishStreaming).
+function wipe() {
+    document.getElementById('chat-container')?.replaceChildren();
+}
+
 function restoreAll() {
     for (let i = _records.length - 1; i >= 0; i--) {
         const { node, parent, next } = _records[i];
@@ -35,6 +46,7 @@ function restoreAll() {
         }
     }
     _records = [];
+    wipe();
     clearBoundChat();                        // home = the active pointer again
 }
 
@@ -59,6 +71,7 @@ export function claimOrgans({ railSlot, composerSlot }, ownerId, chatName = null
         composerSlot.appendChild(child);
     }
     _holder = ownerId || 'unknown';
+    wipe();
     setBoundChat(chatName);
     return true;
 }

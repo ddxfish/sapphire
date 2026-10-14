@@ -2,7 +2,7 @@
 
 ONE marker, a sibling of the image GALLERY marker:
     <!--FILES:{"title": "...", "items": [{"url": "/api/plugin/<name>/...", "name": "song.mp3"}]}-->
-The chat renders it as a row: audio items get a player, every item gets a
+The chat renders it as a row: audio and video items get a player, every item gets a
 download button (interfaces/web/static/shared/files-marker.js). It is UI-only:
 kept in history for the browser, stripped from every copy the model reads.
 

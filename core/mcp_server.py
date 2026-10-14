@@ -12,6 +12,7 @@
 # JSON answers (no event stream - nothing here needs to push), no session.
 # Tools only: no resources, no prompts. The route is core/routes/mcp.py; this
 # file is the protocol and the tools, so a test needs no HTTP.
+import json
 import logging
 from contextvars import ContextVar
 from pathlib import Path
@@ -26,6 +27,8 @@ TEXT_MAX = 8000                # characters of one ask or tell
 OWN = ('ask', 'tell')          # this door's own tools, always offered
 INVITE = 'room_invite'         # the third, offered while Settings > MCP Server takes room invitations
 RESET = 'room_reset'           # the fourth, with it: the host's word that a room she sits in was cleared or closed
+UPDATE = 'room_update'         # the fifth, with them: the host's word that a room she sits in changed (purpose, people, her brief)
+SEAT = ('room_read', 'room_wait', 'room_post')   # a persona key's seat AT a chat room's door here (core/rooms.py DOOR): offered to every persona key
 
 # True while a turn that came in through `ask` or `tell` runs: a tool that
 # would ask another Sapphire checks it and says "answer in your message"
@@ -75,6 +78,7 @@ _TOOLS = {
                 'purpose': {'type': 'string', 'description': 'What the room is for (every bot there reads it).'},
                 'people': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Who is in the room.'},
                 'instructions': {'type': 'string', 'description': 'What the host asks of her in that room.'},
+                'rules': {'type': 'string', 'description': "The room's rules in words (turns, caps, mentions, passing)."},
                 'private': {'type': 'boolean', 'description': 'Whether the host marked the room private.'},
                 'name': {'type': 'string', 'description': 'What the host would call her there.'},
             },
@@ -96,13 +100,73 @@ _TOOLS = {
             'required': ['room', 'host'],
         },
     },
+    UPDATE: {
+        'name': UPDATE,
+        'description': "The host's word that a chat room she sits in changed: its purpose, who is there, or what the "
+                       "host asks of her. The room block in her chat for that room is swapped for the new words; "
+                       "nothing else of hers changes, no turn runs.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'room': {'type': 'string', 'description': "The room's name over there."},
+                'host': {'type': 'string', 'description': 'The host Sapphire, as she sees it (the invitation\'s host).'},
+                'purpose': {'type': 'string', 'description': 'What the room is for now.'},
+                'people': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Who is in the room now.'},
+                'instructions': {'type': 'string', 'description': 'What the host asks of her there now.'},
+                'rules': {'type': 'string', 'description': "The room's rules in words, as they stand now."},
+            },
+            'required': ['room', 'host'],
+        },
+    },
+    'room_read': {
+        'name': 'room_read',
+        'description': "A chat room here where your persona has a seat at the door: the room, who is there, what the "
+                       "host asks of you, and its newest lines (words only). No room named: the rooms where you have "
+                       "such a seat.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'room': {'type': 'string', 'description': "The room's name."},
+                'limit': {'type': 'integer', 'description': 'How many of the newest lines (default 40).'},
+            },
+        },
+    },
+    'room_wait': {
+        'name': 'room_wait',
+        'description': "Wait at the door of a chat room here for your turn (up to 120 s). Your turn: the lines since "
+                       "your last one, the pictures on them, who is there; answer with room_post within 120 s or you "
+                       "are skipped. No turn in that time: {turn: false}, so wait again. The room's bots take turns "
+                       "after each line of the person's; you are one seat among them.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'room': {'type': 'string', 'description': "The room's name."},
+                'seconds': {'type': 'integer', 'description': 'How long to wait, 1-120 (default 120).'},
+            },
+            'required': ['room'],
+        },
+    },
+    'room_post': {
+        'name': 'room_post',
+        'description': "Your line for the turn room_wait handed you: as yourself, in your own words, never a line for "
+                       "anyone else, never your own name first. Empty, or with <<PASS>> in it, you pass this turn. "
+                       "Out of turn, use `tell` with the room as the chat: it lands as you too.",
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'room': {'type': 'string', 'description': "The room's name."},
+                'text': {'type': 'string', 'description': 'Your line.'},
+            },
+            'required': ['room', 'text'],
+        },
+    },
 }
 
 
 def own():
     """This door's own tools right now."""
     from core import room_guest
-    return OWN + ((INVITE, RESET) if room_guest.enabled() else ())
+    return OWN + ((INVITE, RESET, UPDATE) if room_guest.enabled() else ())
 
 
 def _version():
@@ -159,7 +223,7 @@ def exposed(system, persona=None):
     [{name, description, inputSchema}]. Own two first, then what the caller's
     persona gives it, then the ticked ones that are still here and not scoped."""
     from core import mcp_persona
-    tools = [dict(_TOOLS[n]) for n in own()] + mcp_persona.offered(persona)
+    tools = [dict(_TOOLS[n]) for n in own()] + mcp_persona.offered(persona) + seat_tools(persona)
     fm = getattr(getattr(system, 'llm_chat', None), 'function_manager', None)
     if fm is None:
         return tools
@@ -176,6 +240,13 @@ def exposed(system, persona=None):
                 tools.append({'name': name, 'description': str(f.get('description') or ''),
                               'inputSchema': f.get('parameters') or {'type': 'object', 'properties': {}}})
     return tools
+
+
+def seat_tools(persona):
+    """The seat tools, for a key that speaks as a persona: her seat at a room's
+    door is found by that name (core/rooms.py door_*)."""
+    from core import mcp_persona
+    return [dict(_TOOLS[n]) for n in SEAT] if mcp_persona.settings(persona) is not None else []
 
 
 # --- the two of its own --------------------------------------------------------
@@ -307,6 +378,27 @@ def room_invite(system, args, where='', persona=None):
         answering.reset(token)
 
 
+def _seat(name, args, persona):
+    """A persona key's seat at a room's door (core/rooms.py). JSON text back; a
+    cue's pictures ride as the protocol's image blocks (extra['images'])."""
+    from core import mcp_persona, rooms
+    if mcp_persona.settings(persona) is None:
+        return (f"'{name}' needs an API token that speaks as a persona (Settings > System > API Keys): "
+                "its seat at a room's door is found by that name."), False
+    room = args.get('room')
+    try:
+        if name == 'room_post':
+            return rooms.door_post(persona, room, args.get('text')), True
+        if name == 'room_wait':
+            out = rooms.door_wait(persona, room, args.get('seconds'))
+        else:
+            out = rooms.door_read(persona, room, args.get('limit') or 40) if room else {'rooms': rooms.door_rooms(persona)}
+    except rooms.RoomError as e:
+        raise ValueError(str(e))
+    images = out.pop('images', None) or []
+    return json.dumps(out, ensure_ascii=False), True, ({'images': images} if images else None)
+
+
 # --- a call -----------------------------------------------------------------
 
 def call(system, name, args, where='', persona=None):
@@ -317,13 +409,18 @@ def call(system, name, args, where='', persona=None):
         return ask(system, args, where, persona)
     if name == 'tell':
         return tell(system, args, where, persona)
-    if name in (INVITE, RESET):
+    if name in (INVITE, RESET, UPDATE):
         if name not in own():
             return 'This Sapphire does not take chat-room invitations (Settings > MCP Server, over there).', False
         if name == RESET:
             from core import room_guest
             return room_guest.reset(system, args, where)
+        if name == UPDATE:
+            from core import room_guest
+            return room_guest.update(system, args, where)
         return room_invite(system, args, where, persona)
+    if name in SEAT:
+        return _seat(name, args, persona)
     from core import mcp_persona
     if name in mcp_persona.NAMES:
         return mcp_persona.call(system, persona, name, args)
@@ -349,7 +446,11 @@ def _result(ident, value):
 
 def _persona_line(persona):
     from core import mcp_persona
-    return mcp_persona.about(persona)
+    line = mcp_persona.about(persona)
+    if line:
+        line += (" In a chat room here where this persona has a seat at the door, `room_wait` waits for your turn, "
+                 "`room_post` is your line, and `room_read` is the room so far (no room named: your rooms).")
+    return line
 
 
 def handle(system, message, where='', persona=None):
@@ -391,6 +492,10 @@ def handle(system, message, where='', persona=None):
             logger.error(f"[MCP] {name} failed: {e}", exc_info=True)
             text, ok, extra = f"{name} failed: {type(e).__name__}", False, None
         value = {'content': [{'type': 'text', 'text': text}], 'isError': not ok}
+        if isinstance(extra, dict):
+            for pic in extra.pop('images', None) or []:   # a room cue's pictures, as the protocol's image blocks
+                value['content'].append({'type': 'image', 'data': pic.get('data'),
+                                         'mimeType': pic.get('media_type') or 'image/jpeg'})
         if extra:
             value['structuredContent'] = extra        # an ask's tool names, when she shares them (share_tools)
         return _result(ident, value)

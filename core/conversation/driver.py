@@ -144,7 +144,8 @@ class ConversationDriver:
             exclude = None
             if chat is None:
                 try:
-                    chat = self.system.llm_chat.session_manager.get_active_chat_name()
+                    from core.chat.history import landing_chat
+                    chat = landing_chat(self.system.llm_chat.session_manager)   # a chat room open on the screen, else the active chat
                 except Exception:
                     chat = None
                 if chat is None:

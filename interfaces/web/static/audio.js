@@ -265,7 +265,8 @@ export const replayTts = async (idx) => {
 // server's privacy gate judges THAT chat instead of the operator's active
 // one — a private room speaking through a public active chat used to reach
 // a cloud TTS provider (broadsword H3). Omit for the operator's own chat.
-export const playTextStreaming = async (text, voice = null, chat = null) => {
+// `opts`: { speed, pitch } for this text only (a chat-room seat's own), else the live client's.
+export const playTextStreaming = async (text, voice = null, chat = null, opts = null) => {
     stop(true);  // clear any current playback before starting new stream
 
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -274,7 +275,8 @@ export const playTextStreaming = async (text, voice = null, chat = null) => {
         res = await fetch('/api/tts/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ text, ...(voice ? { voice } : {}), ...(chat ? { chat } : {}) }),
+            body: JSON.stringify({ text, ...(voice ? { voice } : {}), ...(chat ? { chat } : {}),
+                                   ...(opts?.speed ? { speed: opts.speed } : {}), ...(opts?.pitch ? { pitch: opts.pitch } : {}) }),
         });
     } catch (e) {
         throw new Error(`network: ${e.message}`);

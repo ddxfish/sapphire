@@ -10,8 +10,9 @@
 // shared per-chat sections (prompt, toolset, brain; mind as a sub-accordion,
 // surface/sections/core-sections.js) pointed at THAT SEAT's settings, plus
 // the room-only fields (name, colour, instructions, memory writes). The
-// rules live under the gear; the Bots switch and the Go/Stop row stay in the
-// sidebar (Krem's votes, 2026-10-11). Record: tmp/chat-room-plan.md.
+// cadence block tops the sidebar (Krem's sketch, 2026-10-13): a heading with
+// the gear (purpose, round cap, pause), then one row: turns per round, the
+// speaking order, the play button. Record: tmp/chat-room-plan.md.
 import { renderSurface } from '../surface/surface.js';
 import { claimOrgans, releaseOrgans } from '../surface/organs.js';
 import { coreSections } from '../surface/sections/core-sections.js';
@@ -23,25 +24,28 @@ import { fetchWithTimeout } from '../shared/fetch.js';
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
-import { refresh } from '../core/state.js';
+import { refresh, getTtsEnabled } from '../core/state.js';
+import * as audio from '../audio.js';
 import { updateScene } from '../features/scene.js';
 import { populateChatDropdown } from '../features/chat-manager.js';
+import * as Images from '../ui-images.js';
+import { updateImagePreviewArea } from '../handlers/send-handlers.js';
 
 const OWNER = 'rooms';
 const LAST_KEY = 'sapphire-room-last';
 const SB_KEY = 'sapphire-rooms-sidebar';
 const ACC_NS = 'rooms-sidebar';
-const SEAT_SECTIONS = ['prompt', 'toolset', 'brain', 'mind'];     // voice and sysprompt wait for per-seat voices
+const SEAT_SECTIONS = ['prompt', 'toolset', 'brain', 'voice', 'mind'];     // sysprompt waits
 const PLACEHOLDER = 'Say something to the room';
 const ECHO_MS = 1500;           // a room_changed this soon after our own save is our echo, not news
 const INVITE_MS = 330000;       // an invitation waits on her lobby turn over there (the server gives up at 300 s)
 const DEVICE = 'device:';       // the Add bot list: a Sapphire device's option value is this + its id
+const AT_DOOR = 'door:';        // ...and a persona seated AT the MCP door (answered by whoever holds its key) is this + its name
 
 let root = null;
 let R = null;                   // the open room: {chat, info, placeholder, mute}
 let bound = false;              // bus handlers live
 let epoch = 0;                  // bumped by hide(): an open() still awaiting must not claim the rail into a hidden view
-let pointerBefore = null;       // the chat the pointer was on when the view was entered: handed back on hide (voice follows you out)
 let fillSeq = 0;                // the Add bot list's latest fill
 const PENDING = new Map();      // room chat -> {device, label}: an invitation still waiting on her decision
 
@@ -65,24 +69,16 @@ export default {
     },
     async show() {
         bindBus();
-        if (pointerBefore === null) {
-            const cur = document.getElementById('chat-select')?.value || '';
-            pointerBefore = cur || '';
-        }
         fillPersonas(true);
         await openLast();
     },
     hide() {
         epoch++;
+        const was = R?.chat;
         leave();
         unbindBus();
-        // the pointer went into the room with us (voice follows): it comes back
-        // out, so the wake word and the Chat view are not left in the room.
-        // Refused while a seat streams (the server's rule) - the Chat view's
-        // steer takes over when that turn settles.
-        const back = pointerBefore;
-        pointerBefore = null;
-        if (back) api.activateChat(back).catch(() => {});
+        // voice lands back on the Chat view's chat; the pointer never moved (2026-10-13)
+        if (was) api.setLanding(was, false).catch(() => {});
     },
 };
 
@@ -101,7 +97,6 @@ function skeleton() {
         formArea: `<div class="rm-composer-slot" id="rm-composer-slot"></div>`,
         sidebarHeader: `
             <div class="sb-chat-header">
-                <button type="button" id="rm-settings" class="sb-icon-btn" title="Room settings - purpose and rules">&#x2699;&#xFE0E;</button>
                 <div class="sb-chat-picker" id="rm-picker">
                     <button class="sb-chat-picker-btn" id="rm-picker-btn">
                         <span id="rm-picker-name">Chat Room</span>
@@ -128,23 +123,33 @@ function skeleton() {
         sidebarBody: `
             <div class="rm-body" id="rm-body">
                 <div class="sidebar-section rm-quick">
-                    <!-- one sentence for the rules that matter (Krem 2026-10-12): none = Bots off;
-                         a number = human every N; "until you stop them" = never wait. Stop is the
-                         chat bar's Stop while a bot speaks; One round is the old Go. -->
-                    <div class="rm-field">
-                        <label for="rm-rounds">After your line, the bots take</label>
-                        <select id="rm-rounds" title="How many rounds the bots talk after each line of yours. None: your lines land, nobody answers. Until you stop them: the chat bar's Stop ends it, and a round cap under the gear is the brake.">
-                            <option value="off">none (bots off)</option>
-                            <option value="1">1 round</option>
-                            <option value="2">2 rounds</option>
-                            <option value="3">3 rounds</option>
-                            <option value="5">5 rounds</option>
-                            <option value="0">until you stop them</option>
-                        </select>
+                    <!-- Krem's sketch (2026-10-13): a small heading, then one row - turns, speaking
+                         order, play. The turns select maps to the rules: bots off; a number = human
+                         every N; "until Stop" = never wait. Stop is the chat bar's Stop while a bot
+                         speaks. The gear holds the rest (purpose, round cap, pause). -->
+                    <div class="rm-sec-head">
+                        <label for="rm-rounds" class="rm-sec-title">Bot turns per round</label>
+                        <button type="button" id="rm-settings" class="sb-icon-btn" title="Room settings: purpose, round cap, pause between bots">&#x2699;&#xFE0E;</button>
                     </div>
                     <div class="rm-run">
-                        <button type="button" id="rm-go" class="sb-btn-sm" title="The bots talk one more round without you">&#x25B6; One round</button>
+                        <select id="rm-rounds" title="How many turns each bot takes after a line of yours. Bots off: your lines land, nobody answers. Until Stop: the chat bar's Stop ends it, and the round cap under the gear is the brake.">
+                            <option value="off">bots off</option>
+                            <option value="1">1 turn</option>
+                            <option value="2">2 turns</option>
+                            <option value="3">3 turns</option>
+                            <option value="5">5 turns</option>
+                            <option value="0">until Stop</option>
+                        </select>
+                        <select id="rm-order" title="Round robin: roster order, each bot reads the lines before hers. Shuffled: a new order every round. Blind round: every bot is cued before any of them answers, so nobody sees the others' lines until the next round.">
+                            <option value="fixed">Round robin</option>
+                            <option value="shuffle">Shuffled</option>
+                            <option value="blind">Blind round</option>
+                        </select>
+                        <button type="button" id="rm-go" class="sb-btn-sm" title="One round: every bot takes one more turn, without you">&#x25B6;</button>
                     </div>
+                </div>
+                <div class="rm-sec-head rm-roster-head">
+                    <label for="rm-add-persona" class="rm-sec-title">Roster</label>
                 </div>
                 <div class="rm-add">
                     <select id="rm-add-persona" title="A persona to seat in this room"></select>
@@ -175,6 +180,10 @@ function skeleton() {
     $('#rm-rounds').onchange = (e) => {
         const v = e.target.value;
         updateRoom(v === 'off' ? { bots_enabled: false } : { bots_enabled: true, human_every: Math.max(0, parseInt(v, 10) || 0) });
+    };
+    $('#rm-order').onchange = (e) => {
+        const v = e.target.value;
+        updateRoom({ shuffle: v === 'shuffle', blind: v === 'blind' });
     };
     $('#rm-add').onclick = addSeat;
     // a room renamed elsewhere (Chat Manager, another tab): the last-open key follows it
@@ -219,13 +228,18 @@ async function open(chat) {
     try { info = await call(`/api/rooms/${enc(chat)}`); }
     catch (e) { ui.showToast(`Could not open "${chat}": ${e.message}`, 'error'); paintEmpty('That room would not open.', 'Chat Room', openLast); return; }
     if (my !== epoch) return;                                // the view closed meanwhile: nothing is claimed
-    R = { chat, info, placeholder: null, mute: 0 };
+    // voiceGen starts at 0, never undefined: speakLine's liveness check compares it to
+    // the generation it captured, and `undefined === 0` kept every line silent until a
+    // Stop press had bumped it (opening night, 2026-10-13: nobody ever heard the room)
+    R = { chat, info, placeholder: null, mute: 0, voiceGen: 0 };
     localStorage.setItem(LAST_KEY, chat);
-    // Voice follows you into the room: the wake word and the local mic land
-    // here as your lines. The server refuses while a turn streams; the room
-    // still opens, voice just stays where it was.
-    try { await api.activateChat(chat); }
-    catch (e) { ui.showToast(`Voice stays on the previous chat: ${e.message}`, 'warning'); }
+    // Voice follows you into the room - the wake word, a satellite, the local mic
+    // land here as your lines - without the Chat view's chat moving: the room is the
+    // LANDING chat while it is open, never the active one (the one pointer used to
+    // play both parts; 2026-10-13). A satellite that spoke is where the bots' lines
+    // are read back (core/rooms.py _read_aloud).
+    try { await api.setLanding(chat, true); }
+    catch (e) { ui.showToast(`Voice stays where it was: ${e.message}`, 'warning'); }
     if (my !== epoch || !R || R.chat !== chat) return;
     claim();
     paintAll();
@@ -245,6 +259,7 @@ function claim() {
 
 function leave() {
     if (!R) return;
+    hush();
     unbindComposer();
     releaseOrgans(OWNER);
     R = null;
@@ -284,6 +299,7 @@ function onClick(e) {
         say();
     } else if (e.target?.closest?.('#stop-btn')) {
         e.preventDefault(); e.stopPropagation();           // the chat's Stop cancels one seat and the round goes on
+        hush();                                            // ...and silences the lines queued to be read
         run('/stop');
     }
 }
@@ -308,11 +324,13 @@ async function say() {
     if (!R) return;
     const input = document.getElementById('prompt-input');
     const txt = (input?.value || '').trim();
-    if (!txt) return;
+    const images = Images.getImagesForApi();                 // the composer's staged pictures ride the line (2026-10-13)
+    if (!txt && !images.length) return;
     input.value = '';
     input.dispatchEvent(new Event('input'));
-    ui.addUserMessage(txt);
-    try { await call(roomUrl('/say'), 'POST', { text: txt }); }
+    ui.addUserMessage(txt, images.length ? Images.getPendingUploadImages() : null);
+    if (images.length) { Images.clearPendingUploadImages(); updateImagePreviewArea(); }
+    try { await call(roomUrl('/say'), 'POST', images.length ? { text: txt, images } : { text: txt }); }
     catch (e) {
         ui.showToast(e.message, 'error');
         if (input && !input.value) { input.value = txt; input.dispatchEvent(new Event('input')); }   // the words come back
@@ -323,9 +341,12 @@ async function say() {
 
 function onState(d) {
     if (!R || d?.chat !== R.chat) return;
+    const doors = JSON.stringify(R.info.state?.doors || {});
     R.info.state = d;
     if (d.turn) R.passed = null;                           // someone is speaking: the last pass is old news
     paintTurn();
+    if (JSON.stringify(d.doors || {}) !== doors)           // someone came to the door, or left it
+        (R.info.seats || []).filter(s => s.kind === 'door').forEach(s => paintSeatHead(s.id));
 }
 
 // A seat's turn that left no line (she passed, said nothing, hit her model's
@@ -333,9 +354,59 @@ function onState(d) {
 // the next seat speaks - a bubble that opened and vanished read as a lost line
 // twice (field reports 2026-10-12).
 function onTurnEnd(d) {
-    if (!R || d?.chat !== R.chat || d?.source !== 'room' || !d?.dropped || !d?.speaker) return;
-    R.passed = { name: d.name || seatOf(d.speaker)?.name || 'a bot', why: d.why || '' };
-    paintTurn();
+    if (!R || d?.chat !== R.chat || d?.source !== 'room' || !d?.speaker) return;
+    if (d.dropped) {
+        R.passed = { name: d.name || seatOf(d.speaker)?.name || 'a bot', why: d.why || '' };
+        paintTurn();
+        return;
+    }
+    speakLine(seatOf(d.speaker), d.text, d.heard);
+}
+
+// ------------------------------------------------------------------ voices: her line aloud, in order (Krem 2026-10-13)
+// The lines queue in the browser where the room is open, one after another, each in the
+// seat's own voice within the active engine (speed and pitch too); the next bot never cuts
+// the last one off. The round does not wait for the reading: TTS on and muted is the same
+// as TTS off. Streaming resolves when the server is done SENDING, not when the last chunk
+// has played, so the chain waits for the queue to drain; a provider with no streaming door
+// gets the whole line as one blob. Stop and leaving the room hush it all (the generation
+// counter drops what was queued). A satellite as the output is a later lane.
+function speakLine(seat, text, heard = null) {
+    if (heard) return;                                      // read on the satellite the person spoke from (core/rooms.py)
+    if (!R || !text || !seat || seat.tts === false || !getTtsEnabled()) return;
+    const me = R, st = seat.settings || {}, voice = st.voice || null, gen = me.voiceGen || 0;
+    const live = () => R === me && me.voiceGen === gen;
+    me.voiceChain = (me.voiceChain || Promise.resolve()).then(async () => {
+        if (!live()) return;
+        try {
+            const ok = await audio.playTextStreaming(text, voice, me.chat, { speed: st.speed, pitch: st.pitch });
+            if (ok) {
+                for (let i = 0; i < 3000 && live() && audio.isTtsPlaying(); i++) await new Promise(r => setTimeout(r, 100));
+                return;
+            }
+            const res = await fetch('/api/tts/preview', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+                body: JSON.stringify({ text, chat: me.chat, ...(voice ? { voice } : {}),
+                                       ...(st.speed ? { speed: st.speed } : {}), ...(st.pitch ? { pitch: st.pitch } : {}) }),
+            });
+            if (!res.ok || !live()) return;
+            const blob = await res.blob();
+            await new Promise((done) => {
+                const el = new Audio(URL.createObjectURL(blob));
+                me.voiceEl = el;
+                el.onended = el.onerror = () => { URL.revokeObjectURL(el.src); if (me.voiceEl === el) me.voiceEl = null; done(); };
+                el.play().catch(() => done());
+            });
+        } catch (e) { console.warn('[Rooms] voice failed:', e); }
+    });
+}
+
+function hush() {
+    audio.stop(true);
+    if (!R) return;
+    R.voiceGen = (R.voiceGen || 0) + 1;
+    R.voiceChain = null;
+    if (R.voiceEl) { try { R.voiceEl.pause(); } catch (e) { /* gone */ } R.voiceEl = null; }
 }
 
 function onChanged(d) {
@@ -369,7 +440,7 @@ function paintAll() {
     $('#rm-title').textContent = `${info.private ? '\u{1F5DD} ' : ''}${info.chat}`;
     $('#rm-picker-name').textContent = info.chat;
     const purpose = $('#rm-purpose');
-    purpose.textContent = info.purpose || 'No purpose yet - every bot reads what you write under the gear.';
+    purpose.textContent = info.purpose || 'No purpose yet - every bot reads what you write under the sidebar\u2019s gear.';
     purpose.classList.toggle('empty', !info.purpose);
     paintRounds();
     paintTurn();
@@ -385,10 +456,11 @@ function paintRounds() {
     if (![...sel.options].some(o => o.value === v)) {      // a number the list does not offer (set earlier): shown as it is
         const o = document.createElement('option');
         o.value = v;
-        o.textContent = `${v} rounds`;
+        o.textContent = `${v} turns`;
         sel.insertBefore(o, sel.querySelector('option[value="0"]'));
     }
     sel.value = v;
+    $('#rm-order').value = info.blind ? 'blind' : info.shuffle ? 'shuffle' : 'fixed';
 }
 
 function paintTurn() {
@@ -411,8 +483,10 @@ function paintTurn() {
 function seatHeadHtml(s) {
     const st = s.settings || {};
     const guest = s.kind === 'sapphire';
-    const meta = guest ? `another Sapphire · ${s.label || s.device}`
-        : `${modelShort(st)} · ${s.memory_write ? 'mem on' : 'mem off'} · ${st.toolset || 'all'}`;
+    const meta = (guest ? `another Sapphire · ${s.label || s.device}`
+        : s.kind === 'door' ? `at the door · ${R?.info?.state?.doors?.[s.id] ? 'here' : 'away'}`
+        : `${modelShort(st)} · ${s.memory_write ? 'mem on' : 'mem off'} · ${st.toolset || 'all'}`)
+        + (s.tts === false ? ' · muted' : '');
     return `
         <span class="accordion-arrow">▶</span>
         ${guest ? '<span class="rm-face rm-face-gem">\u{1F48E}</span>' : avatarImg(s.persona, s.color || '', 'rm-face', s.avatar)}
@@ -426,6 +500,22 @@ function seatHeadHtml(s) {
 }
 
 function seatHtml(s) {
+    if (s.kind === 'door') return `
+        <div class="sidebar-accordion rm-seat rm-door" data-acc="room:seat:${esc(s.id)}" data-seat="${esc(s.id)}">
+            <div class="sidebar-accordion-header rm-seat-head">${seatHeadHtml(s)}</div>
+            <div class="sidebar-accordion-content" style="display:none">
+                <div class="sb-field"><label>name</label><input type="text" data-f="name" value="${esc(s.name)}"></div>
+                <div class="sb-field"><label>colour</label><input type="color" data-f="color" value="${esc(s.color || '#4a9eff')}"></div>
+                <div class="sb-field sb-field-stack">
+                    <label>what you ask of them here</label>
+                    <textarea data-f="context" rows="3" placeholder="Goes with every cue they take at the door.">${esc(s.context || '')}</textarea>
+                </div>
+                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks their lines aloud (TTS)</label></div>
+                <div class="sidebar-section"><div class="gs-content" data-sec="voice"></div></div>
+                <p class="rm-guest-note">Answered over MCP by whoever holds the API key that speaks as "${esc(s.persona)}": they wait at the door (room_wait) and answer on their turn (room_post). Away, their turn is skipped at once.</p>
+                <button type="button" class="sb-btn-full rm-seat-remove">Remove from the room</button>
+            </div>
+        </div>`;
     if (s.kind === 'sapphire') return `
         <div class="sidebar-accordion rm-seat rm-guest" data-acc="room:seat:${esc(s.id)}" data-seat="${esc(s.id)}">
             <div class="sidebar-accordion-header rm-seat-head">${seatHeadHtml(s)}</div>
@@ -433,9 +523,10 @@ function seatHtml(s) {
                 <div class="sb-field"><label>name</label><input type="text" data-f="name" value="${esc(s.name)}"></div>
                 <div class="sb-field"><label>colour</label><input type="color" data-f="color" value="${esc(s.color || '#4a9eff')}"></div>
                 <div class="sb-field sb-field-stack">
-                    <label>sent with the invitation</label>
-                    <textarea rows="3" readonly>${esc(s.context || '')}</textarea>
+                    <label>what you ask of her here</label>
+                    <textarea data-f="context" rows="3" placeholder="Goes to her box: the room block in her chat there is re-written when this changes.">${esc(s.context || '')}</textarea>
                 </div>
+                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks her lines aloud here (TTS, the default voice)</label></div>
                 <p class="rm-guest-note">She answers from her own box with her own prompt, model and tools, in her chat "${esc(s.chat || '?')}". Nothing of hers is set here.</p>
                 <button type="button" class="sb-btn-full rm-seat-remove">Remove from the room</button>
             </div>
@@ -451,8 +542,9 @@ function seatHtml(s) {
                     <textarea data-f="context" rows="3" placeholder="Adds to the persona's custom context. e.g. You hold that a hot dog IS a sandwich.">${esc(s.context || '')}</textarea>
                 </div>
                 <div class="sb-field"><label><input type="checkbox" data-f="memory_write" ${s.memory_write ? 'checked' : ''}> may write to memory, people, goals</label></div>
+                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks her lines aloud (TTS)</label></div>
                 <div class="sidebar-section">
-                    ${['prompt', 'toolset', 'brain'].map(k => `<div class="gs-content" data-sec="${k}"></div>`).join('')}
+                    ${['prompt', 'toolset', 'brain', 'voice'].map(k => `<div class="gs-content" data-sec="${k}"></div>`).join('')}
                 </div>
                 ${accordionHtml({ id: `room:seat:${s.id}:mind`, title: '\u{1F9E0} Mind (scopes)', content: '<div class="gs-content" data-sec="mind"></div>' })}
                 <button type="button" class="sb-btn-full rm-seat-remove">Remove from the room</button>
@@ -514,15 +606,20 @@ async function fillPersonas(force = false) {
     if (!force && sel.options.length) return;
     const seq = ++fillSeq;
     const was = sel.value;
-    let personas = [], hers = [];
+    let personas = [], hers = [], keyed = [];
     try { personas = (await listPersonas()).personas || []; } catch (e) { /* listed as none */ }
     // another Sapphire: every Another Sapphire device, whatever its state (she answers or she does not)
     try { hers = ((await fetchWithTimeout('/api/devices', {}, 10000)).devices || []).filter(d => d.driver === 'sapphire' && d.enabled !== false); }
     catch (e) { /* no devices page, no guests */ }
+    // at the door: every persona some API key speaks as (Settings > System > API Keys) - Claude Code's seat
+    try { keyed = [...new Set(((await call('/api/system/api-tokens')).tokens || []).map(t => t.persona).filter(Boolean))]; }
+    catch (e) { /* no keys page, no door seats */ }
     if (seq !== fillSeq) return;                              // a newer fill is on its way
-    // another Sapphire first (Krem 2026-10-12), then the personas of this one
+    // another Sapphire first (Krem 2026-10-12), the door next, then the personas of this one
     sel.innerHTML = (hers.length ? `<optgroup label="Another Sapphire">${hers.map(d =>
             `<option value="${esc(DEVICE + d.id)}" data-label="${esc(d.label || d.id)}">\u{1F48E} ${esc(d.label || d.id)}</option>`).join('')}</optgroup>` : '')
+        + (keyed.length ? `<optgroup label="At the door (over MCP)">${keyed.map(n =>
+            `<option value="${esc(AT_DOOR + n)}">\u{1F6AA} ${esc(n)}</option>`).join('')}</optgroup>` : '')
         + `<optgroup label="Personas">${personas.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') || '<option value="">no personas</option>'}</optgroup>`;
     if (was && [...sel.options].some(o => o.value === was)) sel.value = was;
 }
@@ -579,8 +676,9 @@ async function addSeat() {
     const persona = sel.value;
     if (!persona) return;
     if (persona.startsWith(DEVICE)) return inviteSapphire(persona.slice(DEVICE.length), sel.selectedOptions[0]?.dataset.label || persona.slice(DEVICE.length));
+    const body = persona.startsWith(AT_DOOR) ? { persona: persona.slice(AT_DOOR.length), door: true } : { persona };
     R.mute = Date.now() + ECHO_MS;
-    try { await call(roomUrl('/seats'), 'POST', { persona }); await reload(); }
+    try { await call(roomUrl('/seats'), 'POST', body); await reload(); }
     catch (e) { ui.showToast(e.message, 'error'); }
 }
 
@@ -634,12 +732,11 @@ function openSettings() {
         { id: 'purpose', label: 'What this room is for (every bot reads it)', type: 'textarea', value: r.purpose || '', rows: 4 },
         { id: 'max_rounds', label: 'Round cap: stop after N rounds in one run (0 = no cap; the brake for "until you stop them")', type: 'number', value: String(r.max_rounds ?? 0) },
         { id: 'pause_s', label: 'Pause between bots, seconds', type: 'number', value: String(r.pause_s ?? 0) },
-        { id: 'shuffle', label: 'Speaking order', type: 'select', options: ['fixed', 'shuffle'],
-          labels: ['Roster order', 'Shuffle every round'], value: r.shuffle ? 'shuffle' : 'fixed' },
+        { id: 'mention_max', label: '@mentions: write @Name in a line and that seat answers next, whoever wrote it; a bot naming another chains. Most mentioned turns in a row since your last line (0 = no cap)', type: 'number', value: String(r.mention_max ?? 3) },
     ], (data) => updateRoom({
         purpose: data.purpose,
         max_rounds: parseInt(data.max_rounds, 10) || 0, pause_s: parseFloat(data.pause_s) || 0,
-        shuffle: data.shuffle === 'shuffle',
+        mention_max: Math.max(0, parseInt(data.mention_max, 10) || 0),
     }), { saveLabel: 'Save' });
 }
 

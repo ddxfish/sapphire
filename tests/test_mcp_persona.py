@@ -336,3 +336,51 @@ def test_ask_and_tell_sign_with_the_keys_persona_unless_the_client_names_itself(
     mcp.call(world.system, 'ask', {'text': 'hi', 'chat': 'lookout', 'from': 'Claude Code'}, persona='claude')
     mcp.call(world.system, 'ask', {'text': 'hi', 'chat': 'lookout'})
     assert seen == ['claude', 'Claude Code', None]
+
+
+# --- a seat at a room's door (core/rooms.py DOOR) ---------------------------------
+
+def test_the_seat_tools_go_to_a_persona_key_and_a_cues_pictures_ride_as_image_blocks(world, monkeypatch):
+    """room_read / room_wait / room_post are offered to every persona key (her seat at a
+    room's door is found by the persona's name) and never to a plain key. The words come
+    back as JSON text, a cue's pictures as the protocol's image blocks; no persona is
+    refused in words; the room's own refusal (no seat) is a tool error in words; the
+    connect line tells a persona key about them."""
+    import json
+    from core import rooms
+    keyed = names(mcp.handle(world.system, rpc('tools/list'), persona='claude')['result']['tools'])
+    assert keyed[-3:] == ['room_read', 'room_wait', 'room_post'] == list(mcp.SEAT)
+    assert not set(mcp.SEAT) & set(names(mcp.handle(world.system, rpc('tools/list'))['result']['tools']))
+    seen = []
+    cue = {'turn': True, 'cue': 'Krem: look\n\n(Your turn, Claude.)', 'about': {'room': 'salon', 'you': 'Claude'},
+           'images': [{'data': 'AAAA', 'media_type': 'image/png'}, {'data': 'BBBB'}]}
+    monkeypatch.setattr(rooms, 'door_wait', lambda persona, room, seconds=None: (seen.append((persona, room, seconds)) or dict(cue)))
+    monkeypatch.setattr(rooms, 'door_post', lambda persona, room, text: f"Posted as Claude in {room!r}.")
+    monkeypatch.setattr(rooms, 'door_read', lambda persona, room, limit=40: {'lines': [], 'about': {'room': room}, 'your_turn': False})
+    monkeypatch.setattr(rooms, 'door_rooms', lambda persona: [{'room': 'salon', 'you': 'Claude'}])
+    out = mcp.handle(world.system, rpc('tools/call', name='room_wait', arguments={'room': 'salon', 'seconds': 30}),
+                     persona='claude')['result']
+    assert seen == [('claude', 'salon', 30)] and not out['isError'] and 'structuredContent' not in out
+    assert json.loads(out['content'][0]['text']) == {k: v for k, v in cue.items() if k != 'images'}
+    assert out['content'][1:] == [{'type': 'image', 'data': 'AAAA', 'mimeType': 'image/png'},
+                                  {'type': 'image', 'data': 'BBBB', 'mimeType': 'image/jpeg'}]
+    text, ok = mcp.call(world.system, 'room_post', {'room': 'salon', 'text': 'hi'}, persona='claude')
+    assert ok and text == "Posted as Claude in 'salon'."
+    text, ok, extra = mcp.call(world.system, 'room_read', {}, persona='claude')
+    assert ok and extra is None and json.loads(text) == {'rooms': [{'room': 'salon', 'you': 'Claude'}]}
+    text, ok, extra = mcp.call(world.system, 'room_read', {'room': 'salon', 'limit': 5}, persona='claude')
+    assert ok and json.loads(text)['about'] == {'room': 'salon'}
+    for who in (None, 'nobody'):
+        text, ok = mcp.call(world.system, 'room_wait', {'room': 'salon'}, persona=who)
+        assert not ok and 'speaks as a persona' in text
+    assert seen == [('claude', 'salon', 30)]
+
+    def refused(persona, room, text):
+        raise rooms.RoomError('no seat at the door')
+    monkeypatch.setattr(rooms, 'door_post', refused)
+    out = mcp.handle(world.system, rpc('tools/call', name='room_post', arguments={'room': 'salon', 'text': 'x'}),
+                     persona='claude')['result']
+    assert out['isError'] and out['content'][0]['text'] == 'no seat at the door'
+    said = mcp.handle(world.system, rpc('initialize'), persona='claude')['result']['instructions']
+    assert '`room_wait` waits for your turn' in said
+    assert 'room_wait' not in mcp.handle(world.system, rpc('initialize'))['result']['instructions']

@@ -1072,6 +1072,12 @@ class ChatSessionManager:
         
         self.current_chat = ConversationHistory(max_history=max_history)
         self.active_chat_name = "default"
+        # Where the person's VOICE lands while a surface other than the Chat view
+        # has them (a chat room, while open): the wake word, a satellite, the
+        # browser conversation. None = the active chat. The active chat itself -
+        # the Chat view's chat, this in-memory list - never moves for it; the one
+        # pointer used to play both parts (2026-10-13). See landing_chat().
+        self.landing_chat_name = None
         self.current_settings = get_system_defaults()
         
         # Rowify watermark state, keyed by CHAT NAME (not "the active one" —
@@ -2421,6 +2427,8 @@ class ChatSessionManager:
                 if old_name == self.active_chat_name:
                     self.active_chat_name = safe_name
                     self._save_last_active(safe_name)
+                if old_name == self.landing_chat_name:
+                    self.landing_chat_name = safe_name
             logger.info(f"Renamed chat '{old_name}' -> '{safe_name}'")
             return True, safe_name
         except Exception as e:
@@ -3465,6 +3473,8 @@ class ChatSessionManager:
                                   or {}).get('prompt')
 
                 was_active = (chat_name == self.active_chat_name)
+                if chat_name == self.landing_chat_name:
+                    self.landing_chat_name = None
                 
                 # Delete chat and any associated data
                 conn.execute("DELETE FROM chats WHERE name = ?", (chat_name,))
@@ -3639,6 +3649,26 @@ class ChatSessionManager:
             except Exception as e:
                 logger.error(f"on_switched apply failed for '{chat_name}': {e}")
         return True
+
+    def set_landing_chat(self, chat_name):
+        """Voice lands on `chat_name` from now (a chat room open on the screen,
+        views/rooms.js); None = the active chat, as ever. False when the chat
+        is missing or sealed. The active chat is untouched."""
+        name = str(chat_name or '').strip() or None
+        if name and (self._vault_hidden(name) or not self.chat_exists(name)):
+            return False
+        with self._lock:
+            self.landing_chat_name = name
+        return True
+
+    def get_landing_chat_name(self) -> str:
+        """The chat the person's voice lands on: the landing chat while one is
+        set and still exists, else the active chat."""
+        with self._lock:
+            name = self.landing_chat_name
+        if name and self.chat_exists(name):
+            return name
+        return self.get_active_chat_name()
 
     def get_active_chat_name(self) -> str:
         """Get active chat name (thread-safe)."""
@@ -4547,6 +4577,87 @@ class ChatSessionManager:
             self._prune_orphaned_tool_images(self.active_chat_name)
             publish(Events.MESSAGE_REMOVED, {"from": "assistant_timestamp"})
         return result
+
+    def edit_chat_rows(self, chat_name: str, op: str, *args):
+        """A message edit on a chat BY NAME, the active one or not: the same
+        edits the message routes run on the active chat, on the stored rows,
+        written back whole (replace_messages). A chat room's rail is bound by
+        name and the Chat view's chat is elsewhere since the landing-chat
+        split (2026-10-13). op: 'remove_last' (count) · 'remove_from_user'
+        (content) · 'remove_from_assistant' (timestamp) · 'remove_last_assistant'
+        (timestamp) · 'edit' (role, timestamp, new_content) · 'remove_tool_call'
+        (tool_call_id). (ok, error); error 'not found' when nothing matched."""
+        own = {'remove_last': self.remove_last_messages, 'remove_from_user': self.remove_from_user_message,
+               'remove_from_assistant': self.remove_from_assistant_timestamp,
+               'remove_last_assistant': self.remove_last_assistant_in_turn,
+               'edit': self.edit_message_by_timestamp, 'remove_tool_call': self.remove_tool_call}
+        if op not in own:
+            return False, f"no such edit: {op}"
+        if chat_name == self.get_active_chat_name():
+            return (True, None) if own[op](*args) else (False, 'not found')
+        rows, _state, _skips = self._read_store_messages(chat_name)
+        if rows is None:
+            return False, f"Chat '{chat_name}' not found"
+        rows = [dict(m) for m in rows if isinstance(m, dict)]
+        h = ConversationHistory(max_history=self.max_history)
+        h.messages = [dict(m) for m in rows]
+        if op == 'remove_last_assistant':
+            ok = self._rows_remove_last_assistant(h.messages, *args)
+        elif op == 'edit':
+            ok = self._rows_edit_by_timestamp(h.messages, *args)
+        else:
+            ok = {'remove_last': h.remove_last_messages, 'remove_from_user': h.remove_from_user_message,
+                  'remove_from_assistant': h.remove_from_assistant_timestamp,
+                  'remove_tool_call': h.remove_tool_call}[op](*args)
+        if not ok:
+            return False, 'not found'
+        ok, err = self.replace_messages(chat_name, h.messages, expected_count=len(rows))
+        if not ok:
+            return False, err
+        self._prune_orphaned_tool_images(chat_name)
+        if op == 'edit':
+            publish(Events.MESSAGE_ADDED, {"role": args[0], "edited": True, "chat_name": chat_name})
+        else:
+            publish(Events.MESSAGE_REMOVED, {"from": op, "chat_name": chat_name})
+        return True, None
+
+    @classmethod
+    def _rows_remove_last_assistant(cls, msgs, timestamp: str) -> bool:
+        """remove_last_assistant_in_turn on a plain list: the LAST assistant row
+        of the turn whose first assistant row carries `timestamp` goes; the only
+        one goes when it is alone."""
+        tail = cls._turn_tail(msgs, timestamp)
+        if tail is None:
+            return False
+        msgs.pop(tail)
+        return True
+
+    @classmethod
+    def _rows_edit_by_timestamp(cls, msgs, role: str, timestamp: str, new_content) -> bool:
+        """edit_message_by_timestamp on a plain list: a user row's text swapped
+        (its image and file blocks kept); an assistant turn's LAST row given the
+        new prose, inline <think> split out into `thinking`."""
+        if role == 'user':
+            for m in msgs:
+                if m.get('role') == 'user' and m.get('timestamp') == timestamp:
+                    c = m.get('content')
+                    if isinstance(c, list):
+                        m['content'] = [{'type': 'text', 'text': new_content}] + \
+                            [b for b in c if not (isinstance(b, dict) and b.get('type') == 'text')]
+                    else:
+                        m['content'] = new_content
+                    return True
+            return False
+        if role == 'assistant':
+            tail = cls._turn_tail(msgs, timestamp)
+            if tail is None:
+                return False
+            clean, thinking = _extract_thinking_from_content(new_content)
+            msgs[tail]['content'] = clean
+            if thinking:
+                msgs[tail]['thinking'] = thinking
+            return True
+        return False
 
     def remove_tool_call(self, tool_call_id: str) -> bool:
         """Remove a specific tool call and its result from history."""
@@ -5506,3 +5617,15 @@ class ChatSessionManager:
         safe_name = "".join(c for c in chat_name if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_name = safe_name.replace(' ', '_').lower()
         return self.history_dir / f"{safe_name}.json"
+
+
+def landing_chat(sm) -> str:
+    """Where the person's VOICE lands - the wake word, a satellite's words, the
+    browser conversation: the landing chat a surface set while it has the
+    person (a chat room, views/rooms.js), else the active chat. Typed turns
+    in the Chat view stay on the active chat. The two parts of the one pointer
+    that used to play both (2026-10-13). Tolerant of a store without the
+    landing (a fake, an old one): the active chat then."""
+    fn = getattr(sm, 'get_landing_chat_name', None)
+    name = fn() if callable(fn) else None
+    return name if isinstance(name, str) and name else sm.get_active_chat_name()

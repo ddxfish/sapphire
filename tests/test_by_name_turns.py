@@ -364,15 +364,25 @@ def test_create_chat_stamps_settings_at_birth(client, mock_system):
     assert r.status_code == 400
 
 
-def test_bound_belt_refuses_edit_when_pointer_moved(client, mock_system):
+def test_a_bound_rails_edit_goes_by_name_when_the_pointer_is_elsewhere(client, mock_system):
+    """F1's belt refused with a 409; since the landing-chat split (2026-10-13) the
+    Chat view's chat never moves for a room, so a rail bound by name edits ITS chat
+    (ChatSessionManager.edit_chat_rows), and the active chat keeps the old path."""
     c, csrf = client
     mock_system.llm_chat.get_active_chat.return_value = 'trinity'
+    mock_system.llm_chat.session_manager.edit_chat_rows.return_value = (True, None)
     r = c.post('/api/history/messages/edit?chat=story_x',
                json={'role': 'user', 'timestamp': 't1', 'new_content': 'x'},
                headers={'X-CSRF-Token': csrf})
-    assert r.status_code == 409
+    assert r.status_code == 200
+    mock_system.llm_chat.session_manager.edit_chat_rows.assert_called_once_with('story_x', 'edit', 'user', 't1', 'x')
     mock_system.llm_chat.session_manager.edit_message_by_timestamp.assert_not_called()
-    # bound to the active chat → passes through
+    mock_system.llm_chat.session_manager.edit_chat_rows.return_value = (False, 'not found')
+    r = c.post('/api/history/messages/edit?chat=story_x',
+               json={'role': 'user', 'timestamp': 't9', 'new_content': 'x'},
+               headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 404
+    # bound to the active chat → the manager's own method, as ever
     mock_system.llm_chat.session_manager.edit_message_by_timestamp.return_value = True
     r = c.post('/api/history/messages/edit?chat=trinity',
                json={'role': 'user', 'timestamp': 't1', 'new_content': 'x'},

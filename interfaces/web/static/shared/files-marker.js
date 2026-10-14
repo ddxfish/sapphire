@@ -1,7 +1,7 @@
 // shared/files-marker.js — the ONE attachments renderer (2026-09-26). A tool, or a
 // plugin's own turn, hands the user files by appending ONE marker line:
 //   <!--FILES:{"title":"…","items":[{"url":"/api/plugin/<name>/…","name":"song.mp3"}]}-->
-// Audio items get a player; every item gets a download button. A player reads
+// Audio and video items get a player; every item gets a download button. A player reads
 // its file's length when it comes on screen, and the file when play is pressed.
 // Built in Python by
 // core/attachments.py. Sibling of shared/gallery-marker.js, and like it the marker
@@ -16,6 +16,7 @@ export const FILES_RE = /<!--FILES:(\{[^\n]*\})-->[ \t]*\n?/;
 const FILES_RE_ALL = new RegExp(FILES_RE.source, 'g');
 const SAFE_URL = /^\/api\/plugin\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.\/-]+(\?[A-Za-z0-9_=&-]*)?$/;
 const AUDIO = /\.(mp3|wav|ogg|oga|m4a|flac)$/i;
+const VIDEO = /\.(mp4|webm|m4v|mov)$/i;
 const MAX_ITEMS = 12;
 
 export function safeUrl(url) {
@@ -28,7 +29,7 @@ export function normalizeFiles(raw) {
         if (!e || typeof e !== 'object' || !safeUrl(e.url)) return null;
         const path = e.url.split('?')[0];
         const name = (typeof e.name === 'string' && e.name.trim()) || path.split('/').pop();
-        return { url: e.url, name, audio: AUDIO.test(path) };
+        return { url: e.url, name, audio: AUDIO.test(path), video: VIDEO.test(path) };
     }).filter(Boolean);
 }
 
@@ -96,6 +97,15 @@ export function buildFilesRows(groups) {
             head.textContent = title;
             row.appendChild(head);
         }
+        files.filter(f => f.video).forEach(f => {
+            const player = document.createElement('video');
+            player.className = 'files-video';
+            player.controls = true; player.playsInline = true;
+            player.preload = 'none';
+            player.src = f.url;
+            whenSeen(player);
+            row.appendChild(player);
+        });
         files.filter(f => f.audio).forEach(f => {
             const player = document.createElement('audio');
             player.className = 'files-audio';

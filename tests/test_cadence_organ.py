@@ -719,3 +719,27 @@ def test_start_registers_the_turn_end_hook_once(monkeypatch):
     cadence.start(object())
     cadence.start(object())
     assert calls == [((cadence.Events.AI_TYPING_END,), cadence._on_turn_end)]
+
+
+def test_a_failed_turn_raises_the_cause_in_words():
+    """A seat with no model loaded in LM Studio (opening night, 2026-10-13): the
+    provider's 400 reached the room as "RuntimeError" and the words sat in the
+    journal. The error a turn raises is in words where its shape is known
+    (friendly_llm_error), the raw name and text only when it is not."""
+    class _BadRequest(Exception):
+        status_code = 400
+
+    def _dies(err):
+        yield {'type': 'content', 'text': ''}
+        raise err
+    lms = _BadRequest("Error code: 400 - {'error': {'message': \"No models loaded. Please load a model in the "
+                      "developer page or use the 'lms load' command.\", 'param': 'model'}}")
+    sysobj, stream, llm = _system(_dies(lms), active='c')
+    cadence._system = sysobj
+    with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='^Model not found or not loaded. If using LM Studio'):
+        cadence.run_turn('c', 'cue')
+    llm.end_stream.assert_called_once_with('sid', 'c')
+    sysobj, stream, llm = _system(_dies(ValueError('the stream broke')), active='c')
+    cadence._system = sysobj
+    with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='^ValueError: the stream broke$'):
+        cadence.run_turn('c', 'cue')

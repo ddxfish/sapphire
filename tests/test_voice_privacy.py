@@ -206,3 +206,13 @@ class TestDoors:
         with pytest.raises(HTTPException) as ei:
             asyncio.run(tts_routes.handle_tts_speak(_Req(), _=None, system=None))
         assert ei.value.status_code == 403
+
+
+def test_the_stream_route_is_mounted_on_its_handler():
+    """2026-10-13: `@router.post('/api/tts/stream')` sat on the privacy-gate helper
+    above the handler, so FastAPI mounted the helper (422: query 'system' and 'chat'
+    required) and no streaming TTS request ever reached handle_tts_stream."""
+    from core.routes.tts import router
+    mounted = {r.path: r.endpoint.__name__ for r in router.routes if hasattr(r, 'endpoint')}
+    assert mounted['/api/tts/stream'] == 'handle_tts_stream'
+    assert '_gate_settings_for' not in mounted.values()

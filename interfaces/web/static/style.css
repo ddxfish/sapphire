@@ -4413,6 +4413,15 @@ a.gallery-caption:hover {
     margin: 0 0 8px 0;
 }
 
+.files-row .files-video {
+    display: block;
+    max-width: 460px;
+    max-height: 60vh;
+    margin: 0 0 8px 0;
+    border-radius: var(--radius-md);
+    background: #000;
+}
+
 .files-row .files-chips {
     display: flex;
     flex-wrap: wrap;
@@ -9375,20 +9384,15 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 .rm-empty p { margin: 0 0 10px; }
 .rm-composer-slot { display: block; }
 
-/* sidebar */
-.rm-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.rm-field > label { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; }
-.rm-field input[type="number"], .rm-skip input[type="number"] {
-    width: 54px; padding: 4px 6px; background: var(--input-bg); border: 1px solid var(--border);
-    border-radius: var(--radius-sm); color: var(--text); font-size: var(--font-sm);
-}
-.rm-hint { font-size: var(--font-xs); color: var(--text-muted); }
-.rm-field select { flex: 1; min-width: 0; font-size: var(--font-sm); }
-.rm-run { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.rm-skip { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+/* sidebar: two headed sections - the cadence block (heading + gear, then one row: turns,
+   speaking order, play) and the roster (heading, add row, seats) */
+.rm-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.rm-sec-title { font-size: var(--font-xs); color: var(--text-muted); }
+.rm-roster-head { margin-top: 14px; }
+.rm-run { display: flex; align-items: center; gap: 6px; }
+.rm-run select { flex: 1 1 0; min-width: 0; font-size: var(--font-sm); }
 .rm-run button:disabled { opacity: 0.45; cursor: default; }
-.rm-bots-row { margin: 6px 0; }
-.rm-add { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
+.rm-add { display: flex; gap: 6px; align-items: center; margin: 0 0 8px; }
 .rm-add select { flex: 1; min-width: 0; padding: 5px 6px; background: var(--input-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: var(--font-sm); }
 .rm-none { color: var(--text-muted); font-size: var(--font-sm); padding: 6px 2px; }
 .rm-guests { color: var(--text-muted); font-size: var(--font-xs); padding: 8px 2px; }

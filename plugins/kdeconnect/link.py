@@ -143,11 +143,15 @@ class Peer:
             except OSError:
                 pass
 
-    def ask(self, kind, body, want, timeout=8, quiet=None):
+    def ask(self, kind, body, want, timeout=8, quiet=None, accept=None):
         """Send one packet and wait for the answer(s) of type `want`. With
         quiet=None: the first answer within `timeout` seconds, as a list of
         one. With quiet=N: every answer until N seconds pass with none (the
-        phone answers one packet per conversation). [] when nothing came."""
+        phone answers one packet per conversation). `accept(pkt)` says which
+        packets of that type are THIS answer: the phone sends the same type
+        for a conversation list and for one conversation, and a list still
+        trickling in must not be taken for the conversation that was asked
+        (2026-10-12). [] when nothing came."""
         q = queue.Queue()
         with self._lock:
             self._waiters.setdefault(want, []).append(q)
@@ -159,9 +163,12 @@ class Peer:
                 if wait <= 0:
                     break
                 try:
-                    out.append(q.get(timeout=wait))
+                    pkt = q.get(timeout=wait)
                 except queue.Empty:
                     break
+                if accept is not None and not accept(pkt):
+                    continue                       # someone else's answer: the driver sees it through 'packet'
+                out.append(pkt)
                 if quiet is None:
                     break
             return out

@@ -136,7 +136,7 @@ def friendly_llm_error(e):
         return "Context limit exceeded — conversation is too long for this model. Lower CONTEXT_LIMIT in Settings or start a new chat."
 
     if status == 400:
-        if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'does not exist')):
+        if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'no models loaded', 'does not exist')):
             return "Model not found or not loaded. If using LM Studio, make sure a model is loaded and running."
         if any(k in error_str for k in ('image', 'vision', 'multimodal', 'content_type')):
             return "This model doesn't support images. Load a vision model to use image attachments."
@@ -780,15 +780,17 @@ class LLMChat:
         non-streaming provider fakes chat_completion_stream in the provider
         layer (~15 lines) — it never gets a second pipeline here.
 
-        Inbox (2026-10-06): this door waits its turn. The active chat is the
+        Inbox (2026-10-06): this door waits its turn. The LANDING chat (a chat
+        room open on the screen, else the active chat; history.landing_chat) is the
         queue; the turn itself runs on the inbox's drainer thread in this
         caller's context, exclusive like a typed turn — before this it began a
         NON-exclusive stream and could land on top of a live turn (interleaved
         rows, a tool_use split from its result, a provider 400).
         """
         from core.chat import inbox
+        from core.chat.history import landing_chat
         try:
-            chat_name = self.session_manager.get_active_chat_name() or ''
+            chat_name = landing_chat(self.session_manager) or ''
         except Exception:
             chat_name = ''
         if not chat_name:

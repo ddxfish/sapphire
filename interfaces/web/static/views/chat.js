@@ -2,7 +2,7 @@
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
-import { getElements, getIsProc } from '../core/state.js';
+import { getElements, getIsProc, refresh } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from '../features/scene.js';
 import { applyTrimColor, applyBackground } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
@@ -484,6 +484,10 @@ export default {
         await steerOffGameChat();
         await refreshInitData();
         await loadSidebar();
+        // the rail is painted for the chat the picker shows, every time this view
+        // opens: a rail lent to a room or a game comes home empty (surface/organs.js)
+        // and this tab's own pointer moves publish no CHAT_SWITCHED to repaint on
+        await refresh(false);
     },
 
     hide() {
@@ -505,13 +509,17 @@ eventBus.on('room_turn_settled', () => { if (getCurrentView() === 'chat') steerO
 
 async function steerOffGameChat() {
     try {
+        // a room's exit returns the pointer to the chat it came from (views/rooms.js
+        // hide); read the list after that lands, or the steer and the return race
+        // for the pointer and the picker ends up on neither
+        for (let i = 0; i < 100 && api.hasPendingActivate(); i++) await new Promise(r => setTimeout(r, 50));
         const data = await api.fetchChatList();
         // Superseded: the user has already gone on to another view (the Chat
         // flyout passes THROUGH the chat view on the way to Chat Room). This
         // steer must not move the pointer under the view they are in now.
         if (getCurrentView() !== 'chat') return;
         const active = (data.chats || []).find(c => c.name === data.active_chat);
-        if (!active || (active.mode !== 'game' && active.mode !== 'room')) return;   // a chat room is Chat > Chat Room's (2026-10-11)
+        if (!active || !['game', 'room', 'seat'].includes(active.mode)) return;   // a room and a seat's chat are Chat > Chat Room's (2026-10-11, seats 2026-10-13)
         // !c.mode, not just !=='game' — the picker's filter. mode:limbo
         // ('backrooms', freshest after its landing wipe bumps updated_at)
         // must never be the steer target.

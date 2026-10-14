@@ -331,8 +331,14 @@ async function doBulkExport() {
 // from this view; then we navigate to the freshly painted transcript.
 async function openChat(name) {
     const c = chats.find(x => x.name === name);
-    if ((c?.mode ?? c?.settings?.mode) === 'room') {        // a room opens in Chat Room, never the chat view (no pointer switch: its bots may be talking)
+    const mode = c?.mode ?? c?.settings?.mode;
+    if (mode === 'room') {        // a room opens in Chat Room, never the chat view (no pointer switch: its bots may be talking)
         localStorage.setItem('sapphire-room-last', name);
+        switchView('rooms');
+        return;
+    }
+    if (mode === 'seat' && c?.settings?.room) {              // a seat's own chat opens as her room: a turn typed there would run her bare (2026-10-13)
+        localStorage.setItem('sapphire-room-last', c.settings.room);
         switchView('rooms');
         return;
     }

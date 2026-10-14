@@ -506,7 +506,8 @@ def test_conversations_come_slowly_and_are_kept(rig, monkeypatch):
     threads = d._conversations(peer)
     assert sorted(threads) == [1, 2, 3], 'all three, though they came half a second apart'
     assert time.monotonic() - t0 >= 1.5 + 1.2 - 0.2
-    assert d._conversations(peer) is threads and len(asked) == 1, 'the second call is the cache'
+    again = d._conversations(peer)
+    assert again == threads and again is not threads and len(asked) == 1, 'the second call is a copy of the cache'
     text, ok = d._sms_list(peer, '2')
     assert ok and text.splitlines()[0].startswith('Texts on the phone: 3 conversations, the 2 newest')
     assert '5550002' in text and 'hello 2' in text
@@ -524,3 +525,41 @@ def test_conversations_come_slowly_and_are_kept(rig, monkeypatch):
     second.start()
     first.join(15); second.join(15)
     assert results == [3, 3] and len(asked) == 2
+
+
+def test_read_ignores_a_conversation_list_still_trickling_in(rig, monkeypatch):
+    """Krem read 'meem' while the phone was still sending its conversation
+    list, and got Don's text (2026-10-12): the two answers share one packet
+    type. read takes only packets whose texts are all of its conversation."""
+    from plugins.kdeconnect import device_driver as d
+    monkeypatch.setattr(d, 'CONV_FIRST', 6)
+    sapphire, ev, phone = rig
+    peer = linked(sapphire, ev, phone)
+    sapphire.request_pair(phone.ident.id)
+    phone.packets.wait('pair')
+    phone.accept_pair()
+    ev.wait('paired')
+    d._threads.pop(phone.ident.id, None)
+    cache = d._cache(peer)
+    cache['by'] = {7: {'_id': 1, 'thread_id': 7, 'addresses': [{'address': '+13015550007'}, {'address': '3015550007'}],
+                       'body': 'latest from mom', 'date': 1700000007000, 'type': 1},
+                   9: {'_id': 2, 'thread_id': 9, 'addresses': [{'address': '5550009'}], 'body': 'radio club', 'date': 1700000009000, 'type': 1}}
+    cache['ts'] = time.time()
+
+    def answer():
+        _, _, info = phone.packets.wait('packet', timeout=10)
+        assert info['pkt']['body']['threadID'] == 7
+        # a straggler of the conversation list first (someone else's thread), then the real answer
+        phone.send('kdeconnect.sms.messages', {'version': 2, 'messages': [
+            {'_id': 2, 'thread_id': 9, 'addresses': [{'address': '5550009'}], 'body': 'radio club', 'date': 1700000009000, 'type': 1}]})
+        time.sleep(0.3)
+        phone.send('kdeconnect.sms.messages', {'version': 2, 'messages': [
+            {'_id': 3, 'thread_id': 7, 'addresses': [{'address': '+13015550007'}], 'body': 'dinner sunday?', 'date': 1700000006000, 'type': 1},
+            {'_id': 1, 'thread_id': 7, 'addresses': [{'address': '+13015550007'}, {'address': '3015550007'}], 'body': 'latest from mom', 'date': 1700000007000, 'type': 2}]})
+    threading.Thread(target=answer, daemon=True).start()
+    text, ok = d._sms_read(peer, '555-0007 5')
+    assert ok, text
+    lines = text.splitlines()
+    assert lines[0] == 'Texts with +13015550007, the last 2, oldest first:', lines[0]
+    assert 'dinner sunday?' in lines[1] and lines[2].endswith('you: latest from mom')
+    assert 'radio club' not in text

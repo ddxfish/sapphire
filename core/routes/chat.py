@@ -1032,22 +1032,42 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
 # HISTORY MANAGEMENT ROUTES
 # =============================================================================
 
-def _bound_belt(request: Request, system):
-    """F1 (2026-09-08): the message-edit routes act on the ACTIVE chat. A
-    rail bound to a session by name sends `?chat=`; when that isn't the
-    active chat any more (the pointer moved under the room) refuse, rather
-    than edit the wrong transcript. Absent = legacy caller, no check."""
-    bound = (request.query_params.get('chat') or '').strip()
-    if bound and bound != system.llm_chat.get_active_chat():
-        raise HTTPException(status_code=409, detail=(
-            f"This rail is bound to '{bound}' but the active chat moved elsewhere — "
-            f"editing works only while it's the active chat."))
+def _edit_target(request: Request, system):
+    """The chat a message-edit route works on: the rail's own (`?chat=`, a room's
+    rail bound by name), else the active chat. F1's belt (2026-09-08) refused a
+    bound chat that was not the active one; since the landing-chat split
+    (2026-10-13) the Chat view's chat never moves for a room, so the edit goes
+    to the bound chat BY NAME (_edit)."""
+    return (request.query_params.get('chat') or '').strip() or system.llm_chat.get_active_chat()
+
+
+def _edit(system, target, op, *args):
+    """One message edit: the active chat through the manager's own methods, as
+    ever; another chat by name (ChatSessionManager.edit_chat_rows). (ok, error)."""
+    sm = system.llm_chat.session_manager
+    own = {'remove_last': 'remove_last_messages', 'remove_from_user': 'remove_from_user_message',
+           'remove_from_assistant': 'remove_from_assistant_timestamp',
+           'remove_last_assistant': 'remove_last_assistant_in_turn',
+           'edit': 'edit_message_by_timestamp', 'remove_tool_call': 'remove_tool_call'}
+    if target == system.llm_chat.get_active_chat():            # the same truth _edit_target reads
+        return (True, None) if getattr(sm, own[op])(*args) else (False, 'not found')
+    return sm.edit_chat_rows(target, op, *args)
+
+
+def _edited(ok, err, found_status, found_detail, failed_detail):
+    """The edit routes' answer: success, or the status the route always gave."""
+    if ok:
+        return None
+    if err == 'not found':
+        raise HTTPException(status_code=found_status, detail=found_detail)
+    raise HTTPException(status_code=500, detail=err or failed_detail)
 
 
 @router.delete("/api/history/messages")
 async def remove_history_messages(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Remove messages from history."""
-    _bound_belt(request, system)
+    """Remove messages from history: the rail's own chat (`?chat=`), else the active chat."""
+    target = _edit_target(request, system)
+    sm = system.llm_chat.session_manager
     data = await request.json()
     count = data.get('count', 0) if data else 0
     user_message = data.get('user_message') if data else None
@@ -1055,34 +1075,36 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
     # Method 1: Delete from specific user message
     if user_message:
         try:
-            if system.llm_chat.session_manager.remove_from_user_message(user_message):
-                return {"status": "success", "message": "Removed from user message"}
-            else:
-                raise HTTPException(status_code=404, detail="User message not found")
+            ok, err = _edit(system, target, 'remove_from_user', user_message)
         except Exception as e:
             logger.error(f"Error removing from user message: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+        _edited(ok, err, 404, "User message not found", "Failed to remove")
+        return {"status": "success", "message": "Removed from user message"}
 
     # Method 2: Clear all
     if count == -1:
         try:
-            session_manager = system.llm_chat.session_manager
-            chat_name = session_manager.get_active_chat_name()
             # a chat room clears through its own door (core/rooms.py): the run settles, its
             # seats' own chats are wiped with it, each guest's box sets hers aside and starts
             # fresh. The sidebar's x on a bound room used to wipe the room's rows alone.
             try:
                 from core import rooms
-                if rooms.is_room(chat_name):
-                    rooms.clear(chat_name)                      # publishes CHAT_CLEARED itself
+                if rooms.is_room(target):
+                    rooms.clear(target)                      # publishes CHAT_CLEARED itself
                     return {"status": "success", "message": "The room was cleared."}
             except rooms.RoomError as e:
                 raise HTTPException(status_code=409, detail=str(e))
-            session_manager.clear()
-
+            if target != sm.get_active_chat_name():          # a rail bound by name: that chat, never the pointer's
+                if not sm.clear_chat(target):
+                    raise HTTPException(status_code=409, detail=f"'{target}' could not be cleared (streaming, or sealed)")
+            else:
+                sm.clear()
             origin = request.headers.get('X-Session-ID')
-            publish(Events.CHAT_CLEARED, {"chat_name": chat_name, "origin": origin})
+            publish(Events.CHAT_CLEARED, {"chat_name": target, "origin": origin})
             return {"status": "success", "message": "All chat history cleared."}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error clearing history: {e}")
             raise HTTPException(status_code=500, detail="Failed to clear history")
@@ -1090,67 +1112,62 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
     # Method 3: Delete last N
     if not isinstance(count, int) or count <= 0:
         raise HTTPException(status_code=400, detail="Invalid count")
-
     try:
-        if system.llm_chat.session_manager.remove_last_messages(count):
-            return {"status": "success", "message": f"Removed {count} messages.", "deleted": count}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to remove messages")
+        ok, err = _edit(system, target, 'remove_last', count)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    _edited(ok, err, 500, "Failed to remove messages", "Failed to remove messages")
+    return {"status": "success", "message": f"Removed {count} messages.", "deleted": count}
 
 
 @router.post("/api/history/messages/remove-last-assistant")
 async def remove_last_assistant(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove only the last assistant message in a turn."""
-    _bound_belt(request, system)
+    target = _edit_target(request, system)
     data = await request.json()
     timestamp = data.get('timestamp')
     if not timestamp:
         raise HTTPException(status_code=400, detail="Timestamp required")
     try:
-        if system.llm_chat.session_manager.remove_last_assistant_in_turn(timestamp):
-            return {"status": "success", "message": "Removed last assistant"}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to remove")
+        ok, err = _edit(system, target, 'remove_last_assistant', timestamp)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    _edited(ok, err, 500, "Failed to remove", "Failed to remove")
+    return {"status": "success", "message": "Removed last assistant"}
 
 
 @router.post("/api/history/messages/remove-from-assistant")
 async def remove_from_assistant(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove assistant message and everything after it."""
-    _bound_belt(request, system)
+    target = _edit_target(request, system)
     data = await request.json()
     timestamp = data.get('timestamp')
     if not timestamp:
         raise HTTPException(status_code=400, detail="Timestamp required")
     try:
-        if system.llm_chat.session_manager.remove_from_assistant_timestamp(timestamp):
-            return {"status": "success", "message": "Removed from assistant"}
-        else:
-            raise HTTPException(status_code=404, detail="Assistant message not found")
+        ok, err = _edit(system, target, 'remove_from_assistant', timestamp)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    _edited(ok, err, 404, "Assistant message not found", "Failed to remove")
+    return {"status": "success", "message": "Removed from assistant"}
 
 
 @router.delete("/api/history/tool-call/{tool_call_id}")
 async def remove_tool_call(tool_call_id: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Remove a specific tool call and its result."""
-    _bound_belt(request, system)
+    target = _edit_target(request, system)
     try:
-        if system.llm_chat.session_manager.remove_tool_call(tool_call_id):
-            return {"status": "success", "message": "Tool call removed"}
-        else:
-            raise HTTPException(status_code=404, detail="Tool call not found")
+        ok, err = _edit(system, target, 'remove_tool_call', tool_call_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    _edited(ok, err, 404, "Tool call not found", "Failed to remove")
+    return {"status": "success", "message": "Tool call removed"}
 
 
 @router.post("/api/history/messages/edit")
 async def edit_message(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Edit a message by timestamp."""
-    _bound_belt(request, system)
+    target = _edit_target(request, system)
     data = await request.json()
     role = data.get('role')
     timestamp = data.get('timestamp')
@@ -1167,12 +1184,11 @@ async def edit_message(request: Request, _=Depends(require_login), system=Depend
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     try:
-        if system.llm_chat.session_manager.edit_message_by_timestamp(role, timestamp, new_content):
-            return {"status": "success", "message": "Message updated"}
-        else:
-            raise HTTPException(status_code=404, detail="Message not found")
+        ok, err = _edit(system, target, 'edit', role, timestamp, new_content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    _edited(ok, err, 404, "Message not found", "Failed to edit")
+    return {"status": "success", "message": "Message updated"}
 
 
 @router.get("/api/history/raw")
@@ -1226,7 +1242,7 @@ async def list_chats(request: Request, type: str = None, kind: str = None,
         if want:
             chats = [c for c in chats if c.get('kind') == want]
         if slim:
-            keep = ('mode', 'game_id', 'private_chat', 'archived', 'persona', 'prompt',
+            keep = ('mode', 'game_id', 'room', 'private_chat', 'archived', 'persona', 'prompt',
                     'llm_primary', 'llm_model', 'toolset', 'trim_color',
                     'private_display_name')
             # New dicts, never in-place: the store's entries are this
@@ -1749,8 +1765,31 @@ async def activate_chat(chat_name: str, request: Request, _=Depends(require_logi
 
 @router.get("/api/chats/active")
 async def get_active_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Get active chat name."""
-    return {"active_chat": system.llm_chat.get_active_chat()}
+    """Get active chat name - and where voice lands right now (the same, unless a room is open)."""
+    from core.chat.history import landing_chat
+    return {"active_chat": system.llm_chat.get_active_chat(),
+            "landing": landing_chat(system.llm_chat.session_manager)}
+
+
+@router.post("/api/chats/{chat_name}/landing")
+async def set_landing_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Where the person's VOICE lands while a surface other than the Chat view has
+    them: a chat room says {on: true} while it is open and {on: false} on the way
+    out (views/rooms.js). The wake word, a satellite and the browser conversation
+    land there; typed turns in the Chat view stay on the active chat, which never
+    moves for it (the one pointer used to play both parts, 2026-10-13)."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    on = bool((data or {}).get('on', True)) if isinstance(data, dict) else True
+    sm = system.llm_chat.session_manager
+    if on:
+        if not sm.set_landing_chat(chat_name):
+            raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+    elif getattr(sm, 'landing_chat_name', None) == chat_name:
+        sm.set_landing_chat(None)
+    return {"status": "success", "landing": sm.get_landing_chat_name(), "active_chat": sm.get_active_chat_name()}
 
 
 def _backfill_persona_visuals(chat_settings):
