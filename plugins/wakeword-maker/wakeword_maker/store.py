@@ -17,7 +17,7 @@ import numpy as np
 
 from . import paths
 from .paths import write_json
-from .paths import COLLECTIONS, SAMPLE_RATE, collection_dir, project_dir, projects_dir, slug_of
+from .paths import COLLECTIONS, SAMPLE_RATE, collection_dir, project_dir, projects_dir, room_dir, slug_of
 
 AUDIO_EXT = ('.wav', '.flac', '.ogg', '.mp3', '.aiff', '.aif')
 MIN_SECONDS = 0.25
@@ -282,6 +282,107 @@ def update_side(pdir, collection, cid, **fields):
     return side
 
 
+# --- the room library: shared by every wake word (paths.room_dir) ----------------------------------------
+
+def room_paths(root, cid):
+    if not cid or '/' in cid or '\\' in cid or '..' in cid:
+        raise ValueError('bad piece id')
+    d = room_dir(root)
+    return d / f"{cid}.wav", d / f"{cid}.json"
+
+
+def add_room(root, audio, meta):
+    """A piece of a room into the library. audio: float32 mono 16 kHz. Returns the sidecar."""
+    d = room_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    cid = new_id()
+    while (d / f"{cid}.wav").exists():
+        cid = new_id()
+    side = {'id': cid, 'collection': 'room', 'created': time.time(), **measure(audio)}
+    side.update({k: v for k, v in (meta or {}).items() if v is not None})
+    side['source'] = side.get('source') or 'capture'
+    write_wav(d / f"{cid}.wav", audio)
+    write_json(d / f"{cid}.json", side)
+    return side
+
+
+def list_room(root, slug=None, devices=None, dropped=False):
+    """Every piece in the library, newest first. With `slug`, the pieces dropped for that wake word (the phrase
+    was said in them) are left out; `devices` keeps only those microphones; `dropped` includes deleted-by-verdict."""
+    d = room_dir(root)
+    if not d.is_dir():
+        return []
+    out = []
+    for e in os.scandir(d):
+        if not e.name.endswith('.json'):
+            continue
+        side = read_side(d / e.name)
+        if not side or not (d / f"{side.get('id', '')}.wav").exists():
+            continue
+        if not dropped and side.get('verdict') == 'drop':
+            continue
+        if slug and slug in (side.get('drop_for') or []):
+            continue
+        if devices and (side.get('device') or 'unknown') not in devices:
+            continue
+        out.append(side)
+    out.sort(key=lambda r: r.get('id', ''), reverse=True)
+    return out
+
+
+def update_room(root, cid, **fields):
+    wav, sp = room_paths(root, cid)
+    side = read_side(sp) or {'id': cid, 'collection': 'room'}
+    side.update(fields)
+    write_json(sp, side)
+    return side
+
+
+def drop_room_for(root, cid, slug):
+    """The phrase of one wake word was said in this piece: it is no negative for that wake word, and stays one
+    for every other."""
+    side = read_side(room_paths(root, cid)[1]) or {}
+    return update_room(root, cid, drop_for=sorted(set(side.get('drop_for') or []) | {slug}))
+
+
+def delete_room(root, cid=None, watch=None):
+    """Delete one piece, or every piece of one watch. Returns how many went."""
+    gone = 0
+    for side in list_room(root, dropped=True):
+        if (cid and side['id'] == cid) or (watch and side.get('watch') == watch):
+            for p in room_paths(root, side['id']):
+                if p.exists():
+                    p.unlink()
+            gone += 1
+    return gone
+
+
+def room_summary(root):
+    """Per microphone: pieces, minutes, watches; and per watch: device, pieces, minutes, when."""
+    by_dev, by_watch = {}, {}
+    for s in list_room(root, dropped=True):
+        d = s.get('device') or 'unknown'
+        x = by_dev.setdefault(d, {'device': d, 'pieces': 0, 'seconds': 0.0, 'dropped': 0, 'watches': set()})
+        x['pieces'] += 1
+        x['seconds'] += float(s.get('seconds') or 0)
+        x['dropped'] += 1 if s.get('verdict') == 'drop' else 0
+        if s.get('watch'):
+            x['watches'].add(s['watch'])
+            w = by_watch.setdefault(s['watch'], {'watch': s['watch'], 'device': d, 'project': s.get('project'), 'pieces': 0, 'seconds': 0.0, 'first': s.get('created'), 'last': s.get('created')})
+            w['pieces'] += 1
+            w['seconds'] += float(s.get('seconds') or 0)
+            w['first'] = min(w['first'] or s['created'], s.get('created') or w['first'])
+            w['last'] = max(w['last'] or 0, s.get('created') or 0)
+    total = sum(x['seconds'] for x in by_dev.values())
+    for x in by_dev.values():
+        x['watches'] = len(x['watches'])
+        x['minutes'] = round(x.pop('seconds') / 60, 1)
+    for w in by_watch.values():
+        w['minutes'] = round(w.pop('seconds') / 60, 1)
+    return {'devices': sorted(by_dev.values(), key=lambda x: -x['minutes']), 'watches': sorted(by_watch.values(), key=lambda w: w['watch'], reverse=True),
+            'minutes': round(total / 60, 1)}
+
+
 # --- taking audio in ---------------------------------------------------------------------------------
 
 BOOST_BELOW = 0.1       # peak under -20 dBFS...
@@ -383,6 +484,14 @@ def create_project(root, phrase, folder=None):
                'negatives': [], 'rounds': [], 'settings': {}}
     save_project(pdir, project)
     return {**project, 'folder': str(pdir)}
+
+
+def load_project_at(pdir):
+    """The project.json of a wake word folder, or None."""
+    try:
+        return json.loads((Path(pdir) / 'project.json').read_text(encoding='utf-8'))
+    except Exception:
+        return None
 
 
 def load_project(root, slug):

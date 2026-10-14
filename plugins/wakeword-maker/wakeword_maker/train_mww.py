@@ -225,8 +225,10 @@ def evaluate(tflite_path, fdir, cfg, root, progress=None):
     rows = []
     for c in CUTOFFS:
         rec = float(np.mean([_detections(p, c, window, settle) > 0 for p in probs_pos])) if probs_pos else None
-        room_fa = (sum(_detections(p, c, window, 0) for p in probs_room) / (room_s / 3600)) if room_s > 0 else None
-        std_fa = (sum(_detections(p, c, window, 0) for p in probs_std) / (std_s / 3600)) if std_s > 0 else None
+        # settle on the room too: a spectrogram that starts in the room all at once fired once at its first window
+        # in every run (3.8-5.9/h on a 10-minute slice) and scored every ESP32 run 0.0; the board ignores that onset
+        room_fa = (sum(_detections(p, c, window, settle) for p in probs_room) / (room_s / 3600)) if room_s > 0 else None
+        std_fa = (sum(_detections(p, c, window, settle) for p in probs_std) / (std_s / 3600)) if std_s > 0 else None
         rows.append({'threshold': c, 'recall': rec, 'fp_per_hour': std_fa, 'own_fa_per_hour': room_fa, 'neg_fp_rate': None})
     return rows, {'held_out_positives': len(probs_pos), 'room_seconds': int(room_s), 'std_seconds': int(std_s), 'stride': st.stride}
 
@@ -261,13 +263,15 @@ def run_job(root, args, progress):
     cfg = {**DEFAULTS, **preset, **{k: v for k, v in (args.get('cfg') or {}).items() if k in DEFAULTS}, 'device': args.get('device', 'auto')}
     progress.step('features', 'building the spectrogram set (reused if nothing changed)')
     from .train_oww import _Quiet
-    key = features_mww.build(root, {'project': slug, 'recipe': args.get('recipe'), 'synth': args.get('synth'), 'exclude_near': args.get('exclude_near'), 'rounds': args.get('rounds', 2), 'holdout': args.get('holdout', True), 'seed': cfg['seed']}, _Quiet(progress))
+    sources = features.sources_of(args)
+    key = features_mww.build(root, {'project': slug, 'recipe': args.get('recipe'), 'sources': sources, 'exclude_near': args.get('exclude_near'), 'rounds': args.get('rounds', 2), 'holdout': args.get('holdout', True), 'seed': cfg['seed']}, _Quiet(progress))
     fdir = pdir / 'features' / 'mww' / key
     stamp = time.strftime('%Y%m%d-%H%M%S')
     run_dir = pdir / 'runs' / f"{stamp}-mww"
     run_dir.mkdir(parents=True, exist_ok=True)
     run = {'id': run_dir.name, 'trainer': 'mww', 'preset': args.get('preset', 'standard'), 'cfg': cfg, 'features': key,
-           'recipe': _recipe_of_set(fdir), 'synth': args.get('synth') or 'all', 'exclude_near': args.get('exclude_near') or [], 'holdout': args.get('holdout', True),
+           'recipe': _recipe_of_set(fdir), 'synth': sources['synth'], 'sources': sources, 'sources_label': features.sources_label(sources),
+           'exclude_near': args.get('exclude_near') or [], 'holdout': args.get('holdout', True), 'grid': args.get('grid'),
            'started': time.time(), 'state': 'running', 'label': args.get('label') or ''}
     write_json(run_dir / 'run.json', run, indent=1)
     try:

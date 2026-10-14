@@ -1,18 +1,24 @@
 # judge.py - a trained run against real audio, inside the warm sampler process (the plugin env has torch and the
 # tflite runtime). Two doors:
 #   judge(root, slug, run)         every held-out clip scored by that run's model, with its mic, style and phrase,
-#                                  so the page can break recall down by microphone and way of speaking
+#                                  so the page can break recall down by microphone and way of speaking; and the
+#                                  stress rows: every held-out take under STRESS draws of a rough recipe, drawn
+#                                  from the held-out room alone, the same draws for every model
 #   score(root, slug, runs, audio) one utterance (the Try it button) scored by several runs at once
+import hashlib
 import json
+import random
 import time
 from pathlib import Path
 
 import numpy as np
 
-from . import catalog, features, features_mww, holdout, paths, store
+from . import augment, catalog, features, features_mww, holdout, paths, store
 from .paths import write_json
 
 _cache = {}
+STRESS = {'recipe': 'firm', 'draws': 4}       # a bench of 56 takes saturates; 224 rough draws of them do not
+STRESS_KEY = f"{STRESS['recipe']}:{STRESS['draws']}:v1"
 
 
 def _run_dir(root, slug, rid):
@@ -132,25 +138,37 @@ GRID = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97)
 USUAL = {'oww': 0.5, 'mww': 0.97}      # where each detector normally runs; among equals the pick stays near it
 
 
+def _pct(values, q):
+    return round(float(np.percentile(values, q)), 4) if values else None
+
+
 def summary(rows, eval_rows=None, trainer='oww'):
     """The judge's verdict at every threshold, and the one to install: no ordinary negative fires, at most one
     sound-alike, the standard false-alarm rate under 0.5/h where the trainer measured it, then the best recall,
-    and among equals the threshold nearest the detector's usual operating point (a plateau of 100% from 0.3 to
-    0.97 says nothing about a faint call from the hallway; the usual point keeps room for it)."""
+    then the best stress recall (the same takes under rough draws), and among equals the threshold nearest the
+    detector's usual operating point (a plateau of 100% from 0.3 to 0.97 says nothing about a faint call from the
+    hallway; the usual point keeps room for it). `margin`: how far apart the scores sit, threshold-free."""
     pos = [r['score'] for r in rows if r['kind'] == 'positive']
-    near = [r['score'] for r in rows if r['kind'] != 'positive' and r.get('near')]
-    other = [r['score'] for r in rows if r['kind'] != 'positive' and not r.get('near')]
+    near = [r['score'] for r in rows if r['kind'] == 'negative' and r.get('near')]
+    other = [r['score'] for r in rows if r['kind'] == 'negative' and not r.get('near')]
+    stress = [r['score'] for r in rows if r['kind'] == 'stress']
     std = {round(r['threshold'], 2): r.get('fp_per_hour') for r in (eval_rows or []) if r.get('threshold') is not None}
     table = []
     for t in GRID:
         table.append({'threshold': t, 'recall': (sum(v >= t for v in pos) / len(pos)) if pos else None,
+                      'stress_recall': (sum(v >= t for v in stress) / len(stress)) if stress else None,
                       'near_fires': sum(v >= t for v in near), 'neg_fires': sum(v >= t for v in other), 'fp_per_hour': std.get(t)})
     scored = [x for x in table if x['recall'] is not None]
     ok = [x for x in scored if x['neg_fires'] == 0 and x['near_fires'] <= 1 and (x['fp_per_hour'] is None or x['fp_per_hour'] <= 0.5)]
     usual = USUAL.get(trainer, 0.5)
-    pick = max(ok or scored, key=lambda x: (x['recall'], -x['near_fires'], -abs(x['threshold'] - usual), x['threshold']), default=None)
-    return {'n_pos': len(pos), 'n_near': len(near), 'n_neg': len(other), 'table': table, 'clean': bool(ok),
-            **({k: pick[k] for k in ('threshold', 'recall', 'near_fires', 'neg_fires', 'fp_per_hour')} if pick else {'threshold': None, 'recall': None})}
+    pick = max(ok or scored, key=lambda x: (x['recall'], -x['near_fires'], x['stress_recall'] or 0, -abs(x['threshold'] - usual), x['threshold']), default=None)
+    top_neg = max(near + other) if near + other else None
+    margin = {'min_pos': _pct(pos, 0), 'p10_pos': _pct(pos, 10), 'max_near': _pct(near, 100), 'max_neg': _pct(other, 100),
+              'stress_min': _pct(stress, 0), 'stress_p10': _pct(stress, 10),
+              'gap': round(min(pos) - top_neg, 4) if pos and top_neg is not None else None}
+    return {'n_pos': len(pos), 'n_near': len(near), 'n_neg': len(other), 'n_stress': len(stress), 'table': table, 'clean': bool(ok),
+            'margin': margin,
+            **({k: pick[k] for k in ('threshold', 'recall', 'stress_recall', 'near_fires', 'neg_fires', 'fp_per_hour')} if pick else {'threshold': None, 'recall': None, 'stress_recall': None})}
 
 
 def judge(root, slug, rid, force=False):
@@ -162,12 +180,13 @@ def judge(root, slug, rid, force=False):
     held_key = holdout.key(pdir)
     if out_path.exists() and not force:
         cached = json.loads(out_path.read_text())
-        if cached.get('holdout_when') == held_when and cached.get('held_key', held_key) == held_key:
+        if cached.get('holdout_when') == held_when and cached.get('held_key', held_key) == held_key and cached.get('stress_key') == STRESS_KEY:
             return cached
     held = holdout.ids(pdir)
-    sets = features._clips(pdir, held)
+    sets = features._clips(pdir, held, root=root)
     rows = []
     t0 = time.time()
+    takes = []
     for kind, items in (('positive', sets['val_positive']), ('negative', sets['val_negative'])):
         for wav, _ in items:
             try:
@@ -179,8 +198,24 @@ def judge(root, slug, rid, force=False):
             best, _ = model.stream_max(audio)
             rows.append({'kind': kind, 'id': side.get('id'), 'collection': side.get('collection'), 'device': side.get('device'), 'style': side.get('style') or 'normal',
                          'near': bool(side.get('near')), 'text': side.get('text'), 'score': round(best, 4)})
+            if kind == 'positive':
+                takes.append((audio, side))
+    # the stress rows: every held-out take under rough draws, the backgrounds drawn from the held-out room alone
+    # (training never saw it), the same seeds for every model so two runs are judged on the same draws
+    held_room = set((holdout.read(pdir) or {}).get('ambient') or [])
+    aug = augment.Augmenter(root, pdir, augment.PRESETS[STRESS['recipe']], seed=1, ambient_ids=held_room)
+    for audio, side in takes:
+        for i in range(STRESS['draws']):
+            seed = int(hashlib.sha1(f"{side.get('id')}:{i}".encode()).hexdigest()[:8], 16)
+            try:
+                varied, applied = aug.apply(audio, seed=seed)
+                best, _ = model.stream_max(varied)
+            except Exception:
+                continue
+            rows.append({'kind': 'stress', 'id': side.get('id'), 'device': side.get('device'), 'style': side.get('style') or 'normal',
+                         'draw': i, 'applied': applied, 'score': round(best, 4)})
     out = {'run': rid, 'trainer': run.get('trainer'), 'rows': rows, 'seconds': round(time.time() - t0, 1), 'when': time.time(),
-           'holdout_when': held_when, 'held_key': held_key}
+           'holdout_when': held_when, 'held_key': held_key, 'stress_key': STRESS_KEY, 'stress': STRESS}
     write_json(out_path, out)
     return out
 
@@ -259,7 +294,7 @@ def run_job(root, args, progress):
         if (d / 'judge.json').is_file() and not args.get('force'):
             try:
                 c = json.loads((d / 'judge.json').read_text())
-                fresh = c.get('held_key') == hk and c.get('holdout_when') == hw and 'heldout' in run
+                fresh = c.get('held_key') == hk and c.get('holdout_when') == hw and c.get('stress_key') == STRESS_KEY and 'heldout' in run
             except Exception:
                 pass
         if not fresh:

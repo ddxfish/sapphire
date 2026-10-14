@@ -27,9 +27,14 @@ One afternoon, start to finish. Each step is a tab on the page, left to right.
 5. **Check.** Rate. Listen to the lowest few, keep or drop by hand.
 6. **Train.** Leave the preset on Standard, tick both model families, set Repeats to 3 and press Train.
    Then open *Advanced*, choose model `rnn`, preset Thorough, Repeats 3, Train again. Go do something else.
+   Or press *Grid…*: tick the models, variation stops, source blocks (Piper only, synthetic only, without one
+   microphone...), presets and knobs you want compared, set seeds, and every combination is queued at once. A
+   Grids card folds the finished cells by each axis, so which source block or stop helps is one row each.
 7. **Train, the scoreboard.** Every finished run is judged on the held-out slice of your own recordings.
-   Read *Hears you* (of your held-out takes, how many it caught) and *Sound-alikes* (how many near misses
-   fooled it). Several runs will tie near the top; the room watch decides between them.
+   Read *Hears you* (of your held-out takes, how many it caught), *Sound-alikes* (how many near misses
+   fooled it), *Stressed* (the same takes under four rough draws each, with the held-out room behind them:
+   the bench that does not saturate) and *Gap* (the lowest take's score minus the highest negative's; under
+   zero they overlap). Several runs may still tie near the top; the room watch decides between them.
 8. **Test.** Tick two or three of the best on Train, start a *Room watch* with the TV on for an evening.
    Zero fires wins. Sort any fire it kept into "false alarm" or "that was me".
 9. **Train.** ★ the winner of each family. **Install.** *Listen for it here* puts it on this computer, no

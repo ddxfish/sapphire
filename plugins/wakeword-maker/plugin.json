@@ -4,7 +4,7 @@
   "short_display_name": "Wakeword Maker",
   "version": "1.0.0",
   "description": "Make your own wake word. One dataset of your phrase, synthesized in thousands of voices and recorded in your own, then two models: openWakeWord for the desktop and the Pi, microWakeWord for the ESP32.",
-  "emoji": "\ud83d\udde3\ufe0f",
+  "emoji": "🗣️",
   "author": "sapphire",
   "default_enabled": false,
   "environment": {
@@ -47,7 +47,7 @@
   "capabilities": {
     "app": {
       "label": "Wakeword Maker",
-      "icon": "\ud83d\udde3\ufe0f",
+      "icon": "🗣️",
       "description": "Record, synthesize, rate, train and install your own wake word"
     },
     "daemon": {
@@ -386,6 +386,51 @@
         "method": "GET",
         "path": "projects/{slug}/runs/{rid}/file/{name}",
         "handler": "routes/api.py:run_file"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/sources",
+        "handler": "routes/api.py:sources_options"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/grid",
+        "handler": "routes/api.py:grid_start"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/grids",
+        "handler": "routes/api.py:grids_list"
+      },
+      {
+        "method": "GET",
+        "path": "projects/{slug}/grids/{gid}",
+        "handler": "routes/api.py:grid_get"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}/grids/{gid}",
+        "handler": "routes/api.py:grid_delete"
+      },
+      {
+        "method": "GET",
+        "path": "room",
+        "handler": "routes/api.py:room_library"
+      },
+      {
+        "method": "DELETE",
+        "path": "room",
+        "handler": "routes/api.py:room_delete"
+      },
+      {
+        "method": "POST",
+        "path": "projects/{slug}/room-day",
+        "handler": "routes/api.py:room_day"
+      },
+      {
+        "method": "DELETE",
+        "path": "projects/{slug}/room-day",
+        "handler": "routes/api.py:room_day_stop"
       }
     ]
   }

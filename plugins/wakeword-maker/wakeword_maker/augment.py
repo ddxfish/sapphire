@@ -82,8 +82,9 @@ def recipe_of(project):
     return out
 
 
-def pools(root, pdir):
-    """Where the sound comes from. Missing pools are reported, not invented."""
+def pools(root, pdir, ambient_ids=None):
+    """Where the sound comes from. Missing pools are reported, not invented. `ambient_ids`: only those room takes
+    (a training build keeps the held-out room out; the stress judge draws from the held-out room alone); None = all."""
     out = {'rir': [], 'ambient': [], 'music': [], 'missing': []}
     rdir = catalog.dataset_dir(root, 'rirs')
     if catalog.receipt(root, 'rirs'):
@@ -98,7 +99,12 @@ def pools(root, pdir):
     for c in ('ambient/recorded', 'ambient/uploaded'):
         d = Path(pdir) / c
         if d.is_dir():
-            out['ambient'] += sorted(str(p) for p in d.glob('*.wav'))
+            out['ambient'] += sorted(str(p) for p in d.glob('*.wav') if ambient_ids is None or p.stem in ambient_ids)
+    from . import store
+    slug = (store.load_project_at(pdir) or {}).get('slug') or Path(pdir).name
+    for r in store.list_room(root, slug=slug):                  # the shared library, minus what this phrase was said in
+        if ambient_ids is None or r['id'] in ambient_ids:
+            out['ambient'].append(str(store.room_paths(root, r['id'])[0]))
     return out
 
 
@@ -120,10 +126,10 @@ def _synthetic_rir(rng, seconds=None):
 class Augmenter:
     """Build once per recipe; apply(audio, rng) returns a new array (length may change with speed)."""
 
-    def __init__(self, root, pdir, recipe, seed=None):
+    def __init__(self, root, pdir, recipe, seed=None, ambient_ids=None):
         import audiomentations as A
         self.recipe = recipe
-        self.pools = pools(root, pdir)
+        self.pools = pools(root, pdir, ambient_ids)
         self.rng = random.Random(seed)
         r = recipe
         self.room = None

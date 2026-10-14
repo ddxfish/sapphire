@@ -42,14 +42,15 @@ def run_job(root, args, progress):
             'device': args.get('device', 'auto')}
 
     progress.step('features', 'building the feature set (reused if nothing changed)')
-    key = features.build_oww(root, {'project': slug, 'recipe': args.get('recipe'), 'synth': args.get('synth'), 'exclude_near': args.get('exclude_near'), 'rounds': args.get('rounds', 2), 'holdout': args.get('holdout', True), 'seed': base['seed'],
+    sources = features.sources_of(args)
+    key = features.build_oww(root, {'project': slug, 'recipe': args.get('recipe'), 'sources': sources, 'exclude_near': args.get('exclude_near'), 'rounds': args.get('rounds', 2), 'holdout': args.get('holdout', True), 'seed': base['seed'],
                                     'device': args.get('device')}, train_oww._Quiet(progress))
     fdir = pdir / 'features' / 'oww' / key
     stamp = time.strftime('%Y%m%d-%H%M%S')
     run_dir = pdir / 'runs' / f"{stamp}-tune"
     (run_dir / 'trials').mkdir(parents=True, exist_ok=True)
     run = {'id': run_dir.name, 'trainer': 'oww', 'kind': 'tune', 'trials': n_trials, 'budget_steps': budget, 'parallel': n_jobs, 'space': which,
-           'features': key, 'recipe': _recipe_of_set(fdir), 'synth': args.get('synth') or 'all', 'exclude_near': args.get('exclude_near') or [], 'holdout': args.get('holdout', True),
+           'features': key, 'recipe': _recipe_of_set(fdir), 'synth': sources['synth'], 'sources': sources, 'sources_label': features.sources_label(sources), 'exclude_near': args.get('exclude_near') or [], 'holdout': args.get('holdout', True),
            'started': time.time(), 'state': 'running', 'preset': final_preset, 'label': args.get('label') or ''}
     write_json(run_dir / 'run.json', run, indent=1)
     data = train_oww.Data(root, fdir)

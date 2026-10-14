@@ -52,13 +52,13 @@ def _spectrogram(audio):
     return generate_features_for_clip((np.clip(audio, -1, 1) * 32767).astype(np.int16), step_ms=STEP_MS)
 
 
-def _pool_init(root, pdir, recipe, seed, src):
+def _pool_init(root, pdir, recipe, seed, src, ambient_ids=None):
     global _aug
     import sys
     if str(src) not in sys.path:
         sys.path.insert(0, str(src))
     compat.apply()
-    _aug = augment.Augmenter(root, pdir, recipe, seed=seed)
+    _aug = augment.Augmenter(root, pdir, recipe, seed=seed, ambient_ids=ambient_ids)   # the held-out room is never a background
 
 
 def _vary_spec(args):
@@ -117,15 +117,17 @@ def build(root, args, progress):
     recipe = recipe_for(project, args)
     held = holdout.ids(pdir) if use_holdout else set()
     if use_holdout and not held:
-        holdout.make(pdir)
+        holdout.make(pdir, root=root)
         held = holdout.ids(pdir)
-    synth = args.get('synth') or 'all'
+    sources = features.sources_of(args)
+    synth = sources['synth']
     exclude_near = [t for t in (args.get('exclude_near') or []) if str(t).strip()]
-    sets = features._clips(pdir, held, synth, exclude_near)
+    sets = features._clips(pdir, held, synth, exclude_near, sources, root=root)
     h = hashlib.sha1()
     h.update(json.dumps(recipe, sort_keys=True).encode())
     h.update(json.dumps({n: sorted(p for p, _ in v) for n, v in sets.items()}, sort_keys=True).encode())
-    h.update(f"mww k={k} holdout={use_holdout} slides={TRAIN_SLIDES} step={STEP_MS} v2".encode())
+    h.update(json.dumps(sources, sort_keys=True).encode())
+    h.update(f"mww k={k} holdout={use_holdout} slides={TRAIN_SLIDES} step={STEP_MS} v4".encode())    # v3: the held-out room left out of the backgrounds; v4: sources
     key = h.hexdigest()[:12]
     out = pdir / 'features' / 'mww' / key
     meta_path = out / 'meta.json'
@@ -147,7 +149,7 @@ def build(root, args, progress):
         """Yield spectrograms for a set, with the training slides, reporting progress."""
         jobs = [(wav, (k if vary else 1) * rep, seed * 7919 + i, vary) for i, (wav, rep) in enumerate(items)]
         n = 0
-        with Pool(workers, initializer=_pool_init, initargs=(str(root), str(pdir), recipe, seed, str(src))) as pool:
+        with Pool(workers, initializer=_pool_init, initargs=(str(root), str(pdir), recipe, seed, str(src), train_room)) as pool:
             for specs in pool.imap_unordered(_vary_spec, jobs, chunksize=8):
                 for spec in specs:
                     if slides > 1 and spec.shape[0] > slides + 20:
@@ -161,6 +163,7 @@ def build(root, args, progress):
                     progress.update(min(95, 100.0 * n / max(1, len(jobs) * (k if vary else 1) * slides)), f"{name}: {n:,} spectrograms · {time.time() - t0:.0f}s")
         counts[name] = n
 
+    train_room = {Path(w).stem for w, _ in sets['ambient']}          # the room takes training may draw on: never the held-out ones
     progress.step('mww', f"positives: {len(sets['positive']):,} clips × {k} variations × {TRAIN_SLIDES} slides")
     _write(out / 'positive' / 'training', 'wakeword_mmap', spec_rows(sets['positive'], True, TRAIN_SLIDES, 'positive/training'))
     if sets['val_positive']:
@@ -182,6 +185,7 @@ def build(root, args, progress):
     counts['room_training_seconds'] = int(sum(len(s) for s in room_train) * STEP_MS / 1000)
     counts['room_heldout_seconds'] = int(sum(len(s) for s in room_val) * STEP_MS / 1000)
     meta = {'key': key, 'trainer': 'mww', 'rounds': k, 'holdout': use_holdout, 'recipe': recipe.get('preset'), 'synth': synth, 'exclude_near': exclude_near, 'slides': TRAIN_SLIDES,
+            'sources': sources, 'sources_label': features.sources_label(sources),
             'counts': counts, 'seconds': round(time.time() - t0), 'when': time.time(), 'holdout_when': (holdout.read(pdir) or {}).get('when'),
             'source': str(src)}
     write_json(meta_path, meta, indent=1)

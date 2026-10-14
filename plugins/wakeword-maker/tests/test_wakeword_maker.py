@@ -21,6 +21,7 @@ if str(PLUGIN) not in sys.path:
 
 from wakeword_maker import catalog, jobs, paths, store   # noqa: E402
 import importlib.util   # noqa: E402
+import threading   # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('wwm_routes_api', PLUGIN / 'routes' / 'api.py')
 api = importlib.util.module_from_spec(_spec)
@@ -549,8 +550,8 @@ def test_watch_keeps_pushed_pieces_and_counts_the_boards_fires(root):
         if store.counts(pdir).get('ambient/recorded'):
             break
         time.sleep(0.1)
-    watch.stop(pdir, p['slug'])
-    watch._live[p['slug']]['thread'].join(5)
+    watch.stop(pdir, p['slug'], device='board1')
+    watch._live[(p['slug'], 'board1')]['thread'].join(5)
     assert armed[-1] == 0                                                              # the board was told to stop
     st = watch.read(pdir, st['id'])
     assert st['kept'] == 1 and store.counts(pdir)['ambient/recorded'] == 1 and st['ended']
@@ -573,6 +574,317 @@ def test_watch_sink_refuses_a_bad_piece_and_pause_frees_a_take(root):
                      chunk_seconds=5, arm=lambda seconds: None, disarm=lambda: None)
     assert watch.sink('board2', b'not a wav', {})['ok'] is False
     watch.pause_all()
-    watch._live[p['slug']]['thread'].join(5)
-    assert not watch._live[p['slug']]['thread'].is_alive()
+    watch._live[(p['slug'], 'board2')]['thread'].join(5)
+    assert not watch._live[(p['slug'], 'board2')]['thread'].is_alive()
     assert watch.read(pdir, st['id']).get('paused')
+
+
+# --- the bench: stress rows, margins, the room pool, the ESP32 trainer's onset -----------------------------
+
+def test_judge_summary_counts_stress_and_measures_the_gap():
+    from wakeword_maker import judge
+    rows = [{'kind': 'positive', 'score': s} for s in (1.0, 0.9, 0.8)]
+    rows += [{'kind': 'negative', 'near': True, 'score': 0.4}, {'kind': 'negative', 'near': False, 'score': 0.2}]
+    rows += [{'kind': 'stress', 'score': s} for s in (0.95, 0.6, 0.45, 0.1)]
+    v = judge.summary(rows, [], 'oww')
+    assert v['n_stress'] == 4 and v['threshold'] == 0.5
+    assert v['stress_recall'] == 0.5                                   # 0.95 and 0.6 clear 0.5; 0.45 and 0.1 do not
+    assert next(x for x in v['table'] if x['threshold'] == 0.3)['stress_recall'] == 0.75
+    m = v['margin']
+    assert m['min_pos'] == 0.8 and m['max_near'] == 0.4 and m['max_neg'] == 0.2 and m['stress_min'] == 0.1
+    assert abs(m['gap'] - 0.4) < 1e-9
+    # on a tie in recall and sound-alikes, the better stress recall wins over the usual-point rule
+    flat = [{'kind': 'positive', 'score': 1.0}] * 3 + [{'kind': 'negative', 'near': True, 'score': 0.0}]
+    flat += [{'kind': 'stress', 'score': 0.35}] * 4
+    assert judge.summary(flat, trainer='oww')['threshold'] == 0.3     # 0.3 hears every stressed draw, 0.5 none
+    assert judge.summary([{'kind': 'positive', 'score': 1.0}], trainer='oww')['stress_recall'] is None
+
+
+def test_mww_detections_ignore_the_onset():
+    from wakeword_maker.train_mww import _detections
+    probs = np.zeros(400)
+    probs[:6] = 1.0                                   # the silence-to-room edge after a reset: one hot window at the start
+    assert _detections(probs, 0.9, 5, 0) == 1         # counted when nothing settles: the phantom every ESP32 run reported
+    assert _detections(probs, 0.9, 5, 100 // 3) == 0  # the board ignores its first 100 slices; so does the judge now
+    probs[200:210] = 1.0
+    assert _detections(probs, 0.9, 5, 100 // 3) == 1
+
+
+def test_augment_pools_can_be_limited_to_named_room_takes(root):
+    from wakeword_maker import augment
+    root.mkdir()
+    p = store.create_project(root, 'hey pool')
+    pdir = paths.project_dir(root, p['slug'])
+    a = store.add_clip(pdir, 'ambient/recorded', tone(2.0), {'device': 'x'})
+    b = store.add_clip(pdir, 'ambient/recorded', tone(2.0), {'device': 'x'})
+    assert len(augment.pools(root, pdir)['ambient']) == 2
+    only = augment.pools(root, pdir, {a['id']})['ambient']
+    assert len(only) == 1 and only[0].endswith(f"{a['id']}.wav")
+    assert augment.pools(root, pdir, set())['ambient'] == []
+
+
+def test_daemon_finds_the_resume_door_in_a_route_row_of_any_shape():
+    spec = importlib.util.spec_from_file_location('wwm_daemon', PLUGIN / 'daemon.py')
+    daemon = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(daemon)
+    calls = []
+    ns = {'watch_resume': lambda settings: calls.append(settings) or (['hey_x: board (w1)'], False)}
+    handler = eval('lambda: None', ns)                       # a handler whose globals are the routes namespace
+    loader = SimpleNamespace(_routes={'wakeword-maker': [('GET', None, [], handler, {'opts': True})]})   # the loader's row: options last
+    assert daemon._resume_door(loader) is ns['watch_resume']
+    assert daemon._resume_door(SimpleNamespace(_routes={'wakeword-maker': [('GET', None, [], {}, {})]})) is None
+    daemon._resume_watches(loader, {'data_dir': 'x'})
+    assert calls == [{'data_dir': 'x'}]
+
+
+# --- sources: what a run trains on, as one block --------------------------------------------------------
+
+def test_sources_block_picks_what_trains_and_never_touches_the_held_out(root):
+    from wakeword_maker import features, holdout
+    root.mkdir()
+    p = store.create_project(root, 'hey src')
+    pdir = paths.project_dir(root, p['slug'])
+    syn_p = store.add_clip(pdir, 'positive/synth', tone(1.0), {'source': 'synth', 'engine': 'piper', 'voice': 'v1'})
+    syn_k = store.add_clip(pdir, 'positive/synth', tone(1.0), {'source': 'synth', 'engine': 'kokoro', 'voice': 'af_x'})
+    own_a = store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'hyperx', 'style': 'normal'})
+    own_b = store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'esp32', 'style': 'fast'})
+    near = store.add_clip(pdir, 'negative/recorded', tone(1.0), {'device': 'hyperx', 'near': True})
+    mined = store.add_clip(pdir, 'negative/mined', tone(1.0), {'source': 'mined'})
+    held = {own_b['id']}
+    ids = lambda items: {Path(w).stem for w, _ in items}
+    s = features._clips(pdir, held)                                   # the old call: everything
+    assert ids(s['positive']) == {syn_p['id'], syn_k['id'], own_a['id']} and ids(s['val_positive']) == {own_b['id']}
+    assert dict((Path(w).stem, n) for w, n in s['positive'])[own_a['id']] == features.OWN_REPEAT
+    assert ids(s['adversarial']) == {near['id'], mined['id']}
+    s = features._clips(pdir, held, sources={'synth': 'piper', 'human': 'none', 'mined': False})
+    assert ids(s['positive']) == {syn_p['id']} and ids(s['val_positive']) == {own_b['id']}    # held out judges regardless
+    assert ids(s['adversarial']) == {near['id']}                        # your own negatives are always in
+    s = features._clips(pdir, set(), sources={'devices': ['esp32'], 'own_repeat': 3})
+    assert ids(s['positive']) == {syn_p['id'], syn_k['id'], own_b['id']}
+    assert dict((Path(w).stem, n) for w, n in s['positive'])[own_b['id']] == 3
+    s = features._clips(pdir, set(), sources={'styles': ['fast']})
+    assert own_a['id'] not in ids(s['positive']) and own_b['id'] in ids(s['positive'])
+    src = features.sources_of({'synth': 'kokoro'})                     # the old single knob still rides
+    assert src['synth'] == 'kokoro' and src['human'] == 'all' and src['own_repeat'] == features.OWN_REPEAT
+    assert features.sources_label(src) == 'kokoro only'
+    assert features.sources_label(features.sources_of({'sources': {'human': 'none', 'own_repeat': 16, 'mined': False}})) == 'no own takes · own x16 · no mined'
+    assert features.sources_label(features.sources_of({})) == 'all'
+    a = features.key_of(p, {'preset': 'natural'}, s, 2, True, features.sources_of({}))
+    b = features.key_of(p, {'preset': 'natural'}, s, 2, True, features.sources_of({'sources': {'own_repeat': 16}}))
+    assert a != b                                                       # a different weight is a different feature set
+
+
+# --- the grid ---------------------------------------------------------------------------------------------
+
+def test_grid_expands_the_axes_queues_every_cell_and_pivots(settings, root, monkeypatch):
+    api.create_project(body={'phrase': 'hey grid'}, settings=settings)
+    pdir = paths.project_dir(root, 'hey_grid')
+    store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'hyperx', 'style': 'normal'})
+    store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'esp32', 'style': 'fast'})
+    opts = api.sources_options('hey_grid', settings=settings)
+    assert opts['devices'] == ['esp32', 'hyperx'] and opts['styles'] == ['fast', 'normal']
+    names = {p['name']: p for p in opts['presets']}
+    assert names['without esp32']['sources'] == {'devices': ['hyperx']} and names['piper only']['label'] == 'piper only'
+    monkeypatch.setattr(api, '_python_for', lambda kind: (sys.executable, None))
+    queued = []
+    monkeypatch.setattr(api.jobs, 'enqueue', lambda root, kind, args, py, pdir, project=None, publish=None: queued.append((kind, args)) or {'id': f"j{len(queued)}"})
+    body = {'trainers': ['oww', 'mww'], 'recipes': ['gentle', 'natural'], 'sources': ['all', 'piper only', 'without esp32'], 'presets': ['standard'],
+            'knobs': {'oww': ['rnn'], 'mww': ['default', 'more room']}, 'seeds': 2, 'label': 'g'}
+    r = api.grid_start('hey_grid', body=body, settings=settings)
+    g = r['grid']
+    assert g['of'] == 36 and len(queued) == 36                       # 2 seeds x (oww 1x2x3 + mww 2x2x3)
+    assert [k for k, _ in queued][:6] == ['train'] * 6               # seed 1, oww first, then the ESP32 cells
+    from collections import Counter
+    kinds = Counter(k for k, _ in queued)
+    assert kinds == {'train': 12, 'train_mww': 24}
+    first = queued[0][1]
+    assert first['grid'] == g['id'] and first['cfg'] == {'model_type': 'rnn', 'seed': 1} and first['label'] == 'g · gentle · all · standard · rnn · s1'
+    assert any(a['sources'] == {'devices': ['hyperx']} for _, a in queued)
+    assert any(a['cfg'].get('sampling_room') == 6.0 for k, a in queued if k == 'train_mww')
+    assert [c['seed'] for c in g['cells']][:18] == [1] * 18 and g['cells'][0]['state'] == 'gone'   # no real jobs in this test
+    lst = api.grids_list('hey_grid', settings=settings)['grids']
+    assert lst[0]['id'] == g['id'] and lst[0]['of'] == 36
+    assert api.grid_get('hey_grid', g['id'], settings=settings)['grid']['of'] == 36
+    assert api.grid_get('hey_grid', 'nope', settings=settings)[1] == 404
+    assert api.grid_start('hey_grid', body={**body, 'seeds': 5, 'presets': ['quick', 'standard', 'thorough'], 'recipes': list(api.augment.STOPS)}, settings=settings)[1] == 400
+    assert api.grid_start('hey_grid', body={'trainers': ['bogus']}, settings=settings)[1] == 400
+    assert api.grid_delete('hey_grid', g['id'], settings=settings)['deleted'] is True
+    assert api.grids_list('hey_grid', settings=settings)['grids'] == []
+    # the pivot folds the judged cells by every axis that varies
+    cells = [{'trainer': 'oww', 'recipe': 'gentle', 'sources': 'all', 'seed': 1, 'recall': 1.0, 'stress': 0.8, 'near': 0, 'gap': 0.4, 'fp': 0.0},
+             {'trainer': 'oww', 'recipe': 'rough', 'sources': 'all', 'seed': 1, 'recall': 0.9, 'stress': 0.9, 'near': 2, 'gap': -0.1, 'fp': 0.2},
+             {'trainer': 'oww', 'recipe': 'rough', 'sources': 'all', 'seed': 2, 'recall': None}]
+    pv = api._pivot(cells)
+    assert 'trainer' not in pv and 'sources' not in pv and set(pv) == {'recipe', 'seed'}
+    assert pv['recipe']['gentle'] == {'n': 1, 'of': 1, 'recall': 1.0, 'recall_min': 1.0, 'stress': 0.8, 'near': 0.0, 'gap': 0.4, 'fp': 0.0}
+    assert pv['recipe']['rough']['n'] == 1 and pv['recipe']['rough']['of'] == 2 and pv['recipe']['rough']['recall'] == 0.9
+    assert pv['seed']['2'] == {'n': 0, 'of': 1, 'recall': None, 'recall_min': None, 'stress': None, 'near': None, 'gap': None, 'fp': None}
+
+
+def test_one_watch_per_microphone_two_at_once_and_each_stops_alone(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey two')
+    pdir = paths.project_dir(root, p['slug'])
+    quiet = lambda wav: {}
+    a = watch.start(pdir, p['slug'], 'boardA', 1, 'r1', quiet, capture_fn=lambda s: watch.take('boardA', timeout=s), chunk_seconds=5, keep=True, arm=lambda s: None, disarm=lambda: None)
+    b = watch.start(pdir, p['slug'], 'boardB', 1, 'r1', quiet, capture_fn=lambda s: watch.take('boardB', timeout=s), chunk_seconds=5, keep=True, arm=lambda s: None, disarm=lambda: None)
+    assert a['id'] != b['id'] and watch.running(p['slug'], 'boardA') and watch.running(p['slug'], 'boardB') and watch.running(p['slug'])
+    with pytest.raises(RuntimeError):
+        watch.start(pdir, p['slug'], 'boardA', 1, 'r1', quiet, capture_fn=lambda s: None, arm=lambda s: None)   # that mic is taken
+    c = watch.start(pdir, p['slug'], 'browser:HyperX', 1, 'r1', quiet, keep=True)                               # a PC mic rides alongside
+    assert watch.live_for(pdir, p['slug'], 'browser:HyperX')['id'] == c['id'] and watch.live_for(pdir, p['slug'], 'nobody') is None
+    assert watch.sink('boardB', wav_bytes(tone(4.0)), {'chunk': 1})['accepted'] is True
+    assert watch.sink('boardA', wav_bytes(tone(4.0)), {'chunk': 1})['accepted'] is True
+    for _ in range(100):
+        if (store.counts(pdir).get('ambient/recorded') or 0) >= 2:
+            break
+        time.sleep(0.1)
+    sides = store.list_clips(pdir, 'ambient/recorded', 0, 10)[0]
+    assert {x['device'] for x in sides} == {'boardA', 'boardB'} and {x['watch'] for x in sides} == {a['id'], b['id']}   # each piece to its own watch
+    live = [w['device'] for w in watch.watches(pdir, p['slug']) if w['running']]
+    assert sorted(live) == ['boardA', 'boardB', 'browser:HyperX']
+    watch.stop(pdir, p['slug'], device='boardA')
+    watch._live[(p['slug'], 'boardA')]['thread'].join(5)
+    assert not watch.running(p['slug'], 'boardA') and watch.running(p['slug'], 'boardB')
+    assert watch.read(pdir, a['id'])['ended'] and not watch.read(pdir, b['id']).get('ended')
+    assert watch.sink('boardA', wav_bytes(tone(4.0)), {})['accepted'] is False                                # its board is told to stop
+    watch.stop(pdir, p['slug'])                                                                                 # the rest, all at once
+    watch._live[(p['slug'], 'boardB')]['thread'].join(5)
+    assert not watch.running(p['slug']) and watch.read(pdir, c['id'])['ended']
+    assert all(w['ended'] for w in watch.watches(pdir, p['slug']))
+
+
+def test_a_board_that_refuses_to_arm_leaves_no_open_watch(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey refuse')
+    pdir = paths.project_dir(root, p['slug'])
+
+    def refuse(seconds):
+        raise RuntimeError('409 a capture is already going on')
+    with pytest.raises(RuntimeError):
+        watch.start(pdir, p['slug'], 'boardX', 5, 'r1', lambda wav: {}, capture_fn=lambda s: None, arm=refuse)
+    sts = watch.watches(pdir, p['slug'])
+    assert len(sts) == 1 and sts[0]['ended'] and 'already going on' in sts[0]['error'] and not sts[0]['running']
+    assert not watch.running(p['slug'])
+
+
+def test_resume_brings_back_every_mic_and_skips_only_the_busy_one(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey resume')
+    pdir = paths.project_dir(root, p['slug'])
+    quiet = lambda wav: {}
+    a = watch.start(pdir, p['slug'], 'boardA', 5, 'r1', quiet, capture_fn=lambda s: watch.take('boardA', timeout=s), chunk_seconds=5, arm=lambda s: None, disarm=lambda: None)
+    slow = threading.Event()
+    b = watch.start(pdir, p['slug'], 'slowpi', 5, 'r1', quiet, capture_fn=lambda s: (slow.wait(30), None)[1], chunk_seconds=5)   # a pull that holds
+    watch.pause_all()
+    watch._live[(p['slug'], 'boardA')]['thread'].join(5)
+    assert watch.read(pdir, a['id']).get('paused') and not watch.running(p['slug'], 'boardA')
+    armed = []
+    got, busy = watch.resume(pdir, p['slug'], lambda d, r, w: (quiet, (lambda s: watch.take(d, timeout=s)), 5, (lambda s: armed.append((d, s))), None))
+    assert [w['device'] for w in got] == ['boardA'] and busy is True                 # boardA is back; slowpi's old loop still holds its pull
+    assert armed and armed[0][0] == 'boardA' and watch.running(p['slug'], 'boardA')
+    slow.set()
+    watch._live[(p['slug'], 'slowpi')]['thread'].join(5)
+    got, busy = watch.resume(pdir, p['slug'], lambda d, r, w: (quiet, (lambda s: None), 5))
+    assert [w['device'] for w in got] == ['slowpi'] and busy is False
+    watch.stop(pdir, p['slug'])
+
+
+def test_that_was_me_drops_the_room_piece_the_fire_fell_in(root):
+    from wakeword_maker import watch, holdout
+    root.mkdir()
+    p = store.create_project(root, 'hey piece')
+    pdir = paths.project_dir(root, p['slug'])
+    st = watch.start(pdir, p['slug'], 'boardP', 1, '', lambda wav: {}, capture_fn=lambda s: watch.take('boardP', timeout=s), chunk_seconds=5, keep=True, arm=lambda s: None, disarm=lambda: None)
+    assert st['runs'] == ''                                                                   # a capture with no models: the room only
+    watch.sink('boardP', wav_bytes(tone(6.0)), {'chunk': 0, 'fires': [[2.0, 0.99]], 'fire_count': 1, 'model': 'hey_piece'})
+    for _ in range(100):
+        if store.counts(pdir).get('ambient/recorded'):
+            break
+        time.sleep(0.1)
+    time.sleep(0.3)
+    watch.stop(pdir, p['slug'])
+    st = watch.read(pdir, st['id'])
+    fire = st['fires'][0]
+    piece = store.list_clips(pdir, 'ambient/recorded', 0, 10)[0][0]
+    assert fire['piece_clip'] == piece['id']
+    out = watch.fate(pdir, st['id'], fire['id'], 'positive', {'device': 'boardP', 'text': 'hey piece'})
+    assert out['piece_dropped'] is True and out['clip']
+    side = store.read_side(store.clip_paths(pdir, 'ambient/recorded', piece['id'])[1])
+    assert side['verdict'] == 'drop'                                                          # that piece is no negative any more
+    assert holdout.make(pdir)['counts']['ambient'] == [0, 0]                                   # and never judges false alarms
+
+
+# --- the room library: shared by every wake word ----------------------------------------------------------
+
+def test_room_library_is_shared_filtered_per_phrase_and_held_out_per_mic(root):
+    from wakeword_maker import features, holdout, augment, watch
+    root.mkdir()
+    a = store.create_project(root, 'hey alpha'); b = store.create_project(root, 'hey beta')
+    pa, pb = paths.project_dir(root, a['slug']), paths.project_dir(root, b['slug'])
+    pieces = [store.add_room(root, tone(3.0), {'device': d, 'watch': w, 'project': 'hey_alpha'}) for d, w in (('esp', 'w1'), ('esp', 'w1'), ('esp', 'w1'), ('pi', 'w2'), ('pi', 'w2'), ('pi', 'w2'))]
+    assert len(store.list_room(root)) == 6 and store.room_summary(root)['minutes'] == round(sum(x['seconds'] for x in pieces) / 60, 1)
+    own = store.add_clip(pa, 'ambient/recorded', tone(3.0), {'device': 'hyperx'})
+    ids = lambda items: {Path(w).stem for w, _ in items}
+    s = features._clips(pa, set(), root=root)
+    assert ids(s['ambient']) == {p['id'] for p in pieces} | {own['id']}              # own takes plus the whole library
+    store.drop_room_for(root, pieces[0]['id'], 'hey_alpha')                          # alpha's phrase was said in it
+    assert pieces[0]['id'] not in ids(features._clips(pa, set(), root=root)['ambient'])
+    assert pieces[0]['id'] in ids(features._clips(pb, set(), root=root)['ambient'])   # still a fine negative for beta
+    s = features._clips(pa, set(), sources={'room_devices': ['pi']}, root=root)
+    assert ids(s['ambient']) == {p['id'] for p in pieces[3:]}                        # one microphone's room only
+    assert features.sources_label(features.sources_of({'sources': {'room_devices': ['pi']}})) == 'room pi'
+    h = holdout.make(pa, frac=0.3, seed=1, root=root)
+    held = set(h['ambient'])
+    assert len(held) == 2 and len([i for i in held if i in {p['id'] for p in pieces[:3]}]) == 1   # whole takes, from EACH mic: one esp (of two left), one pi (of three)
+    assert pieces[0]['id'] not in held
+    pools = augment.pools(root, pa, held)
+    assert {Path(x).stem for x in pools['ambient']} == held                          # the stress judge draws from the held-out room alone
+    pools = augment.pools(root, pb)
+    assert len(pools['ambient']) == 6                                                 # beta sees every piece
+    assert store.delete_room(root, watch='w2') == 3 and len(store.list_room(root)) == 3
+    assert store.delete_room(root, cid=pieces[1]['id']) == 1
+
+
+def test_a_kept_piece_lands_in_the_library_and_that_was_me_drops_it_for_this_phrase_only(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey lib')
+    pdir = paths.project_dir(root, p['slug'])
+    st = watch.start(pdir, p['slug'], 'boardL', 1, '', lambda wav: {}, capture_fn=lambda s: watch.take('boardL', timeout=s), chunk_seconds=5, keep=True,
+                     arm=lambda s: None, disarm=lambda: None, root=root)
+    assert st['library'] and st['project'] == 'hey_lib'
+    watch.sink('boardL', wav_bytes(tone(6.0)), {'chunk': 4, 'fires': [[2.0, 0.97]], 'fire_count': 1, 'model': 'x'})
+    for _ in range(100):
+        if store.list_room(root):
+            break
+        time.sleep(0.1)
+    time.sleep(0.3)
+    watch.stop(pdir, p['slug'])
+    piece = store.list_room(root)[0]
+    assert piece['device'] == 'boardL' and piece['watch'] == st['id'] and piece['piece'] == 4 and piece['project'] == 'hey_lib'
+    assert store.counts(pdir)['ambient/recorded'] == 0                                # nothing in the wake word's own folder
+    st = watch.read(pdir, st['id'])
+    fire = st['fires'][0]
+    assert fire['piece_clip'] == piece['id'] and fire['piece_in'] == 'room'
+    out = watch.fate(pdir, st['id'], fire['id'], 'positive', {'device': 'boardL', 'text': 'hey lib'}, root=root, slug='hey_lib')
+    assert out['piece_dropped'] is True
+    side = store.list_room(root, dropped=True)[0]
+    assert side['drop_for'] == ['hey_lib'] and store.list_room(root, slug='hey_lib') == [] and len(store.list_room(root, slug='other')) == 1
+
+
+def test_room_day_starts_a_keeping_watch_on_every_online_satellite(settings, root, monkeypatch):
+    api.create_project(body={'phrase': 'hey day'}, settings=settings)
+    monkeypatch.setattr(api, 'mics', lambda **_: {'mics': [{'id': 'espA', 'online': True, 'capture': True}, {'id': 'piB', 'online': True, 'capture': False}, {'id': 'off', 'online': False}]})
+    monkeypatch.setattr(api, '_watch_fns', lambda root, slug, device, runs, settings, keep=False, test=False: ((lambda wav: {}), (lambda s: api._watch.take(device, timeout=s)), 5, (lambda s: None) if device == 'espA' else None, None))
+    r = api.room_day('hey_day', body={'minutes': 90}, settings=settings)
+    assert [x['device'] for x in r['started']] == ['espA', 'piB'] and r['refused'] == [] and r['minutes'] == 90 and r['runs'] == ''
+    assert [w['device'] for w in r['watches'] if w['running']] == ['piB', 'espA'] or sorted(w['device'] for w in r['watches'] if w['running']) == ['espA', 'piB']
+    r2 = api.room_day('hey_day', body={'devices': ['espA']}, settings=settings)
+    assert r2['started'] == [] and r2['refused'][0]['error'] == 'already watching'
+    assert api.room_library(query={'project': 'hey_day'}, settings=settings)['minutes'] == 0
+    r3 = api.room_day_stop('hey_day', settings=settings)
+    assert not any(w['running'] for w in r3['watches'])

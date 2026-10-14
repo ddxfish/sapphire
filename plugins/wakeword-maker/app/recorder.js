@@ -62,7 +62,7 @@ export function onChange(fn) {
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', fn);
 }
 
-function encodeWAV(samples, rate) {
+export function encodeWAV(samples, rate) {
     const buf = new ArrayBuffer(44 + samples.length * 2);
     const v = new DataView(buf);
     const str = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };

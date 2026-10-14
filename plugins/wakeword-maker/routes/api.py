@@ -401,10 +401,10 @@ def clip_audio(slug, kind, src, cid, settings=None, **_):
     if err:
         return err
     c = _collection(kind, src)
-    if not c:
+    if not c and (kind, src) != ('ambient', 'library'):
         return {'error': 'no such collection'}, 404
     try:
-        wav, _side = store.clip_paths(paths.project_dir(root, slug), c, cid)
+        wav = store.room_paths(root, cid)[0] if not c else store.clip_paths(paths.project_dir(root, slug), c, cid)[0]
     except ValueError:
         return {'error': 'bad clip id'}, 400
     if not wav.is_file():
@@ -417,6 +417,11 @@ def delete_clip(slug, kind, src, cid, settings=None, **_):
     if err:
         return err
     c = _collection(kind, src)
+    if not c and (kind, src) == ('ambient', 'library'):          # a piece of the shared room library
+        try:
+            return {'deleted': store.delete_room(root, cid=cid) > 0}
+        except ValueError:
+            return {'error': 'bad piece id'}, 400
     if not c:
         return {'error': 'no such collection'}, 404
     try:
@@ -432,6 +437,12 @@ def tag_clip(slug, kind, src, cid, body=None, settings=None, **_):
     if err:
         return err
     c = _collection(kind, src)
+    if not c and (kind, src) == ('ambient', 'library'):          # a piece of the shared room library: verdict or note
+        fields = {k2: body[k2] for k2 in ('verdict', 'note') if k2 in (body or {})}
+        try:
+            return {'clip': store.update_room(root, cid, **fields)}
+        except ValueError:
+            return {'error': 'bad piece id'}, 400
     if not c:
         return {'error': 'no such collection'}, 404
     body = body or {}
@@ -651,6 +662,7 @@ def guide(slug, settings=None, **_):
             rows, _ = store.list_clips(pdir, f"{kind}/{src}", 0, 100000)
             own[kind] += rows
     pos, neg, amb = own['positive'], own['negative'], own['ambient']
+    amb = amb + store.list_room(root, slug=slug)                 # the shared room library counts for every wake word
     amb_min = sum(float(c.get('seconds') or 0) for c in amb) / 60.0
     near = [c for c in neg if c.get('near')]
     progress = {
@@ -803,6 +815,10 @@ def browse(slug, query=None, settings=None, **_):
     cols, keep = KINDS[kind]
     held = holdout.ids(pdir)
     rows = [({**r, 'held': True} if r['id'] in held else r) for c in cols for r in _rows(pdir / c) if keep(r)]
+    if kind == 'ambient':
+        rows += [{**r, 'collection': 'ambient/library', 'library': True, 'flags': store.clip_flags(r), **({'held': True} if r['id'] in held else {})}
+                 for r in store.list_room(root, slug=slug)]
+        rows.sort(key=lambda r: r.get('id', ''), reverse=True)
     facets = {'device': Counter(r.get('device') or 'unknown' for r in rows), 'source': Counter(r.get('source') or '?' for r in rows),
               'style': Counter(r.get('style') or 'normal' for r in rows)}
     for k, v in (('device', q.get('device')), ('source', q.get('source')), ('style', q.get('style'))):
@@ -1121,7 +1137,7 @@ def _run_rows(pdir, root=None):
                         r['heldout'] = _judge.summary(cached['rows'], r.get('rows'), r.get('trainer') or 'oww')
                         r.setdefault('threshold', r['heldout'].get('threshold'))
                         write_json(rj, r, indent=1)
-                    if (cached.get('holdout_when') != hw or cached.get('held_key', hk) != hk) and r.get('heldout'):
+                    if (cached.get('holdout_when') != hw or cached.get('held_key', hk) != hk or cached.get('stress_key') != _judge.STRESS_KEY) and r.get('heldout'):
                         r['heldout'] = {**r['heldout'], 'stale': True}        # the judging set changed since: re-judge
                 except Exception:
                     pass
@@ -1291,6 +1307,8 @@ def _try_runs(root, slug, py, runs, device, data, key, via, settings):
 
 
 def _watch_scorer(root, slug, runs, settings):
+    if not runs:                                   # a capture with no models ticked: the room is kept, nothing is scored
+        return lambda wav: {}
     py, err = _python_for('synth')
     if err:
         raise RuntimeError(err[0].get('error') if isinstance(err, tuple) else str(err))
@@ -1315,25 +1333,27 @@ def watch_start(slug, body=None, settings=None, **_):
         return err
     body = body or {}
     runs = str(body.get('runs') or '')
-    if not _safe(*runs.split(',')):          # several ticked models ride as one comma list
-        return {'error': 'pick at least one model'}, 400
+    keep = body.get('keep') in (True, 'true', 1, '1')          # every piece becomes a room take
+    if runs and not _safe(*runs.split(',')):          # several ticked models ride as one comma list
+        return {'error': 'bad run id'}, 400
+    if not runs and not keep:
+        return {'error': 'pick at least one model, or keep the room'}, 400
     try:
         minutes = max(1, min(24 * 60, int(body.get('minutes') or 30)))
     except ValueError:
         minutes = 30
     device = str(body.get('device') or 'browser')[:60]
-    keep = body.get('keep') in (True, 'true', 1, '1')          # every piece becomes a room take
     test = body.get('test') in (True, 'true', 1, '1')          # a pushing board counts its fires and answers nothing
     pdir = paths.project_dir(root, slug)
     try:
-        if device == 'browser':
-            st = _watch.start(pdir, slug, device, minutes, runs, _watch_scorer(root, slug, runs, settings), keep=keep)
+        if device.startswith('browser'):                         # 'browser', or 'browser:<mic label>': one tab per PC mic
+            st = _watch.start(pdir, slug, device, minutes, runs, _watch_scorer(root, slug, runs, settings), keep=keep, root=root)
         else:
             from core.devices import engine
             row = engine._usable(device)
             listen_fn, capture_fn, chunk_s, arm, disarm = _watch_fns(root, slug, device, runs, settings, keep=keep, test=test)
             st = _watch.start(pdir, slug, row['id'], minutes, runs, listen_fn, capture_fn, chunk_seconds=chunk_s,
-                              keep=keep, test=test and arm is not None, arm=arm, disarm=disarm)
+                              keep=keep, test=test and arm is not None, arm=arm, disarm=disarm, root=root)
     except Exception as e:
         return {'error': f"watch: {getattr(e, 'args', [e])[0]}"}, 502
     st['running'] = True
@@ -1384,12 +1404,10 @@ def watch_resume(settings):
     for pr in store.list_projects(root):
         slug = pr['slug']
         try:
-            st = _watch.resume(paths.project_dir(root, slug), slug,
-                               lambda d, r, w, s=slug: _watch_fns(root, s, d, r, settings, keep=bool(w.get('keep')), test=bool(w.get('test'))))
-            if st == 'busy':
-                busy = True
-            elif st:
-                out.append(f"{slug}: {st['device']} ({st['id']})")
+            got, held = _watch.resume(paths.project_dir(root, slug), slug,
+                                      lambda d, r, w, s=slug: _watch_fns(root, s, d, r, settings, keep=bool(w.get('keep')), test=bool(w.get('test'))), root=root)
+            busy = busy or held
+            out += [f"{slug}: {st['device']} ({st['id']})" for st in (got or [])]
         except Exception as e:
             logger.warning(f"[WWM] could not resume the watch for {slug}: {e}")
     return out, busy
@@ -1402,17 +1420,26 @@ def watch_get(slug, settings=None, **_):
     pr, err = _project(root, slug)
     if err:
         return err
-    return {'watch': _watch.latest(paths.project_dir(root, slug), slug)}
+    pdir = paths.project_dir(root, slug)
+    return {'watch': _watch.latest(pdir, slug), 'watches': _watch.watches(pdir, slug)}
 
 
-def watch_stop(slug, settings=None, **_):
+def watch_stop(slug, body=None, query=None, settings=None, **_):
+    """Stop the watch on one microphone ({device} or {id}); with neither, every watch of the wake word."""
     root, err = _root(settings)
     if err:
         return err
     pr, err = _project(root, slug)
     if err:
         return err
-    return {'watch': _watch.stop(paths.project_dir(root, slug), slug)}
+    q = {**(query or {}), **(body or {})}
+    device = str(q.get('device') or '')[:60] or None
+    wid = str(q.get('id') or '') or None
+    if wid and not _safe(wid):
+        return {'error': 'bad watch id'}, 400
+    pdir = paths.project_dir(root, slug)
+    last = _watch.stop(pdir, slug, device=device, wid=wid)
+    return {'watch': last or _watch.latest(pdir, slug), 'watches': _watch.watches(pdir, slug)}
 
 
 async def watch_chunk(slug, request=None, settings=None, **_):
@@ -1424,10 +1451,11 @@ async def watch_chunk(slug, request=None, settings=None, **_):
     if err:
         return err
     pdir = paths.project_dir(root, slug)
-    st = _watch.latest(pdir, slug)
-    if not st or st.get('ended') or not st.get('browser'):
-        return {'error': 'no browser watch is running'}, 409
     form = await request.form()
+    device = str(form.get('device') or 'browser')[:60]
+    st = _watch.live_for(pdir, slug, device)
+    if not st or st.get('ended') or not st.get('browser'):
+        return {'error': f"no browser watch is running on {device}"}, 409
     up = form.get('audio')
     if up is None:
         return {'error': 'no audio part'}, 400
@@ -1438,7 +1466,7 @@ async def watch_chunk(slug, request=None, settings=None, **_):
             audio, sr = store.decode(data)
             audio = store.to_16k(audio, sr)
             listen_fn = _watch_scorer(root, slug, st['runs'], settings)
-            out = _watch.chunk(pdir, st, audio, 'browser', listen_fn)
+            out = _watch.chunk(pdir, st, audio, device, listen_fn, root=root)
         except Exception as e:
             return {'error': f"watch: {getattr(e, 'args', [e])[0]}"}, 502
         out['running'] = True
@@ -1475,7 +1503,7 @@ def watch_fate(slug, wid, fid, body=None, settings=None, **_):
     pdir = paths.project_dir(root, slug)
     st = _watch.read(pdir, wid) or {}
     try:
-        fire = _watch.fate(pdir, wid, fid, what, {'device': st.get('device'), 'text': pr['phrase'] if what == 'positive' else None})
+        fire = _watch.fate(pdir, wid, fid, what, {'device': st.get('device'), 'text': pr['phrase'] if what == 'positive' else None}, root=root, slug=slug)
     except ValueError as e:
         return {'error': str(e)}, 404
     if what in ('negative', 'positive'):
@@ -1527,7 +1555,8 @@ def set_run(slug, rid, body=None, settings=None, **_):
 def train_options(**_):
     from wakeword_maker import train_oww, tune, train_mww
     return {'defaults': train_oww.DEFAULTS, 'presets': train_oww.PRESETS, 'space': {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in tune.SPACE.items()},
-            'thresholds': train_oww.THRESHOLDS, 'mww': {'defaults': train_mww.DEFAULTS, 'presets': train_mww.PRESETS, 'cutoffs': train_mww.CUTOFFS}}
+            'thresholds': train_oww.THRESHOLDS, 'mww': {'defaults': train_mww.DEFAULTS, 'presets': train_mww.PRESETS, 'cutoffs': train_mww.CUTOFFS},
+            'grid': {'recipes': list(augment.STOPS), 'presets': ['quick', 'standard', 'thorough'], 'knobs': {t: list(v) for t, v in GRID_KNOBS.items()}, 'max': GRID_MAX}}
 
 
 def voice_catalog(settings=None, **_):
@@ -1587,7 +1616,7 @@ def reshuffle_holdout(slug, body=None, settings=None, **_):
         frac = float((body or {}).get('fraction') or holdout.FRACTION)
     except ValueError:
         frac = holdout.FRACTION
-    h = holdout.make(pdir, frac=max(0.05, min(0.4, frac)))
+    h = holdout.make(pdir, frac=max(0.05, min(0.4, frac)), root=root)       # the shared room library is in the draw
     for c in paths.COLLECTIONS:
         _forget(pdir / c)
     return {'holdout': {k: v for k, v in h.items() if k not in ('positive', 'near', 'negative', 'ambient')}}
@@ -1748,7 +1777,8 @@ def _chosen(pdir):
         if judged:                                  # the judge's own order: clean first, recall, fewest sound-alikes, fewest false alarms, threshold nearest the usual
             usual = _judge.USUAL.get(tr, 0.5)
             out[tr] = max(judged, key=lambda r: (bool(r['heldout'].get('clean')), r['heldout'].get('recall') or 0, -(r['heldout'].get('near_fires') or 0),
-                                                 -(r['heldout'].get('fp_per_hour') or 0), -abs((r['heldout'].get('threshold') or usual) - usual)))
+                                                 r['heldout'].get('stress_recall') or 0, -(r['heldout'].get('fp_per_hour') or 0),
+                                                 (r['heldout'].get('margin') or {}).get('gap') or 0, -abs((r['heldout'].get('threshold') or usual) - usual)))
     return out
 
 
@@ -1953,3 +1983,303 @@ def run_file(slug, rid, name, settings=None, **_):
         return {'error': 'that run has no such file'}, 404
     out_name = f"{slug}{f.suffix}" if name != 'model.json' else f"{slug}_manifest.json"
     return FileResponse(str(f), media_type=RUN_FILES[name], filename=out_name)
+
+
+# --- the grid: many runs from one click --------------------------------------------------------------------
+# A grid is the product of the axes you tick: trainer x recipe stop x source block x preset x knobs x seeds. Every
+# cell is one ordinary train job, queued here in Sapphire's process (so the tails and the queue are its own), with
+# a label that names its cell and `grid` in its args. <project>/grids/<id>.json keeps the cells; GET joins each
+# to its job's state and its run's verdict and folds them by axis: mean recall, stress, sound-alikes and gap over
+# everything else, so "which source block helps" is one row, not a scroll through forty runs.
+GRID_MAX = 200
+GRID_SOURCES = {           # named source blocks (features.sources_of); 'without <mic>' rows are added per project
+    'all': {}, 'piper only': {'synth': 'piper'}, 'kokoro only': {'synth': 'kokoro'},
+    'synthetic only': {'human': 'none'}, 'own takes only': {'synth': 'none'}, 'own x16': {'own_repeat': 16},
+}
+GRID_KNOBS = {             # named settings per trainer; 'default' = the preset as it stands
+    'oww': {'dnn 32x1': {'model_type': 'dnn', 'layer_size': 32, 'n_blocks': 1},
+            'dnn 64x2': {'model_type': 'dnn', 'layer_size': 64, 'n_blocks': 2},
+            'rnn': {'model_type': 'rnn'}},
+    'mww': {'more room': {'sampling_room': 6.0}, 'heavier negatives': {'negative_class_weight': 40},
+            'bigger net': {'pointwise_filters': '96,96,96,96', 'first_conv_filters': 48},
+            'lighter adversarial': {'sampling_adversarial': 1.5, 'penalty_adversarial': 1.0}},
+}
+GRID_AXES = ('trainer', 'recipe', 'sources', 'preset', 'knob', 'seed')
+
+
+def _own_rows(pdir):
+    return [r for c in ('positive/recorded', 'positive/uploaded') for r in store.list_clips(pdir, c, 0, 10 ** 7)[0]]
+
+
+_grid_root = None      # set by the routes before _grid_sources: where the room library lives
+
+
+def _grid_sources(pdir, root=None):
+    """The named source blocks, plus 'without <mic>' / 'only <mic>' for every microphone in your takes (two or more),
+    and 'room only / without <mic>' for every microphone in the shared room library."""
+    global _grid_root
+    if root is not None:
+        _grid_root = root
+    out = dict(GRID_SOURCES)
+    devices = sorted({r.get('device') or 'unknown' for r in _own_rows(pdir)})
+    if len(devices) > 1:
+        for d in devices:
+            out[f"without {d}"] = {'devices': [x for x in devices if x != d]}
+        for d in devices:
+            out[f"only {d}"] = {'devices': [d]}
+    room = sorted({r.get('device') or 'unknown' for r in store.list_room(_grid_root or '', dropped=False)} if _grid_root else set())
+    if len(room) > 1:
+        for d in room:
+            out[f"room only {d}"] = {'room_devices': [d]}
+            out[f"room without {d}"] = {'room_devices': [x for x in room if x != d]}
+    return out
+
+
+def sources_options(slug, settings=None, **_):
+    """What a run may train on: the mics and styles in your takes, and the named source blocks a grid offers."""
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    from wakeword_maker import features as _f
+    pdir = paths.project_dir(root, slug)
+    rows = _own_rows(pdir)
+    return {'devices': sorted({r.get('device') or 'unknown' for r in rows}), 'styles': sorted({r.get('style') or 'normal' for r in rows}),
+            'presets': [{'name': k, 'sources': v, 'label': _f.sources_label(_f.sources_of({'sources': v}))} for k, v in _grid_sources(pdir, root).items()]}
+
+
+def _grids_dir(pdir):
+    return pdir / 'grids'
+
+
+def _pivot(cells):
+    """Per axis with more than one value: for each value, the judged cells' mean recall, stress recall, sound-alike
+    fires and gap, with how many cells that is and the lowest recall among them."""
+    out = {}
+    for axis in GRID_AXES:
+        values = sorted({str(c.get(axis)) for c in cells})
+        if len(values) < 2:
+            continue
+        table = {}
+        for v in values:
+            mine = [c for c in cells if str(c.get(axis)) == v and c.get('recall') is not None]
+            mean = lambda k: round(sum(float(c[k]) for c in mine if c.get(k) is not None) / max(1, len([c for c in mine if c.get(k) is not None])), 3) if any(c.get(k) is not None for c in mine) else None
+            table[v] = {'n': len(mine), 'of': len([c for c in cells if str(c.get(axis)) == v]), 'recall': mean('recall'), 'recall_min': min((c['recall'] for c in mine), default=None),
+                        'stress': mean('stress'), 'near': mean('near'), 'gap': mean('gap'), 'fp': mean('fp')}
+        out[axis] = table
+    return out
+
+
+def _grid_view(root, pdir, grid):
+    """The grid's cells joined to their job state and run verdict, counts, and the pivot."""
+    runs = {r['id']: r for r in _run_rows(pdir, root)}
+    by_job = {j['id']: j for j in jobs.list_all(root, project=grid.get('project'), limit=10 ** 6)}
+    cells = []
+    for c in grid.get('cells') or []:
+        j = by_job.get(c.get('job'))
+        rid = ((j or {}).get('result') or {}).get('run')
+        r = runs.get(rid) or {}
+        h = r.get('heldout') or {}
+        cells.append({**c, 'state': (j or {}).get('state') or 'gone', 'run': rid, 'recall': h.get('recall'), 'stress': h.get('stress_recall'),
+                      'near': h.get('near_fires'), 'gap': (h.get('margin') or {}).get('gap'), 'fp': h.get('fp_per_hour'), 'threshold': h.get('threshold'),
+                      'stale': bool(h.get('stale')), 'error': (j or {}).get('error')})
+    counts = Counter(c['state'] for c in cells)
+    return {**grid, 'cells': cells, 'counts': dict(counts), 'done': counts.get('done', 0), 'of': len(cells), 'pivot': _pivot(cells)}
+
+
+def grid_start(slug, body=None, settings=None, **_):
+    """Queue a grid: every combination of the ticked axes, `seeds` times each (seed 1 of every cell first, so the
+    first pass covers the whole grid). Refused above GRID_MAX cells. Answers the grid as GET would."""
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    body = body or {}
+    pdir = paths.project_dir(root, slug)
+    named = _grid_sources(pdir, root)
+    trainers = [t for t in (body.get('trainers') or ['oww']) if t in ('oww', 'mww')]
+    recipes = [r for r in (body.get('recipes') or ['natural']) if r in augment.STOPS]
+    srcs = [s for s in (body.get('sources') or ['all']) if s in named]
+    presets = [p for p in (body.get('presets') or ['standard']) if p in ('quick', 'standard', 'thorough')]
+    knobs = body.get('knobs') if isinstance(body.get('knobs'), dict) else {}
+    try:
+        seeds = max(1, min(5, int(body.get('seeds') or 1)))
+    except ValueError:
+        seeds = 1
+    if not (trainers and recipes and srcs and presets):
+        return {'error': 'pick at least one trainer, recipe, source block and preset'}, 400
+    cells = []
+    for seed in range(1, seeds + 1):
+        for tr in trainers:
+            names = [k for k in (knobs.get(tr) or ['default']) if k == 'default' or k in GRID_KNOBS[tr]] or ['default']
+            for recipe in recipes:
+                for sname in srcs:
+                    for preset in presets:
+                        for kn in names:
+                            cells.append({'trainer': tr, 'recipe': recipe, 'sources': sname, 'preset': preset, 'knob': kn, 'seed': seed})
+    if len(cells) > GRID_MAX:
+        return {'error': f"{len(cells)} runs is too many for one grid; {GRID_MAX} at most. Fewer axes, or fewer seeds."}, 400
+    py, err = _python_for('train')
+    if err:
+        return err
+    gid = time.strftime('%Y%m%d-%H%M%S')
+    label = str(body.get('label') or '')[:40].strip()
+    holdout_on = body.get('holdout', True) not in (False, 'false', 0, '0')
+    try:
+        rounds = max(1, min(6, int(body.get('rounds') or 2)))
+    except ValueError:
+        rounds = 2
+    for c in cells:
+        cfg = dict(GRID_KNOBS[c['trainer']].get(c['knob'], {}))
+        cfg['seed'] = c['seed']
+        c['label'] = ' · '.join(x for x in (label, c['recipe'], c['sources'], c['preset'], c['knob'] if c['knob'] != 'default' else '', f"s{c['seed']}") if x)
+        args = {'preset': c['preset'], 'recipe': c['recipe'], 'sources': named[c['sources']], 'cfg': cfg, 'holdout': holdout_on, 'rounds': rounds,
+                'label': c['label'], 'grid': gid, 'device': (settings or {}).get('device', 'auto'), 'whisper': (settings or {}).get('qa_whisper_model', 'base.en')}
+        j = jobs.enqueue(root, 'train' if c['trainer'] == 'oww' else 'train_mww', args, py, PLUGIN_DIR, project=slug, publish=_publish)
+        c['job'] = j['id']
+    grid = {'id': gid, 'project': slug, 'label': label, 'when': time.time(), 'seeds': seeds, 'rounds': rounds, 'holdout': holdout_on,
+            'axes': {'trainers': trainers, 'recipes': recipes, 'sources': srcs, 'presets': presets, 'knobs': {t: [k for k in (knobs.get(t) or ['default'])] for t in trainers}},
+            'cells': cells}
+    _grids_dir(pdir).mkdir(parents=True, exist_ok=True)
+    write_json(_grids_dir(pdir) / f"{gid}.json", grid, indent=1)
+    return {'grid': _grid_view(root, pdir, grid)}
+
+
+def grids_list(slug, settings=None, **_):
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    pdir = paths.project_dir(root, slug)
+    out = []
+    d = _grids_dir(pdir)
+    for f in sorted(d.glob('*.json'), reverse=True) if d.is_dir() else []:
+        g = read_json(f)
+        if g:
+            v = _grid_view(root, pdir, g)
+            out.append({k: v[k] for k in ('id', 'label', 'when', 'seeds', 'axes', 'counts', 'done', 'of')})
+    return {'grids': out}
+
+
+def grid_get(slug, gid, settings=None, **_):
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    if not _safe(gid):
+        return {'error': 'bad grid id'}, 400
+    pdir = paths.project_dir(root, slug)
+    g = read_json(_grids_dir(pdir) / f"{gid}.json")
+    if not g:
+        return {'error': 'no such grid'}, 404
+    return {'grid': _grid_view(root, pdir, g)}
+
+
+def grid_delete(slug, gid, settings=None, **_):
+    """Forget a grid: its queued and running cells are cancelled; finished runs stay on the scoreboard."""
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    if not _safe(gid):
+        return {'error': 'bad grid id'}, 400
+    pdir = paths.project_dir(root, slug)
+    f = _grids_dir(pdir) / f"{gid}.json"
+    g = read_json(f)
+    if not g:
+        return {'error': 'no such grid'}, 404
+    stopped = 0
+    for c in g.get('cells') or []:
+        if c.get('job') and _safe(c['job']) and jobs.cancel(paths.jobs_dir(root) / c['job']):
+            stopped += 1
+    f.unlink()
+    return {'deleted': True, 'cancelled': stopped}
+
+
+# --- the room library and the room day ----------------------------------------------------------------------
+# Room sound belongs to no phrase: every kept piece lands once at <root>/room, tagged by microphone, and every
+# wake word trains on it and judges false alarms with it (minus the pieces its own phrase was said in). A room
+# day is one click: a watch on every microphone you tick, for the hours you set, keeping everything.
+
+def room_library(query=None, settings=None, **_):
+    root, err = _root(settings)
+    if err:
+        return err
+    out = store.room_summary(root)
+    slug = str((query or {}).get('project') or '')
+    if slug:
+        out['dropped_for'] = sum(1 for r in store.list_room(root, dropped=True) if slug in (r.get('drop_for') or []))
+    return out
+
+
+def room_delete(query=None, body=None, settings=None, **_):
+    """Delete one piece (?cid=) or a whole watch's pieces (?watch=)."""
+    root, err = _root(settings)
+    if err:
+        return err
+    q = {**(query or {}), **(body or {})}
+    cid, wid = str(q.get('cid') or ''), str(q.get('watch') or '')
+    if not (cid or wid) or (cid and not _safe(cid)) or (wid and not _safe(wid)):
+        return {'error': 'cid= or watch='}, 400
+    try:
+        return {'deleted': store.delete_room(root, cid=cid or None, watch=wid or None)}
+    except ValueError:
+        return {'error': 'bad id'}, 400
+
+
+def room_day(slug, body=None, settings=None, **_):
+    """Start a keeping watch on every satellite microphone named (or every online one): the room for `minutes`,
+    every piece into the library, the wake word's chosen models on watch so a phrase said in the room is flagged.
+    PC microphones are the page's: it starts them itself. Answers what started and what refused."""
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    body = body or {}
+    try:
+        minutes = max(1, min(24 * 60, int(body.get('minutes') or 360)))
+    except ValueError:
+        minutes = 360
+    test = body.get('test', True) not in (False, 'false', 0, '0')
+    want = [str(d)[:60] for d in (body.get('devices') or []) if str(d).strip()]
+    sats = [m for m in mics()['mics'] if m.get('online') and (not want or m['id'] in want)]
+    pdir = paths.project_dir(root, slug)
+    picks = _chosen(pdir)
+    runs = ','.join(dict.fromkeys([r['id'] for r in picks.values() if r] + [d.name for d in (pdir / 'runs').iterdir() if d.name.startswith('builtin-') and (d / 'run.json').is_file()] if (pdir / 'runs').is_dir() else [r['id'] for r in picks.values() if r]))
+    started, refused = [], []
+    for m in sats:
+        if _watch.running(slug, m['id']):
+            refused.append({'device': m['id'], 'error': 'already watching'})
+            continue
+        try:
+            listen_fn, capture_fn, chunk_s, arm, disarm = _watch_fns(root, slug, m['id'], runs, settings, keep=True, test=test)
+            st = _watch.start(pdir, slug, m['id'], minutes, runs, listen_fn, capture_fn, chunk_seconds=chunk_s, keep=True,
+                              test=test and arm is not None, arm=arm, disarm=disarm, root=root)
+            started.append({'device': m['id'], 'id': st['id'], 'pushed': st.get('pushed')})
+        except Exception as e:
+            refused.append({'device': m['id'], 'error': str(getattr(e, 'args', [e])[0])[:160]})
+    return {'started': started, 'refused': refused, 'minutes': minutes, 'runs': runs, 'watches': _watch.watches(pdir, slug)}
+
+
+def room_day_stop(slug, settings=None, **_):
+    root, err = _root(settings)
+    if err:
+        return err
+    pr, err = _project(root, slug)
+    if err:
+        return err
+    pdir = paths.project_dir(root, slug)
+    _watch.stop(pdir, slug)
+    return {'watches': _watch.watches(pdir, slug)}

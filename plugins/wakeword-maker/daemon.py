@@ -43,17 +43,23 @@ def start(plugin_loader, settings):
         logger.debug(f"[WWM] room sink: {e}")
 
 
+def _resume_door(plugin_loader):
+    """`watch_resume` out of the routes namespace. A route row is a tuple whose shape is the loader's (it grew an
+    options dict at the end on 2026-10-14, and the resume silently never ran): the handler is the callable in it."""
+    for row in (getattr(plugin_loader, '_routes', {}) or {}).get(PLUGIN_DIR.name) or []:
+        for x in (row if isinstance(row, (tuple, list)) else [row]):
+            fn = getattr(x, '__globals__', {}).get('watch_resume') if callable(x) else None
+            if fn:
+                return fn
+    return None
+
+
 def _resume_watches(plugin_loader, settings):
     """The route handlers are exec'd into one namespace by the plugin loader; `watch_resume` lives there. Find it
     through any registered handler and let it rebuild a satellite watch a reload or restart interrupted (a watch is
     a thread, jobs are processes)."""
-    def find():
-        for row in (getattr(plugin_loader, '_routes', {}) or {}).get(PLUGIN_DIR.name) or []:
-            fn = getattr(row[-1], '__globals__', {}).get('watch_resume')
-            if fn:
-                return fn
     for _ in range(60):                                  # up to ten minutes: a paused loop may be mid-chunk (300 s on a Pi)
-        resume = find()
+        resume = _resume_door(plugin_loader)
         if resume is not None:
             try:
                 got, busy = resume(settings)

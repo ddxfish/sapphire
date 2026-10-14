@@ -116,6 +116,12 @@ def jobs_dir(root):
     return Path(root) / 'jobs'
 
 
+def room_dir(root):
+    """The room library: hours of the rooms through every microphone, kept once at the root and shared by every
+    wake word (room sound belongs to no phrase). Each piece = <id>.wav + <id>.json like a clip, tagged by device."""
+    return Path(root) / 'room'
+
+
 def voices_dir(root):
     """Piper voices (<name>.onnx + .json) and, under hf/, the Hugging Face cache for Kokoro's model and packs and
     Whisper's model. All of it under the data folder, none of it in the user's home."""

@@ -31,7 +31,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 
 | Guide | What's Inside |
 |-------|--------------|
-| [Design Principles](design-principles.md) | Read first: one system, route through core, settings at a glance, scopes, privacy — what a plugin must do to ship with Sapphire |
+| [Design Principles](design-principles.md) | Read first: core is minimal, plugin or core, one system, one feature one sentence, what shipping costs — the bar for a plugin that ships with Sapphire |
 | [Manifest](manifest.md) | `plugin.json` reference — fields, priority bands, directory structure |
 | [Hooks](hooks.md) | All hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
 | [Voice Commands](voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |

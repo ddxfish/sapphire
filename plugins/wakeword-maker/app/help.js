@@ -78,6 +78,13 @@ Each kind of device wants its own kind of model: openWakeWord for desktop and Pi
 "Put back" returns to the model that was listening before. Both stay on disk; Settings can pick either.`],
     install_satellite: ['Satellites', `Sends the model bytes and the threshold to the body. The body stores it and starts listening for it.
 Pi and ESP32 bodies older than that door answer "no door": copy the files instead.`],
+    sources: ['Sources', `What this run trains on. Synthetic voices: all, one engine, or none. Your takes: all, or none (then the model learns the phrase from made voices alone and is judged on you). Own weight: how many extra times each of your takes is varied into training, 8 by default against thousands of synthetic clips.
+The held-out slice is never touched by any of this: every run is judged on every microphone. Your own near misses always train.`],
+    grid: ['The grid', `Many runs from one click. Tick what you want compared: models, variation stops, source blocks (without one microphone, synthetic only, Piper only...), how hard, named knobs; set seeds. Every combination is queued as an ordinary run, seed 1 of everything first, one at a time.
+The pivot folds the finished cells by each axis: the mean of Hears you, Stressed, Sound-alikes and Gap over everything else. One row per value, so "does leaving the ESP32 takes out hurt it on the ESP32" is a glance, not a scroll. Seeds matter: the same cell three times tells noise from signal. Forgetting a grid cancels what is still queued; finished runs stay.`],
+    roomday: ['Room day', `Every microphone at once, for the hours you set, everything kept. The pieces go to the shared room library at the data folder's root, tagged by microphone, and every wake word trains on them and judges false alarms with them: room sound belongs to no phrase.
+If a phrase is said in the room, the models on watch flag it; "That was me" drops that piece for that wake word only. More positions beat more mics in one spot: a second ESP32 by the TV, the other Pi in another room.
+PC microphones record from this tab, one stream each; keep the tab open. Satellites run on their own and survive a restart.`],
     repeats: ['Repeats', `Queue the same run two to five times, differing only by seed.
 Two runs of one recipe can land a few clips apart by luck alone; three repeats and the middle one is what the recipe really does.`],
     breakdown: ['By microphone and way of speaking', `The held-out clips, scored by this model, grouped by which mic and how you said it.
@@ -88,7 +95,8 @@ Try near misses and other words too. Pick a satellite to test through its own mi
 Sort the fires: False alarm keeps it as a negative (the next training learns from it). That was me keeps it as a phrase sample.
 Hours of quiet with no fires is the best news a wake word can get.
 Keep it all as room sound: every piece it hears becomes a room take. A day of your room through the device's own microphone is the honest judge of false alarms, and the next training draws its background from it.
-An ESP32 that pushes its room keeps hearing its wake word, and its own fires are counted beside the models'. Board test mode: it counts and answers nothing, so a candidate can be judged on a day of the room without her talking to the TV.`],
+An ESP32 that pushes its room keeps hearing its wake word, and its own fires are counted beside the models'. Board test mode: it counts and answers nothing, so a candidate can be judged on a day of the room without her talking to the TV.
+Several microphones at once: one watch per mic, each its own record. A whole day on every satellite and every PC mic gives each model an honest false-alarm number on its own ears and a background pool that matches it. A PC mic is one browser tab each: open the page twice for two.`],
 };
 
 export function qbtn(topic) {

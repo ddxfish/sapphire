@@ -39,10 +39,10 @@ def recipe_for(project, args):
     return augment.recipe_of(project)
 
 
-def _pool_init(root, pdir, recipe, seed):
+def _pool_init(root, pdir, recipe, seed, ambient_ids=None):
     global _aug
     compat.apply()
-    _aug = augment.Augmenter(root, pdir, recipe, seed=seed)
+    _aug = augment.Augmenter(root, pdir, recipe, seed=seed, ambient_ids=ambient_ids)   # the held-out room is never a background
     random.seed(seed)
     np.random.seed(seed % (2 ** 32))
 
@@ -114,6 +114,68 @@ class Embedder:
         return self.f.embed_clips(pcm_int16, batch_size=batch, ncpu=self.threads).astype(np.float32)
 
 
+SOURCES_DEFAULT = {'synth': 'all', 'human': 'all', 'devices': None, 'styles': None, 'own_repeat': OWN_REPEAT, 'mined': True, 'room_devices': None}
+
+
+def sources_of(args):
+    """What a run trains on, as one block: `synth` (all | piper | kokoro | none | [voices]), `human` (all | none: your
+    own takes of the phrase), `devices` / `styles` (only takes from these mics or ways of speaking; None = every),
+    `own_repeat` (how many extra times each of your takes is varied), `mined` (false accepts a watch kept). The
+    old single `synth` arg still works. Your own negatives are always in: a near miss in your voice is never a
+    liability. The held-out slice is never touched by any of this: it judges every run on every mic."""
+    args = args or {}
+    src = dict(SOURCES_DEFAULT)
+    given = dict(args.get('sources') or {})
+    if args.get('synth') and 'synth' not in given:
+        given['synth'] = args['synth']
+    for k in SOURCES_DEFAULT:
+        if k in given and given[k] is not None:
+            src[k] = given[k]
+    src['synth'] = sorted(src['synth']) if isinstance(src['synth'], (list, tuple, set)) else (str(src['synth'] or 'all'))
+    src['human'] = 'none' if str(src['human']).lower() in ('none', 'false', '0', 'off') else 'all'
+    src['devices'] = sorted(str(d) for d in src['devices']) if isinstance(src['devices'], (list, tuple, set)) and src['devices'] else None
+    src['styles'] = sorted(str(s) for s in src['styles']) if isinstance(src['styles'], (list, tuple, set)) and src['styles'] else None
+    src['room_devices'] = sorted(str(d) for d in src['room_devices']) if isinstance(src['room_devices'], (list, tuple, set)) and src['room_devices'] else None
+    src['own_repeat'] = max(1, min(64, int(src['own_repeat'] or OWN_REPEAT)))
+    src['mined'] = src['mined'] not in (False, 'false', 0, '0')
+    return src
+
+
+def sources_label(src):
+    """A short name for the scoreboard: 'all', or what is left out and what is weighed."""
+    if not src:
+        return 'all'
+    parts = []
+    if isinstance(src.get('synth'), list):
+        parts.append(f"{len(src['synth'])} voices")
+    elif src.get('synth') not in (None, 'all'):
+        parts.append({'none': 'no synthetic'}.get(src['synth'], f"{src['synth']} only"))
+    if src.get('human') == 'none':
+        parts.append('no own takes')
+    if src.get('devices'):
+        parts.append('mics ' + ','.join(src['devices']))
+    if src.get('styles'):
+        parts.append('styles ' + ','.join(src['styles']))
+    if src.get('own_repeat') not in (None, OWN_REPEAT):
+        parts.append(f"own x{src['own_repeat']}")
+    if src.get('mined') is False:
+        parts.append('no mined')
+    if src.get('room_devices'):
+        parts.append('room ' + ','.join(src['room_devices']))
+    return ' · '.join(parts) or 'all'
+
+
+def human_ok(r, src):
+    """Does one of your own takes of the phrase train this run?"""
+    if src.get('human') == 'none':
+        return False
+    if src.get('devices') and (r.get('device') or 'unknown') not in src['devices']:
+        return False
+    if src.get('styles') and (r.get('style') or 'normal') not in src['styles']:
+        return False
+    return True
+
+
 def synth_ok(r, synth='all'):
     """Does this clip pass the run's synthetic-voice filter? 'all', one engine ('piper', 'kokoro'), 'none' (your own
     recordings only), or a list of voice names (a saved set). Recorded and uploaded clips always pass."""
@@ -126,9 +188,14 @@ def synth_ok(r, synth='all'):
     return r.get('engine') == synth
 
 
-def _clips(pdir, held, synth='all', exclude_near=()):
+def _clips(pdir, held, synth='all', exclude_near=(), sources=None, root=None):
     """What goes where. Returns dict of lists of (wav path, repeat). `exclude_near`: sound-alike texts kept out of
-    training (they stay in the held-out slice, so the judge still reports them)."""
+    training (they stay in the held-out slice, so the judge still reports them). `sources`: see sources_of; the
+    held-out slice is unaffected by it. With `root`, the shared room library joins the project's own room takes
+    (minus the pieces dropped for this wake word: its phrase was said in them)."""
+    src = sources_of({'sources': sources, 'synth': synth})
+    room_ok = lambda r: not src['room_devices'] or (r.get('device') or 'unknown') in src['room_devices']
+    synth = src['synth']
     skip = {' '.join(str(t).lower().split()) for t in (exclude_near or ())}
 
     def rows(c):
@@ -143,9 +210,9 @@ def _clips(pdir, held, synth='all', exclude_near=()):
             own = r.get('source') != 'synth'
             if r['id'] in held:
                 sets['val_positive'].append((str(wav), 1))
-            else:
-                sets['positive'].append((str(wav), OWN_REPEAT if own else 1))
-    for c in ('negative/synth', 'negative/recorded', 'negative/uploaded', 'negative/mined'):
+            elif not own or human_ok(r, src):
+                sets['positive'].append((str(wav), src['own_repeat'] if own else 1))
+    for c in ('negative/synth', 'negative/recorded', 'negative/uploaded') + (('negative/mined',) if src['mined'] else ()):
         for r in rows(c):
             wav, _ = store.clip_paths(pdir, c, r['id'])
             own = r.get('source') in ('recorded', 'uploaded')
@@ -155,16 +222,26 @@ def _clips(pdir, held, synth='all', exclude_near=()):
                 sets['adversarial'].append((str(wav), 4 if own else 1))
     for c in ('ambient/recorded', 'ambient/uploaded'):
         for r in rows(c):
+            if not room_ok(r):
+                continue
             wav, _ = store.clip_paths(pdir, c, r['id'])
+            (sets['val_ambient'] if r['id'] in held else sets['ambient']).append((str(wav), 1))
+    if root is not None:
+        slug = (read_json(Path(pdir) / 'project.json') or {}).get('slug') or Path(pdir).name
+        for r in store.list_room(root, slug=slug):
+            if not room_ok(r):
+                continue
+            wav, _ = store.room_paths(root, r['id'])
             (sets['val_ambient'] if r['id'] in held else sets['ambient']).append((str(wav), 1))
     return sets
 
 
-def key_of(project, recipe, sets, k, use_holdout):
+def key_of(project, recipe, sets, k, use_holdout, sources=None):
     h = hashlib.sha1()
     h.update(json.dumps(recipe, sort_keys=True).encode())
     h.update(json.dumps({n: sorted(p for p, _ in v) for n, v in sets.items()}, sort_keys=True).encode())
-    h.update(f"k={k} holdout={use_holdout} window={WINDOW} own={OWN_REPEAT} v3".encode())
+    h.update(json.dumps(sources or {}, sort_keys=True).encode())
+    h.update(f"k={k} holdout={use_holdout} window={WINDOW} v5".encode())    # v4: the held-out room left out of the backgrounds; v5: sources
     return h.hexdigest()[:12]
 
 
@@ -182,12 +259,13 @@ def build_oww(root, args, progress):
     recipe = recipe_for(project, args)
     held = holdout.ids(pdir) if use_holdout else set()
     if use_holdout and not held:
-        holdout.make(pdir)
+        holdout.make(pdir, root=root)
         held = holdout.ids(pdir)
-    synth = args.get('synth') or 'all'
+    sources = sources_of(args)
+    synth = sources['synth']
     exclude_near = [t for t in (args.get('exclude_near') or []) if str(t).strip()]
-    sets = _clips(pdir, held, synth, exclude_near)
-    key = key_of(project, recipe, sets, k, use_holdout)
+    sets = _clips(pdir, held, synth, exclude_near, sources, root=root)
+    key = key_of(project, recipe, sets, k, use_holdout, sources)
     out = pdir / 'features' / 'oww' / key
     meta_path = out / 'meta.json'
     meta = read_json(meta_path)                         # a half-written meta (full disk, a kill) means: build again
@@ -203,7 +281,8 @@ def build_oww(root, args, progress):
     plan = [('positive', True), ('adversarial', True), ('val_positive', False), ('val_negative', False)]
     counts = {}
     t0 = time.time()
-    with Pool(workers, initializer=_pool_init, initargs=(str(root), str(pdir), recipe, seed)) as pool:
+    train_room = {Path(w).stem for w, _ in sets['ambient']}          # the room takes training may draw on: never the held-out ones
+    with Pool(workers, initializer=_pool_init, initargs=(str(root), str(pdir), recipe, seed, train_room)) as pool:
         for name, vary in plan:
             items = sets[name]
             if not items:
@@ -258,7 +337,8 @@ def build_oww(root, args, progress):
         counts[name] = len(feats)
         counts[name + '_seconds'] = int(sum(len(c) for c in chunks) * 1.0 + (WINDOW_S - 1.0) * len([c for c in chunks if len(c)]))
     meta = {'key': key, 'trainer': 'oww', 'shape': list(emb.shape), 'rounds': k, 'holdout': use_holdout, 'recipe': recipe.get('preset'), 'synth': synth, 'exclude_near': exclude_near,
-            'counts': counts, 'seconds': round(time.time() - t0), 'when': time.time(), 'own_repeat': OWN_REPEAT,
+            'sources': sources, 'sources_label': sources_label(sources),
+            'counts': counts, 'seconds': round(time.time() - t0), 'when': time.time(), 'own_repeat': sources['own_repeat'],
             'holdout_when': (holdout.read(pdir) or {}).get('when')}
     write_json(meta_path, meta, indent=1)
     prune_sets(pdir, 'oww')

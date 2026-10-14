@@ -28,6 +28,8 @@ function draw(el, ctx, p, opt, runsData, ds) {
     const useHold = saved.holdout !== false;
     const rounds = saved.rounds || 2;
     const synth = saved.synth || 'all';
+    const human = saved.sources?.human || 'all';
+    const ownRepeat = saved.sources?.own_repeat || 8;
     const running = runsData.running || [];
     const gpu = !!ctx.state.status?.gpu;
     el.innerHTML = `
@@ -50,12 +52,15 @@ function draw(el, ctx, p, opt, runsData, ds) {
           <label><input type="checkbox" id="wwm-holdout" ${useHold ? 'checked' : ''}> validate on the held-out slice</label>${qbtn('validate')}
           <label>Variations per clip <input type="number" id="wwm-rounds" min="1" max="6" value="${rounds}" style="width:60px"></label>${qbtn('rounds')}
           <label>Synthetic voices <select id="wwm-synth">${[['all', 'all'], ['piper', 'Piper only'], ['kokoro', 'Kokoro only'], ['none', 'none: your recordings only']].map(([v, t]) => `<option value="${v}" ${synth === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>${qbtn('synth')}
+          <label>Your takes <select id="wwm-human"><option value="all" ${human !== 'none' ? 'selected' : ''}>all</option><option value="none" ${human === 'none' ? 'selected' : ''}>none: synthetic only</option></select></label>
+          <label title="how many extra times each of your takes is varied into training; 8 is the usual weight against thousands of synthetic clips">Own weight <input type="number" id="wwm-ownrep" min="1" max="64" value="${ownRepeat}" style="width:56px"></label>${qbtn('sources')}
           <label>Label <input type="text" id="wwm-tlabel" placeholder="e.g. natural, standard" style="min-width:160px"></label>
           <label>Repeats <input type="number" id="wwm-repeats" min="1" max="5" value="1" style="width:56px"></label>${qbtn('repeats')}
         </div>
         <div class="wwm-row" style="margin-top:8px">
           <button class="wwm-btn primary big" id="wwm-train-go" ${envReady && (owwReady || mwwReady) ? '' : 'disabled'}>${running.length || (runsData.queued || []).length ? 'Add to queue' : 'Train'}</button>
           <button class="wwm-btn" id="wwm-sweep-toggle" ${envReady && owwReady ? '' : 'disabled'} title="desktop and Pi model only, for now">Sweep the knobs…</button>
+          <button class="wwm-btn" id="wwm-grid-toggle" ${envReady && (owwReady || mwwReady) ? '' : 'disabled'} title="many runs from one click: every combination of what you tick, with seeds">Grid…</button>
           <button class="wwm-btn ghost" id="wwm-adv-toggle">▸ Advanced</button>
           ${running.length ? `<span class="wwm-muted">running: ${esc(running[0].msg || running[0].kind)}</span>` : envReady ? '' : '<span class="wwm-muted">build the environment on the Settings tab first</span>'}
         </div>
@@ -69,6 +74,16 @@ function draw(el, ctx, p, opt, runsData, ds) {
           <label>Target false alarms/h <input type="number" id="wwm-c-target_fp_per_hour" min="0.01" max="5" step="0.05" value="${cfg.target_fp_per_hour}"></label>
           <label>Seed <input type="number" id="wwm-c-seed" min="0" max="99999" value="${cfg.seed}"></label>
         </div>
+        <div id="wwm-grid" style="display:none" class="wwm-sweep">
+          <h3>Grid ${qbtn('grid')}</h3>
+          <div class="wwm-row"><b>Models</b> ${['oww', 'mww'].map(t => `<label><input type="checkbox" data-gax="trainers" value="${t}" ${(t === 'oww' ? owwReady : mwwReady) ? 'checked' : 'disabled'}> ${t === 'oww' ? 'desktop/Pi' : 'ESP32'}</label>`).join('')}</div>
+          <div class="wwm-row"><b>Variations</b> ${(opt.grid?.recipes || []).map(r => `<label><input type="checkbox" data-gax="recipes" value="${r}" ${r === 'natural' ? 'checked' : ''}> ${r}</label>`).join('')}</div>
+          <div class="wwm-row" id="wwm-grid-sources"><b>Sources</b> <span class="wwm-muted">loading…</span></div>
+          <div class="wwm-row"><b>How hard</b> ${(opt.grid?.presets || []).map(r => `<label><input type="checkbox" data-gax="presets" value="${r}" ${r === 'standard' ? 'checked' : ''}> ${r}</label>`).join('')}</div>
+          <div class="wwm-row"><b>Desktop knobs</b> <label><input type="checkbox" data-gknob="oww" value="default" checked> as the preset</label>${(opt.grid?.knobs?.oww || []).map(k => `<label><input type="checkbox" data-gknob="oww" value="${k}"> ${k}</label>`).join('')}</div>
+          <div class="wwm-row"><b>ESP32 knobs</b> <label><input type="checkbox" data-gknob="mww" value="default" checked> as the preset</label>${(opt.grid?.knobs?.mww || []).map(k => `<label><input type="checkbox" data-gknob="mww" value="${k}"> ${k}</label>`).join('')}</div>
+          <div class="wwm-row"><label>Seeds each <input type="number" id="wwm-g-seeds" min="1" max="5" value="3" style="width:56px"></label><label>Label <input type="text" id="wwm-g-label" placeholder="e.g. sources" style="min-width:140px"></label><button class="wwm-btn primary" id="wwm-grid-go">Queue the grid</button><span class="wwm-muted" id="wwm-grid-count"></span></div>
+        </div>
         <div id="wwm-sweep" style="display:none" class="wwm-sweep">
           <h3>Sweep ${qbtn('sweep')}</h3>
           <div class="wwm-row">
@@ -79,6 +94,10 @@ function draw(el, ctx, p, opt, runsData, ds) {
           <div class="wwm-row">${Object.keys(opt.space).map(k => `<label><input type="checkbox" data-space="${k}" checked> ${k.replace(/_/g, ' ')}</label>`).join('')}</div>
           <div class="wwm-row"><button class="wwm-btn primary" id="wwm-sweep-go">Run the sweep</button><span class="wwm-muted">the best trial then trains in full with the preset above</span></div>
         </div>
+      </div>
+      <div class="wwm-card" id="wwm-grids-card" style="display:none">
+        <h2>Grids ${qbtn('grid')}</h2>
+        <div id="wwm-grids"></div>
       </div>
       <div class="wwm-card">
         <h2>Runs</h2>
@@ -99,6 +118,7 @@ function draw(el, ctx, p, opt, runsData, ds) {
     mt.addEventListener('change', sizeKnobs);
     el.querySelector('#wwm-adv-toggle').addEventListener('click', (e) => { const a = el.querySelector('#wwm-adv'); const open = a.style.display === 'none'; a.style.display = open ? '' : 'none'; e.target.textContent = open ? '▾ Advanced' : '▸ Advanced'; });
     el.querySelector('#wwm-sweep-toggle').addEventListener('click', () => { const a = el.querySelector('#wwm-sweep'); a.style.display = a.style.display === 'none' ? '' : 'none'; });
+    gridPanel(el, ctx, p, opt);
     const readCfg = () => {
         const c = {};
         for (const k of ['model_type', 'layer_size', 'n_blocks', 'steps', 'lr', 'max_negative_weight', 'target_fp_per_hour', 'seed']) {
@@ -107,10 +127,11 @@ function draw(el, ctx, p, opt, runsData, ds) {
         return c;
     };
     const read = () => ({ preset: seg.querySelector('button.on')?.dataset.v || 'standard', holdout: el.querySelector('#wwm-holdout').checked, rounds: parseInt(el.querySelector('#wwm-rounds').value) || 2, cfg: readCfg(), synth: el.querySelector('#wwm-synth').value,
+        sources: { synth: el.querySelector('#wwm-synth').value, human: el.querySelector('#wwm-human').value, own_repeat: parseInt(el.querySelector('#wwm-ownrep').value) || 8 },
         trainers: { oww: el.querySelector('#wwm-t-oww').checked, mww: el.querySelector('#wwm-t-mww').checked },
         recipe: ({ harsh: 'rough' })[p.settings?.augment?.preset] || p.settings?.augment?.preset || 'natural' });
     const save = async () => { try { const r = await api(`/projects/${p.slug}`, { method: 'PUT', body: { settings: { train: read() } } }); Object.assign(p, r.project); } catch { /* fine */ } };
-    el.querySelectorAll('#wwm-adv input, #wwm-adv select, #wwm-holdout, #wwm-rounds, #wwm-synth, #wwm-t-oww, #wwm-t-mww').forEach(i => i.addEventListener('change', save));
+    el.querySelectorAll('#wwm-adv input, #wwm-adv select, #wwm-holdout, #wwm-rounds, #wwm-synth, #wwm-human, #wwm-ownrep, #wwm-t-oww, #wwm-t-mww').forEach(i => i.addEventListener('change', save));
 
     el.querySelector('#wwm-train-go').addEventListener('click', async () => {
         const t = read();
@@ -141,8 +162,60 @@ function draw(el, ctx, p, opt, runsData, ds) {
     });
 
     drawRuns(el, ctx, p, runsData, opt);
+    drawGrids(el, ctx, p);
     if (poll) clearInterval(poll);
-    if (running.length || (runsData.queued || []).length) poll = setInterval(() => { if (!document.hidden) api(`/projects/${p.slug}/runs`).then(r => drawRuns(el, ctx, p, r, opt)).catch(() => {}); }, 10000);
+    if (running.length || (runsData.queued || []).length) poll = setInterval(() => { if (!document.hidden) { api(`/projects/${p.slug}/runs`).then(r => drawRuns(el, ctx, p, r, opt)).catch(() => {}); drawGrids(el, ctx, p); } }, 10000);
+}
+
+// --- the grid: tick the axes, queue every combination; the pivot says which axis value helps ------------
+function gridPanel(el, ctx, p, opt) {
+    const panel = el.querySelector('#wwm-grid');
+    el.querySelector('#wwm-grid-toggle').addEventListener('click', () => { panel.style.display = panel.style.display === 'none' ? '' : 'none'; });
+    const picked = (ax) => [...panel.querySelectorAll(`[data-gax="${ax}"]:checked`)].map(i => i.value);
+    const knobs = (t) => [...panel.querySelectorAll(`[data-gknob="${t}"]:checked`)].map(i => i.value);
+    const count = () => {
+        const tr = picked('trainers'), n = tr.reduce((s, t) => s + Math.max(1, knobs(t).length), 0) * picked('recipes').length * picked('sources').length * picked('presets').length * (parseInt(panel.querySelector('#wwm-g-seeds').value) || 1);
+        const c = panel.querySelector('#wwm-grid-count'); c.textContent = n ? `${n} run${n === 1 ? '' : 's'}${n > (opt.grid?.max || 200) ? `: too many, ${opt.grid?.max || 200} at most` : ''}` : 'tick one of each';
+        panel.querySelector('#wwm-grid-go').disabled = !n || n > (opt.grid?.max || 200);
+    };
+    api(`/projects/${p.slug}/sources`).then(s => {
+        el.querySelector('#wwm-grid-sources').innerHTML = `<b>Sources</b> ${(s.presets || []).map(x => `<label title="${esc(x.label)}"><input type="checkbox" data-gax="sources" value="${esc(x.name)}" ${x.name === 'all' ? 'checked' : ''}> ${esc(x.name)}</label>`).join('')}`;
+        panel.querySelectorAll('input').forEach(i => i.addEventListener('change', count)); count();
+    }).catch(() => { el.querySelector('#wwm-grid-sources').innerHTML = '<b>Sources</b> <span class="wwm-error">could not read the sources</span>'; });
+    panel.querySelectorAll('input').forEach(i => i.addEventListener('change', count));
+    panel.querySelector('#wwm-grid-go').addEventListener('click', async () => {
+        const body = { trainers: picked('trainers'), recipes: picked('recipes'), sources: picked('sources'), presets: picked('presets'), knobs: { oww: knobs('oww'), mww: knobs('mww') },
+            seeds: parseInt(panel.querySelector('#wwm-g-seeds').value) || 1, label: panel.querySelector('#wwm-g-label').value.trim(), holdout: el.querySelector('#wwm-holdout').checked, rounds: parseInt(el.querySelector('#wwm-rounds').value) || 2 };
+        try { const r = await api(`/projects/${p.slug}/grid`, { method: 'POST', body }); ctx.toast(`${r.grid.of} runs queued; they take turns, one at a time.`, 'info'); panel.style.display = 'none'; setTimeout(() => render(el, ctx), 800); }
+        catch (e) { ctx.toast(e.message, 'error'); }
+    });
+}
+
+const pct0 = (v) => v == null ? '–' : Math.round(100 * v) + '%';
+
+async function drawGrids(el, ctx, p) {
+    const card = el.querySelector('#wwm-grids-card'), box = el.querySelector('#wwm-grids');
+    if (!card || !box) return;
+    let grids = [];
+    try { grids = (await api(`/projects/${p.slug}/grids`)).grids || []; } catch { return; }
+    card.style.display = grids.length ? '' : 'none';
+    if (!grids.length) return;
+    const open = box.dataset.open || grids[0].id;
+    box.dataset.open = open;
+    box.innerHTML = grids.map(g => `<div class="wwm-row wwm-between" style="margin:4px 0"><span><button class="wwm-btn ghost" data-grid="${esc(g.id)}">${g.id === open ? '▾' : '▸'} ${esc(g.label || g.id)}</button> <span class="wwm-muted">${g.done} of ${g.of} done${g.counts?.running ? `, ${g.counts.running} running` : ''}${g.counts?.queued ? `, ${g.counts.queued} queued` : ''}${g.counts?.failed ? `, <span class="wwm-error">${g.counts.failed} failed</span>` : ''} · ${g.seeds} seed${g.seeds === 1 ? '' : 's'}</span></span><button class="wwm-x" data-grid-del="${esc(g.id)}" title="forget this grid; queued cells are cancelled, finished runs stay">✕</button></div>${g.id === open ? `<div id="wwm-grid-open" class="wwm-muted">loading…</div>` : ''}`).join('');
+    box.querySelectorAll('[data-grid]').forEach(b => b.addEventListener('click', () => { box.dataset.open = b.dataset.grid === box.dataset.open ? '-' : b.dataset.grid; drawGrids(el, ctx, p); }));
+    box.querySelectorAll('[data-grid-del]').forEach(b => b.addEventListener('click', () => showConfirm(`Forget grid ${b.dataset.gridDel}? Queued runs are cancelled; finished ones stay on the scoreboard.`, async () => {
+        try { await api(`/projects/${p.slug}/grids/${b.dataset.gridDel}`, { method: 'DELETE' }); render(el, ctx); } catch (e) { ctx.toast(e.message, 'error'); }
+    }, { title: 'Forget grid', saveLabel: 'Forget' })));
+    const slot = box.querySelector('#wwm-grid-open');
+    if (!slot) return;
+    try {
+        const g = (await api(`/projects/${p.slug}/grids/${open}`)).grid;
+        const axes = Object.entries(g.pivot || {});
+        const names = { trainer: 'model', recipe: 'variations', sources: 'sources', preset: 'how hard', knob: 'knobs', seed: 'seed' };
+        slot.innerHTML = (axes.length ? `<div class="wwm-grid2">${axes.map(([ax, table]) => `<div><h3>By ${names[ax] || ax}</h3><table class="wwm-table"><thead><tr><th>${esc(names[ax] || ax)}</th><th class="num" title="judged cells of this value">n</th><th class="num">hears you</th><th class="num" title="the worst cell">min</th><th class="num">stressed</th><th class="num">sound-alikes</th><th class="num">gap</th></tr></thead><tbody>${Object.entries(table).map(([v, s]) => `<tr><td>${esc(v === 'oww' ? 'desktop/Pi' : v === 'mww' ? 'ESP32' : v)}</td><td class="num">${s.n}/${s.of}</td><td class="num">${pct0(s.recall)}</td><td class="num">${pct0(s.recall_min)}</td><td class="num">${pct0(s.stress)}</td><td class="num">${s.near == null ? '–' : s.near.toFixed(1)}</td><td class="num">${s.gap == null ? '–' : s.gap.toFixed(2)}</td></tr>`).join('')}</tbody></table></div>`).join('')}</div>` : '<div class="wwm-muted">Nothing judged yet; the pivot fills in as cells finish.</div>')
+            + `<details style="margin-top:6px"><summary class="wwm-muted">Every cell (${g.of})</summary><table class="wwm-table"><thead><tr><th>cell</th><th>state</th><th class="num">hears you</th><th class="num">stressed</th><th class="num">sound-alikes</th><th class="num">gap</th><th>run</th></tr></thead><tbody>${g.cells.map(c => `<tr><td>${esc(c.label || '')}</td><td><span class="wwm-pill ${c.state === 'done' ? 'ok' : c.state === 'failed' ? 'bad' : 'warn'}">${esc(c.state)}</span>${c.error ? ` <span class="wwm-error" title="${esc(c.error)}">!</span>` : ''}</td><td class="num">${pct0(c.recall)}</td><td class="num">${pct0(c.stress)}</td><td class="num">${c.near ?? '–'}</td><td class="num">${c.gap == null ? '–' : c.gap.toFixed(2)}</td><td class="wwm-muted">${esc(c.run || '')}</td></tr>`).join('')}</tbody></table></details>`;
+    } catch (e) { slot.innerHTML = `<span class="wwm-error">${esc(e.message)}</span>`; }
 }
 
 const fmt = (v, d = 2) => v == null ? '–' : (typeof v === 'number' ? v.toFixed(d) : v);
@@ -164,17 +237,19 @@ function drawRuns(el, ctx, p, data, opt) {
     box.innerHTML = `${q.length ? `<div class="wwm-queue"><b>Queued:</b> ${q.map(j => `<span class="wwm-chip">${esc({ train: 'desktop/Pi', train_mww: 'ESP32', tune: 'sweep' }[j.kind] || j.kind)} · ${esc(j.args?.preset || '')}${j.args?.recipe ? ' · ' + esc(j.args.recipe) : ''}${j.args?.synth && j.args.synth !== 'all' ? ' · ' + esc(String(j.args.synth)) : ''}${j.args?.label ? ' · ' + esc(j.args.label) : ''}<button data-unqueue="${esc(j.id)}" title="remove from the queue">✕</button></span>`).join('')}</div>` : ''}
       ${f ? `<div class="wwm-muted" style="margin-bottom:6px">Feature set on disk: ${(f.counts?.positive || 0).toLocaleString()} positive rows, ${(f.counts?.adversarial || 0).toLocaleString()} sound-alike rows, ${(f.counts?.ambient || 0).toLocaleString()} room windows · ${f.rounds} variation(s) per clip · ${f.recipe}${f.synth && f.synth !== 'all' ? ' · voices: ' + esc(String(f.synth)) : ''} · ${f.holdout ? 'held-out slice kept apart' : 'no held-out slice'} · built in ${f.seconds}s</div>` : ''}
       ${(() => { const stale = runs.filter(r => r.heldout?.stale).length, unjudged = runs.filter(r => r.state === 'done' && r.has_model && !r.heldout && !r.id.startsWith('builtin-')).length; return (stale || unjudged) ? `<div class="wwm-row" style="margin-bottom:6px"><button class="wwm-btn" id="wwm-rejudge">Re-judge ${stale + unjudged} model${stale + unjudged === 1 ? '' : 's'}</button><span class="wwm-muted">${stale ? `${stale} verdict${stale === 1 ? '' : 's'} came from an older held-out slice (a reshuffle or a dropped clip since). ` : ''}${unjudged ? `${unjudged} finished model${unjudged === 1 ? '' : 's'} never judged. ` : ''}A few seconds per model.</span></div>` : ''; })()}
-      ${runs.length ? `<table class="wwm-table wwm-score"><thead><tr><th title="tick to test it live on Test">test</th><th></th><th>Run</th><th>Model</th><th>Label</th><th>What</th><th>Recipe</th><th>State</th><th class="num" title="held-out clips of you it heard, streaming judge">Hears you</th><th class="num" title="held-out sound-alikes it fired on (your near misses)">Sound-alikes</th><th class="num" title="false alarms per hour on the standard negative set">FA/h</th><th class="num" title="the judge's pick; type to override">Threshold</th><th class="num">min</th><th title="the one Install puts on the devices, one per model type">use</th><th></th></tr></thead><tbody>
+      ${runs.length ? `<table class="wwm-table wwm-score"><thead><tr><th title="tick to test it live on Test">test</th><th></th><th>Run</th><th>Model</th><th>Label</th><th>What</th><th>Recipe</th><th>State</th><th class="num" title="held-out clips of you it heard, streaming judge">Hears you</th><th class="num" title="held-out sound-alikes it fired on (your near misses)">Sound-alikes</th><th class="num" title="the same held-out takes under four rough draws each (room, noise, pitch, speed, distance), backgrounds from the held-out room: the stress test">Stressed</th><th class="num" title="false alarms per hour on the standard negative set">FA/h</th><th class="num" title="lowest score of your held-out takes minus the highest score of any held-out negative; under 0 they overlap, no threshold separates them">Gap</th><th class="num" title="the judge's pick; type to override">Threshold</th><th class="num">min</th><th title="the one Install puts on the devices, one per model type">use</th><th></th></tr></thead><tbody>
       ${runs.map(r => { const h = r.heldout; const b = bestRow(r.rows); const thr = r.threshold ?? r.cutoff ?? h?.threshold ?? b?.threshold ?? 0.5; const near = h ? h.near_fires : null; const testable = r.state === 'done' && r.has_model;
         return `<tr data-run="${esc(r.id)}" class="wwm-runrow ${r.chosen ? 'wwm-chosen' : ''}" title="click for the curves and the threshold tables">
         <td>${testable ? `<input type="checkbox" data-sel="${esc(r.id)}" ${sel.has(r.id) ? 'checked' : ''}>` : ''}</td><td><span class="wwm-info">i</span></td><td>${esc(r.id)}</td><td>${r.trainer === 'mww' ? 'ESP32' : 'desktop/Pi'}</td><td>${esc(r.label || '')}</td><td>${r.kind === 'tune' ? `sweep ${r.trials}×${(r.budget_steps / 1000).toFixed(0)}k` : esc(r.preset || '')}${r.cfg && r.cfg.model_type ? ` · ${esc(r.cfg.model_type)}${r.cfg.model_type === 'rnn' ? '' : ` ${r.cfg.layer_size}×${r.cfg.n_blocks}`}` : (r.cfg && r.cfg.pointwise_filters ? ` · mixednet ${esc(r.cfg.pointwise_filters)}` : '')}</td>
-        <td>${esc(r.recipe || '')}${r.synth && r.synth !== 'all' ? ` · ${esc(Array.isArray(r.synth) ? 'voice set' : r.synth)}` : ''}${r.holdout === false ? ' · no holdout' : ''}</td><td><span class="wwm-pill ${r.state === 'done' ? 'ok' : r.state === 'failed' ? 'bad' : 'warn'}">${esc(r.state)}</span></td>
+        <td>${esc(r.recipe || '')}${r.sources_label && r.sources_label !== 'all' ? ` · ${esc(r.sources_label)}` : (r.synth && r.synth !== 'all' ? ` · ${esc(Array.isArray(r.synth) ? 'voice set' : r.synth)}` : '')}${r.holdout === false ? ' · no holdout' : ''}</td><td><span class="wwm-pill ${r.state === 'done' ? 'ok' : r.state === 'failed' ? 'bad' : 'warn'}">${esc(r.state)}</span></td>
         <td class="num ${h?.stale ? 'wwm-stale' : ''}" ${h?.stale ? 'title="judged on an older held-out slice"' : h && h.recall == null ? 'title="no held-out recordings of you to judge on"' : ''}>${h ? (h.recall == null ? '–' : (100 * h.recall).toFixed(0) + '%') + (h.stale ? ' ⟳' : '') : (b ? `<span class="wwm-muted" title="trainer's own number; not judged yet">${(100 * b.recall).toFixed(0)}%</span>` : '–')}</td>
         <td class="num ${near == null ? '' : near === 0 ? 'wwm-good' : near === 1 ? 'wwm-meh' : 'wwm-bad'}">${h && near != null ? `${near}/${h.n_near}` : '–'}</td>
+        <td class="num ${h?.stress_recall == null ? '' : h.stress_recall >= 0.9 ? 'wwm-good' : h.stress_recall >= 0.7 ? 'wwm-meh' : 'wwm-bad'}" ${h && h.stress_recall == null ? 'title="not stress-judged yet: Re-judge"' : ''}>${h && h.stress_recall != null ? (100 * h.stress_recall).toFixed(0) + '%' : '–'}</td>
         <td class="num" ${h && h.fp_per_hour == null ? 'title="the trainer did not measure false alarms at this threshold"' : ''}>${h ? (h.fp_per_hour != null ? fmt(h.fp_per_hour) : '–') : (b ? `<span class="wwm-muted" title="trainer's own number at its best threshold; not judged yet">${fmt(b.fp_per_hour)}</span>` : '–')}</td>
+        <td class="num ${h?.margin?.gap == null ? '' : h.margin.gap >= 0.3 ? 'wwm-good' : h.margin.gap > 0 ? 'wwm-meh' : 'wwm-bad'}" ${h?.margin ? `title="lowest take ${fmt(h.margin.min_pos)}, highest negative ${fmt(Math.max(h.margin.max_near ?? -1, h.margin.max_neg ?? -1))}, lowest stressed take ${fmt(h.margin.stress_min)}"` : ''}>${h?.margin?.gap != null ? fmt(h.margin.gap) : '–'}</td>
         <td class="num">${testable ? `<input type="number" data-thr="${esc(r.id)}" min="0.05" max="0.999" step="0.01" value="${thr}" style="width:64px">${h && h.clean === false ? '<span class="wwm-warn" title="no threshold met the rule (no other-word fires, at most one sound-alike, under 0.5 false alarms an hour); this is the best of a flawed set">⚠</span>' : ''}${h && h.neg_fires ? `<span class="wwm-warn" title="${h.neg_fires} other-word recording(s) fire at this threshold">!</span>` : ''}` : '–'}</td>
         <td class="num">${r.seconds ? Math.round(r.seconds / 60) : ''}</td><td>${testable ? `<button class="wwm-x ${r.chosen ? 'on' : ''}" data-choose="${esc(r.id)}" title="${r.chosen ? 'Install uses this one' : 'use this one for Install'}">${r.chosen ? '★' : '☆'}</button>` : ''}</td><td class="num"><button class="wwm-x" data-del-run="${esc(r.id)}" title="delete this run">✕</button></td></tr>`; }).join('')}
-      </tbody></table><div class="wwm-muted">Hears you and Sound-alikes come from the streaming judge on your held-out clips, the same one Test uses; every finished run is judged on its own. Tick models to try them live on Test. ★ marks the one Install puts on the devices.</div>` : '<div class="wwm-muted">No runs yet.</div>'}`;
+      </tbody></table><div class="wwm-muted">Hears you, Sound-alikes, Stressed and Gap come from the streaming judge on your held-out clips, the same one Test uses; every finished run is judged on its own. Stressed is the same takes under four rough draws each, backgrounds from the held-out room. Gap under 0 means a take and a negative overlap. Tick models to try them live on Test. ★ marks the one Install puts on the devices.</div>` : '<div class="wwm-muted">No runs yet.</div>'}`;
     box.querySelector('#wwm-rejudge')?.addEventListener('click', async () => {
         try { await ctx.startJob('judge', {}); ctx.toast('Judging every finished model on the held-out slice as it stands…', 'info'); } catch (e) { ctx.toast(e.message, 'error'); }
     });
@@ -238,9 +313,9 @@ async function showRun(el, ctx, p, rid, opt) {
           <div><h3>False alarms per hour, standard set</h3>${line([{ name: 'std FA/h', key: 'fp_per_hour', data: m, color: '#e9a33a' }])}</div>
           <div><h3>False alarms per hour, your room</h3>${line([{ name: 'room FA/h', key: 'own_fa_per_hour', data: m, color: 'var(--error, #e66)' }])}</div>
         </div>
-        ${r.heldout?.table ? `<h3>The judge, by threshold <span class="wwm-muted">streaming, your ${r.heldout.n_pos} held-out clips, ${r.heldout.n_near} sound-alikes, ${r.heldout.n_neg} other negatives</span></h3><table class="wwm-table"><thead><tr><th>threshold</th><th class="num">hears you</th><th class="num">sound-alikes fired</th><th class="num">other negatives fired</th><th class="num">FA/h standard</th></tr></thead><tbody>
-          ${r.heldout.table.map(x => `<tr class="${x.threshold === r.heldout.threshold ? 'wwm-pick' : ''}"><td>${x.threshold}${x.threshold === r.heldout.threshold ? ' ◂' : ''}</td><td class="num">${x.recall == null ? '–' : (100 * x.recall).toFixed(0) + '%'}</td><td class="num ${x.near_fires === 0 ? 'wwm-good' : x.near_fires === 1 ? 'wwm-meh' : 'wwm-bad'}">${x.near_fires}</td><td class="num ${x.neg_fires ? 'wwm-bad' : 'wwm-good'}">${x.neg_fires}</td><td class="num">${fmt(x.fp_per_hour)}</td></tr>`).join('')}</tbody></table>
-          <div class="wwm-muted">◂ the pick: no other negative fires, at most one sound-alike, under 0.5 false alarms an hour where the trainer measured it, then the most of you heard, then the threshold nearest the usual one (0.5 desktop, 0.97 ESP32). Type another number in the table above to override.</div>` : ''}
+        ${r.heldout?.table ? `<h3>The judge, by threshold <span class="wwm-muted">streaming, your ${r.heldout.n_pos} held-out clips, ${r.heldout.n_near} sound-alikes, ${r.heldout.n_neg} other negatives</span></h3><table class="wwm-table"><thead><tr><th>threshold</th><th class="num">hears you</th><th class="num">stressed</th><th class="num">sound-alikes fired</th><th class="num">other negatives fired</th><th class="num">FA/h standard</th></tr></thead><tbody>
+          ${r.heldout.table.map(x => `<tr class="${x.threshold === r.heldout.threshold ? 'wwm-pick' : ''}"><td>${x.threshold}${x.threshold === r.heldout.threshold ? ' ◂' : ''}</td><td class="num">${x.recall == null ? '–' : (100 * x.recall).toFixed(0) + '%'}</td><td class="num">${x.stress_recall == null ? '–' : (100 * x.stress_recall).toFixed(0) + '%'}</td><td class="num ${x.near_fires === 0 ? 'wwm-good' : x.near_fires === 1 ? 'wwm-meh' : 'wwm-bad'}">${x.near_fires}</td><td class="num ${x.neg_fires ? 'wwm-bad' : 'wwm-good'}">${x.neg_fires}</td><td class="num">${fmt(x.fp_per_hour)}</td></tr>`).join('')}</tbody></table>
+          <div class="wwm-muted">◂ the pick: no other negative fires, at most one sound-alike, under 0.5 false alarms an hour where the trainer measured it, then the most of you heard, then the most heard under stress, then the threshold nearest the usual one (0.5 desktop, 0.97 ESP32). Type another number in the table above to override.${r.heldout.margin ? ` Margins: lowest take ${fmt(r.heldout.margin.min_pos)} (tenth percentile ${fmt(r.heldout.margin.p10_pos)}), highest sound-alike ${fmt(r.heldout.margin.max_near)}, highest other negative ${fmt(r.heldout.margin.max_neg)}, lowest stressed take ${fmt(r.heldout.margin.stress_min)}, gap ${fmt(r.heldout.margin.gap)}.` : ''}</div>` : ''}
         ${rows.length ? `<details style="margin-top:8px"><summary class="wwm-muted">The trainer's own eval by threshold (feature windows, not streaming)</summary><table class="wwm-table"><thead><tr><th>threshold</th><th class="num">recall (yours)</th><th class="num">negatives fired</th><th class="num">FA/h standard</th><th class="num">FA/h your room</th></tr></thead><tbody>
           ${rows.map(x => { const ok = (x.fp_per_hour || 0) <= 0.5 && (x.own_fa_per_hour || 0) <= 1; return `<tr class="${ok ? '' : 'wwm-dim'}"><td>${x.threshold}</td><td class="num">${x.recall == null ? '–' : (100 * x.recall).toFixed(0) + '%'}</td><td class="num">${x.neg_fp_rate == null ? '–' : (100 * x.neg_fp_rate).toFixed(0) + '%'}</td><td class="num">${fmt(x.fp_per_hour)}</td><td class="num">${fmt(x.own_fa_per_hour)}</td></tr>`; }).join('')}</tbody></table></details>` : ''}
       </div>`;

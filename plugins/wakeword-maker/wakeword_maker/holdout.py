@@ -39,12 +39,17 @@ def _stratified(rows, key, frac, rng):
     return sorted(picked)
 
 
-def make(pdir, frac=FRACTION, seed=None):
+def make(pdir, frac=FRACTION, seed=None, root=None):
+    """With `root`, the shared room library's pieces (minus those dropped for this wake word) are in the draw too;
+    room takes are held out whole, about `frac` of the minutes of EVERY microphone, so each mic has a judge."""
     rng = random.Random(seed)
     ok = lambda r: r.get('verdict') != 'drop'          # a clip the Check stage dropped must not judge anyone
     pos = [r for c in ('positive/recorded', 'positive/uploaded') for r in store.list_clips(pdir, c, 0, 10 ** 7)[0] if ok(r)]
     neg = [r for c in ('negative/recorded', 'negative/uploaded') for r in store.list_clips(pdir, c, 0, 10 ** 7)[0] if ok(r)]
-    amb = [r for c in ('ambient/recorded', 'ambient/uploaded') for r in store.list_clips(pdir, c, 0, 10 ** 7)[0]]
+    amb = [r for c in ('ambient/recorded', 'ambient/uploaded') for r in store.list_clips(pdir, c, 0, 10 ** 7)[0] if ok(r)]
+    if root is not None:
+        slug = (store.load_project_at(pdir) or {}).get('slug') or Path(pdir).name
+        amb += store.list_room(root, slug=slug)
     out = {
         'when': time.time(), 'fraction': frac,
         'positive': _stratified(pos, lambda r: (r.get('device'), r.get('style') or 'normal'), frac, rng),
@@ -52,16 +57,24 @@ def make(pdir, frac=FRACTION, seed=None):
         'negative': _stratified([r for r in neg if not r.get('near')], lambda r: r.get('device'), frac, rng),
         'ambient': [],
     }
-    # room takes: whole takes until about frac of the minutes, longest-first mixed so one giant take is not everything
+    # room takes: whole takes until about frac of the minutes, per microphone, shuffled so one giant take is not everything
     total = sum(float(r.get('seconds') or 0) for r in amb)
-    rng.shuffle(amb)
     got = 0.0
+    by_dev = defaultdict(list)
     for r in amb:
-        if total and got / total >= frac:
-            break
-        if len(amb) >= 2:
-            out['ambient'].append(r['id'])
-            got += float(r.get('seconds') or 0)
+        by_dev[r.get('device') or 'unknown'].append(r)
+    for takes in by_dev.values():
+        rng.shuffle(takes)
+        mine = sum(float(r.get('seconds') or 0) for r in takes)
+        had = 0.0
+        for r in takes:
+            if mine and had / mine >= frac:
+                break
+            if len(takes) >= 2:
+                out['ambient'].append(r['id'])
+                had += float(r.get('seconds') or 0)
+        got += had
+    out['ambient'].sort()
     out['ambient_seconds'] = round(got)
     out['counts'] = {'positive': [len(out['positive']), len(pos)], 'near': [len(out['near']), len([r for r in neg if r.get('near')])],
                      'negative': [len(out['negative']), len([r for r in neg if not r.get('near')])], 'ambient': [len(out['ambient']), len(amb)],
