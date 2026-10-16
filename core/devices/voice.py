@@ -48,7 +48,9 @@ import base64
 import contextvars
 import hmac
 import io
+import json
 import logging
+import re
 import os
 import queue
 import tempfile
@@ -327,6 +329,30 @@ def bound_of(config):
     return out
 
 
+LABEL_MAX = 24
+
+
+def labels(device_id):
+    """The first words of the message set for each button's `tell` press, for
+    a board that draws its buttons on a screen: {button: words}. The short
+    press names it, else the long, else the double. {} when none. Never raises."""
+    try:
+        row = _engine().rows().get(str(device_id or '').strip().lower())
+        part = _part_with(row, 'buttons') if row and row.get('enabled', True) else None
+        held = (part.get('config') or {}).get('buttons') if part and 'buttons' in (part.get('has') or ()) else None
+        out = {}
+        for how in ('short', 'long', 'double'):
+            for slot, pick in (held.items() if isinstance(held, dict) else ()):
+                button, _, way = str(slot).rpartition('.')
+                text = ' '.join(str(pick.get('text') or '').split()) if isinstance(pick, dict) else ''
+                if way == how and button and button not in out and pick.get('do') == TELL and text:
+                    out[button] = text[:LABEL_MAX].rstrip()
+        return out
+    except Exception as e:
+        logger.warning(f"[DEVICES] {device_id}: its buttons' words could not be read: {e}")
+        return {}
+
+
 def bound(device_id):
     """What a device's presses are set to, for its events stream. None for a
     device with no buttons. Never raises."""
@@ -478,7 +504,7 @@ class Reply:
             return
         from core import think
         self._raw = (self._raw + text)[:TEXT_MAX * 4]
-        shown = think.strip(self._raw)[:TEXT_MAX]
+        shown = small_screen(think.strip(self._raw))[:TEXT_MAX]
         if shown == self.text:
             return
         if not shown.startswith(self.text):      # the visible text changed under the device: a new revision
@@ -497,7 +523,7 @@ class Reply:
         """Her text as the turn kept it. More of the same is just more to
         pull; a different text (tool rounds joined, a prefill) is a new
         revision, pulled from the start."""
-        final = str(final or '')[:TEXT_MAX]
+        final = small_screen(str(final or ''))[:TEXT_MAX]
         if final and final != self.text:
             if not final.startswith(self.text):
                 self.rev += 1
@@ -847,20 +873,36 @@ CHATS_MAX = 40                     # names a board is handed: a picker on a smal
 
 
 def _board_chats():
-    """The chats a board may be handed or pick, newest first: plain ones. No
-    private chat, nothing archived, no game or story session."""
+    """The chats a board may pick and read, newest first: plain ones. No
+    private chat, nothing archived, no game or story session. All of them:
+    chats() hands a board the newest CHATS_MAX, but the one it was set to
+    stays pickable and readable however old (it read back as nothing past
+    the cap, 2026-10-16)."""
     out = []
     for c in _system().llm_chat.session_manager.list_chat_files():
         if c.get('private_chat') or c.get('archived') or c.get('kind', 'chat') != 'chat':
             continue
         out.append(c['name'])
-    return out[:CHATS_MAX]
+    return out
+
+
+def _browse(part):
+    """May this board's picker list every open chat? Off, the default: the one
+    it talks in only, and its key reaches no other (Settings > Devices)."""
+    return bool((part.get('config') or {}).get('browse'))
+
+
+def _now(part):
+    """The chat a board talks in: its own setting, else where voice lands."""
+    from core.chat.history import landing_chat
+    return str((part.get('config') or {}).get('chat') or '').strip() or landing_chat(_system().llm_chat.session_manager)
 
 
 def chats(device_id):
     """The chats a board can pick from, for a picker on its own screen (GET
     /chats): {'ok', 'chat': the one it talks in now, 'chats': [names]}. A
     private chat is never named to a board, not even as the one it talks in.
+    With Browse chats off (the default) the list is that one chat alone.
     Never raises."""
     try:
         e = _engine()
@@ -873,10 +915,15 @@ def chats(device_id):
         part = _talk_part(row) or _chat_part(row)
         if not part:
             return {'ok': False, 'error': f"'{row['id']}' has nothing that talks in a chat."}
-        from core.chat.history import landing_chat
         names = _board_chats()
-        now = str((part.get('config') or {}).get('chat') or '').strip() or landing_chat(_system().llm_chat.session_manager)
-        return {'ok': True, 'chat': now if now in names else '', 'chats': names}
+        now = _now(part)
+        now = now if now in names else ''
+        if not _browse(part):
+            return {'ok': True, 'chat': now, 'chats': [now] if now else []}
+        handed = names[:CHATS_MAX]
+        if now and now not in handed:
+            handed.insert(0, now)                          # the one it talks in is on its picker however old
+        return {'ok': True, 'chat': now, 'chats': handed}
     except Exception as e:
         logger.error(f"[DEVICES] chats({device_id}) failed: {e}", exc_info=True)
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
@@ -887,7 +934,8 @@ def pick_chat(device_id, name):
     talking part's `chat` setting, the same as typing it on the Devices page:
     what the board sends lands there from now on, and the glass is brought
     up to date so the name comes back to its screen. Only a chat the board
-    could be handed (chats()) can be picked: no guessing a private one. The
+    could be handed (chats()) can be picked: no guessing a private one, and
+    with Browse chats off only the one it shows (which changes nothing). The
     chat open in the browser is never changed. Never raises."""
     try:
         e = _engine()
@@ -903,13 +951,145 @@ def pick_chat(device_id, name):
         name = str(name or '').strip()[:64]
         if name not in _board_chats():
             return {'ok': False, 'error': f"'{name}' is not a chat this board can pick."}
+        if not _browse(part):
+            if name == _now(part):
+                return {'ok': True, 'chat': name}                  # the one it shows: nothing to keep
+            return {'ok': False, 'error': f"'{row['id']}' may not browse chats (Settings > Devices > Browse chats)."}
         e.update(row['id'], parts={part['driver']: {'chat': name}})
+        kept = e.rows().get(row['id']) or {}
+        if not any(str((p.get('config') or {}).get('chat') or '') == name for p in kept.get('parts') or []):
+            return {'ok': False, 'error': f"'{row['id']}' has no chat setting to keep the pick in."}
         from core.devices import glass
         glass.sync_soon(row['id'])
         logger.info(f"[DEVICES] {row['id']} picked the chat '{name}'")
         return {'ok': True, 'chat': name}
     except Exception as e:
         logger.error(f"[DEVICES] pick_chat({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
+
+
+# Emoji on a small screen: the fonts there have none. The common ones become
+# the faces they came from; the rest, with the joiners and variation marks that
+# ride along, are left out. Applied wherever her words go to a board's screen.
+FACES = {'🙂': ':)', '🙃': ':)', '😊': ':)', '😀': ':)', '😃': ':)', '😄': ':)', '😁': ':)', '☺': ':)', '😉': ';)',
+         '😂': ':D', '🤣': ':D', '😆': ':D', '😢': ":'(", '😭': ":'(", '😞': ':(', '😔': ':(', '🙁': ':(', '☹': ':(',
+         '😮': ':o', '😲': ':o', '😛': ':P', '😜': ':P', '🤔': 'hmm', '😍': '<3', '🥰': '<3', '😘': '<3',
+         '❤': '<3', '🧡': '<3', '💛': '<3', '💚': '<3', '💙': '<3', '💜': '<3', '🖤': '<3', '🤍': '<3', '💕': '<3', '💖': '<3',
+         '💗': '<3', '💓': '<3', '👍': '+1', '👎': '-1', '👋': '(wave)', '✅': '[x]', '⭐': '*', '✨': '*', '🔥': '(fire)'}
+_FACES = re.compile('|'.join(re.escape(k) for k in sorted(FACES, key=len, reverse=True)) + r'\uFE0F?')
+_EMOJI = re.compile(r'[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE00-\uFE0F\u200D\u20E3\U000E0020-\U000E007F]')
+_SPACES = re.compile(r'[ \t]{2,}')
+_LEAD = re.compile(r'(?m)^ +')
+
+
+def small_screen(text):
+    """Her words as a board's small screen can draw them: the common emoji as
+    faces, the rest left out, the spacing tidied."""
+    text = str(text or '')
+    if not _EMOJI.search(text):
+        return text
+    text = _FACES.sub(lambda m: FACES[m.group(0).rstrip('\uFE0F')], text)
+    text = _EMOJI.sub('', text)
+    return _LEAD.sub('', _SPACES.sub(' ', text).replace(' \n', '\n'))
+
+
+HISTORY_MAX = 1500                 # bytes of text one history pull hands a board (its buffer is small)
+HISTORY_EACH = 3000                # bytes one message is cut to; the reader draws that much of a reply
+_ORIGIN = re.compile(r'^\[(?:Voice from|Typed on|Button pressed on) device [^\]]*\]\s*')
+_MARKER = re.compile(r'<!--[A-Z]+:.*?-->\s*', re.S)
+
+
+def _plain_text(message):
+    """A message as a small screen reads it: the words only. '' for a message
+    with none (a tool round, a picture alone). An attached file is named,
+    never sent: its body stays on the box. Thinking goes the way the UI
+    strips it (every form, closed or not), and the browser's widget markers."""
+    from core import think
+    from core.ui_markers import UI_MARKER_RE
+    content = message.get('content')
+    if isinstance(content, list):
+        bits = []
+        for b in content:
+            if isinstance(b, str):
+                bits.append(b)
+            elif isinstance(b, dict) and b.get('type') == 'text':
+                bits.append(str(b.get('text') or ''))
+            elif isinstance(b, dict) and b.get('type') == 'file':
+                bits.append(f"({b.get('filename') or 'a file'})")
+        content = ' '.join(bits)
+    text = str(content or '')
+    if message.get('role') == 'user':
+        text = _ORIGIN.sub('', text, count=1)
+    text = UI_MARKER_RE.sub('', _MARKER.sub('', think.strip(text)))
+    return small_screen(text).strip()
+
+
+def _wire_bytes(text):
+    """What one message costs the board's buffer: its JSON, as the door sends
+    it (UTF-8, compact), with the row around it. The board's buffer is sized
+    for `most` plus one whole message; counting the words alone overran it
+    for a chat of short lines (2026-10-16)."""
+    return len(json.dumps(text, ensure_ascii=False).encode('utf-8')) + 22
+
+
+def _cut_bytes(text, most):
+    """The first `most` bytes of text, on a whole character, '...' when cut."""
+    raw = text.encode('utf-8')
+    if len(raw) <= most:
+        return text
+    return raw[:most].decode('utf-8', 'ignore').rstrip() + '...'
+
+
+def history(device_id, before=None, most=HISTORY_MAX):
+    """The chat a board talks in, read back for its screen (GET /history):
+    {'ok', 'chat', 'messages': [{'who': 'you' | 'her', 'text'}] newest first,
+    'before': the cursor for the next older pull (0 = nothing older),
+    'total'}. `before` in is that cursor; left out = the newest. Whole
+    messages, at least one, until `most` bytes; each cut to HISTORY_EACH.
+    A private chat reads back as nothing. Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        part = _talk_part(row) or _chat_part(row)
+        if not part:
+            return {'ok': False, 'error': f"'{row['id']}' has nothing that talks in a chat."}
+        sm = _system().llm_chat.session_manager
+        chat = _now(part)
+        nothing = {'ok': True, 'chat': '', 'messages': [], 'before': 0, 'total': 0}
+        if chat not in _board_chats():
+            return nothing
+        plain = []
+        for m in sm.get_display_messages_for(chat) or []:
+            if m.get('role') in ('user', 'assistant'):
+                text = _plain_text(m)
+                if text:
+                    plain.append(('you' if m['role'] == 'user' else 'her', text))
+        try:
+            end = min(int(before), len(plain)) if before not in (None, '') else len(plain)
+        except (TypeError, ValueError):
+            end = len(plain)
+        most = max(200, min(int(most or HISTORY_MAX), 8000))
+        out, used, at = [], 0, end
+        while at > 0:
+            who, text = plain[at - 1]
+            text = _cut_bytes(text, HISTORY_EACH)
+            size = _wire_bytes(text)
+            while size > HISTORY_EACH + 64 and len(text) > 16:    # quotes and newlines grow on the wire: cut to what fits
+                text = _cut_bytes(text, int(len(text.encode('utf-8')) * 0.8))
+                size = _wire_bytes(text)
+            if out and used + size > most:
+                break
+            out.append({'who': who, 'text': text})
+            used += size
+            at -= 1
+        return {'ok': True, 'chat': chat, 'messages': out, 'before': at, 'total': len(plain)}
+    except Exception as e:
+        logger.error(f"[DEVICES] history({device_id}) failed: {e}", exc_info=True)
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 

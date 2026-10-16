@@ -69,7 +69,7 @@ Sapphire shows a setting or an action only on a board that says it takes it
 (`_takes` in the satellite driver; the engine keeps the list with the device,
 so it holds while the board is off):
 
-- each key in `/health` `screen` is a screen setting it takes (`brightness`, `dim`, `dim_after_s`, `off_after_min`, `flip`)
+- each key in `/health` `screen` is a screen setting it takes (`brightness`, `dim`, `dim_after_s`, `off_after_min`, `flip`, `rotation`, `home`)
 - `screen` with `w`, `h` and `format`: it takes a picture
 - `mic.max_s`: it takes the longest question
 - `led.looks`, a list of look names: the only looks it takes. A board that lists none takes them all
@@ -99,16 +99,18 @@ A board answers only the addresses of what it has.
 | `camera` | `GET /camera/snap?b64=true` | `{"data_b64", "width", "height"}`, a JPEG |
 | `power` | `POST /power?action=restart` | `restart` or `shutdown`. Answers first, then acts: `{"in_s": 3}` |
 | `storage` | `GET /storage` | What is kept: `{"free_bytes", "total_bytes", "path", "files": [{"name", "size", "mtime"}], "can": []}`. A board that reads its backups back says `"check"` in `can`, adds `"ok": true` or `false` to each backup it holds a hash for (`false` = it no longer matches: damaged; Sapphire removes those before her next backup lands), and `"checks": {"running", "done", "of", "damaged", "unchecked"}` for the check it runs after every start. The same block, without `files`, is `storage` in `/health`, with `count`, `writing` and `failed` (the last backup sent did not land). The hash files themselves (`name.sha256`) are the board's own and never listed |
-| `storage` | `PUT /storage/{name}` | A backup onto the card: the bytes are the request body (`application/octet-stream`, `Content-Length` required, `X-Sha256` optional). The board writes `name.partial`, renames when complete, answers `{"ok": true, "name", "size", "sha256"}`. It REFUSES with 400 any name that is not `sapphire_*.sapphirebak` carrying the `SAPPHIREBAK` magic in its first 12 bytes, except the four opener files (`README.txt`, `open-backup.sh`, `open-backup.bat`, `decrypt_backup.py`): plaintext backups never land on a satellite, even if Sapphire has a bug. 409 while another PUT runs, 411 without a length, 507 when it does not fit. A 70 MB backup takes a minute or two over WiFi; the board must still answer `/health` meanwhile |
+| `storage` | `PUT /storage/{name}` | A backup onto the card: the bytes are the request body (`application/octet-stream`, `Content-Length` required, `X-Sha256` optional). The board writes `name.partial`, renames when complete, answers `{"ok": true, "name", "size", "sha256"}`. It REFUSES with 400 any name not ending in `.sapphirebak`, and any body not carrying the `SAPPHIREBAK` magic in its first 12 bytes, except the four opener files (`README.txt`, `open-backup.sh`, `open-backup.bat`, `decrypt_backup.py`): plaintext backups never land on a satellite, even if Sapphire has a bug. 409 while another PUT runs, 411 without a length, 507 when it does not fit. A 70 MB backup takes a minute or two over WiFi; the board must still answer `/health` meanwhile |
 | `storage` | `GET /storage/{name}` | The bytes back, for a restore |
 | `storage` | `DELETE /storage/{name}` | Rotation: Sapphire keeps the counts set on the device page and drops the oldest |
 | `storage` | `POST /storage/check` | Only a board whose `storage.can` lists `check`: reads every backup back now and compares it with its hash. Answers `{"ok": true, "checking": true}` at once and runs by itself (`storage.checks` in `/health` says how far); 409 while one is running |
 | `storage` | `POST /storage/format` | Only a board whose `storage.can` lists `format`: wipes the card and formats it FAT32. The person at the Devices page runs it, never Sapphire |
+| `storage` | `POST /storage/cancel` | Only a board whose `storage.can` lists `cancel`: the backup arriving now is dropped (the PUT is answered 409 "cancelled on the board"); 409 when none is. The Backups page on a CYD reader has the same button |
 | `screen` | `POST /screen` | `{"text", "seconds"}`: a line across the top of its screen for that long (20 s if left out), or `{"clear": true}`. Answers `{"ok": true, "seconds"}`. Her `screen` / `show` action |
+| `screen` | `POST /screen/calibrate` | Only a board that states `screen.calibrate` in `/health` (a resistive glass: the CYD 2.8): three crosses come up on the glass for 60 s and the calibration is kept on the board. Answers `{"ok": true, "seconds": 60}`; 400 on a glass that needs none. A board with no calibration kept shows the crosses by itself when it starts |
 | `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action |
 | `screen` | `POST /screen/background?w=&h=&name=` | The scene behind its clock: the body is `w` x `h` pixels of RGB565, big-endian, cropped by Sapphire to fill the glass; `name` is the scene's name and comes back in `/health` as `screen.background`. `{"clear": true}` as JSON takes it away. Sapphire sends it when the board links, and when its chat or that chat's scene changes (`core/devices/glass.py`). A board that states no `screen.background` in `/health` is sent no scene (a text-only glass). |
 | `screen` | `POST /screen` with `{"chat", "brain", "trim"}` | The chat the board talks in: its name, shown on the glass (`""` hides it), the name of the model that answers in it, and its trim color `"#rrggbb"` (`""` = none). They come back as `screen.chat`, `.brain`, `.trim`; only the ones a board states are compared. A board that states no `screen.chat` in `/health` is sent neither the name nor a scene. A private chat is never named or pictured. |
-| `screen` | `PUT /screen/settings` | `{"brightness", "dim", "dim_after_s", "off_after_min", "flip"}`, any of them: the backlight in use and when left alone (percent), when it dims (seconds, 0 = never) and when it goes dark (minutes, 0 = never), and `flip` (true or false) to turn the picture and its touch 180 degrees. A board with only `flip` (the pocket, the backup stick) answers `{"flip", "restarting"}` and restarts to draw that way; it refuses with 409 while its card is being written. Kept on the board across a restart; `/health` states them in `screen`. Sent when the device is saved. |
+| `screen` | `PUT /screen/settings` | `{"brightness", "dim", "dim_after_s", "off_after_min", "flip", "home"}`, any of them (`home` is the page a board with pages opens on: `chat`, `backups`, `status`, `board`, `actions`; it comes back as `screen.home`): the backlight in use and when left alone (percent), when it dims (seconds, 0 = never) and when it goes dark (minutes, 0 = never), and `flip` (true or false) to turn the picture and its touch 180 degrees, or `rotation` (0, 90, 180 or 270, on a board that states `screen.rotation`: the CYD readers) to turn them any way, `w` and `h` in `/health` following. A board with only `flip` (the backup stick) or `rotation` answers `{"flip" or "rotation", "restarting"}` and restarts to draw that way; it refuses with 409 while its card is being written. Kept on the board across a restart; `/health` states them in `screen`. Sent when the device is saved. |
 | `firmware` | `PUT /firmware` | A new program, over the air: the bytes are the body (`application/octet-stream`, `Content-Length` required, `X-Sha256` of the whole body). The board writes them into the slot not running, checks the image and the sha256, marks that slot to boot and answers `{"ok": true, "restarting": true, "slot": "ota_1", "sha256"}`, then restarts onto it. Rollback: the new program is on trial until it says it is fine (WiFi joined, or 90 s up); a program that crashes before that is replaced by the old one at the next boot. 413 when it does not fit the slot, 422 when it is not an ESP image or the sha differs (nothing is changed then), 501 on a board with one slot. Her `firmware` / `update` action sends the source's newest; the person at the Devices page runs it, never she on her own |
 | `sensors` | `GET /sensors` | What it measures, now: `{"sensors": {"light": 1234, "temp_c": 23.5}}`. A name ends in its unit; a light sensor with no calibration sends its raw reading. The same object in `/health` feeds the readings on the device's page. Her `sensors` / `read` action |
 | `keyboard` | nothing | Sapphire asks nothing of a keyboard. The board sends what was typed (below) and pulls her reply |
@@ -377,8 +379,10 @@ Authorization: Bearer <voice key>
 {"msg": "3f9a1c", "rev": 0, "from": 120, "text": "...", "have": 410, "done": false}
 ```
 
-A doorbell comes at most four times a second while she writes, and once more
-with `done`. A missed doorbell is made good by the next one. `rev` goes up
+Her words reach a screen with the common emoji turned into the faces they
+came from (`:)`, `<3`, `+1`) and the rest left out (`voice.small_screen`):
+a small board's font has none. A doorbell comes at most four times a second
+while she writes, and once more with `done`. A missed doorbell is made good by the next one. `rev` goes up
 when her final text differs from what streamed (a tool round joined, thinking
 stripped): the board starts that reply over from `from=0`. `max` is held to
 2000. With no `msg`, the latest reply: what a board that just connected
@@ -408,11 +412,36 @@ answered `{"ok": true, "chat": "kitchen"}`. The pick is the device's **Talks
 in chat** setting, the same as typing it in Settings > Devices: what the board
 sends lands there from now on, and the name comes back to its screen through
 `POST /screen {"chat"}` for a board that states `screen.chat` in `/health`.
-The chat open in the browser is not touched. The list is newest first, at
-most 40, plain chats only: no private chat (not even as `chat`, which is then
-`""`), nothing archived, no game or story session. A name that is not in the
-list is `{"ok": false, "error": "..."}`. A Sapphire without the doors answers
-404; a board then shows the one name it is sent.
+The chat open in the browser is not touched. The list is the one chat the
+board talks in unless **Browse chats** is on for the device in Settings >
+Devices (off by default, so a board's key reaches no chat but its own; a pick
+of another name is then `{"ok": false}`). With it on: newest first, at most
+40 plus the one it talks in, plain chats only: no private chat (not even as
+`chat`, which is then `""`), nothing archived, no game or story session. A
+name that is not in the list is `{"ok": false, "error": "..."}`. A Sapphire
+without the doors answers 404; a board then shows the one name it is sent.
+
+### The board reads its chat
+
+A board with a screen opens on the conversation, not on a blank page:
+
+```
+GET /api/devices/pocket/history?before=&max=1500
+Authorization: Bearer <the key the satellite sends>
+
+{"ok": true, "chat": "kitchen", "before": 38, "total": 41,
+ "messages": [{"who": "her", "text": "Soup, and the bread from yesterday."},
+              {"who": "you", "text": "what's for dinner"}, ...]}
+```
+
+Newest first, whole messages, at least one, until `max` bytes (200 to 8000;
+1500 if left out); each message is cut to 3000 bytes with `...`. `before` in
+the answer is the cursor for the next older pull (`?before=38`); `0` means
+nothing older. The words only: her thinking, file markers and the line that
+names the device are left out, as are tool rounds. A private chat reads back
+as `{"chat": "", "messages": [], "before": 0}`. The reader (`firmware/cyd28`)
+pulls this when it links, when its chat changes, and when you page back past
+what it holds.
 
 ### What its light should show
 
@@ -434,7 +463,7 @@ It answers server-sent events. Each is one line of JSON after `data: `.
 | `idle` | The turn is over |
 | `error` | This board got no answer |
 | `text` | A doorbell for a board with a keyboard: `msg`, `rev`, `have`, `done`. Pull the words, see "What was typed". Not a light state |
-| `buttons` | What each press is set to: `bound`, see "A button was pressed". Sent only to a board that said it has buttons. Not a light state |
+| `buttons` | What each press is set to: `bound`, see "A button was pressed". With `labels` (`{"a": "Lights off"}`) when a press is set to send her a message: its first words, for a board that draws its buttons on a screen. Sent only to a board that said it has buttons. Not a light state |
 
 A line that starts with `:` arrives every 20 seconds and means nothing. When
 the stream ends, open it again. A board only ever hears about its own turns.
@@ -446,7 +475,7 @@ the stream ends, open it again. A board only ever hears about its own turns.
 - Conversion: `core/devices/voice.py` `fit(audio, kind, plays)`, checked by `wanted(plays)`. The only place her voice is converted for a device.
 - A board from the browser: `interfaces/web/static/views/settings-tabs/device-flash.js` (two lanes: esptool-js over Web Serial with `shared/md5.js` for the write check, or `core/devices/flasher.py` on Sapphire's computer through `/api/devices/flash/{ports,chip,start,status,ask,close}`; then the console line), the chip's MAC as the device `fingerprint` (`engine.provision`, `/health.mac`, console `show.mac`), `POST /api/devices/provision` (`engine.provision`: the row with no url, two keys, her address: the body's `sapphire` or `GET /api/devices/here`'s guess from `net.local_ips`, tunnels and bridges excluded; `ssl_utils.cert_pem`), `GET /api/devices/firmware[/{board}/{part}]` (`core/devices/firmware.py`, index + ESP Web Tools manifests, cached). The address: `engine.learned`, called by `_device_key` on every device door.
 - Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`; typed words `devices_text` (POST) and `devices_text_read` (GET), which ride `voice.typed`, `voice.Reply` and `voice.reply_text`.
-- A board's chat picker: `voice.chats` and `voice.pick_chat` (`devices_chats`, `devices_chat`): the same `chat` setting the Devices page saves, then `glass.sync_soon`.
+- A board's chat picker: `voice.chats` and `voice.pick_chat` (`devices_chats`, `devices_chat`): the same `chat` setting the Devices page saves, then `glass.sync_soon`. Its history: `voice.history` (`devices_history`) over `session_manager.get_display_messages_for`.
 - Buttons: the `buttons` setting is a `bindings` field (`engine._bound`, `engine._menu`), its menu is the driver's `bindings()` from the board's `/health`; `voice.bound` is what the stream carries (`routes.light_stream` at open, the driver's `apply` at a save), `voice.pressed` the press door (`devices_press`). The chat every lane uses: `voice.chat_for`, which makes a chat that is named and does not exist. Firmware: `main/buttons.c` in each board.
 - Backups onto a board: `core/devices/storage.py` makes a `SatelliteTarget` (in the driver) for every device whose `has` says `storage`; `core/backup_targets.ship` seals once, PUTs, rotates by the device's keep fields, drops the openers. Never plaintext: `Target.check` (Sapphire) + the board's own magic check.
 - `tests/test_docs_satellite_protocol.py` runs this page's health example through the real driver and checks every address in the table.

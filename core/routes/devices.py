@@ -585,6 +585,22 @@ async def devices_chat(device_id: str, request: Request):
     return await asyncio.to_thread(voice.pick_chat, device_id, body.get('name'))
 
 
+@router.get("/api/devices/{device_id}/history")
+async def devices_history(device_id: str, request: Request):
+    """The chat a board talks in, read back for its screen: ?before=&max=.
+    Newest first, whole messages, a cursor for the next older pull."""
+    await _device_key(device_id, request, 'history', per_min=PULL_PER_MIN)
+    from core.devices import voice
+    q = request.query_params
+
+    def number(name, fallback):
+        try:
+            return int(q.get(name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+    return await asyncio.to_thread(voice.history, device_id, q.get('before'), number('max', voice.HISTORY_MAX))
+
+
 @router.get("/api/devices/{device_id}/text")
 async def devices_text_read(device_id: str, request: Request):
     """A piece of her reply, for the device's screen: ?msg=&from=&max=.
@@ -619,7 +635,11 @@ async def light_stream(device_id, key, gone):
             yield f"data: {json.dumps(now)}\n\n"
         jobs = await asyncio.to_thread(voice.bound, device_id)      # a board keeps what its presses do only in memory
         if jobs is not None:
-            yield f"data: {json.dumps({'state': 'buttons', 'bound': jobs, 'src': 'device'})}\n\n"
+            told = {'state': 'buttons', 'bound': jobs, 'src': 'device'}
+            labels = await asyncio.to_thread(voice.labels, device_id)
+            if labels:
+                told['labels'] = labels                            # a board that draws its buttons writes these on them
+            yield f"data: {json.dumps(told, ensure_ascii=False, separators=(',', ':'))}\n\n"   # nine labelled buttons: a board reads this into a small line
         while True:
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=STREAM_QUIET)

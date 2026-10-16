@@ -61,6 +61,12 @@ SPEC = {
          'help': "The chat this device is in: what it hears, what is typed on it and what its buttons send "
                  "land there, and its screen shows it. Empty = the last chat used. A name that is not a "
                  "chat yet is made when you save."},
+        # a reader's picker: every open chat, or the one above only (Krem's vote 2026-10-16: off by default,
+        # so a board's key reaches no chat but its own)
+        {'key': 'browse', 'type': 'boolean', 'label': 'Browse chats', 'tab': 'Status', 'default': False,
+         'capability': 'keyboard',
+         'help': "Its picker lists every open chat and it may read any of them back. Off = only the chat "
+                 "above (the active one when that is empty): the board's key reaches nothing else."},
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
          'capability': 'camera',
          'help': "Off = Sapphire is not offered a camera on this satellite."},
@@ -100,8 +106,16 @@ SPEC = {
         {'key': 'off_after_min', 'takes': 'screen.off_after_min', 'type': 'number', 'label': 'Screen dark after (minutes)', 'capability': 'screen',
          'default': 0, 'min': 0, 'max': 1440,
          'help': '0 = never. The backlight goes out to save power; a touch or her stirring brings it back.'},
+        {'key': 'rotation', 'takes': 'screen.rotation', 'type': 'select', 'label': 'Rotation', 'capability': 'screen', 'default': '0',
+         'options': [{'value': '0', 'label': 'landscape'}, {'value': '90', 'label': 'portrait'},
+                     {'value': '180', 'label': 'landscape, upside down'}, {'value': '270', 'label': 'portrait, the other way up'}],
+         'help': "How the glass sits. The board restarts to draw that way (a CYD reader; other boards take Upside down)."},
         {'key': 'flip', 'takes': 'screen.flip', 'type': 'boolean', 'label': 'Upside down', 'capability': 'screen',
          'help': 'Turns the picture and its touch 180 degrees, for a board mounted the other way up.'},
+        {'key': 'home', 'takes': 'screen.home', 'type': 'select', 'label': 'Opens on', 'capability': 'screen', 'default': 'chat',
+         'options': [{'value': 'chat', 'label': 'the chat'}, {'value': 'backups', 'label': 'Backups'}, {'value': 'status', 'label': 'Status'},
+                     {'value': 'board', 'label': 'Board'}, {'value': 'actions', 'label': 'Actions'}],
+         'help': 'The page the board shows when it starts (a board with pages, the reader).'},
         # the looks: what the ring shows in each state, in the words of `light set`
         {'key': 'look_resting', 'takes': 'look.resting', 'type': 'string', 'label': 'Resting', 'capability': 'light',
          'default': 'sapphire heartbeat bpm=33 ceiling=0.1',
@@ -224,7 +238,8 @@ def apply(device, config, secrets):
             logger.warning(f"[DEVICES] {device['id']}: its chat '{config['chat']}' could not be made now: {e}")
     jobs = voice.bound(device['id'])           # None: it has no buttons, and its program may not know the word
     if jobs is not None:
-        voice.cue(device['id'], 'buttons', bound=jobs)
+        labels = voice.labels(device['id'])
+        voice.cue(device['id'], 'buttons', bound=jobs, **({'labels': labels} if labels else {}))
     body = {name: parse_light(config.get(f'look_{name}')) for name in LOOKS}
     body = {k: v for k, v in body.items() if v}
     body['from'] = str(config.get('lights_from') or '')
@@ -251,6 +266,10 @@ def apply(device, config, secrets):
     screen = {k: int(config[k]) for k in SCREEN_KEYS if isinstance(config.get(k), (int, float))}
     if isinstance(config.get('flip'), bool):
         screen['flip'] = config['flip']
+    if str(config.get('rotation', '')).isdigit():
+        screen['rotation'] = int(config['rotation'])   # a board without it (one with `flip`) ignores the word
+    if isinstance(config.get('home'), str) and config['home']:
+        screen['home'] = config['home']        # a board without pages ignores the word
     if screen and 'screen' in (_health(device, config, secrets).get('has') or []):
         try:
             _call('PUT', '/screen/settings', config, secrets, json=screen)
@@ -523,6 +542,14 @@ def describe(device, config):
     }}
     if isinstance(device.get('takes'), list) and 'screen.picture' not in device['takes']:
         told['screen']['actions'].pop('picture')          # a screen for words only
+    if isinstance(device.get('takes'), list) and 'screen.calibrate' in device['takes']:
+        told['screen']['actions']['calibrate'] = {        # a resistive glass (the CYD 2.8): three crosses on the board
+            'help': 'calibrate its touch glass: three crosses come up on the board to tap, 60 s. '
+                    'Someone has to be at the board', 'example': '', 'owner': True}
+    if 'cancel' in _can(device):
+        told['storage']['actions']['cancel'] = {
+            'help': 'stop the backup landing on its card right now; what landed of it is dropped',
+            'example': '', 'owner': True}
     if 'check' in _can(device):
         told['storage']['actions']['check'] = {
             'help': 'read every backup on the card back now and compare it with the hash kept when it was '
@@ -1157,6 +1184,16 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 with _lock:
                     _about.pop(device['id'], None)
                 return f"{device['id']} is reading its backups back now. Its readings say how far it is.", True
+            if action == 'cancel':
+                if 'cancel' not in _can(device):
+                    return "This satellite cannot stop a backup once it is on its way.", False
+                try:
+                    _json(_call('POST', '/storage/cancel', config, secrets))
+                except Problem as e:
+                    return f"Nothing to stop: {e}", False
+                with _lock:
+                    _about.pop(device['id'], None)
+                return f"The backup landing on {device['id']} is cancelled; what landed of it is dropped.", True
             if action == 'format':
                 if 'format' not in _can(device):
                     return "This satellite cannot format its card.", False
@@ -1290,6 +1327,9 @@ def run(device, capability, action, value, config, secrets, call_tool):
             if action == 'clear':
                 _call('POST', '/screen', config, secrets, json={'clear': True})
                 return 'The line is down.', True
+            if action == 'calibrate':
+                _call('POST', '/screen/calibrate', config, secrets)
+                return f"The crosses are up on {device['id']}: tap the three, top-left, top-right, bottom-right, within 60 s.", True
             if action == 'picture':
                 return _picture(value, device, config, secrets)
             if action == 'show':

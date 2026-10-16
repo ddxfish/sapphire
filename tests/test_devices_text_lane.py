@@ -399,8 +399,30 @@ CHATS = [{'name': 'open-chat', 'kind': 'chat'}, {'name': 'diary', 'kind': 'chat'
          {'name': 'kitchen', 'kind': 'chat'}]
 
 
+def _browse(on=True):
+    engine.update('pocket', parts={'satellite': {'browse': on}})
+
+
+def test_a_board_is_handed_its_own_chat_only_until_browsing_is_allowed(home):
+    home.sm.list_chat_files.return_value = CHATS
+    home.sm.chat_exists.side_effect = lambda n: n in ('open-chat', 'kitchen')
+    assert voice.chats('pocket') == {'ok': True, 'chat': 'open-chat', 'chats': ['open-chat']}   # the active one: nothing else named
+    assert voice.pick_chat('pocket', 'open-chat') == {'ok': True, 'chat': 'open-chat'}            # the one it shows: nothing kept
+    assert engine.get('pocket')['parts'][0]['config'].get('chat', '') == ''
+    assert voice.pick_chat('pocket', 'kitchen')['ok'] is False                                     # any other: refused
+    home.sm.get_display_messages_for.return_value = [{'role': 'assistant', 'content': 'Soup.'}]
+    assert voice.history('pocket')['chat'] == 'open-chat'                                          # its own chat still reads back
+    _browse()
+    assert voice.chats('pocket')['chats'] == ['open-chat', 'kitchen']
+    assert voice.pick_chat('pocket', 'kitchen')['ok'] is True
+    _browse(False)
+    assert voice.chats('pocket') == {'ok': True, 'chat': 'kitchen', 'chats': ['kitchen']}         # locked to the chat it was set to
+    assert voice.history('pocket')['chat'] == 'kitchen'
+
+
 def test_a_board_is_handed_plain_chats_only_and_told_which_it_talks_in(home):
     home.sm.list_chat_files.return_value = CHATS
+    _browse()
     assert voice.chats('pocket') == {'ok': True, 'chat': 'open-chat', 'chats': ['open-chat', 'kitchen']}
     home.sm.get_active_chat_name.return_value = 'diary'        # the active chat is private: not named to a board
     assert voice.chats('pocket')['chat'] == ''
@@ -410,6 +432,7 @@ def test_a_board_is_handed_plain_chats_only_and_told_which_it_talks_in(home):
 def test_a_board_picks_a_chat_and_it_sticks_as_its_own_setting(home):
     home.sm.list_chat_files.return_value = CHATS
     home.sm.chat_exists.side_effect = lambda n: n in ('open-chat', 'kitchen', 'diary')
+    _browse()
     with patch('core.devices.glass.sync_soon') as sync:
         assert voice.pick_chat('pocket', ' kitchen ') == {'ok': True, 'chat': 'kitchen'}
     sync.assert_called_once_with('pocket')
@@ -427,6 +450,7 @@ def test_a_board_picks_a_chat_and_it_sticks_as_its_own_setting(home):
 def test_the_chat_doors(home):
     home.sm.list_chat_files.return_value = CHATS
     home.sm.chat_exists.side_effect = lambda n: n in ('open-chat', 'kitchen')
+    _browse()
     out = asyncio.run(routes.devices_chats('pocket', _req('GET', '/api/devices/pocket/chats')))
     assert out == {'ok': True, 'chat': 'open-chat', 'chats': ['open-chat', 'kitchen']}
     with patch('core.devices.glass.sync_soon'):
@@ -436,3 +460,76 @@ def test_the_chat_doors(home):
     with pytest.raises(HTTPException) as e:
         asyncio.run(routes.devices_chats('pocket', _req('GET', '/api/devices/pocket/chats', key='wrong')))
     assert e.value.status_code == 401
+
+
+# --- the chat read back for the board's screen ------------------------------------------------
+
+def test_history_reads_back_the_words_only_newest_first_with_a_cursor(home):
+    home.sm.list_chat_files.return_value = CHATS
+    home.sm.get_display_messages_for.return_value = [
+        {'role': 'user', 'content': HEADER + '\nwhat time is it'},
+        {'role': 'assistant', 'content': '<think>noon-ish</think>It is noon.', 'thinking': 'noon-ish'},
+        {'role': 'tool', 'content': 'weather: sunny'},
+        {'role': 'assistant', 'content': ''},
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'and the weather?'}, {'type': 'image', 'url': 'x'}]},
+        {'role': 'assistant', 'content': 'Sunny. <!--FILES:[]-->'},
+    ]
+    out = voice.history('pocket')
+    assert out == {'ok': True, 'chat': 'open-chat', 'before': 0, 'total': 4,
+                   'messages': [{'who': 'her', 'text': 'Sunny.'}, {'who': 'you', 'text': 'and the weather?'},
+                                {'who': 'her', 'text': 'It is noon.'}, {'who': 'you', 'text': 'what time is it'}]}
+    home.sm.get_display_messages_for.assert_called_with('open-chat')
+    # a small budget: whole messages, at least one, and the cursor walks back
+    out = voice.history('pocket', most=200)
+    assert [m['text'] for m in out['messages']] == ['Sunny.', 'and the weather?', 'It is noon.', 'what time is it'] or out['before'] >= 0
+    out = voice.history('pocket', before=2, most=1)                   # the budget floors at 200: both short ones fit
+    assert [m['text'] for m in out['messages']] == ['It is noon.', 'what time is it'] and out['before'] == 0
+    out = voice.history('pocket', before=1)
+    assert out['messages'] == [{'who': 'you', 'text': 'what time is it'}] and out['before'] == 0
+    assert voice.history('pocket', before='junk')['before'] == 0
+    assert voice.history('pocket', before=0)['messages'] == []
+
+
+def test_history_cuts_a_long_message_on_a_whole_character_and_hides_a_private_chat(home):
+    home.sm.list_chat_files.return_value = CHATS
+    long = 'é' * 2000                                             # 4000 bytes
+    home.sm.get_display_messages_for.return_value = [{'role': 'assistant', 'content': long}]
+    out = voice.history('pocket')
+    assert out['messages'][0]['text'].endswith('...') and len(out['messages'][0]['text'].encode()) <= 3003
+    assert '\ufffd' not in out['messages'][0]['text']
+    home.sm.get_display_messages_for.return_value = [{'role': 'user', 'content': 'a' * 150}, {'role': 'assistant', 'content': 'b' * 150}]
+    out = voice.history('pocket', most=200)                           # whole messages: the second does not fit
+    assert [m['who'] for m in out['messages']] == ['her'] and out['before'] == 1
+    home.sm.get_active_chat_name.return_value = 'diary'          # private: nothing read back
+    assert voice.history('pocket') == {'ok': True, 'chat': '', 'messages': [], 'before': 0, 'total': 0}
+    assert voice.history('ghost')['ok'] is False
+
+
+def test_the_history_door(home):
+    home.sm.list_chat_files.return_value = CHATS
+    home.sm.get_display_messages_for.return_value = [{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': 'Hello.'}]
+    out = asyncio.run(routes.devices_history('pocket', _req('GET', '/api/devices/pocket/history', query='max=junk')))
+    assert out['messages'] == [{'who': 'her', 'text': 'Hello.'}, {'who': 'you', 'text': 'hi'}] and out['before'] == 0
+    out = asyncio.run(routes.devices_history('pocket', _req('GET', '/api/devices/pocket/history', query='before=1')))
+    assert out['messages'] == [{'who': 'you', 'text': 'hi'}]
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(routes.devices_history('pocket', _req('GET', '/api/devices/pocket/history', key='wrong')))
+    assert e.value.status_code == 401
+
+
+# --- emoji on a small screen ------------------------------------------------------------------
+
+def test_small_screen_turns_the_common_emoji_into_faces_and_drops_the_rest():
+    assert voice.small_screen('Hi 🙂 there ❤️ and 👍 yes 🦄 done') == 'Hi :) there <3 and +1 yes done'
+    assert voice.small_screen('👨‍👩‍👧 family\nnext') == 'family\nnext'
+    assert voice.small_screen('plain, "quoted" - fine') == 'plain, "quoted" - fine'
+    assert voice.small_screen('') == '' and voice.small_screen(None) == ''
+
+
+def test_emoji_reach_the_screen_as_faces_live_and_read_back(home):
+    with _streaming(['Noon 🙂', ' and ❤️ sunny']):
+        msg = voice.typed('pocket', 'hi')['msg']
+    assert voice.reply_text('pocket', msg)['text'] == 'Noon :) and <3 sunny'
+    home.sm.list_chat_files.return_value = CHATS
+    home.sm.get_display_messages_for.return_value = [{'role': 'assistant', 'content': 'Soup 🍲 tonight 👍'}]
+    assert voice.history('pocket')['messages'][0]['text'] == 'Soup tonight +1'

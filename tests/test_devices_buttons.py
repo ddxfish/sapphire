@@ -85,6 +85,15 @@ def test_bound_is_what_the_stream_carries(home):
     assert voice.bound('pocket') == {'boot': {'short': 'tell', 'double': 'clear'}}
 
 
+def test_labels_are_the_first_words_of_a_tell_press_for_a_board_that_draws_its_buttons(home):
+    _with_button()
+    assert voice.labels('pocket') == {} and voice.labels('nobody') == {}
+    _bind(boot_short={'do': 'clear'}, boot_long={'do': 'tell', 'text': '  Lights  off, please, and the heating down a notch too '})
+    assert voice.labels('pocket') == {'boot': 'Lights off, please, and'}       # 24 chars, the long press since the short is a job
+    _bind(boot_short={'do': 'tell', 'text': 'Goodnight'}, boot_long={'do': 'tell', 'text': 'Morning'})
+    assert voice.labels('pocket') == {'boot': 'Goodnight'}                     # the short press names it
+
+
 def test_a_save_rings_the_boards_stream_with_its_buttons(home):
     _with_button()
     spy, seen = _cues()
