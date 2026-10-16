@@ -149,6 +149,7 @@ LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'nigh
 INBOUND = ('keyboard', 'buttons')   # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed(), pressed()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 _SECONDS = re.compile(r'^seconds=(\d{1,4})$', re.I)
+_HANDLE = re.compile(r'img:[A-Za-z0-9_.-]{1,72}|doc:\d{1,9}|last')   # what names an image to the picture action (an id may carry a .jpg)
 
 WAITING = ("Waiting for the satellite to call in: its address is learned from that. "
            "Or type its address in Settings > Devices.")
@@ -513,13 +514,15 @@ def describe(device, config):
         'shutdown': {'help': 'switch it off. Someone must unplug and replug it to bring it back',
                      'example': ''},
     }}
-    told['screen'] = {'label': 'Screen', 'help': 'its small screen', 'actions': {
-        'show': {'help': 'a line across the top of its screen for a while. seconds= how long, 20 if left out',
+    told['screen'] = {'label': 'Screen', 'help': 'its small screen: show puts words on it, picture puts an image on it', 'actions': {
+        'show': {'help': 'words in a line across the top of its screen for a while. seconds= how long, 20 if left out. '
+                         'For an image use picture',
                  'example': 'Dinner in ten minutes', 'values': '<text> [seconds=20]'},
         'clear': {'help': 'take the line down', 'example': ''},
-        'picture': {'help': 'an image on the whole screen until a tap, or seconds= (60 if left out). '
-                            'An image handle like img:ab12 (the receipt any image tool gives you), doc:N from the '
-                            'library, or last = the newest image in this chat. A landscape image is turned sideways',
+        'picture': {'help': 'an image on the whole screen until a tap, or seconds= (60 if left out). This is how to '
+                            'show someone a picture there. Give an image handle like img:ab12 (the receipt any image '
+                            'tool gives you), doc:N from the library, or last = the newest image in this chat. '
+                            'A landscape image is turned sideways',
                     'example': 'last seconds=120', 'values': '<img:id | doc:N | last> [seconds=60]', 'wait': PICTURE_WAIT},
     }}
     told['buttons'] = {'label': 'Buttons', 'help': "its buttons: each press does what is set above. Set to send a "
@@ -898,7 +901,7 @@ def _picture(value, device, config, secrets):
         if not found:
             return "There is no image in this chat yet. Make or find one first, then say picture last.", True
         source = f'img:{found}'
-    if not re.fullmatch(r'img:[A-Za-z0-9_-]{1,64}|doc:\d{1,9}', source):      # the three handles, nothing fetched
+    if not _HANDLE.fullmatch(source) or source == 'last':                       # the three handles, nothing fetched
         return "Give an image handle: img:<id> (the receipt an image tool gives you), doc:<n> from the library, or last.", False
     try:
         got = images.resolve(source)
@@ -1333,6 +1336,11 @@ def run(device, capability, action, value, config, secrets, call_tool):
             if action == 'picture':
                 return _picture(value, device, config, secrets)
             if action == 'show':
+                first = str(value or '').split()[:1]
+                if first and _HANDLE.fullmatch(first[0]):           # "show doc:23": the picture was meant (AIX, 2026-10-16)
+                    said, ok = _picture(value, device, config, secrets)
+                    return (said + " (An image handle goes up as a picture: that is the `picture` action; `show` is for words.)"
+                            if ok else said), ok
                 words, seconds = [], 20
                 for tok in str(value or '').split():
                     m = _SECONDS.match(tok)

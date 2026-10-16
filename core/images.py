@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -155,7 +156,20 @@ def _session_manager():
     return get_system().llm_chat.session_manager
 
 
+_EXT = re.compile(r'\.(jpe?g|png|webp|gif)$', re.I)
+
+
 def _chat_image(image_id) -> Resolved:
+    try:
+        return _chat_image_as(image_id)
+    except ImageError:
+        bare = _EXT.sub('', image_id)
+        if bare == image_id:
+            raise
+        return _chat_image_as(bare)                # img:1ae699735605.jpg: the id with a file ending tacked on (2026-10-16)
+
+
+def _chat_image_as(image_id) -> Resolved:
     row = None
     try:
         row = _session_manager().get_tool_image(image_id)
