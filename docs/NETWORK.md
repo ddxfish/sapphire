@@ -105,7 +105,7 @@ Independent of the proxy, Sapphire holds a set of quiet-egress guarantees:
 | Surface | Guarantee |
 |---------|-----------|
 | STT (Whisper), image vibes (CLIP), embeddings | Cached models load with `local_files_only` — offline. Network is only touched once, to download a missing model. |
-| Kokoro TTS | Boots with Hugging Face offline mode armed when the model is already cached; lifts it once per process only if files are missing. |
+| Kokoro TTS | Resolves model and voice files from the local Hugging Face cache (no network when cached); a file not yet cached is downloaded once, on first use. |
 | tiktoken | BPE file cached persistently under `user/cache/tiktoken` — no re-download per reboot. |
 | Hugging Face telemetry | Disabled unconditionally at boot. |
 | Silero VAD | Model pinned to an exact upstream commit URL — no floating "latest" fetch. |
@@ -181,7 +181,7 @@ UI/ROUTES:
 DEPENDENCY: httpx[socks] (socksio) ships in BOTH requirements.txt and install/requirements-minimal.txt (2026-09-20 parity). Missing = older or hand-built env: LLM/httpx lane fails with SOCKS on; strip warns; fix: pip install 'httpx[socks]'.
 
 EGRESS INVARIANTS (independent of proxy):
-- Cached models load offline: whisper/CLIP/embeddings local_files_only (retry online only if missing); kokoro arms HF_HUB_OFFLINE when cached, lifts once if files missing; silero VAD pinned to exact commit URL; tiktoken cache persistent at user/cache/tiktoken.
+- Cached models load offline: whisper/CLIP/embeddings local_files_only (retry online only if missing); kokoro resolves model/voice files from the local HF cache, downloads once if missing; silero VAD pinned to exact commit URL; tiktoken cache persistent at user/cache/tiktoken.
 - HF_HUB_DISABLE_TELEMETRY=1 unconditionally.
 - Plugin-key allowlist: disk cache authoritative 24h — warm-cache boot makes no GitHub call.
 - UPDATE_CHECK_ENABLED: daily GitHub release check = only unprompted core outbound call; toggle checked per-iteration (effective within a day, restart = immediate).

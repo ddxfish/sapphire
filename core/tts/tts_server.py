@@ -14,40 +14,9 @@ import re
 import threading
 import tempfile
 import psutil
-# Quiet-egress (negspace E4, 2026-08-31): kokoro fetches config/model/voice
-# files via hf_hub, which pings huggingface.co on EVERY load even when the
-# cache is fully warm. Arm HF offline mode BEFORE the kokoro import (hf_hub
-# reads the env at import time) — but only when the model cache already
-# exists, so first-run downloads still work. Telemetry off unconditionally.
-# A voice missing from the cache lifts offline at synth time (_synth) and
-# retries online; init failures retry the same way below.
-_hf_home = os.environ.get('HF_HOME') or os.path.join(
-    os.path.expanduser('~'), '.cache', 'huggingface')
-_kokoro_snaps = os.path.join(_hf_home, 'hub', 'models--hexgrad--Kokoro-82M',
-                             'snapshots')
-try:
-    _kokoro_cached = os.path.isdir(_kokoro_snaps) and bool(os.listdir(_kokoro_snaps))
-except OSError:
-    _kokoro_cached = False
-if _kokoro_cached:
-    os.environ.setdefault('HF_HUB_OFFLINE', '1')
-os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
-
-
-def _hf_go_online():
-    """Lift HF offline mode for the rest of this process (a restart
-    re-arms). hf_hub modules may bind the flag as a module global at
-    import, so flip env AND every huggingface_hub module attr."""
-    os.environ['HF_HUB_OFFLINE'] = '0'
-    for _name, _mod in list(sys.modules.items()):
-        if _name.startswith('huggingface_hub') and hasattr(_mod, 'HF_HUB_OFFLINE'):
-            try:
-                _mod.HF_HUB_OFFLINE = False
-            except Exception:
-                pass
-
-
-from kokoro import KPipeline
+os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')  # pure phone-home UA
+from huggingface_hub import hf_hub_download, try_to_load_from_cache
+from kokoro import KModel, KPipeline
 
 # Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
 faulthandler.enable()
@@ -141,11 +110,11 @@ logger.info(f"Torch threads: intra={_torch.get_num_threads()}, "
 # CUDA mode is much faster but requires a CUDA-capable GPU + working driver.
 #
 # Fallback chain for safe public-release:
-#   1. cuda requested + cuda available + KPipeline(device='cuda') works → cuda
+#   1. cuda requested + cuda available + model.to('cuda') works → cuda
 #   2. cuda requested but cuda not available → cpu (with warning)
 #   3. cuda init throws (driver mismatch, OOM, etc) → cpu (with warning)
 #   4. cpu requested → cpu (always works)
-#   5. Old KPipeline version without device kwarg → library auto-detect
+# (_init_kpipeline builds the model from cache-resolved files, then moves it)
 try:
     import config as _cfg
     _kokoro_device = (getattr(_cfg, 'KOKORO_DEVICE', 'cuda') or 'cuda').strip().lower()
@@ -174,75 +143,83 @@ if _kokoro_device == 'cuda':
 logger.info(f"Loading Kokoro model on device='{_kokoro_device}'...")
 
 
+REPO_ID = 'hexgrad/Kokoro-82M'
+
+
+def _hf_file(filename):
+    """Local path of a Kokoro repo file: the cache when it's there (zero
+    network, quiet egress / negspace E4), else one explicit download.
+
+    Replaces arming the hub's process-wide offline flag at import and
+    "lifting" it later: hf_hub bakes that flag into its session, and the
+    lift wrapped kokoro's
+    generator *creation*, which never raises (the voice fetch runs on the
+    first next()), so every voice not already cached failed forever
+    (user report 2026-10-15)."""
+    path = try_to_load_from_cache(REPO_ID, filename)
+    if isinstance(path, str):
+        return path
+    logger.info(f"[TTS] {filename} not in the local cache, downloading from Hugging Face")
+    return hf_hub_download(REPO_ID, filename)
+
+
+_packs = {}   # voice name -> CPU tensor (kokoro's own cache is keyed by the string it is given)
+
+
+def _voice_pack(voice):
+    """Voice name (or comma blend) to a loaded voice tensor, resolving each
+    file from the cache (one download if missing) and loading it here.
+    kokoro splits a voice STRING on commas, so handing it cache paths would
+    break every voice on a path with a comma in it; a tensor passes through
+    untouched. Loading here also means a corrupt file fails before any
+    headers go out."""
+    names = [n.strip() for n in str(voice).split(',') if n.strip()] or [DEFAULT_VOICE]
+    packs = []
+    for name in names:
+        pack = _packs.get(name)
+        if pack is None:
+            path = name if name.endswith('.pt') else _hf_file(f'voices/{name}.pt')
+            pack = _packs[name] = _torch.load(path, map_location='cpu', weights_only=True)
+        packs.append(pack)
+    return packs[0] if len(packs) == 1 else _torch.mean(_torch.stack(packs), dim=0)
+
+
+def _unavailable_status(e):
+    """A definite 'no such file' from the hub is the caller's mistake: 404,
+    which the provider does not retry. Anything else (hub unreachable,
+    corrupt file) is 503, which it does."""
+    code = getattr(getattr(e, 'response', None), 'status_code', None)
+    return 404 if code == 404 else 503
+
+
 def _init_kpipeline():
-    """The original init fallback chain, verbatim — wrapped so the HF
-    offline-retry shell below can run it twice."""
+    """Model from cache-resolved files, moved to the device: cuda, falling
+    back to cpu when CUDA fails at runtime (driver mismatch, OOM, context
+    corruption) even though torch.cuda.is_available() said yes."""
     global _kokoro_device
+    kmodel = KModel(repo_id=REPO_ID, config=_hf_file('config.json'),
+                    model=_hf_file(KModel.MODEL_NAMES[REPO_ID]))
     try:
-        return KPipeline(lang_code='a', device=_kokoro_device)
-    except TypeError:
-        # Older kokoro versions don't accept device= kwarg — fall back to
-        # auto-detect (respects CUDA_VISIBLE_DEVICES env if set by parent).
-        logger.warning("KPipeline doesn't accept device kwarg — using library default")
-        try:
-            return KPipeline(lang_code='a')
-        except Exception as e:
-            logger.error(f"Kokoro init failed even in auto-detect mode: {e}")
-            raise
+        kmodel = kmodel.to(_kokoro_device).eval()
     except Exception as e:
-        # CUDA init can fail at runtime even when torch.cuda.is_available() returns
-        # True (driver/lib mismatch, OOM, device-context corruption). Fall back to
-        # cpu so TTS still works.
-        if _kokoro_device == 'cuda':
-            logger.warning(f"Kokoro CUDA init failed ({e}) — falling back to cpu")
-            try:
-                p = KPipeline(lang_code='a', device='cpu')
-                _kokoro_device = 'cpu'
-                return p
-            except Exception as e2:
-                logger.error(f"Kokoro init failed on both cuda and cpu: {e2}")
-                raise
-        else:
-            # cpu init failed — nothing left to fall back to
+        if _kokoro_device != 'cuda':
             logger.error(f"Kokoro init failed on cpu: {e}")
             raise
+        logger.warning(f"Kokoro CUDA init failed ({e}), falling back to cpu")
+        _kokoro_device = 'cpu'
+        kmodel = kmodel.to('cpu').eval()
+    return KPipeline(lang_code='a', repo_id=REPO_ID, model=kmodel)
 
 
-pipeline = None
-try:
-    pipeline = _init_kpipeline()
-except Exception as _init_err:
-    if os.environ.get('HF_HUB_OFFLINE') == '1':
-        # Cache looked present but a needed file was missing — lift
-        # offline once and let the download happen (negspace E4).
-        logger.warning(f"Kokoro init failed under HF offline mode ({_init_err}) "
-                       "— retrying online")
-        _hf_go_online()
-        pipeline = _init_kpipeline()
-    else:
-        raise
+pipeline = _init_kpipeline()
 logger.info(f"Model loaded successfully on device='{_kokoro_device}'. Using temp dir: {TEMP_DIR}")
-
-
-def _synth(text, voice, speed):
-    """pipeline() with HF offline fallback (negspace E4): voices/*.pt
-    download lazily PER VOICE, so a never-used voice under offline mode
-    raises. Lift offline once, retry, stay online for process life
-    (restart re-arms). Real synth errors pass straight through."""
-    try:
-        return pipeline(text, voice=voice, speed=speed)
-    except Exception as e:
-        if (os.environ.get('HF_HUB_OFFLINE') == '1'
-                and (type(e).__name__ in ('OfflineModeIsEnabled',
-                                          'LocalEntryNotFoundError',
-                                          'FileNotFoundError')
-                     or 'offline' in str(e).lower()
-                     or 'local_files_only' in str(e))):
-            logger.info(f"[TTS] voice '{voice}' not in local cache — "
-                        "lifting HF offline mode to download")
-            _hf_go_online()
-            return pipeline(text, voice=voice, speed=speed)
-        raise
+# Warm the default voice: a box that can't reach Hugging Face says so here,
+# in kokoro.log at boot, instead of as a 500 on the first sentence.
+try:
+    _voice_pack(DEFAULT_VOICE)
+except Exception as _e:
+    logger.warning(f"Default voice '{DEFAULT_VOICE}' is not cached and could not be downloaded "
+                   f"({_e}); uncached voices will fail until Hugging Face is reachable")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -401,13 +378,29 @@ class TTSHandler(BaseHTTPRequestHandler):
             speed = DEFAULT_SPEED
         pitch = data.get('pitch', 1.0)
 
+        # Resolve (download once if missing) the voice outside the lock and
+        # answer failures as JSON: an exception escaping a handler makes
+        # ThreadingMixIn close the socket with no response, which the main
+        # app can only report as "Remote end closed connection".
+        try:
+            voice_pack = _voice_pack(voice)
+        except Exception as e:
+            logger.error(f"Voice '{voice}' unavailable: {e}")
+            _json_response(self, {'error': f"Voice '{voice}' unavailable: {e}"}, _unavailable_status(e))
+            return
+
         generation_start = time.time()
-        with pipeline_lock:
-            generator = _synth(text_to_speak, voice, speed)
-            # Copy each segment to decouple from PyTorch tensor memory
-            # Without copy, GC of generator tensors can free memory numpy still references → SIGSEGV
-            audio_segments = [np.copy(seg) for _, _, seg in generator]
-            del generator
+        try:
+            with pipeline_lock:
+                generator = pipeline(text_to_speak, voice=voice_pack, speed=speed)
+                # Copy each segment to decouple from PyTorch tensor memory
+                # Without copy, GC of generator tensors can free memory numpy still references → SIGSEGV
+                audio_segments = [np.copy(seg) for _, _, seg in generator]
+                del generator
+        except Exception as e:
+            logger.error(f"Synthesis failed (voice={voice}): {e}", exc_info=True)
+            _json_response(self, {'error': f'Synthesis failed: {e}'}, 500)
+            return
 
         if not audio_segments:
             logger.error("Failed to generate audio for text.")
@@ -503,6 +496,15 @@ class TTSHandler(BaseHTTPRequestHandler):
             speed = DEFAULT_SPEED
         pitch = data.get('pitch', 1.0)
 
+        # Resolve the voice BEFORE committing headers: a missing voice or an
+        # unreachable Hugging Face is still a clean JSON answer (404 / 503) here.
+        try:
+            voice_pack = _voice_pack(voice)
+        except Exception as e:
+            logger.error(f"Voice '{voice}' unavailable: {e}")
+            _json_response(self, {'error': f"Voice '{voice}' unavailable: {e}"}, _unavailable_status(e))
+            return
+
         # Headers committed — past this point we can't return JSON errors,
         # only chunks or a close.
         self.send_response(200)
@@ -585,7 +587,7 @@ class TTSHandler(BaseHTTPRequestHandler):
 
         try:
             with pipeline_lock:
-                generator = _synth(text_to_speak, voice, speed)
+                generator = pipeline(text_to_speak, voice=voice_pack, speed=speed)
                 for _, _, seg in generator:
                     # If downstream already failed (client gone), bail early —
                     # no point finishing inference for a dead socket.

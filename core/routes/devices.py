@@ -566,6 +566,25 @@ async def devices_ask(device_id: str, request: Request):
     return await asyncio.to_thread(voice.asked, device_id, body.get('job'))
 
 
+@router.get("/api/devices/{device_id}/chats")
+async def devices_chats(device_id: str, request: Request):
+    """The chats a board may pick from, for a picker on its own screen:
+    {"ok", "chat", "chats"}. A private chat is never named."""
+    await _device_key(device_id, request, 'chats')
+    from core.devices import voice
+    return await asyncio.to_thread(voice.chats, device_id)
+
+
+@router.post("/api/devices/{device_id}/chat")
+async def devices_chat(device_id: str, request: Request):
+    """A board picked the chat it talks in: {"name"}. Kept as its chat
+    setting; the name comes back to its screen through POST /screen."""
+    await _device_key(device_id, request, 'chat')
+    from core.devices import voice
+    body = await _body(request)
+    return await asyncio.to_thread(voice.pick_chat, device_id, body.get('name'))
+
+
 @router.get("/api/devices/{device_id}/text")
 async def devices_text_read(device_id: str, request: Request):
     """A piece of her reply, for the device's screen: ?msg=&from=&max=.

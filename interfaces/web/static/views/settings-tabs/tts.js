@@ -108,7 +108,8 @@ export default {
                 const data = await res.json();
                 if (data.success) {
                     result.style.color = 'var(--color-success, #4caf50)';
-                    result.textContent = `${data.provider} — ${data.ms}ms`;
+                    const spoke = data.synth_ms != null ? `, spoke a test phrase in ${data.synth_ms}ms` : '';
+                    result.textContent = `${data.provider} — reachable in ${data.ms}ms${spoke}`;
                 } else {
                     result.style.color = 'var(--color-error, #f44336)';
                     result.textContent = data.error || 'Test failed';

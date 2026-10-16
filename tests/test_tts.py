@@ -1,12 +1,8 @@
 """Tests for TTS text cleaning (core/tts/tts_server.py clean_text)."""
-import sys
 import pytest
-from unittest.mock import MagicMock
+from _kokoro_stub import import_tts_server  # no GPU model, disk cache or network
 
-# Mock kokoro so we don't load the GPU model during tests
-sys.modules.setdefault('kokoro', MagicMock())
-
-from core.tts.tts_server import clean_text
+clean_text = import_tts_server().clean_text
 
 
 class TestCleanTextThinkBlocks:

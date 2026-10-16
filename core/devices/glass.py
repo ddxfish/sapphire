@@ -117,7 +117,7 @@ def sync(device_id):
                 if _words_differ(screen, want):
                     satellite.screen_chat(config, secrets, want['chat'], want['brain'], want['trim'])
                     did.append(f"chat {want['chat'] or '(none)'} (model {want['brain'] or '-'}, trim {want['trim'] or '-'})")
-                if screen.get('background', '') != scene:
+                if 'background' in screen and screen.get('background', '') != scene:   # a board that states no background draws none (the reader)
                     raw = _scene_bytes(scene) if scene else None
                     if raw:
                         w, h = int(screen['w']), int(screen['h'])
@@ -146,7 +146,7 @@ def behind(config, screen):
         want = wanted({'config': config})
     except Exception:
         return False
-    return _words_differ(screen, want) or screen.get('background', '') != want['scene']
+    return _words_differ(screen, want) or ('background' in screen and screen.get('background', '') != want['scene'])
 
 
 RETRY_AFTER = (3, 10)         # seconds: a board that has just linked may not answer its own door yet

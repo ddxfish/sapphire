@@ -390,3 +390,49 @@ def test_said_lands_in_the_chat_with_its_pictures_kept(home):
     assert got['speak'] is None                      # nothing is spoken: a phone has no speaker of hers
     assert voice.said('pocket', '', '')['error'] == 'Nothing was said.'
     assert 'no device' in voice.said('nobody', 'x', 'y')['error'].lower()
+
+
+# --- a picker on the board: the chats it may be handed, the one it picks ----------------------
+
+CHATS = [{'name': 'open-chat', 'kind': 'chat'}, {'name': 'diary', 'kind': 'chat', 'private_chat': True},
+         {'name': 'doom-1', 'kind': 'game'}, {'name': 'old', 'kind': 'chat', 'archived': True},
+         {'name': 'kitchen', 'kind': 'chat'}]
+
+
+def test_a_board_is_handed_plain_chats_only_and_told_which_it_talks_in(home):
+    home.sm.list_chat_files.return_value = CHATS
+    assert voice.chats('pocket') == {'ok': True, 'chat': 'open-chat', 'chats': ['open-chat', 'kitchen']}
+    home.sm.get_active_chat_name.return_value = 'diary'        # the active chat is private: not named to a board
+    assert voice.chats('pocket')['chat'] == ''
+    assert voice.chats('ghost')['ok'] is False
+
+
+def test_a_board_picks_a_chat_and_it_sticks_as_its_own_setting(home):
+    home.sm.list_chat_files.return_value = CHATS
+    home.sm.chat_exists.side_effect = lambda n: n in ('open-chat', 'kitchen', 'diary')
+    with patch('core.devices.glass.sync_soon') as sync:
+        assert voice.pick_chat('pocket', ' kitchen ') == {'ok': True, 'chat': 'kitchen'}
+    sync.assert_called_once_with('pocket')
+    assert engine.get('pocket')['parts'][0]['config']['chat'] == 'kitchen'
+    assert voice.chats('pocket')['chat'] == 'kitchen'
+    with _streaming(['Soup.']) as run_turn:
+        voice.typed('pocket', 'what is for dinner')
+    assert run_turn.call_args[0][0] == 'kitchen'               # what it types lands there now
+    for bad in ('diary', 'doom-1', 'old', 'nope', ''):          # private, a game, archived, unknown: not even by name
+        assert voice.pick_chat('pocket', bad)['ok'] is False
+    assert engine.get('pocket')['parts'][0]['config']['chat'] == 'kitchen'
+    home.sm.set_active_chat.assert_not_called()                 # the browser's chat is never switched
+
+
+def test_the_chat_doors(home):
+    home.sm.list_chat_files.return_value = CHATS
+    home.sm.chat_exists.side_effect = lambda n: n in ('open-chat', 'kitchen')
+    out = asyncio.run(routes.devices_chats('pocket', _req('GET', '/api/devices/pocket/chats')))
+    assert out == {'ok': True, 'chat': 'open-chat', 'chats': ['open-chat', 'kitchen']}
+    with patch('core.devices.glass.sync_soon'):
+        out = asyncio.run(routes.devices_chat('pocket', _req('POST', '/api/devices/pocket/chat',
+                                                             b'{"name": "kitchen"}', 'application/json')))
+    assert out == {'ok': True, 'chat': 'kitchen'}
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(routes.devices_chats('pocket', _req('GET', '/api/devices/pocket/chats', key='wrong')))
+    assert e.value.status_code == 401

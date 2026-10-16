@@ -11,7 +11,6 @@ thread, and the container warms the model on a thread at boot.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 
 logger = logging.getLogger(__name__)
@@ -26,11 +25,16 @@ def loaded() -> bool:
     return _pipe is not None
 
 
-def _restore(prev) -> None:
-    if prev is None:
-        os.environ.pop('HF_HUB_OFFLINE', None)
-    else:
-        os.environ['HF_HUB_OFFLINE'] = prev
+def _build(local_only: bool):
+    """Tokenizer + model with local_files_only on the load itself: the house
+    pattern (core/vibes.py, core/embeddings). Never the process-wide
+    HF_HUB_OFFLINE env: hf_hub reads it once at import, and a subprocess
+    spawned while it was set (the Kokoro server respawning) inherited it
+    for life (2026-10-15)."""
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+    tok = AutoTokenizer.from_pretrained(MODEL, local_files_only=local_only)
+    mdl = AutoModelForSequenceClassification.from_pretrained(MODEL, local_files_only=local_only)
+    return pipeline('sentiment-analysis', model=mdl, tokenizer=tok, top_k=None, truncation=True)
 
 
 def _load():
@@ -41,29 +45,24 @@ def _load():
         if _pipe is not None or _failed:
             return _pipe
         try:
-            from transformers import pipeline
+            import transformers  # noqa: F401 — the lazy dependency check
         except ImportError:
             logger.warning('[DISCORD] transformers not importable — reaction tone stays on the word list')
             _failed = True
             return None
-        # Offline-first, the house rule for every cached model (core/vibes.py,
-        # whisper, kokoro): a warm cache loads with zero network; the hub is
-        # dialled once only when the files are missing.
-        prev = os.environ.get('HF_HUB_OFFLINE')
-        os.environ['HF_HUB_OFFLINE'] = '1'
+        # Offline-first, the house rule for every cached model: a warm cache
+        # loads with zero network; the hub is dialled once only when the
+        # files are missing (transformers raises OSError on a local-only miss).
         try:
             try:
-                _pipe = pipeline('sentiment-analysis', model=MODEL, top_k=None, truncation=True)
-            except (OSError, EnvironmentError):
-                _restore(prev)
+                _pipe = _build(local_only=True)
+            except OSError:
                 logger.info('[DISCORD] RoBERTa tone model not cached — downloading once (~500 MB)')
-                _pipe = pipeline('sentiment-analysis', model=MODEL, top_k=None, truncation=True)
+                _pipe = _build(local_only=False)
             logger.info('[DISCORD] RoBERTa tone model loaded')
         except Exception as exc:
             logger.warning('[DISCORD] RoBERTa tone model failed to load (%s) — word list instead', exc)
             _failed = True
-        finally:
-            _restore(prev)
     return _pipe
 
 

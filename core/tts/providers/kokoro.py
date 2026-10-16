@@ -96,9 +96,14 @@ class KokoroTTSProvider(BaseTTSProvider):
                     'pitch': float(kwargs.get('pitch') or 1.0),
                 }, timeout=60)
                 if response.status_code == 200:
+                    self._last_error = None
                     return response.content
-                logger.error(f"Kokoro server error: {response.status_code}")
-                last_error = f"HTTP {response.status_code}"
+                try:
+                    detail = response.json().get('error') or ''
+                except Exception:
+                    detail = ''
+                last_error = f"HTTP {response.status_code} {detail}".rstrip()
+                logger.error(f"Kokoro server error: {last_error}")
                 if 400 <= response.status_code < 500:
                     break  # client error — retrying won't help
             except Exception as e:
@@ -108,7 +113,8 @@ class KokoroTTSProvider(BaseTTSProvider):
                 logger.warning(f"Kokoro TTS attempt {attempt + 1} failed, retrying in {delays[attempt]}s...")
                 time.sleep(delays[attempt])
 
-        logger.error(f"Kokoro generate failed after {1 + len(delays)} attempts: {last_error}")
+        logger.error(f"Kokoro generate failed after {attempt + 1} attempt(s): {last_error}")
+        self._last_error = str(last_error)   # the Test button shows it
         return None
 
     def generate_stream(self, text: str, voice: str, speed: float, **kwargs) -> Iterator[bytes]:
@@ -140,8 +146,17 @@ class KokoroTTSProvider(BaseTTSProvider):
                 timeout=60,
             )
             if response.status_code != 200:
+                try:
+                    detail = response.json().get('error') or ''
+                except Exception:
+                    detail = ''
+                if 400 <= response.status_code < 500:
+                    # The caller's mistake (unknown voice, bad text): the
+                    # whole-blob route would answer the same, so don't ask it.
+                    logger.error(f"Kokoro /tts/stream returned {response.status_code} {detail}".rstrip())
+                    return
                 logger.warning(
-                    f"Kokoro /tts/stream returned {response.status_code} — "
+                    f"Kokoro /tts/stream returned {response.status_code} {detail} — "
                     f"falling back to non-streaming generate()"
                 )
                 audio = self.generate(text, voice, speed, **kwargs)

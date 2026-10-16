@@ -843,6 +843,76 @@ def asked(device_id, job):
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
+CHATS_MAX = 40                     # names a board is handed: a picker on a small screen
+
+
+def _board_chats():
+    """The chats a board may be handed or pick, newest first: plain ones. No
+    private chat, nothing archived, no game or story session."""
+    out = []
+    for c in _system().llm_chat.session_manager.list_chat_files():
+        if c.get('private_chat') or c.get('archived') or c.get('kind', 'chat') != 'chat':
+            continue
+        out.append(c['name'])
+    return out[:CHATS_MAX]
+
+
+def chats(device_id):
+    """The chats a board can pick from, for a picker on its own screen (GET
+    /chats): {'ok', 'chat': the one it talks in now, 'chats': [names]}. A
+    private chat is never named to a board, not even as the one it talks in.
+    Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        part = _talk_part(row) or _chat_part(row)
+        if not part:
+            return {'ok': False, 'error': f"'{row['id']}' has nothing that talks in a chat."}
+        from core.chat.history import landing_chat
+        names = _board_chats()
+        now = str((part.get('config') or {}).get('chat') or '').strip() or landing_chat(_system().llm_chat.session_manager)
+        return {'ok': True, 'chat': now if now in names else '', 'chats': names}
+    except Exception as e:
+        logger.error(f"[DEVICES] chats({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
+
+
+def pick_chat(device_id, name):
+    """A board picked the chat it talks in (POST /chat {"name"}). Kept as the
+    talking part's `chat` setting, the same as typing it on the Devices page:
+    what the board sends lands there from now on, and the glass is brought
+    up to date so the name comes back to its screen. Only a chat the board
+    could be handed (chats()) can be picked: no guessing a private one. The
+    chat open in the browser is never changed. Never raises."""
+    try:
+        e = _engine()
+        why = e.refusal()
+        if why:
+            return {'ok': False, 'error': why}
+        row = e.rows().get(str(device_id or '').strip().lower())
+        if not row or not row.get('enabled', True):
+            return {'ok': False, 'error': f"There is no device named '{device_id}', or it is turned off."}
+        part = _talk_part(row) or _chat_part(row)
+        if not part:
+            return {'ok': False, 'error': f"'{row['id']}' has nothing that talks in a chat."}
+        name = str(name or '').strip()[:64]
+        if name not in _board_chats():
+            return {'ok': False, 'error': f"'{name}' is not a chat this board can pick."}
+        e.update(row['id'], parts={part['driver']: {'chat': name}})
+        from core.devices import glass
+        glass.sync_soon(row['id'])
+        logger.info(f"[DEVICES] {row['id']} picked the chat '{name}'")
+        return {'ok': True, 'chat': name}
+    except Exception as e:
+        logger.error(f"[DEVICES] pick_chat({device_id}) failed: {e}", exc_info=True)
+        return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
+
+
 def press_text(row, button, how):
     """What a press says when no message was set for it."""
     return f"The {button} button on {row['id']} was pressed{ {'long': ' and held', 'double': ' twice'}.get(how, '') }."

@@ -73,6 +73,15 @@ def test_sync_sends_the_name_and_the_scene_when_they_differ():
     assert calls[1][:2] == ('POST', '/screen/background')
 
 
+def test_a_board_that_states_no_background_gets_the_name_and_no_scene():
+    # the reader (cyd28) draws text only: it states screen.chat and no screen.background
+    did, calls = _sync({'w': 320, 'h': 240, 'chat': ''}, W('coding', 'matrix'), _png(8, 8))
+    assert [c[:2] for c in calls] == [('POST', '/screen')] and did == ['chat coding (model opus, trim #00ffaa)']
+    with patch.object(glass, 'wanted', return_value=W('coding', 'matrix')):
+        assert not glass.behind({}, {'chat': 'coding'})
+        assert glass.behind({}, {'chat': 'other'})
+
+
 def test_sync_sends_nothing_when_the_board_already_shows_it():
     did, calls = _sync({'w': 320, 'h': 240, 'chat': 'coding', 'brain': 'opus', 'trim': '#00ffaa', 'background': 'matrix'}, W('coding', 'matrix'), _png(8, 8))
     assert did == [] and calls == []

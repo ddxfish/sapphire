@@ -375,9 +375,14 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
     return {"status": "success"}
 
 
+_TTS_TEST_PHRASE = "Testing, one two three."
+
+
 @router.post("/api/tts/test")
 async def test_tts(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Test current TTS provider availability."""
+    """Test the current TTS provider: reachable, then a real short synthesis
+    through the path chat uses. A health ping alone passed while every
+    sentence failed (user report 2026-10-15)."""
     import time
     prov_name = getattr(config, 'TTS_PROVIDER', 'none')
     provider = getattr(system.tts, 'provider', None)
@@ -395,7 +400,17 @@ async def test_tts(request: Request, _=Depends(require_login), system=Depends(ge
     if not available:
         error = getattr(provider, '_last_error', None) or "Provider not available"
         return {"success": False, "provider": prov_name, "error": error, "ms": elapsed}
-    return {"success": True, "provider": prov_name, "ms": elapsed}
+    t1 = time.time()
+    try:
+        audio = await asyncio.to_thread(system.tts.generate_audio_data, _TTS_TEST_PHRASE)
+    except Exception as e:
+        return {"success": False, "provider": prov_name, "ms": elapsed, "error": f"Reachable, but synthesis failed: {e}"}
+    synth_ms = round((time.time() - t1) * 1000)
+    if not audio:
+        reason = getattr(provider, '_last_error', None) or "no audio returned (see the app log)"
+        return {"success": False, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms,
+                "error": f"Reachable, but synthesis failed: {reason}"}
+    return {"success": True, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms, "bytes": len(audio)}
 
 
 @router.get("/api/tts/voices")

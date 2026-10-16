@@ -29,7 +29,7 @@
     "conversation/name_match.py": "sha256:74dec039f513cc6b7f906ce293f9f5caf3f1723791a90b3d59712ecd09c8332c",
     "conversation/reactions.py": "sha256:e38042fb503f3daa3b06353b3905938eb0c82eaf69c84f6f2cce997c61534553",
     "conversation/reply_style_service.py": "sha256:eab62c6e1288d29623325b37aefc85fa06bafab2af5b0fc4bebe88b84deb64c2",
-    "conversation/sentiment.py": "sha256:8db06189f1535a331b41018c72fb020c7bb55102256db6e105d551bdf3b4e8f6",
+    "conversation/sentiment.py": "sha256:3b1c1c2dbf1e6d97f100074888b3eddf5720373964dbc9a86bf059207cd61590",
     "conversation/trigger_service.py": "sha256:00a9ef21bc6c684b2b1963f554488199d3084125dbddea871e9bf458152df7ca",
     "conversation/typing_indicator.py": "sha256:8e30d7076eab8e412a1278efc9c122673ff30fef24f9e8887add1a6321485d3f",
     "daemon.py": "sha256:fae4bb328eefe73c4bb7ce266054d2d60196b81cf6ffd99b6c0904172bf7c9cf",
@@ -107,6 +107,7 @@
     "tests/test_reply_style_service.py": "sha256:c50d8ec04c5e15fb9fedf8f6e3bcf213fd1068879f47b21010c0ff080498fead",
     "tests/test_route_handlers_load.py": "sha256:a002f5acaaa6bf259f0887fc55775dd2659050cc151224586651e7bf44c560f2",
     "tests/test_safety_gates.py": "sha256:53994d520720ef4ec63882273d680a55f1e4ccd6dffe519f75cf65f8392732a2",
+    "tests/test_sentiment_offline_first.py": "sha256:9dc58c2f220037af2eda98a403009efbcf6f5ff0aec1eb4f5dfe3f0f1d24a9eb",
     "tests/test_settings_model.py": "sha256:6277aded6686ee30af76270f3d44492563d98b5b4fe1b0e45f99d0aa46e9a84e",
     "tests/test_speech_bridge.py": "sha256:4ffc4601644e9a76ee0892b0b97df753bc49ba44afe038e9995aa7cb2feda9ae",
     "tests/test_think_tags.py": "sha256:9203403b9b7fd28addb91390859f394e29508bc1ffd967c4b0cce6896a8f5414",
@@ -152,5 +153,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "4Y9UnHuw5wkh7qgW2KntQqR8n9KOxII+T8Vh8AvP2ub0cHlwxVENY8RGpyHszSZLzn5YD8cbP3eF6Tr5rPz8Bw=="
+  "signature": "U7SYGjhYDr/VAifKXDkk437omct1/0xMK++jrT/ifZRhWROD9byWhlrEO/c3tqnOMaL3OK/8XMlh1zHPYKgJDA=="
 }
