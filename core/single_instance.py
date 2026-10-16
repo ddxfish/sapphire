@@ -122,6 +122,57 @@ def is_port_taken(err):
     return err.errno in (errno.EADDRINUSE, 10048) or getattr(err, 'winerror', None) == 10048
 
 
+def tie_children_to_me(log=print):
+    """Windows: put this process in a Job Object that kills every member when
+    its last handle closes. Children (sapphire.py, Kokoro, plugin services)
+    join the job as they are created, so nothing outlives the runner: Windows
+    has no die-with-parent otherwise, and a launcher close or a Task Manager
+    kill of the runner used to leave a headless Sapphire behind (row 9).
+    Returns the job handle (keep it alive) or None. Never raises."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+
+        class Basic(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                        ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                        ('SchedulingClass', wintypes.DWORD)]
+
+        class Io(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in ('ReadOperationCount', 'WriteOperationCount',
+                                                       'OtherOperationCount', 'ReadTransferCount',
+                                                       'WriteTransferCount', 'OtherTransferCount')]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [('BasicLimitInformation', Basic), ('IoInfo', Io), ('ProcessMemoryLimit', ctypes.c_size_t),
+                        ('JobMemoryLimit', ctypes.c_size_t), ('PeakProcessMemoryUsed', ctypes.c_size_t),
+                        ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError()
+        info = Extended()
+        info.BasicLimitInformation.LimitFlags = 0x2000              # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):   # ExtendedLimitInformation
+            raise ctypes.WinError()
+        if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
+            raise ctypes.WinError()
+        return job
+    except Exception as e:
+        log(f"Could not tie child processes to this runner (Job Object): {e}")
+        return None
+
+
 def port_holder(port):
     """'pid N (name)' for the listener on `port`, or '' when unknown. Best effort."""
     try:

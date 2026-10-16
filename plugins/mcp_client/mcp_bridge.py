@@ -5,8 +5,12 @@
 # context management to avoid anyio cancel scope leaks.
 
 import asyncio
+import inspect
 import logging
+import re
 import shutil
+import sys
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -96,7 +100,7 @@ class MCPBridge:
 
         params = StdioServerParameters(command=command, args=args, env=env)
 
-        async with stdio_client(params) as (read, write):
+        async with stdio_client(params, **self._errlog_kw(command, args)) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 self._session = session
@@ -105,6 +109,21 @@ class MCPBridge:
                 self._ready.set()
                 # Hold open until stop requested
                 await self._stop.wait()
+
+    @staticmethod
+    def _errlog_kw(command, args):
+        """The server's stderr goes to its own file under user/logs, not to
+        ours: children holding Sapphire's stderr kept the launcher's pipe open
+        after she was gone, and their noise landed in her console (2026-10-16)."""
+        try:
+            if 'errlog' not in inspect.signature(stdio_client).parameters:
+                return {}
+            logs = Path(__file__).absolute().parents[2] / 'user' / 'logs'
+            logs.mkdir(parents=True, exist_ok=True)
+            tag = re.sub(r'[^A-Za-z0-9_.-]+', '_', ' '.join([Path(command).name, *args[:1]]))[:40]
+            return {'errlog': open(logs / f"mcp-{tag}.log", 'a', encoding='utf-8', errors='replace')}
+        except Exception:
+            return {}
 
     async def _run_http(self):
         """HTTP connection — held open via async with."""

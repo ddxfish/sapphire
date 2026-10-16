@@ -137,3 +137,44 @@ def test_wait_for_child_is_patient_while_nobody_asked_it_to_stop(runner, monkeyp
     child = _Child(exits_after=5)
     assert runner._wait_for_child(child) == 0
     assert child.killed is False and child.waits == 5
+
+
+def test_windows_ctrl_break_is_a_stop_signal(runner, monkeypatch):
+    """The launcher's graceful stop is CTRL_BREAK to the runner's process group;
+    the runner registers SIGBREAK wherever the platform has it."""
+    registered = []
+    monkeypatch.setattr(runner.signal, 'signal', lambda sig, h: registered.append(sig))
+    monkeypatch.setattr(runner.signal, 'SIGBREAK', 21, raising=False)
+    _runs(runner, [0])
+    _main(runner)
+    assert 21 in registered
+
+
+def test_a_stop_during_the_update_window_means_no_boot(runner, monkeypatch):
+    """Ctrl+C mid-pip used to kill pip, roll the update back, and boot anyway."""
+    import core.updater, core.restore, core.integrity, core.gpu_install
+    monkeypatch.setattr(core.updater, 'apply_pending_update', lambda: setattr(runner, '_runner_stopping', True))
+    monkeypatch.setattr(core.restore, 'apply_pending_restore', lambda log=print: None)
+    monkeypatch.setattr(core.integrity, 'log_boot_status', lambda: None)
+    monkeypatch.setattr(core.gpu_install, 'apply_pending', lambda log=print: None)
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('must not spawn'))
+    assert runner.run_sapphire() == 0
+    assert any('not starting Sapphire' in l for l in runner.lines)
+
+
+def test_the_gpu_install_runs_in_the_pre_start_window(runner, monkeypatch):
+    order = []
+    import core.updater, core.restore, core.integrity, core.gpu_install
+    monkeypatch.setattr(core.updater, 'apply_pending_update', lambda: order.append('update'))
+    monkeypatch.setattr(core.restore, 'apply_pending_restore', lambda log=print: order.append('restore'))
+    monkeypatch.setattr(core.gpu_install, 'apply_pending', lambda log=print: order.append('gpu'))
+    monkeypatch.setattr(core.integrity, 'log_boot_status', lambda: order.append('integrity'))
+
+    class Done:
+        returncode = 0
+        def wait(self, timeout=None):
+            order.append('spawn')
+            return 0
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: Done())
+    assert runner.run_sapphire() == 0
+    assert order == ['update', 'restore', 'gpu', 'integrity', 'spawn']

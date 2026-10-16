@@ -523,7 +523,10 @@ The Status page shows `[CPU]` with a warning mark next to TTS or STT while `cuda
 `user/logs/kokoro.log` says `torch.cuda.is_available()=False`, and the Status page or the TTS/STT
 settings tab says why. The card is almost never the problem:
 
-- **Windows:** the default `torch` from PyPI has no CUDA at all, for any card. Inside the sapphire env:
+- **Windows:** the default `torch` from PyPI has no CUDA at all, for any card. The TTS and STT settings
+  tabs offer **Install GPU torch and restart**, which picks the right wheel for your card (a 2-3 GB download;
+  it runs on the restart, before Sapphire boots, and the console or launcher pane shows pip's progress).
+  By hand, inside the sapphire env:
   ```
   pip install torch --index-url https://download.pytorch.org/whl/cu128
   ```

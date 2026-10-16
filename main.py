@@ -125,6 +125,15 @@ def run_sapphire():
     except Exception as e:
         log(f"Pending-restore apply raised: {e}", RED)
 
+    # A queued GPU torch install runs in this same window: nothing holds torch's
+    # DLLs before sapphire.py spawns, the only time pip can swap them on Windows.
+    # Never blocks boot; the result goes to user/last_gpu_install.json.
+    try:
+        from core.gpu_install import apply_pending as apply_pending_gpu_install
+        apply_pending_gpu_install(log=lambda m: log(m, YELLOW))
+    except Exception as e:
+        log(f"GPU install apply raised: {e}", RED)
+
     # Core integrity check (~22ms) — runs after any pending update applies, so it
     # catches a partial/half-applied update at boot instead of at crash-time. Logs via
     # the logging module (visible in journalctl) rather than the buffered launcher print.
@@ -133,6 +142,12 @@ def run_sapphire():
         log_boot_status()
     except Exception as e:
         log(f"Integrity boot check raised: {e}", YELLOW)
+
+    # A stop that arrived during the window above (Ctrl+C mid-pip) used to be
+    # followed by a full boot anyway. Honour it here.
+    if _runner_stopping:
+        log("Stop requested during the pre-start window; not starting Sapphire", YELLOW)
+        return 0
 
     try:
         _child_started = time.monotonic()
@@ -182,6 +197,10 @@ def main():
         signal.signal(signal.SIGTERM, handle_signal)
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, handle_signal)
+    if hasattr(signal, 'SIGBREAK'):
+        # Windows: a graceful stop from the launcher is CTRL_BREAK to our process
+        # group (the console group gets it, sapphire.py included), never taskkill
+        signal.signal(signal.SIGBREAK, handle_signal)
     
     log("Sapphire Runner starting", GREEN)
 
@@ -191,6 +210,8 @@ def main():
     from core.single_instance import acquire_or_exit, ENV_HELD, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
     _instance_lock = acquire_or_exit(Path(__file__).parent, who='The runner', log=lambda m: log(m, RED))
     os.environ[ENV_HELD] = str(os.getpid())
+    from core.single_instance import tie_children_to_me
+    _job = tie_children_to_me(log=lambda m: log(m, YELLOW))   # Windows: no child outlives this runner
     
     if args.once:
         log("Running in single-run mode (--once)", YELLOW)

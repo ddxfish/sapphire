@@ -89,3 +89,10 @@ def test_bind_listener_bad_host_is_not_port_taken():
 def test_exit_codes_are_what_the_runner_expects():
     assert (si.EXIT_ANOTHER_INSTANCE, si.EXIT_CONFIG) == (43, 44)
     assert si.ENV_HELD == 'SAPPHIRE_INSTANCE_LOCK'
+
+
+def test_job_object_is_windows_only_and_never_raises():
+    said = []
+    out = si.tie_children_to_me(log=said.append)
+    if sys.platform != 'win32':
+        assert out is None and said == []

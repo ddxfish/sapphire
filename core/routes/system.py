@@ -56,10 +56,33 @@ async def extras_install(name: str, request: Request, _=Depends(require_login)):
 async def gpu_state(request: Request, refresh: bool = False, _=Depends(require_login)):
     """Whether this torch can use the NVIDIA card: the boot probe's verdict,
     re-probed in the background when refresh is set (read again later)."""
-    from core import gpu_status
+    from core import gpu_status, gpu_install
+    from core.settings_manager import settings
     if refresh:
         gpu_status.start_background(refresh=True)
-    return gpu_status.peek()
+    out = gpu_status.peek()
+    out['install'] = gpu_install.plan(out, managed=settings.is_managed())   # what the button would do, or None
+    out['pending'] = gpu_install.pending()
+    out['last_install'] = gpu_install.last_result()
+    return out
+
+
+@router.post("/api/system/gpu/install")
+async def gpu_install_request(request: Request, _=Depends(require_login)):
+    """Queue the GPU torch install and restart. pip runs in the runner's window
+    before sapphire.py exists: a loaded torch DLL cannot be replaced on Windows."""
+    from core import gpu_status, gpu_install
+    from core.settings_manager import settings
+    from core.api_fastapi import get_restart_callback
+    p = gpu_install.plan(gpu_status.peek(), managed=settings.is_managed())
+    if not p:
+        raise HTTPException(status_code=400, detail="There is nothing to install for this box.")
+    callback = get_restart_callback()
+    if not callback:
+        raise HTTPException(status_code=503, detail="Restart is not available in this run mode.")
+    gpu_install.request(p['index'])
+    callback()
+    return {"status": "restarting", "index": p['index']}
 
 
 # =============================================================================

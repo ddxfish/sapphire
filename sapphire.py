@@ -236,6 +236,17 @@ class VoiceChatSystem:
                     f"(python tools/sign_plugin.py plugins/{_name}) or set ALLOW_UNSIGNED_PLUGINS=true."
                 )
                 print(f"\n{'='*60}\nSAPPHIRE WARNING: Essential plugin '{_name}' did not load ({reason})\nRunning in degraded mode — memory/core tools unavailable.\n{'='*60}\n", flush=True)
+                # The boot-toast lane is what the UI actually shows (the event
+                # below has no consumer, row 19, 2026-10-16).
+                try:
+                    if not any(e.get('plugin') == _name for e in _pl._load_errors):
+                        _pl._load_errors.append({
+                            'plugin': _name,
+                            'error': f"essential plugin did not load ({reason}); memory/core tools are unavailable",
+                            'hint': f"python tools/sign_plugin.py plugins/{_name}, or ALLOW_UNSIGNED_PLUGINS=true, then restart",
+                        })
+                except Exception:
+                    pass
             if self._missing_essential_plugins:
                 try:
                     from core.event_bus import publish, Events
@@ -937,8 +948,14 @@ class VoiceChatSystem:
 
     def _start_kokoro_server(self, base_dir):
         """Start Kokoro TTS subprocess if not already running."""
-        if self.tts_server_manager and self.tts_server_manager.is_running():
-            return
+        if self.tts_server_manager:
+            if self.tts_server_manager.is_running():
+                return
+            # A manager whose child is between death and respawn: stop it (that
+            # joins its monitor) before building another, or two monitors fight
+            # over the port for good (row 11, 2026-10-16).
+            self.tts_server_manager.stop()
+            self.tts_server_manager = None
         tts_script = base_dir / "core" / "tts" / "tts_server.py"
         if not tts_script.exists():
             logger.warning(f"Kokoro server script not found: {tts_script}")
@@ -1007,7 +1024,10 @@ class VoiceChatSystem:
         flag them and wait (bounded) so the engine's finally lands its row and
         counters instead of leaving a dangling user message. 2026-09-15."""
         llm = getattr(self, 'llm_chat', None)
-        if llm is None or not getattr(llm, 'any_streaming', lambda: False)():
+        if llm is None:
+            return
+        llm.closing = True      # begin_stream refuses new turns (inbox, cadence, continuity) from here on
+        if not getattr(llm, 'any_streaming', lambda: False)():
             return
         n = llm.cancel_streams()
         logger.info(f"Shutdown: cancelled {n} live turn(s), waiting up to {timeout}s for their writes")
@@ -1326,6 +1346,8 @@ def run():
         signal.signal(signal.SIGTERM, handle_shutdown_signal)
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, handle_shutdown_signal)
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, handle_shutdown_signal)   # Windows: the launcher's graceful stop
     
     # Auto-detect timezone if unset (upgrades skip setup wizard)
     _tz = getattr(config, 'USER_TIMEZONE', '') or ''

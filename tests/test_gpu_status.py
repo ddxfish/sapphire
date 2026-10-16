@@ -146,7 +146,8 @@ def test_route_returns_the_cached_verdict(client, monkeypatch):
     kicked = []
     monkeypatch.setattr(g, 'start_background', lambda refresh=False: kicked.append(refresh))
     r = c.get('/api/system/gpu')
-    assert r.status_code == 200 and r.json() == {'state': 'cpu_torch', 'message': 'x'}
+    assert r.status_code == 200
+    assert r.json()['state'] == 'cpu_torch' and r.json()['message'] == 'x' and 'install' in r.json()
     assert kicked == []
     assert c.get('/api/system/gpu?refresh=1').status_code == 200
     assert kicked == [True]

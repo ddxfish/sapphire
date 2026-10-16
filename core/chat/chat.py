@@ -293,6 +293,9 @@ class LLMChat:
         are one critical section so two simultaneous sends can't both pass.
         2026-08-29.
         """
+        if getattr(self, 'closing', False):
+            # shutting down: nothing new starts while the live turns drain (2026-10-16)
+            raise ChatBusy(chat_name or '')
         import secrets as _secrets
         stream = StreamingChat(self)
         stream.operator_lane = bool(operator)

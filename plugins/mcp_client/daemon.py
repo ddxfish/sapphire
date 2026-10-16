@@ -42,15 +42,19 @@ def start(plugin_loader, settings):
 
 
 def stop():
-    """Disconnect all MCP servers."""
+    """Disconnect all MCP servers. The loop runs its own cleanup first (each
+    stdio child's context exits, so no npx/uvx server is orphaned holding our
+    stderr); stopping the loop from outside is the last resort. Stopping it
+    first abandoned _main() mid-way and leaked a child per reload (2026-10-16)."""
     global _loop, _thread
     _stop_event.set()
 
-    if _loop and _loop.is_running():
-        _loop.call_soon_threadsafe(_loop.stop)
-
     if _thread and _thread.is_alive():
-        _thread.join(timeout=5)
+        _thread.join(timeout=8)
+    if _thread and _thread.is_alive() and _loop and _loop.is_running():
+        logger.warning("[MCP] daemon did not finish its own cleanup in time; stopping the loop")
+        _loop.call_soon_threadsafe(_loop.stop)
+        _thread.join(timeout=3)
 
     _loop = None
     _thread = None
