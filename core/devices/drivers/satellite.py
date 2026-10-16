@@ -110,6 +110,11 @@ SPEC = {
          'options': [{'value': '0', 'label': 'landscape'}, {'value': '90', 'label': 'portrait'},
                      {'value': '180', 'label': 'landscape, upside down'}, {'value': '270', 'label': 'portrait, the other way up'}],
          'help': "How the glass sits. The board restarts to draw that way (a CYD reader; other boards take Upside down)."},
+        # a CYD glass comes in variants: these two put a wrong one right at once, no restart (firmware 0.5.1)
+        {'key': 'invert', 'takes': 'screen.invert', 'type': 'boolean', 'label': 'Invert colors', 'capability': 'screen',
+         'help': 'For a glass that shows the test card in negative: red as cyan, white as black. At once.'},
+        {'key': 'mirror', 'takes': 'screen.mirror', 'type': 'boolean', 'label': 'Mirror image', 'capability': 'screen',
+         'help': 'For a glass that scans the other way: the test card reads backwards. At once; its touch follows.'},
         {'key': 'flip', 'takes': 'screen.flip', 'type': 'boolean', 'label': 'Upside down', 'capability': 'screen',
          'help': 'Turns the picture and its touch 180 degrees, for a board mounted the other way up.'},
         {'key': 'home', 'takes': 'screen.home', 'type': 'select', 'label': 'Opens on', 'capability': 'screen', 'default': 'chat',
@@ -265,8 +270,9 @@ def apply(device, config, secrets):
         except Problem as e:
             raise _engine_error(str(e))
     screen = {k: int(config[k]) for k in SCREEN_KEYS if isinstance(config.get(k), (int, float))}
-    if isinstance(config.get('flip'), bool):
-        screen['flip'] = config['flip']
+    for k in ('flip', 'invert', 'mirror'):
+        if isinstance(config.get(k), bool):
+            screen[k] = config[k]              # a board without the word (a CYD has no flip, the audio board no invert) ignores it
     if str(config.get('rotation', '')).isdigit():
         screen['rotation'] = int(config['rotation'])   # a board without it (one with `flip`) ignores the word
     if isinstance(config.get('home'), str) and config['home']:

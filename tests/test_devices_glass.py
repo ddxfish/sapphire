@@ -129,7 +129,7 @@ def test_a_board_that_cannot_be_reached_is_tried_again():
 
 def test_saving_a_device_sends_its_screen_settings_only_to_a_board_with_a_screen():
     from core.devices.drivers import satellite as sat
-    config = {'url': 'http://b', 'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10, 'flip': True}
+    config = {'url': 'http://b', 'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10, 'flip': True, 'invert': True, 'mirror': False}
     for has, expect in ((['screen'], True), (['speaker'], False)):
         calls = []
         with patch.object(sat, '_call', side_effect=lambda m, path, c, s, **kw: calls.append((m, path, kw.get('json')))), \
@@ -139,7 +139,7 @@ def test_saving_a_device_sends_its_screen_settings_only_to_a_board_with_a_screen
         sent = [c for c in calls if c[1] == '/screen/settings']
         assert bool(sent) == expect
         if expect:
-            assert sent[0] == ('PUT', '/screen/settings', {'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10, 'flip': True})
+            assert sent[0] == ('PUT', '/screen/settings', {'brightness': 60, 'dim': 5, 'dim_after_s': 30, 'off_after_min': 10, 'flip': True, 'invert': True, 'mirror': False})
 
 
 def test_wanted_names_the_model_and_the_trim_of_the_chat():
@@ -178,4 +178,7 @@ def test_a_board_is_shown_only_what_it_says_it_takes():
     glass_board = {'has': ['screen', 'mic'], 'screen': {'w': 320, 'h': 240, 'format': 'rgb565be', 'brightness': 80}, 'mic': {'max_s': 30}}
     assert {'screen.picture', 'screen.brightness', 'mic.max_s', 'look.resting'} <= set(sat._takes(glass_board))
     assert 'picture' not in sat.describe({'id': 'x', 'takes': takes}, {})['screen']['actions']
+    cyd = {'has': ['screen'], 'screen': {'w': 320, 'h': 240, 'format': 'rgb565be', 'rotation': 0, 'invert': False, 'mirror': False}}
+    shown = {k for k, f in fields.items() if engine.taken(f, {'takes': sat._takes(cyd)})}
+    assert {'rotation', 'invert', 'mirror'} <= shown and 'flip' not in shown   # a CYD: the glass knobs, not the stick's flip
     assert 'picture' in sat.describe({'id': 'x', 'takes': sat._takes(glass_board)}, {})['screen']['actions']
