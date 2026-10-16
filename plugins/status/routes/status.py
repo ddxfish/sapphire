@@ -552,6 +552,12 @@ def get_full_status_sync(scope=_FROM_CHAT):
             },
         }
 
+        try:
+            from core import gpu_status
+            services["gpu"] = gpu_status.peek()   # why cuda fell back to cpu, when it did
+        except Exception:
+            pass
+
         # Daemons
         daemons = {}
         try:

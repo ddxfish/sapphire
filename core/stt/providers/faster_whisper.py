@@ -93,7 +93,13 @@ class FasterWhisperProvider(BaseSTTProvider):
                 else:
                     logger.warning(f"CUDA device {cuda_device} not available ({available_gpus} GPUs)")
 
-            logger.info("Falling back to CPU model with int8")
+            if device == "cuda":
+                _why = ("this torch build has no CUDA (the default Windows torch from PyPI)" if not torch.version.cuda
+                        else f"torch has CUDA {torch.version.cuda} but could not use the GPU")
+                logger.warning(f"Whisper: {_why} - falling back to the CPU (int8). "
+                               "See docs/TROUBLESHOOTING.md 'Voice runs on the CPU'")
+            else:
+                logger.info("Falling back to CPU model with int8")
             self.model = _load_whisper(WhisperModel, model_size, device="cpu",
                                        compute_type="int8", num_workers=num_workers)
             logger.info("Successfully loaded model on CPU")

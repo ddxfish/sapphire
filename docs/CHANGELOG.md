@@ -1,3 +1,7 @@
+# 2.14.3 - Rebuilt startup
+- Better GPU detection and error logs
+- Removed second half-rebooted version of the app on edge case failures
+- Child lifecycle relies on parent, so exits can be correct codes for watchdog
 # 2.14.2 - Group chat room
 - Multiple personas can chat in app
 - Can invite other sapphires in device manager

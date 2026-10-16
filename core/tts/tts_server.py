@@ -131,10 +131,12 @@ if _kokoro_device == 'cuda':
     try:
         import torch as _torch_check
         if not _torch_check.cuda.is_available():
-            logger.warning(
-                "KOKORO_DEVICE='cuda' but torch.cuda.is_available()=False "
-                "(no GPU, broken driver, or CUDA libs missing) — using cpu"
-            )
+            _why = ("this torch build has no CUDA (the default Windows torch from PyPI)"
+                    if not _torch_check.version.cuda else
+                    f"torch has CUDA {_torch_check.version.cuda} but cannot open the GPU "
+                    "(no card, driver too old, or a build that does not know this card)")
+            logger.warning(f"KOKORO_DEVICE='cuda' but torch.cuda.is_available()=False: {_why} - using cpu. "
+                           "See docs/TROUBLESHOOTING.md 'Voice runs on the CPU'")
             _kokoro_device = 'cpu'
     except Exception as e:
         logger.warning(f"CUDA availability check failed ({e}) — using cpu")
@@ -211,6 +213,27 @@ def _init_kpipeline():
     return KPipeline(lang_code='a', repo_id=REPO_ID, model=kmodel)
 
 
+
+def _claim_port():
+    """A port already held (an older Kokoro, a stranger) is a one-line exit
+    now, not a 10 s model load first. The real bind below repeats this
+    exclusively on Windows (2026-10-16)."""
+    s = socket.socket(socket.AF_INET6 if ':' in str(HOST) else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if sys.platform == 'win32':
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((HOST, PORT))
+    except OSError as e:
+        logger.error(f"Port {PORT} on {HOST} is not free ({e}): another Kokoro or program holds it. Not loading the model.")
+        sys.exit(75)
+    finally:
+        s.close()
+
+
+if __name__ == '__main__':
+    _claim_port()          # only as the server: an importer (tests) must never be exited
 pipeline = _init_kpipeline()
 logger.info(f"Model loaded successfully on device='{_kokoro_device}'. Using temp dir: {TEMP_DIR}")
 # Warm the default voice: a box that can't reach Hugging Face says so here,
@@ -637,6 +660,14 @@ class TTSHandler(BaseHTTPRequestHandler):
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """HTTPServer that handles each request in a new thread."""
     daemon_threads = True
+    # Windows: the stdlib default SO_REUSEADDR lets a second Kokoro co-bind the
+    # port silently (two servers, double VRAM, one answers). Exclusive there.
+    allow_reuse_address = sys.platform != 'win32'
+
+    def server_bind(self):
+        if sys.platform == 'win32':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def main():

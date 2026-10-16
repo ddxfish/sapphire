@@ -146,6 +146,7 @@ function renderDashboard(el, d) {
                         <div class="status-svc-row">${dot(svc.wakeword?.enabled)} Wakeword${svc.wakeword?.model ? ': ' + esc(svc.wakeword.model) : ''}</div>
                         <div class="status-svc-row">${dot(svc.embeddings?.enabled)} Embeddings: ${esc(svc.embeddings?.provider || 'off')}</div>
                         <div class="status-svc-row">${dot(svc.socks?.enabled)} SOCKS Proxy${svc.socks?.enabled ? (svc.socks.has_credentials ? ' (creds set)' : ' (no creds)') : ''}</div>
+                        ${svc.gpu?.message ? `<div class="status-svc-row" style="opacity:0.85" title="${esc(svc.gpu.state)}">&#9888; ${esc(svc.gpu.message)}</div>` : ''}
                         ${Object.entries(daemons).map(([k,v]) =>
                             `<div class="status-svc-row">${dot(v === 'running')} ${esc(k)}: ${esc(v)}</div>`
                         ).join('')}
@@ -444,6 +445,7 @@ function renderDashboard(el, d) {
             ``,
             `=== Services ===`,
             `TTS: ${svc.tts?.provider || 'off'}${svc.tts?.voice ? ' (' + svc.tts.voice + ')' : ''} | STT: ${svc.stt?.provider || 'off'}`,
+            svc.gpu?.message ? `GPU: ${svc.gpu.message}` : (svc.gpu?.state ? `GPU: ${svc.gpu.state}` : ''),
             `Wakeword: ${svc.wakeword?.enabled ? 'ON' : 'OFF'} | Embeddings: ${svc.embeddings?.provider || 'off'} | SOCKS: ${svc.socks?.enabled ? 'ON' : 'OFF'}`,
             `Audio In: ${audio.input || 'default'} | Audio Out: ${audio.output || 'default'}`,
             Object.keys(daemons).length ? `Daemons: ${Object.entries(daemons).map(([k,v]) => `${k}: ${v}`).join(', ')}` : '',

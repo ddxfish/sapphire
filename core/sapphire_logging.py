@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+import threading
 import faulthandler
 import logging
 import shutil
@@ -26,8 +28,11 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-# Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
-faulthandler.enable()
+# Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr. Under pythonw there
+# is no stderr and enable() raises, which killed every boot there; the startup
+# log below takes the dump instead (2026-10-16).
+if sys.stderr is not None:
+    faulthandler.enable()
 
 # Pytest imports this module transitively (and test_log_level_hot_reload
 # directly). Without a guard, the TEST process attaches the SAME
@@ -45,7 +50,12 @@ if not _UNDER_PYTEST:
     try:
         os.makedirs(_ROOT / 'user/logs', exist_ok=True)
         _startup_log = open(_ROOT / 'user/logs/startup_errors.log', 'a', encoding='utf-8')
-        _startup_log.write(f"\n--- Startup attempt ---\n")
+        _startup_log.write(f"\n--- Startup attempt pid={os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        # Flush now: a process ended from outside never flushes, and an empty
+        # file here used to mean 'every exit was a kill', not 'nothing happened'.
+        _startup_log.flush()
+        if sys.stderr is None:
+            faulthandler.enable(file=_startup_log)
     except Exception:
         pass
 
@@ -186,6 +196,24 @@ def _quiet_noisy_loggers():
         logging.getLogger(_name).setLevel(logging.WARNING)
 
 _quiet_noisy_loggers()
+
+
+# Threads die quietly: the default hook prints to stderr (never the app log)
+# and ignores SystemExit altogether. uvicorn's bind failure was exactly that
+# (2026-10-16). Every thread death lands in the log, SystemExit included.
+def _thread_excepthook(args):
+    name = getattr(getattr(args, 'thread', None), 'name', '?')
+    if args.exc_type is SystemExit:
+        code = getattr(args.exc_value, 'code', None)
+        logging.getLogger('threads').error(
+            f"Thread '{name}' called sys.exit({code!r}); the thread is gone, the process is not")
+        return
+    logging.getLogger('threads').error(f"Unhandled exception in thread '{name}'",
+                                       exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+
+if not _UNDER_PYTEST:
+    threading.excepthook = _thread_excepthook
 
 
 def set_log_level(level_name):

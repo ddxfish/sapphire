@@ -82,6 +82,8 @@ cd sapphire
 pip install -r requirements.txt
 ```
 
+> **Windows with an NVIDIA GPU:** the default `torch` from PyPI has no CUDA, so voice would run on the CPU. After the requirements, in the same env: `pip install torch --index-url https://download.pytorch.org/whl/cu128` (GTX 10-series or older: `cu126`). Linux gets CUDA from PyPI already. Details: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#voice-runs-on-the-cpu-gpu-found-torch-cannot-use-it).
+
 ### Minimal Install
 
 For a lighter footprint without voice features:

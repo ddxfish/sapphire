@@ -1,6 +1,7 @@
 import os
 import subprocess
 import signal
+import concurrent.futures
 import logging
 import threading
 import time
@@ -32,84 +33,73 @@ def _make_child_die_with_parent():
             pass  # Fall back to setsid only
 
 
-def kill_process_on_port(port: int) -> bool:
-    """
-    Kill any process listening on the specified port.
-    Returns True if a process was killed, False otherwise.
-    """
+# PR_SET_PDEATHSIG fires when the THREAD that forked exits, not the process.
+# A service started from a web worker thread (anyio prunes idle workers after
+# 10 s), an env-build callback or the extras pip thread got a spurious SIGTERM
+# minutes later. Every spawn goes through this one thread, which lives as long
+# as the process does (2026-10-16 scouts, tmp/single-instance-plan.md row 8).
+_spawner = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='spawner')
+
+
+def _spawn(*args, **kwargs):
+    """subprocess.Popen, from the long-lived spawner thread on Unix."""
     if IS_WINDOWS:
+        return subprocess.Popen(*args, **kwargs)
+    return _spawner.submit(subprocess.Popen, *args, **kwargs).result()
+
+
+def kill_process_on_port(port: int, owner: str = None) -> bool:
+    """Kill the process LISTENING on `port` when it is ours, never otherwise.
+
+    Ours = its command line contains `owner` (the service script, or the
+    Sapphire root for plugin services) and it is neither this process nor its
+    parent. A stranger on the port is logged and left alone: the service then
+    fails to bind and says so, instead of us shooting a neighbour. Needs
+    psutil (always present with the voice stack); without it nothing is
+    killed. The old netstat/fuser/lsof walk matched by port alone, read a
+    localized Windows netstat, listed CLIENTS with lsof and could SIGTERM
+    Sapphire herself (2026-10-16 scouts).
+    """
+    try:
+        import psutil
+    except ImportError:
+        logger.warning(f"psutil missing: cannot tell who holds port {port}, leaving it alone")
+        return False
+    owner = owner or str(Path(__file__).absolute().parent.parent)
+    me, parent = os.getpid(), os.getppid()
+    try:
+        conns = psutil.net_connections(kind='tcp')
+    except Exception as e:
+        logger.debug(f"net_connections failed: {e}")
+        return False
+    killed = False
+    for c in conns:
+        if c.status != psutil.CONN_LISTEN or not c.laddr or c.laddr.port != port or not c.pid:
+            continue
+        if c.pid in (me, parent):
+            continue
         try:
-            result = subprocess.run(
-                ['netstat', '-ano', '-p', 'TCP'],
-                capture_output=True, text=True, timeout=5,
-                encoding='utf-8', errors='replace',
-            )
-            killed = False
-            # "TCP  0.0.0.0:5012  0.0.0.0:0  LISTENING  1234" — compare the port
-            # EXACTLY: the old substring test on ':5012' also matched :50120-9,
-            # taskkilled a stranger, then returned before reaching the real orphan.
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if len(parts) < 5 or parts[3] != 'LISTENING':
-                    continue
-                if parts[1].rsplit(':', 1)[-1] != str(port):
-                    continue
-                pid = int(parts[-1])
-                if pid > 0:
-                    subprocess.run(['taskkill', '/F', '/PID', str(pid)], timeout=5)
-                    logger.info(f"Killed orphan process {pid} on port {port}")
-                    killed = True
-            return killed
+            proc = psutil.Process(c.pid)
+            cmd = ' '.join(proc.cmdline())
+            name = proc.name()
+        except Exception:
+            continue                        # cannot identify it: cannot kill it
+        if owner not in cmd:
+            logger.warning(f"Port {port} is held by pid {c.pid} ({name}), not one of ours; leaving it alone")
+            continue
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except psutil.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         except Exception:
             pass
-        return False
-
-    try:
-        # Find PID using fuser
-        result = subprocess.run(
-            ['fuser', f'{port}/tcp'],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            encoding='utf-8', errors='replace',
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split()
-            for pid in pids:
-                try:
-                    pid_int = int(pid.strip())
-                    os.kill(pid_int, signal.SIGTERM)
-                    logger.info(f"Killed orphan process {pid_int} on port {port}")
-                except (ValueError, ProcessLookupError):
-                    pass
-            time.sleep(0.5)  # Let it die
-            return True
-    except FileNotFoundError:
-        # fuser not available, try lsof
-        try:
-            result = subprocess.run(
-                ['lsof', '-ti', f':{port}'],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                encoding='utf-8', errors='replace',
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                for pid in result.stdout.strip().split('\n'):
-                    try:
-                        pid_int = int(pid.strip())
-                        os.kill(pid_int, signal.SIGTERM)
-                        logger.info(f"Killed orphan process {pid_int} on port {port}")
-                    except (ValueError, ProcessLookupError):
-                        pass
-                time.sleep(0.5)
-                return True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-    except subprocess.TimeoutExpired:
-        pass
-
-    return False
+        logger.info(f"Killed orphan process {c.pid} ({name}) on port {port}")
+        killed = True
+    return killed
 
 
 class ProcessManager:
@@ -144,6 +134,8 @@ class ProcessManager:
         self._python_exe = str(python_exe) if python_exe else None
         self._monitor_thread = None
         self._monitor_running = False
+        self._stop_event = threading.Event()    # wakes the monitor at once on stop()
+        self._lock = threading.RLock()          # start/stop and the monitor's restart decision
         self._env_callback = env_callback
 
     def start(self):
@@ -197,15 +189,15 @@ class ProcessManager:
             with open(self.log_file, "w") as log:
                 if IS_WINDOWS:
                     # Windows: no process groups, just start the process
-                    self.process = subprocess.Popen(
+                    self.process = _spawn(
                         self.command,
                         stdout=log,
                         stderr=log,
                         env=spawn_env
                     )
                 else:
-                    # Unix: new session + die-with-parent for clean orphan handling
-                    self.process = subprocess.Popen(
+                    # Unix: new session + die-with-parent, from the spawner thread
+                    self.process = _spawn(
                         self.command,
                         stdout=log,
                         stderr=log,
@@ -223,9 +215,21 @@ class ProcessManager:
             return False
 
     def stop(self):
-        """Stops the external script process and monitoring."""
-        self._monitor_running = False
-        
+        """Stops the external script process and monitoring.
+
+        The monitor is told first and joined, so it cannot respawn the child we
+        are about to kill: that race was live, stop() returned and a fresh child
+        appeared two seconds later (2026-10-16 scouts, row 10)."""
+        with self._lock:
+            self._monitor_running = False
+            self._stop_event.set()
+            monitor = self._monitor_thread
+        if monitor is not None and monitor.is_alive() and monitor is not threading.current_thread():
+            monitor.join(timeout=5)
+        with self._lock:
+            self._stop_process()
+
+    def _stop_process(self):
         if self.process and self.process.poll() is None:
             if IS_WINDOWS:
                 # Windows: terminate then kill if needed
@@ -243,9 +247,14 @@ class ProcessManager:
                         logger.error(f"Process '{self.script_path.name}' could not be killed.")
             else:
                 # Unix: kill entire process group
-                logger.info(f"Stopping process group for '{self.script_path.name}' (PGID: {os.getpgid(self.process.pid)})...")
                 try:
-                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                    pgid = os.getpgid(self.process.pid)
+                except ProcessLookupError:
+                    logger.info(f"Process '{self.script_path.name}' ended on its own.")
+                    return
+                logger.info(f"Stopping process group for '{self.script_path.name}' (PGID: {pgid})...")
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
                     self.process.wait(timeout=10)
                     logger.info(f"Process '{self.script_path.name}' stopped successfully.")
                 except (subprocess.TimeoutExpired, ProcessLookupError):
@@ -273,15 +282,14 @@ class ProcessManager:
             return
         
         self._monitor_running = True
+        self._stop_event.clear()
         
         def _monitor():
             logger.info(f"Monitor started for '{self.script_path.name}' (interval: {check_interval}s)")
             retry_warns = 0  # throttle for the never-started branch (wave-3 A2)
 
             while self._monitor_running:
-                time.sleep(check_interval)
-                
-                if not self._monitor_running:
+                if self._stop_event.wait(check_interval):
                     break
                 
                 if self.process is None or self.process.poll() is not None:
@@ -303,11 +311,13 @@ class ProcessManager:
                                            f"(initial start failed?) — retrying start "
                                            f"(attempt {retry_warns})...")
 
-                    # Brief delay before restart
-                    time.sleep(2)
-                    
-                    if self._monitor_running:
-                        if self.start():
+                    # Brief delay before restart; stop() wakes us instead of waiting it out
+                    if self._stop_event.wait(2):
+                        break
+
+                    # Under the lock: stop() cannot slip between this check and the spawn
+                    with self._lock:
+                        if self._monitor_running and self.start():
                             retry_warns = 0  # healthy again — reset throttle
             
             logger.info(f"Monitor stopped for '{self.script_path.name}'")

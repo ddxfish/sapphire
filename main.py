@@ -5,6 +5,8 @@
 # Exit codes from sapphire.py:
 #   0  = Clean shutdown
 #   42 = Restart requested
+#   43 = Another Sapphire is running (instance lock or web port held) - not restarted
+#   44 = Configuration error (web host, port or certificate) - not restarted
 #   *  = Crash/error
 #
 # Signal exit codes (treated as clean shutdown):
@@ -12,6 +14,7 @@
 #   -15, 143 = SIGTERM
 #   -1, 129  = SIGHUP
 
+import os
 import sys
 import subprocess
 import signal
@@ -30,6 +33,9 @@ RESET = '\033[0m'
 # Signal state
 _runner_stopping = False
 _child_process = None
+_child_started = 0.0   # monotonic, set at spawn: a crash after a long healthy run is not the next strike
+HEALTHY_SECONDS = 60
+STOP_GRACE = 90        # seconds after a stop signal before the runner kills a child that will not end
 
 # Exit codes that mean "user requested stop" not "crash"
 CLEAN_EXIT_CODES = {
@@ -70,9 +76,27 @@ def handle_signal(signum, frame):
             pass  # Child already dead
     
 
+def _wait_for_child(proc):
+    """Wait for sapphire.py. Signals are forwarded by handle_signal(); after one,
+    a child that does not end within STOP_GRACE seconds is killed, so a wedged
+    shutdown cannot hang the runner (and the launcher) forever. sapphire.py's
+    own teardown watchdog fires first, at 60 s, with the thread stacks."""
+    deadline = None
+    while True:
+        try:
+            return proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if _runner_stopping and deadline is None:
+                deadline = time.monotonic() + STOP_GRACE
+            if deadline is not None and time.monotonic() > deadline:
+                log(f"Sapphire did not stop within {STOP_GRACE}s, killing it", RED)
+                proc.kill()
+                return proc.wait()
+
+
 def run_sapphire():
     """Run sapphire.py and return its exit code."""
-    global _child_process
+    global _child_process, _child_started
 
     script_path = Path(__file__).parent / "sapphire.py"
 
@@ -111,6 +135,7 @@ def run_sapphire():
         log(f"Integrity boot check raised: {e}", YELLOW)
 
     try:
+        _child_started = time.monotonic()
         _child_process = subprocess.Popen(
             [sys.executable, str(script_path)],
             stdin=sys.stdin,
@@ -118,11 +143,7 @@ def run_sapphire():
             stderr=sys.stderr
         )
 
-        # Wait indefinitely - signals are forwarded via handle_signal(), so Ctrl+C
-        # will reach the child. No timeout/watchdog needed; if child hangs, user
-        # can still Ctrl+C which sets _runner_stopping and forwards SIGINT.
-        _child_process.wait()
-        exit_code = _child_process.returncode
+        exit_code = _wait_for_child(_child_process)
         _child_process = None
         return exit_code
 
@@ -163,6 +184,13 @@ def main():
         signal.signal(signal.SIGHUP, handle_signal)
     
     log("Sapphire Runner starting", GREEN)
+
+    # One Sapphire per user/. The second runner stops HERE, before the update
+    # window and before any core import touches settings; the lock dies with
+    # this process and the child is told the runner holds it (2026-10-16).
+    from core.single_instance import acquire_or_exit, ENV_HELD, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
+    _instance_lock = acquire_or_exit(Path(__file__).parent, who='The runner', log=lambda m: log(m, RED))
+    os.environ[ENV_HELD] = str(os.getpid())
     
     if args.once:
         log("Running in single-run mode (--once)", YELLOW)
@@ -187,6 +215,14 @@ def main():
             log("Clean shutdown, exiting runner", GREEN)
             sys.exit(0)
         
+        # Another instance, or a configuration that cannot work: restarting
+        # would only repeat the same line five times and then give up anyway.
+        if exit_code in (EXIT_ANOTHER_INSTANCE, EXIT_CONFIG):
+            log("Not restarting: " + ("another Sapphire holds the instance lock or the web port"
+                                      if exit_code == EXIT_ANOTHER_INSTANCE else
+                                      "configuration error (web host, port or certificate), see the lines above"), RED)
+            sys.exit(exit_code)
+
         # Restart requested
         if exit_code == 42:
             log("Restart requested, restarting in 1 second...", YELLOW)
@@ -200,8 +236,11 @@ def main():
             continue
         
         # Crash or error
+        if _child_started and time.monotonic() - _child_started >= HEALTHY_SECONDS:
+            consecutive_crashes = 0   # it ran healthy for a while: a new story, not strike N
         consecutive_crashes += 1
-        log(f"Crashed with exit code {exit_code} (crash {consecutive_crashes}/{args.max_crashes})", RED)
+        hint = " - no traceback above means it was ended from outside (taskkill, launcher Stop, Task Manager)" if exit_code == 1 else ""
+        log(f"Crashed with exit code {exit_code} (crash {consecutive_crashes}/{args.max_crashes}){hint}", RED)
         
         if consecutive_crashes >= args.max_crashes:
             log(f"Too many consecutive crashes, giving up", RED)

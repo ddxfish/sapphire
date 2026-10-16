@@ -1,6 +1,7 @@
 // settings-tabs/tts.js - Text-to-speech provider settings
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
+import { gpuNotice } from '../../shared/gpu-notice.js';
 
 let _mergedConfig = null;
 
@@ -68,7 +69,8 @@ export default {
                     </button>
                     <span id="tts-test-result" style="margin-left: 0.75rem; font-size: var(--font-sm);"></span>
                 </div>
-            </div>`;
+            </div>
+            <div id="tts-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>`;
         return html;
     },
 
@@ -93,6 +95,7 @@ export default {
         }
         const cfg = _mergedConfig || tabConfig;
         attachProviderListeners(cfg, ctx, el, this);
+        gpuNotice(el, '#tts-gpu-notice');
 
         const btn = el.querySelector('#tts-test-btn');
         const result = el.querySelector('#tts-test-result');

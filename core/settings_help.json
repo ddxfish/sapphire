@@ -198,7 +198,7 @@
   },
   "FASTER_WHISPER_DEVICE": {
     "short": "Compute device for Whisper inference",
-    "long": "Which hardware to use for speech recognition. 'cpu' uses processor (slower but works everywhere). 'cuda' uses NVIDIA GPU (much faster, requires CUDA-capable GPU). 'auto' automatically detects best available option."
+    "long": "Which hardware to use for speech recognition. 'cpu' uses processor (slower but works everywhere). 'cuda' uses NVIDIA GPU (much faster, requires CUDA-capable GPU). 'auto' automatically detects best available option. If the Status page shows CPU while cuda is selected, torch cannot use the card: see TROUBLESHOOTING.md, 'Voice runs on the CPU'."
   },
   "FASTER_WHISPER_COMPUTE_TYPE": {
     "short": "Precision/quantization for Whisper model",
@@ -282,7 +282,7 @@
   },
   "KOKORO_DEVICE": {
     "short": "Compute device for Kokoro TTS",
-    "long": "Which hardware Kokoro uses for synthesis. 'cuda' uses NVIDIA GPU (much faster, adds ~1-2GB VRAM). 'cpu' uses processor (slower, frees VRAM for other models). Requires Sapphire restart to take effect."
+    "long": "Which hardware Kokoro uses for synthesis. 'cuda' uses NVIDIA GPU (much faster, adds ~1-2GB VRAM). 'cpu' uses processor (slower, frees VRAM for other models). Requires Sapphire restart to take effect. If the Status page shows CPU while cuda is selected, torch cannot use the card: see TROUBLESHOOTING.md, 'Voice runs on the CPU'."
   },
   "KOKORO_CUDA_DEVICE": {
     "short": "GPU index for Kokoro (multi-GPU)",

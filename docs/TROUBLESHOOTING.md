@@ -517,6 +517,22 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 - STT with base Whisper models uses ~2-3GB.
 - TTS (Kokoro) uses ~2-3GB.
 
+### Voice runs on the CPU (GPU found, torch cannot use it)
+
+The Status page shows `[CPU]` with a warning mark next to TTS or STT while `cuda` is selected,
+`user/logs/kokoro.log` says `torch.cuda.is_available()=False`, and the Status page or the TTS/STT
+settings tab says why. The card is almost never the problem:
+
+- **Windows:** the default `torch` from PyPI has no CUDA at all, for any card. Inside the sapphire env:
+  ```
+  pip install torch --index-url https://download.pytorch.org/whl/cu128
+  ```
+  GTX 10-series and 900-series cards (Pascal, Maxwell) are not in the cu128 build: use `cu126` in the URL instead.
+- **"is not in this torch build":** the build predates your card (RTX 50-series needs CUDA 12.8 or newer). Same command.
+- **"driver may be too old":** update the NVIDIA driver. In Docker, make sure the container was given the GPU.
+
+Restart Sapphire afterwards. Linux installs get CUDA from PyPI already and usually only hit the driver case.
+
 ### Troubleshoot Nvidia 5000 series on Linux
 Try Sapphire first. Most won't need this. Only do this if STT and TTS are not using your GPU. It's a nightly build of torch with cuda 12.8 that may work better with the Linux open-kernel drivers if you get stuck. Don't use this if you don't need it.
 

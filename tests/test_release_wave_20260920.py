@@ -55,34 +55,34 @@ def test_conda_env_detected_by_conda_meta_without_activation(tmp_path, monkeypat
     assert _conda_env_name() == "other"
 
 
-# ---- netstat exact port ----------------------------------------------------
+# ---- port killer: exact port, listeners only --------------------------------
+# 2026-10-16: the netstat/fuser walk became a psutil walk with an ownership
+# check (tests/test_port_killer.py has the full set). The rule this guarded
+# stays: port 5012 exactly, both listeners, never :50120, never a client.
 
-NETSTAT = """
-Active Connections
-
-  Proto  Local Address          Foreign Address        State           PID
-  TCP    0.0.0.0:50120          0.0.0.0:0              LISTENING       111
-  TCP    127.0.0.1:5012         0.0.0.0:0              LISTENING       222
-  TCP    [::]:5012              [::]:0                 LISTENING       333
-  TCP    127.0.0.1:5012         127.0.0.1:60001        ESTABLISHED     444
-"""
-
-
-def test_windows_orphan_kill_matches_port_exactly(monkeypatch):
+def test_orphan_kill_matches_port_exactly(monkeypatch):
     import core.process_manager as pm
-    calls = []
 
-    def fake_run(argv, **kw):
-        if argv[0] == "netstat":
-            return types.SimpleNamespace(stdout=NETSTAT, returncode=0)
-        calls.append(argv)
-        return types.SimpleNamespace(stdout="", returncode=0)
+    class Proc:
+        def __init__(self, pid):
+            self.pid, self.ended = pid, False
+        def cmdline(self): return ['python', '/srv/sapphire/core/tts/tts_server.py']
+        def name(self): return 'python'
+        def terminate(self): self.ended = True
+        def wait(self, timeout=None): pass
+        def kill(self): pass
 
-    monkeypatch.setattr(pm, "IS_WINDOWS", True)
-    monkeypatch.setattr(pm.subprocess, "run", fake_run)
-    assert pm.kill_process_on_port(5012) is True
-    killed = {a[-1] for a in calls}
-    assert killed == {"222", "333"}, killed          # both listeners on 5012, never 50120
+    procs = {pid: Proc(pid) for pid in (111, 222, 333, 444)}
+    conn = lambda port, pid, status='LISTEN': types.SimpleNamespace(
+        status=status, laddr=types.SimpleNamespace(port=port), pid=pid)
+    fake = types.SimpleNamespace(
+        CONN_LISTEN='LISTEN', TimeoutExpired=type('TimeoutExpired', (Exception,), {}),
+        net_connections=lambda kind='tcp': [conn(50120, 111), conn(5012, 222), conn(5012, 333),
+                                            conn(5012, 444, 'ESTABLISHED')],
+        Process=lambda pid: procs[pid])
+    monkeypatch.setitem(sys.modules, 'psutil', fake)
+    assert pm.kill_process_on_port(5012, owner='/srv/sapphire') is True
+    assert {pid for pid, p in procs.items() if p.ended} == {222, 333}
 
 
 # ---- MCP daemon loop -------------------------------------------------------

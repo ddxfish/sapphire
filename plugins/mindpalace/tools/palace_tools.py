@@ -487,6 +487,11 @@ def _ensure_db():
                         # build a fresh schema on top of the corrupt file.
                         if not _safe_rename_corrupted(db_path):
                             return False
+                except sqlite3.OperationalError as e:
+                    # Locked, busy, unreadable is not corruption (another process still
+                    # holds it); never rename the live DB for that. Next call retries.
+                    logger.error(f"[MINDPALACE] DB not available at boot, leaving it untouched: {e}")
+                    return False
                 except sqlite3.DatabaseError as e:
                     logger.error(f"[MINDPALACE] Database corrupted: {e}")
                     if not _safe_rename_corrupted(db_path):

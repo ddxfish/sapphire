@@ -1,6 +1,7 @@
 // settings-tabs/stt.js - Speech-to-text provider settings + VAD tuning
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
+import { gpuNotice } from '../../shared/gpu-notice.js';
 
 let _mergedConfig = null;
 
@@ -161,7 +162,8 @@ export default {
 
     render(ctx) {
         const cfg = _mergedConfig || tabConfig;
-        return renderProviderTab(cfg, ctx) + renderVADSection(ctx);
+        return renderProviderTab(cfg, ctx) + renderVADSection(ctx)
+            + '<div id="stt-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>';
     },
 
     async attachListeners(ctx, el) {
@@ -188,6 +190,7 @@ export default {
         // the generic tab render and the VAD section, badge poll and test
         // button vanished until the tab was re-entered (D2#2, 2026-09-08).
         attachProviderListeners(cfg, ctx, el, this);
+        gpuNotice(el, '#stt-gpu-notice');
 
         // VAD wiring — badge polling + test button only. The checkbox is
         // bound by the generic data-key path, no manual handlers here.

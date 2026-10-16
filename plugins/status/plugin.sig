@@ -2,10 +2,10 @@
   "plugin": "status",
   "version": "1.2.0",
   "files": {
-    "app/index.js": "sha256:18f8eb6fdb37d996ef0f732613a86f598d098a781d12befd3ba7dae90eba6c6b",
+    "app/index.js": "sha256:f3740568d42a46544f593bf1158036a2db5e5b22681f79d3b6298065520c1cc6",
     "plugin.json": "sha256:b6bb7ac8dad680db29e427c2bd5ad8da40cb3a164b1d971e7ea3ad301bf28b14",
-    "routes/status.py": "sha256:d054bba22907b129fb81d1ddb235fbfc004c5c19f73ca6c4309b1e4c6dbad9af",
+    "routes/status.py": "sha256:555acf8122c7fdc18ddc9c743eb0799e16363c3e094879cbd57ac224adc6fee4",
     "tools/status_tool.py": "sha256:d07f9322b00c79d3c3541896cb1eed047e3bb493f018d63b7eccf653e6cef9f0"
   },
-  "signature": "zQSD1NARATtw7IkhdkIe46tCZ92IInTBUzzpp8m4w1jnrzOHL8HBKj3yIkYvWd7BGIQSOFn82PDRk5wHbkYOAQ=="
+  "signature": "dLJMJfc5PpLUbdvCLwXFnb9GqaMc2dFDSC0N2kuw4Cz6Y+Wc0HB4vCohvrt8bPm8vf5iviBOBNe7t0RBVXEkCw=="
 }

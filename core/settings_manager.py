@@ -832,8 +832,10 @@ class SettingsManager:
                     if user_path.stat().st_mtime == self._last_mtime:
                         continue
 
-                    # Reload settings
+                    # Reload settings, remembering what the callback keys held
                     logger.info("Detected settings file change, reloading...")
+                    with self._lock:
+                        before = {key: self._config.get(key) for key in self._reload_callbacks}
                     self.reload()
 
                     # Advance _last_mtime BEFORE callback dispatch — pre-fix
@@ -848,33 +850,12 @@ class SettingsManager:
                     except Exception:
                         pass
 
-                    # Snapshot callback list under the lock, then dispatch
-                    # OUTSIDE the lock. Pre-fix, the dispatch ran inside
-                    # `with self._lock:` — provider rebuilds (Kokoro server
-                    # restart, STT recorder rebuild, embedder reload) can
-                    # take seconds and stalled every concurrent settings
-                    # read for the entire rebuild duration. Stop-the-world.
-                    # Wildcard scout 2026-05-07 W2.
-                    # WARNING (negspace R1#5, 2026-08-31): set() does NOT use
-                    # this pattern — its callback dispatch still runs under
-                    # self._lock. Currently defused because every live
-                    # provider-switch caller passes _skip_callbacks=True, but
-                    # registering a NEW reload callback reopens an app-wide
-                    # stall (config.X proxies every read through this lock).
-                    # Convert set() to snapshot-then-dispatch before adding
-                    # callbacks. (The old comment here claimed set() was
-                    # already converted — it never was.)
-                    with self._lock:
-                        snapshot = [
-                            (key, cb, self._config.get(key))
-                            for key, cb in self._reload_callbacks.items()
-                            if key in self._config
-                        ]
-                    for key, callback, value in snapshot:
-                        try:
-                            callback(value)
-                        except Exception as e:
-                            logger.error(f"Callback failed for {key}: {e}")
+                    # Only the keys whose value changed get their callback
+                    # (dispatch outside the lock: provider rebuilds take seconds).
+                    # WARNING (negspace R1#5, 2026-08-31): set() does NOT use the
+                    # snapshot-then-dispatch pattern; its dispatch still runs under
+                    # self._lock. Convert set() before adding new reload callbacks.
+                    self._dispatch_reload_callbacks(before)
             
             except Exception as e:
                 logger.error(f"File watcher error: {e}")
@@ -882,6 +863,23 @@ class SettingsManager:
         
         logger.info("File watcher stopped")
     
+    def _dispatch_reload_callbacks(self, before):
+        """After a reload from disk, call a key's reload callback only when that
+        key's value changed. Every callback used to fire on ANY outside write,
+        so an unrelated edit rebuilt TTS mid-sentence and reloaded Whisper
+        (2026-10-16). Snapshot under the lock, dispatch outside it."""
+        with self._lock:
+            changed = [(key, cb, self._config.get(key))
+                       for key, cb in self._reload_callbacks.items()
+                       if key in self._config and self._config.get(key) != before.get(key)]
+        if changed:
+            logger.info("Settings changed on disk with reload callbacks: " + ", ".join(k for k, _, _ in changed))
+        for key, callback, value in changed:
+            try:
+                callback(value)
+            except Exception as e:
+                logger.error(f"Callback failed for {key}: {e}")
+
     def start_file_watcher(self):
         """Start the background file watcher thread"""
         if self._watcher_thread is not None and self._watcher_thread.is_alive():

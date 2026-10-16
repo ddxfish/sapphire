@@ -1932,7 +1932,7 @@ class PluginLoader:
                     logger.error(f"[PLUGINS] Service port {port} for '{name}' is a Sapphire core port — service NOT started (fix the plugin's port setting)")
                     continue
                 try:
-                    kill_process_on_port(port)
+                    kill_process_on_port(port, owner=str(PROJECT_ROOT))
                 except Exception:
                     pass
 

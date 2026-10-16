@@ -52,6 +52,16 @@ async def extras_install(name: str, request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/api/system/gpu")
+async def gpu_state(request: Request, refresh: bool = False, _=Depends(require_login)):
+    """Whether this torch can use the NVIDIA card: the boot probe's verdict,
+    re-probed in the background when refresh is set (read again later)."""
+    from core import gpu_status
+    if refresh:
+        gpu_status.start_background(refresh=True)
+    return gpu_status.peek()
+
+
 # =============================================================================
 # BACKUP ROUTES
 # =============================================================================

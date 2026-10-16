@@ -5,7 +5,14 @@ import time
 import signal
 import threading
 import subprocess
+import errno
 from pathlib import Path
+
+# One Sapphire per user/ (2026-10-16): a bare `python sapphire.py` takes the
+# instance lock itself; under main.py the runner already holds it and says so.
+if __name__ == "__main__" and not os.environ.get('SAPPHIRE_INSTANCE_LOCK'):
+    from core.single_instance import acquire_or_exit as _acquire_or_exit
+    _instance_lock = _acquire_or_exit(Path(__file__).parent, who='sapphire.py')
 
 # Windows: Set event loop policy before ANY asyncio usage (imports like FastAPI trigger it)
 if sys.platform == 'win32':
@@ -937,7 +944,7 @@ class VoiceChatSystem:
             logger.warning(f"Kokoro server script not found: {tts_script}")
             return
         tts_port = getattr(config, 'TTS_SERVER_PORT', 5012)
-        if kill_process_on_port(tts_port):
+        if kill_process_on_port(tts_port, owner=str(tts_script)):
             logger.info(f"Cleaned up orphaned TTS process on port {tts_port}")
         logger.info("Starting Kokoro TTS server...")
 
@@ -1448,6 +1455,9 @@ def run():
         spice_set_manager.start_file_watcher()
         logger.info("Spice set file watcher started")
 
+        from core import gpu_status
+        gpu_status.start_background()   # can this torch see the card? (Status page, voice tabs, log)
+
         # Display clickable URL for user
         protocol = 'https' if config.WEB_UI_SSL_ADHOC else 'http'
         host_display = 'localhost' if config.WEB_UI_HOST in ('0.0.0.0', '127.0.0.1') else config.WEB_UI_HOST
@@ -1458,8 +1468,6 @@ def run():
         BLACK = '\033[30m'
         BOLD = '\033[1m'
         RESET = '\033[0m'
-        print(f"\n{CYAN_BG}{BLACK}{BOLD} * SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
-
         # SOCKS boot probe — late on purpose: plugin scan is done, so the
         # load_errors toast lane exists for a dead-proxy warning.
         from core.socks_proxy import start_boot_probe
@@ -1467,8 +1475,24 @@ def run():
 
         logger.info(f"Sapphire is running. Starting uvicorn server...")
 
-        # Run uvicorn - this blocks until shutdown
-        # Using a thread so we can still check for restart signals
+        # Bind the web port HERE, in the main thread, before the banner. uvicorn
+        # binding inside its daemon thread died with a swallowed SystemExit on a
+        # taken port, and the rest of her kept running headless on the same
+        # user/ as the instance that had the port (the twin, 2026-10-16).
+        from core.single_instance import bind_listener, is_port_taken, port_holder, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
+        try:
+            web_sock = bind_listener(config.WEB_UI_HOST, config.WEB_UI_PORT)
+        except OSError as e:
+            if is_port_taken(e):
+                who = port_holder(config.WEB_UI_PORT)
+                logger.error(f"Port {config.WEB_UI_PORT} is already taken{' by ' + who if who else ''}: "
+                             f"another Sapphire is probably running at {url}. Not starting a second one.")
+                return EXIT_ANOTHER_INSTANCE
+            logger.error(f"Cannot listen on {config.WEB_UI_HOST}:{config.WEB_UI_PORT}: {e}. Check WEB_UI_HOST and WEB_UI_PORT.")
+            return EXIT_CONFIG
+
+        # Run uvicorn on that socket, in a thread so the main loop can watch for
+        # restart/shutdown signals and for the server thread itself dying.
         ssl_paths = get_ssl_context()
         server_config = uvicorn.Config(
             app,
@@ -1479,20 +1503,45 @@ def run():
             ssl_keyfile=ssl_paths[1] if ssl_paths else None,
         )
         server = uvicorn.Server(server_config)
+        server_failure = []
+        server_done = threading.Event()
 
         def run_server():
-            server.run()
+            try:
+                server.run(sockets=[web_sock])
+            except BaseException as e:      # SystemExit included: uvicorn exits its thread on a bad start
+                server_failure.append(e)
+            finally:
+                server_done.set()
 
-        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread = threading.Thread(target=run_server, daemon=True, name='uvicorn')
         server_thread.start()
 
-        # Main loop - check for restart/shutdown signals
+        # The banner waits for the server to be really up. A bad certificate or
+        # host dies in that thread: a configuration exit, not a headless run.
+        deadline = time.monotonic() + 60
+        while not server.started and not server_done.is_set() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if not server.started:
+            why = server_failure[0] if server_failure else ('did not start within 60 s' if not server_done.is_set() else 'stopped before it started')
+            logger.error(f"Web server failed to start on {config.WEB_UI_HOST}:{config.WEB_UI_PORT}: {why!r}. "
+                         "Check WEB_UI_HOST, WEB_UI_PORT and the SSL certificate settings.")
+            return EXIT_CONFIG
+
+        print(f"\n{CYAN_BG}{BLACK}{BOLD} * SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
+
+        # Main loop - check for restart/shutdown signals, and for the web server dying
         while not _restart_requested and not _shutdown_requested:
             try:
                 time.sleep(0.5)
             except KeyboardInterrupt:
                 # Windows: KeyboardInterrupt can bypass signal handler during sleep
                 _shutdown_requested = True
+            if server_done.is_set() and not _restart_requested and not _shutdown_requested:
+                # nobody asked and the web server is gone: a headless Sapphire is not a Sapphire
+                logger.error(f"Web server stopped unexpectedly: {server_failure[0]!r}" if server_failure
+                             else "Web server stopped unexpectedly")
+                return 1
 
         # Determine exit code
         if _restart_requested:
@@ -1506,6 +1555,12 @@ def run():
         server.should_exit = True
 
     finally:
+        # If stopping wedges, the watchdog dumps every thread's stack and ends
+        # the process with the code the runner expects, instead of a restart
+        # that never comes. It also covers the interpreter's own wait for
+        # non-daemon threads after this function returns.
+        from core import watchdog
+        watchdog.arm(60, lambda: 42 if _restart_requested else (0 if _shutdown_requested else 1))
         voice_chat.stop()
 
     return exit_code

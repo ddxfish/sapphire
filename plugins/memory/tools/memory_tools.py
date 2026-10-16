@@ -429,6 +429,12 @@ def _ensure_db():
                     if result[0] != 'ok':
                         logger.error(f"Database integrity check failed: {result[0]}")
                         _repair_db(db_path)
+                except sqlite3.OperationalError as e:
+                    # Locked, busy, unreadable: another process (an older instance, a
+                    # backup) still holds it. That is not corruption; renaming the live
+                    # DB for it would lose her memory. Try again on the next call.
+                    logger.error(f"Memory DB not available at boot, leaving it untouched: {e}")
+                    return False
                 except sqlite3.DatabaseError as e:
                     logger.error(f"Database corrupted: {e}")
                     _repair_db(db_path)
