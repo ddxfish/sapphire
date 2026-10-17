@@ -565,7 +565,7 @@ def test_drops_are_typed_so_a_door_can_tell_privacy_from_stale(fast, monkeypatch
                                       on_drop=lambda why: kinds.append(it3.drop_kind)))
     inbox.drop_chat('desk', 'Sapphire is restarting', 'restart')
     assert kinds[-1] == 'restart'
-    src = (__import__('pathlib').Path(__file__).resolve().parent.parent / 'plugins' / 'twilio-voice' / 'daemon.py').read_text(encoding='utf-8')
+    src = (__import__('pathlib').Path(__file__).resolve().parent.parent / 'core' / 'plugins' / 'twilio-voice' / 'daemon.py').read_text(encoding='utf-8')
     assert "if item.drop_kind in ('privacy', 'sealed', 'gone'):" in src
     assert '_fallback()' not in src.split('def _watch():')[1].split('threading.Thread')[0], 'a failed turn is not re-written'
 

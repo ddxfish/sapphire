@@ -124,9 +124,8 @@ CORE_WIDGETS_DIR = PROJECT_ROOT / "core" / "dashboard_builtins" / "web"
 CORE_WIDGETS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/core-widgets", StaticFiles(directory=str(CORE_WIDGETS_DIR)), name="core-widgets")
 
-# Plugin web assets — serves from plugins/{name}/web/ and user/plugins/{name}/web/
-SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
-USER_PLUGINS_DIR_WEB = PROJECT_ROOT / "user" / "plugins"
+# Plugin web assets — serves <plugin dir>/web/ from either band
+from core.paths import SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR as USER_PLUGINS_DIR_WEB
 
 import mimetypes
 

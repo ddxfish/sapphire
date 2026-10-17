@@ -1,0 +1,414 @@
+# Toolmaker — plugin tool
+"""
+Tool creation tools — lets Sapphire create, read, and activate custom tools.
+Custom tools are saved as proper plugins in user/plugins/ and loaded live via rescan.
+"""
+
+import ast
+import importlib.util
+import json
+import logging
+import os
+import shutil
+import sys
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+ENABLED = True
+EMOJI = '\U0001f6e0\ufe0f'
+TOOL_CATEGORY = 'meta_danger'
+from core.paths import PROJECT_ROOT, SYSTEM_PLUGINS_DIR
+
+_PROJECT_ROOT = PROJECT_ROOT
+_USER_PLUGINS = _PROJECT_ROOT / "user" / "plugins"
+
+# Names that cannot be used for AI-created tools
+_RESERVED_NAMES = {
+    # Core function modules
+    'ai', 'docs', 'goals', 'knowledge', 'memory', 'meta', 'network', 'notepad', 'web',
+    # System plugins
+    'bitcoin', 'email', 'homeassistant', 'image_gen', 'ssh', 'toolmaker', 'voice_commands', 'stop', 'reset',
+    # Core-UI
+    'backup', 'continuity', 'setup_wizard',
+}
+
+
+def _get_validation_level():
+    """Read validation level from plugin settings. Managed mode forces strict."""
+    import os
+    if os.environ.get('SAPPHIRE_MANAGED'):
+        return 'strict'
+    try:
+        from core.plugin_loader import plugin_loader
+        level = plugin_loader.get_plugin_settings('toolmaker').get('validation', 'strict')
+        # Migrate legacy "trust" → "system_killer"
+        if level == 'trust':
+            level = 'system_killer'
+        return level
+    except Exception:
+        return 'strict'
+
+
+AVAILABLE_FUNCTIONS = ['tool_load', 'tool_read', 'tool_save']
+
+# Validation uses shared code_validator (single source of truth for blocklists/allowlists)
+from core.code_validator import validate_code
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": True,
+        "function": {
+            "name": "tool_load",
+            "description": "Load newly saved tools live, no restart.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "tool_read",
+            "description": "Read a custom tool's source. No name = list AI-created plugins.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Without .py"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": True,
+        "function": {
+            "name": "tool_save",
+            "description": "Create or update a custom tool plugin; the code is validated. Then call tool_load. FIRST call "
+                           "search_help_docs(\"TOOLMAKER\") for the required format.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Letters, digits and underscores, no .py"
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "Complete Python source of the tool module"
+                    }
+                },
+                "required": ["name", "code"]
+            }
+        }
+    },
+]
+
+
+# === Validation ===
+
+def _validate_ast(code, strictness):
+    """Validate code AST. Delegates to shared code_validator."""
+    return validate_code(code, strictness)
+
+
+def _smoke_test(filepath):
+    """Import module and validate structure. Returns (ok, error_msg).
+
+    Note: This executes module-level code, but only AFTER AST validation has
+    blocked all dangerous imports/calls/attrs. In managed mode the AST gate is
+    even stricter (no os.getenv, io, pathlib, filesystem ops). What remains
+    is data declarations (TOOLS, ENABLED) and safe imports (json, requests).
+    """
+    module_name = f"_toolmaker_smoke_{filepath.stem}"
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, filepath)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as e:
+        return False, f"Import failed: {e}"
+    finally:
+        sys.modules.pop(module_name, None)
+
+    # Required exports
+    if not isinstance(getattr(module, 'TOOLS', None), list):
+        return False, "Missing or invalid TOOLS list"
+    if not isinstance(getattr(module, 'AVAILABLE_FUNCTIONS', None), list):
+        return False, "Missing or invalid AVAILABLE_FUNCTIONS list"
+    if not callable(getattr(module, 'execute', None)):
+        return False, "Missing execute() function"
+
+    # Validate each tool schema
+    for tool in module.TOOLS:
+        if not isinstance(tool, dict) or 'function' not in tool:
+            return False, "TOOLS entry missing 'function' key"
+        func = tool['function']
+        if 'name' not in func:
+            return False, "Tool function missing 'name'"
+        if 'description' not in func:
+            return False, "Tool function missing 'description'"
+        if func['name'] not in module.AVAILABLE_FUNCTIONS:
+            return False, f"Tool '{func['name']}' not in AVAILABLE_FUNCTIONS"
+
+    if not module.TOOLS:
+        return False, "TOOLS list is empty"
+
+    return True, module
+
+
+def _settings_to_schema(settings_dict, help_dict=None):
+    """Convert SETTINGS dict to manifest settings schema."""
+    schema = []
+    for key, default in settings_dict.items():
+        field = {"key": key, "label": key.replace("_", " ").title(), "default": default}
+        if isinstance(default, bool):
+            field["type"] = "boolean"
+        elif isinstance(default, (int, float)):
+            field["type"] = "number"
+        else:
+            field["type"] = "string"
+        if help_dict and key in help_dict:
+            field["help"] = help_dict[key]
+        schema.append(field)
+    return schema
+
+
+def _generate_manifest(name, module, code):
+    """Generate plugin.json manifest from validated module."""
+    # short_display_name = the SHORT label shown in plugin lists (weather_lookup
+    # → Weather Lookup). This is the one field that drives the display title; the
+    # old "Title — description" smushing is dead (it produced giant names when
+    # authors wrote prose). 2026-06-21.
+    short_display_name = name.replace('_', ' ').title()[:40]
+
+    # description = the full sentence, shown UNDER the title — free prose, never
+    # the title itself. From the first tool's description (first sentence, capped).
+    tool_desc = ''
+    if module.TOOLS:
+        func = module.TOOLS[0].get('function', {})
+        tool_desc = func.get('description', '').split('.')[0].strip()[:120]
+
+    manifest = {
+        "name": name,
+        "version": "1.0.0",
+        "short_display_name": short_display_name,
+        "description": tool_desc or short_display_name,
+        "author": "ai-toolmaker",
+        "default_enabled": True,
+        "capabilities": {
+            "tools": [f"tools/{name}.py"]
+        }
+    }
+
+    # Pull emoji from module if defined
+    emoji = getattr(module, 'EMOJI', None)
+    if emoji and isinstance(emoji, str):
+        manifest["icon"] = emoji
+
+    # Convert SETTINGS dict to manifest schema
+    settings_dict = getattr(module, 'SETTINGS', None)
+    if isinstance(settings_dict, dict) and settings_dict:
+        help_dict = getattr(module, 'SETTINGS_HELP', None)
+        manifest["capabilities"]["settings"] = _settings_to_schema(
+            settings_dict, help_dict if isinstance(help_dict, dict) else None
+        )
+
+    return manifest
+
+
+def _list_user_plugins():
+    """List AI-created plugins in user/plugins/."""
+    if not _USER_PLUGINS.exists():
+        return "No AI-created plugins found."
+    plugins = []
+    for child in sorted(_USER_PLUGINS.iterdir()):
+        if not child.is_dir():
+            continue
+        manifest_path = child / "plugin.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            tool_names = []
+            tools_dir = child / "tools"
+            if tools_dir.exists():
+                for py in tools_dir.glob("*.py"):
+                    if not py.name.startswith("_"):
+                        tool_names.append(py.stem)
+            plugins.append(f"  {child.name} ({', '.join(tool_names) or 'no tools'})")
+        except Exception:
+            plugins.append(f"  {child.name} (broken manifest)")
+    if not plugins:
+        return "No AI-created plugins found."
+    return "AI-created plugins:\n" + "\n".join(plugins)
+
+
+def _sanitize_name(name):
+    """Sanitize plugin name. Returns None if invalid."""
+    name = name.strip().lower().replace('.py', '').replace('-', '_')
+    if not name or not all(c.isalnum() or c == '_' for c in name):
+        return None
+    if name.startswith('_'):
+        return None
+    # Block reserved names
+    if name in _RESERVED_NAMES:
+        return None
+    # Names owned by core (functions, shipped plugins, core UI): one rule
+    # shared with the REST installer and the store tool.
+    from core.plugin_loader import core_name_collision
+    if core_name_collision(name):
+        return None
+    return name
+
+
+def execute(function_name, arguments, config):
+    try:
+        if function_name == 'tool_save':
+            name = _sanitize_name(arguments.get('name', ''))
+            if not name:
+                return "FAILED: Invalid or reserved name. Use alphanumeric/underscores, cannot match core tools or system plugins.", False
+
+            code = arguments.get('code', '')
+            if not code.strip():
+                return "FAILED: No code provided.", False
+
+            strictness = _get_validation_level()
+
+            ok, err = _validate_ast(code, strictness)
+            if not ok:
+                return f"FAILED: Validation failed ({strictness} mode): {err}", False
+
+            # Create plugin directory structure. A re-save of an EXISTING
+            # plugin must never destroy it: back up the working code and
+            # restore it if the new code fails the smoke test — the old flow
+            # rmtree'd the whole dir (manifest, data and all) on failure.
+            plugin_dir = _USER_PLUGINS / name
+            tools_dir = plugin_dir / "tools"
+            is_new = not plugin_dir.exists()
+            tools_dir.mkdir(parents=True, exist_ok=True)
+            filepath = tools_dir / f"{name}.py"
+            old_code = filepath.read_text(encoding='utf-8') if filepath.exists() else None
+            filepath.write_text(code, encoding='utf-8')
+
+            # Smoke test
+            ok, result = _smoke_test(filepath)
+            if not ok:
+                if is_new:
+                    shutil.rmtree(plugin_dir, ignore_errors=True)
+                    return f"FAILED: Smoke test failed: {result}\nPlugin directory removed — fix and retry.", False
+                if old_code is not None:
+                    filepath.write_text(old_code, encoding='utf-8')
+                return (f"FAILED: Smoke test failed: {result}\n"
+                        f"Existing plugin '{name}' left untouched — fix and retry."), False
+
+            # Generate and write manifest
+            manifest = _generate_manifest(name, result, code)
+            manifest_path = plugin_dir / "plugin.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+
+            plugin_list = _list_user_plugins()
+            return f"Plugin '{name}' saved and validated.\n{plugin_list}\nNow call tool_load to activate.", True
+
+        elif function_name == 'tool_read':
+            name = arguments.get('name')
+            if not name:
+                return _list_user_plugins(), True
+
+            clean = _sanitize_name(name)
+            if not clean:
+                return f"FAILED: Invalid tool name: '{name}'. Use alphanumeric and underscores only.", False
+            # Check user plugins first
+            plugin_tool = _USER_PLUGINS / clean / "tools" / f"{clean}.py"
+            if plugin_tool.exists():
+                code = plugin_tool.read_text(encoding='utf-8')
+                return f"=== {clean} (user plugin) ===\n{code}", True
+
+            # Check legacy user/functions/ for backward compat
+            legacy = _PROJECT_ROOT / "user" / "functions" / f"{clean}.py"
+            if legacy.exists():
+                code = legacy.read_text(encoding='utf-8')
+                return f"=== {clean} (legacy user/functions/) ===\n{code}", True
+
+            return f"FAILED: Tool '{clean}' not found.\n{_list_user_plugins()}", False
+
+        elif function_name == 'tool_load':
+            try:
+                from core.plugin_loader import plugin_loader
+                result = plugin_loader.rescan()
+                added = result.get("added", [])
+
+                # Filter added list to only plugins that actually loaded
+                actually_loaded = []
+                failed_to_load = []
+                for name in added:
+                    info = plugin_loader.get_plugin_info(name)
+                    if info and info.get("loaded"):
+                        actually_loaded.append(name)
+                    else:
+                        failed_to_load.append(name)
+
+                # Reload any already-loaded user plugins (handles tool updates)
+                reloaded = []
+                if _USER_PLUGINS.exists():
+                    for child in _USER_PLUGINS.iterdir():
+                        if not child.is_dir():
+                            continue
+                        name = child.name
+                        info = plugin_loader.get_plugin_info(name)
+                        if info and info.get("loaded") and name not in added:
+                            plugin_loader.reload_plugin(name)
+                            reloaded.append(name)
+
+                # Re-sync toolset so new/updated tools are available
+                try:
+                    from core.api_fastapi import get_system
+                    system = get_system()
+                    if system and hasattr(system, 'llm_chat'):
+                        toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
+                        toolset_name = toolset_info.get("name", "custom")
+                        # reload_plugin carried extras; a bare re-apply here
+                        # negated it (extras-decay site #10, 2026-08-05)
+                        extras = None
+                        try:
+                            extras = (system.llm_chat.session_manager.get_chat_settings()
+                                      or {}).get('extra_toolsets') or None
+                        except Exception:
+                            pass
+                        system.llm_chat.function_manager.update_enabled_functions(
+                            [toolset_name], extra_toolsets=extras)
+                        # Notify frontend so toolset count refreshes
+                        from core.event_bus import publish, Events
+                        publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
+                except Exception:
+                    pass
+
+                parts = []
+                if actually_loaded:
+                    parts.append(f"Loaded {len(actually_loaded)} new: {', '.join(actually_loaded)}")
+                if reloaded:
+                    parts.append(f"Reloaded {len(reloaded)} updated: {', '.join(reloaded)}")
+                if failed_to_load:
+                    parts.append(f"FAILED to load {len(failed_to_load)}: {', '.join(failed_to_load)} (check plugin signing/sideloading)")
+                if parts:
+                    return f"{'. '.join(parts)}. Tools are now available.", not failed_to_load
+                else:
+                    return "Rescan complete — no changes detected.", True
+            except Exception as e:
+                return f"FAILED: Load failed: {e}", False
+
+        return f"FAILED: Unknown function: {function_name}", False
+
+    except Exception as e:
+        logger.error(f"Toolmaker error in {function_name}: {e}", exc_info=True)
+        return f"FAILED: Error: {str(e)}", False

@@ -25,10 +25,7 @@ logger = logging.getLogger(__name__)
 from core.fs_utils import rmtree_robust as _rmtree_robust
 
 # Plugin search paths (relative to project root)
-PROJECT_ROOT = Path(__file__).parent.parent
-SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
-USER_PLUGINS_DIR = PROJECT_ROOT / "user" / "plugins"
-PLUGIN_STATE_DIR = PROJECT_ROOT / "user" / "plugin_state"
+from core.paths import PROJECT_ROOT, SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR, PLUGIN_STATE_DIR
 # Previous versions retained by plugin updates (one generation, = Revert).
 # MUST live outside user/plugins — the scanner registers any subdir with a
 # plugin.json under its manifest name, so a retained copy inside the scan
@@ -69,6 +66,22 @@ def _version_tuple(text) -> Optional[tuple]:
             break
         parts.append(int(digits.group()))
     return tuple(parts) if parts else None
+
+
+def core_name_collision(name: str):
+    """Why `name` may not be installed into the user band, or None. ONE rule for
+    every install door — the REST installer, the store tool, Toolmaker. A user
+    plugin that takes a shipped plugin's name shadows it at the next boot: the
+    third-party code runs under the shipped name, scopes and tool names, or,
+    blocked as unsigned, the shipped plugin is simply gone from the registry
+    (for memory, that is the degraded-mode banner)."""
+    if (SYSTEM_PLUGINS_DIR / name).is_dir():
+        return f"'{name}' conflicts with the shipped system plugin at core/plugins/{name} — a user plugin may not take its name"
+    if (PROJECT_ROOT / "functions" / f"{name}.py").exists():
+        return f"'{name}' conflicts with a core function"
+    if (PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui" / name).exists():
+        return f"'{name}' conflicts with a core UI plugin"
+    return None
 
 
 class PluginState:
@@ -244,6 +257,73 @@ class PluginLoader:
         from core.settings_manager import settings
         return settings.is_managed()
 
+    def _band_move_tripwires(self):
+        """Loud where the band move (plugins/ -> core/plugins/, 2026-10-17) would
+        otherwise fail silently. Every branch only logs (plus one toast entry)."""
+        import sys
+        from core.paths import PROJECT_ROOT as _REAL_ROOT   # the real root, not the patchable module global
+        # 1. Code that counted .parent one level short lands on a REAL folder —
+        #    core/ for a shipped plugin, user/ for a user-band one — and quietly
+        #    builds core/user/... or user/user/...
+        for stray_user in (PROJECT_ROOT / "core" / "user", PROJECT_ROOT / "user" / "user"):
+            if stray_user.exists():
+                logger.error(f"[PLUGINS] {stray_user} exists — something computed the project root "
+                             "one level short. Move its contents into user/ and replace the counted "
+                             ".parent chain with core.paths.PROJECT_ROOT.")
+        # 2. The old root plugins/ is no longer scanned. Old copies of SHIPPED
+        #    plugins (a zip extracted over the old tree) are deleted by name,
+        #    never moved; a hand-dropped plugin belongs in user/plugins/. Named
+        #    apart on purpose: "delete the folder" beside "found yours" would
+        #    cost that user their plugin. Theirs also rides the boot-toast lane
+        #    (_load_errors), because a log line is exactly what they never read.
+        old_root = PROJECT_ROOT / "plugins"
+        if old_root.is_dir():
+            stray = sorted(p.name for p in old_root.iterdir()
+                           if p.is_dir() and (p / "plugin.json").exists())
+            shipped = [n for n in stray if (SYSTEM_PLUGINS_DIR / n).is_dir()]
+            yours = [n for n in stray if n not in shipped]
+            if shipped:
+                logger.warning(f"[PLUGINS] plugins/ at the repo root is no longer scanned (the shipped band "
+                               f"lives in core/plugins/). It holds old copies of {len(shipped)} shipped "
+                               f"plugin(s) {shipped[:8]} — delete those folders; do NOT move them to user/plugins/.")
+            if yours:
+                logger.warning(f"[PLUGINS] plugins/ at the repo root is no longer scanned (the shipped band "
+                               f"lives in core/plugins/). Found {yours} there — your own plugins go in user/plugins/.")
+                for name in yours:
+                    err = {"plugin": name,
+                           "error": f"plugins/{name} sits in the old root plugins/ folder, which is no longer scanned",
+                           "hint": f"move it to user/plugins/{name} and reload"}
+                    self._load_errors.append(err)
+                    try:
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, err)
+                    except Exception:
+                        pass
+            # A package at the old root would BEAT the plugins.py shim (a folder
+            # with an __init__ wins over a module file) and hijack every
+            # plugins.* import into the old tree. Checked on disk, because at
+            # scan time nothing has usually imported `plugins` yet.
+            if (old_root / "__init__.py").exists():
+                logger.error(f"[PLUGINS] {old_root / '__init__.py'} exists — it shadows the plugins.py shim "
+                             "and sends every plugins.<name> import into the dead old tree; delete it (and "
+                             "the root plugins/ folder if nothing of yours is in it).")
+        # 3. Imported by disk path? core.plugins.<x> is a SECOND module object
+        #    with its own locks and state; the import name is plugins.<x>.
+        by_disk_path = sorted(k for k in sys.modules
+                              if k == "core.plugins" or k.startswith("core.plugins."))
+        if by_disk_path:
+            logger.error(f"[PLUGINS] imported by disk path (a second module copy): {by_disk_path[:5]} — "
+                         "import shipped plugins as plugins.<name>, never core.plugins.<name>.")
+        # 4. If something did import `plugins` already, it must be the shim.
+        shim = sys.modules.get("plugins")
+        if shim is not None:
+            shim_file = getattr(shim, "__file__", None)
+            expected = _REAL_ROOT / "plugins.py"
+            if not shim_file or Path(shim_file).absolute() != expected:
+                logger.error(f"[PLUGINS] the plugins namespace is {shim_file or 'a bare namespace package'}, "
+                             f"not the shim {expected} — a stray plugins/__init__.py or plugins/ package at "
+                             "the repo root is shadowing it; remove it.")
+
     def scan(self, function_manager=None):
         """Discover all plugins and load enabled ones.
 
@@ -251,6 +331,14 @@ class PluginLoader:
             function_manager: Optional FunctionManager for plugin tool registration.
         """
         self._function_manager = function_manager
+
+        # Tripwires for the band move (plugins/ -> core/plugins/, 2026-10-17).
+        # Advisory only, and wrapped: an unreadable stray folder must never
+        # take the whole scan (and every plugin) down with it.
+        try:
+            self._band_move_tripwires()
+        except Exception as e:
+            logger.debug(f"[PLUGINS] band-move tripwires skipped: {e}")
         self._plugins.clear()
         enabled_list = self._get_enabled_list()
         disabled_list = self._get_disabled_list()
@@ -975,7 +1063,10 @@ class PluginLoader:
             daemon_entry = daemon_config.get("entry")
             if daemon_entry:
                 try:
-                    pkg_base = f"plugins.{name}" if band == "user" else None
+                    # Both bands register as plugins.<name>.<entry>: the import
+                    # name is band-neutral, and a cwd-derived name (what the
+                    # system band used to get) would be a second module copy.
+                    pkg_base = f"plugins.{name}"
                     daemon_mod = self._load_daemon_module(plugin_dir, daemon_entry, pkg_base)
                     if daemon_mod and hasattr(daemon_mod, "start"):
                         info["daemon_module"] = daemon_mod
@@ -1035,7 +1126,7 @@ class PluginLoader:
         logger.info(f"[PLUGINS] Loaded: {name} (priority {base_priority}, {band})")
         return True
 
-    def _load_daemon_module(self, plugin_dir: Path, entry_path: str, pkg_base: str = None):
+    def _load_daemon_module(self, plugin_dir: Path, entry_path: str, pkg_base: str):
         """Load a daemon module from a plugin. Returns the module namespace."""
         full_path = plugin_dir / entry_path
         try:
@@ -1051,22 +1142,11 @@ class PluginLoader:
             import importlib.util
             import sys
 
-            # Derive the natural package import path so that tools doing
-            # "from plugins.telegram.daemon import X" find this same module
-            # instead of importing a second copy with separate state.
-            if pkg_base:
-                # User-band plugins import themselves as plugins.<name>.* via
-                # the package alias — the daemon must register under that same
-                # path or "from plugins.<name>.daemon import X" execs a second
-                # copy with separate state.
-                entry_dotted = str(Path(entry_path).with_suffix("")).replace("/", ".").replace("\\", ".")
-                pkg_name = f"{pkg_base}.{entry_dotted}"
-            else:
-                try:
-                    rel = full_path.resolve().relative_to(Path.cwd())
-                    pkg_name = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")
-                except ValueError:
-                    pkg_name = f"plugin_daemon_{plugin_dir.name}"
+            # Register under the plugin's import name (plugins.<name>.<entry>) so
+            # "from plugins.telegram.daemon import X" finds this same module
+            # instead of executing a second copy with separate state.
+            entry_dotted = str(Path(entry_path).with_suffix("")).replace("/", ".").replace("\\", ".")
+            pkg_name = f"{pkg_base}.{entry_dotted}"
 
             spec = importlib.util.spec_from_file_location(pkg_name, str(full_path))
             mod = importlib.util.module_from_spec(spec)

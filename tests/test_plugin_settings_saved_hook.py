@@ -4,7 +4,7 @@ These test CORE behavior (core/event_bus.py + core/routes/plugins.py), not any
 one plugin — the PUT settings route notifies the active provider so a plugin can
 react to its own settings (e.g. Piper's download-on-save), and the toast event
 exists end-to-end. Piper's own provider logic is tested in
-plugins/piper/tests/test_piper_provider.py.
+core/plugins/piper/tests/test_piper_provider.py.
 """
 import json
 from pathlib import Path

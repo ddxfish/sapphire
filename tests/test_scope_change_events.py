@@ -90,17 +90,18 @@ def test_delete_gcal_account_publishes_scope_changed(client, event_bus_capture, 
 
 # ── static guard for the signed-plugin routes (not loaded in TestClient) ──
 @pytest.mark.parametrize("rel_path", [
-    "plugins/google-calendar/routes/oauth.py",
-    "plugins/telegram/routes/auth.py",
-    "plugins/discord/api/accounts.py",
+    "core/plugins/google-calendar/routes/oauth.py",
+    "core/plugins/telegram/routes/auth.py",
+    "core/plugins/discord/api/accounts.py",
 ])
 def test_signed_plugin_account_routes_publish_scope_changed(rel_path):
     """These plugin routes add/remove account-backed scopes but aren't mounted
     on the core TestClient app, so guard the publish statically — catches a
     regression where someone removes the SCOPE_CHANGED publish."""
     root = pathlib.Path(__file__).resolve().parent.parent
-    if not (root / rel_path).exists():
-        pytest.skip(f"{rel_path} not installed on this box (user-band plugin)")
+    # All three ship with Sapphire: a missing file is a moved band or a renamed
+    # route, never "not installed" — a skip here hid exactly that for a day.
+    assert (root / rel_path).exists(), f"{rel_path} is a shipped plugin route and is missing"
     text = (root / rel_path).read_text(encoding="utf-8")
     assert "Events.SCOPE_CHANGED" in text, \
         f"{rel_path} no longer publishes SCOPE_CHANGED — sidebar scope dropdowns will go stale"

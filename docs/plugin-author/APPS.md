@@ -11,7 +11,7 @@ Plugins can ship a full-page app that appears in the **Apps** nav item. Apps get
 ### File Structure
 
 ```
-plugins/my-plugin/
+user/plugins/my-plugin/
   plugin.json
   app/
     index.js      # Required — exports render() and cleanup()

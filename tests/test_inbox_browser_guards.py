@@ -80,5 +80,5 @@ def test_queued_bubbles_survive_the_history_reconcile_and_a_moved_view_paints_no
     assert "if (viewMoved()) { ctl.headless = true; return; }" in send
     assert 'if (ctl.headless || !streamStillMine()) return;' in send
     assert "ui.showToast(`Her reply landed in “${ctl.chat}”`, 'info');" in send
-    app = (Path(__file__).resolve().parent.parent / 'plugins' / 'agents' / 'app' / 'index.js').read_text(encoding='utf-8')
+    app = (Path(__file__).resolve().parent.parent / 'core' / 'plugins' / 'agents' / 'app' / 'index.js').read_text(encoding='utf-8')
     assert "if (prev && prev.dataset.sig === sig(a)) { next.appendChild(prev); continue; }" in app

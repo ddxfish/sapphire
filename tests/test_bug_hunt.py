@@ -896,7 +896,7 @@ class TestSSHNoShellTrue:
         import importlib.util
         from pathlib import Path
         spec = importlib.util.spec_from_file_location(
-            "ssh_tool", Path(__file__).parent.parent / "plugins" / "ssh" / "tools" / "ssh_tool.py")
+            "ssh_tool", Path(__file__).parent.parent / "core" / "plugins" / "ssh" / "tools" / "ssh_tool.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod

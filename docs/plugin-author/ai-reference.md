@@ -4,7 +4,8 @@ Compact reference for Sapphire's own use when building plugins. For simple tool 
 
 When creating or modifying plugins:
 
-- Plugin = folder in `plugins/{name}/` with `plugin.json` manifest
+- Plugin = folder in `user/plugins/{name}/` with `plugin.json` manifest (shipped ones live in `core/plugins/{name}/`; both import as `plugins.{name}`; a root-level `plugins/` is not scanned)
+- Project root in plugin code: `from core.paths import PROJECT_ROOT` — never count `.parent`s
 - `plugin.json` requires `name` field, everything else optional
 - Hooks = Python functions receiving mutable `HookEvent` object
 - Tools = `TOOLS` list + `execute(function_name, arguments, config)` returning `(str, bool)` (optional 4th arg `plugin_settings`, 5th `credentials` — inspected by arity)

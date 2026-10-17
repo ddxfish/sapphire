@@ -2,7 +2,7 @@
 
 ## What Is a Plugin?
 
-A plugin is a self-contained package that extends Sapphire — a folder with a single `plugin.json` manifest, dropped into `plugins/` (built-in) or `user/plugins/` (yours). It can do far more than add abilities the AI calls; it hooks into parts of the pipeline the LLM never touches:
+A plugin is a self-contained package that extends Sapphire — a folder with a single `plugin.json` manifest, dropped into `user/plugins/` (yours; the built-in ones ship in `core/plugins/`). It can do far more than add abilities the AI calls; it hooks into parts of the pipeline the LLM never touches:
 
 - **Add tools** — functions the AI can call during a conversation (search the web, save a memory, control a device)
 - **Intercept voice input** after speech-to-text, before the LLM ever sees it (`post_stt`)
@@ -66,7 +66,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 Minimal plugin — logs every chat:
 
 ```
-plugins/my-plugin/
+user/plugins/my-plugin/
   plugin.json
   hooks/greet.py
 ```
@@ -104,26 +104,26 @@ Enable in Settings > Plugins. It loads immediately — no restart.
 
 | Path | Band | Priority Range | Tracked |
 |------|------|----------------|---------|
-| `plugins/` | System | 0-99 | Yes |
+| `core/plugins/` | System | 0-99 | Yes |
 | `user/plugins/` | User | 100-199 | No (gitignored) |
 
-User plugin priorities are automatically offset into the 100-199 range.
+User plugin priorities are automatically offset into the 100-199 range. Your own plugins always go in `user/plugins/`. A `plugins/` folder at the repo root is not scanned. Both bands import as `plugins.<name>`, whichever folder they sit in.
 
 ---
 
 ## Plugin Tests
 
-Tests for a plugin live alongside it, at `plugins/<name>/tests/test_*.py`. They travel with the plugin on install/uninstall so authors can maintain them next to the code they cover.
+Tests for a plugin live alongside it, at `<plugin>/tests/test_*.py` — `core/plugins/<name>/tests/` for shipped plugins, `user/plugins/<name>/tests/` for yours. They travel with the plugin on install/uninstall so authors can maintain them next to the code they cover.
 
 ```
-plugins/my-plugin/
+user/plugins/my-plugin/
   plugin.json
   tools/my_tool.py
   tests/
     test_my_tool.py        # no __init__.py
 ```
 
-Run from the repo root with `pytest` — the root `pytest.ini` sets `testpaths = tests plugins` and skips `user/`, `infra/`, and `tmp/`.
+Shipped-plugin tests run from the repo root with `pytest` — the root `pytest.ini` sets `testpaths = tests core/plugins` and skips `user/`, `infra/`, and `tmp/`. Run your own with `python -m pytest user/plugins/my-plugin/tests` from the repo root; `from plugins.my_plugin import ...` resolves there too, because the `plugins.<name>` namespace spans both bands.
 
 **Do not add an `__init__.py` to `tests/`.** pytest collects tests across every plugin's `tests/` dir simultaneously; an `__init__.py` turns each one into the same import name (`tests`) and triggers import-name collisions. Leave the directory as plain, non-package — pytest's rootdir-relative collection handles it fine.
 
@@ -134,7 +134,7 @@ Run from the repo root with `pytest` — the root `pytest.ini` sets `testpaths =
 A plugin combining hooks, tools, voice commands, and a scheduled task:
 
 ```
-plugins/smart-home/
+user/plugins/smart-home/
   plugin.json
   hooks/context.py
   hooks/quick_lights.py

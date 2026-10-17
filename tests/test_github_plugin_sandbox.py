@@ -24,7 +24,7 @@ def github_tools():
     would. The plugin's tools/github.py expects `from typing import Optional`
     at top-level (added 2026-05-14) and accesses core.* lazily.
     """
-    plugin_dir = Path(__file__).resolve().parent.parent / "plugins" / "github"
+    plugin_dir = Path(__file__).resolve().parent.parent / "core" / "plugins" / "github"
     if str(plugin_dir / "tools") not in sys.path:
         sys.path.insert(0, str(plugin_dir / "tools"))
     # Force-reimport to pick up any code edits between test runs

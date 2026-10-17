@@ -68,7 +68,7 @@ def test_get_current_scope_returns_none_on_exception(module_path, fn_name, scope
         # which are available in the test env.
         spec = importlib.util.spec_from_file_location(
             "gcal_tools_under_test",
-            Path(__file__).parent.parent / "plugins" / "google-calendar" / "tools" / "calendar.py",
+            Path(__file__).parent.parent / "core" / "plugins" / "google-calendar" / "tools" / "calendar.py",
         )
         mod = importlib.util.module_from_spec(spec)
         # Register in sys.modules BEFORE exec so any self-references resolve.
@@ -103,10 +103,10 @@ def test_no_scope_resolver_hardcodes_default_fallback():
     import re
     project_root = Path(__file__).parent.parent
     targets = [
-        project_root / "plugins/memory/tools/memory_tools.py",
-        project_root / "plugins/memory/tools/knowledge_tools.py",
-        project_root / "plugins/memory/tools/goals_tools.py",
-        project_root / "plugins/google-calendar/tools/calendar.py",
+        project_root / "core/plugins/memory/tools/memory_tools.py",
+        project_root / "core/plugins/memory/tools/knowledge_tools.py",
+        project_root / "core/plugins/memory/tools/goals_tools.py",
+        project_root / "core/plugins/google-calendar/tools/calendar.py",
     ]
     # Match `def _get_current_scope` (or similar) body and look for
     # `return 'default'` or `return "default"` within the next ~400 chars.

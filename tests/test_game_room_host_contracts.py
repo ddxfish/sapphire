@@ -9,12 +9,12 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP = ROOT / "plugins" / "game-room" / "app"
+APP = ROOT / "core" / "plugins" / "game-room" / "app"
 HOST = (APP / "room-host.js").read_text(encoding="utf-8")
 STORY = (APP / "story-room.js").read_text(encoding="utf-8")
 INDEX = (APP / "index.js").read_text(encoding="utf-8")
 CSS = (APP / "game-room.css").read_text(encoding="utf-8")
-MANIFEST = json.loads((ROOT / "plugins" / "game-room" / "plugin.json").read_text(encoding="utf-8"))
+MANIFEST = json.loads((ROOT / "core" / "plugins" / "game-room" / "plugin.json").read_text(encoding="utf-8"))
 
 
 def test_old_room_module_is_gone():
@@ -39,7 +39,7 @@ def test_rooms_bind_the_real_rail_by_name():
 
 
 def test_moves_carry_no_talk_line():
-    poker = (ROOT / "plugins" / "game-holdem" / "app" / "poker.js").read_text(encoding="utf-8")
+    poker = (ROOT / "core" / "plugins" / "game-holdem" / "app" / "poker.js").read_text(encoding="utf-8")
     assert "say" not in poker.split("renderActions")[1]
     assert "clearComposer" not in poker and "clearComposer" not in HOST
 
@@ -75,7 +75,7 @@ def test_subtitle_shows_only_while_the_rail_is_folded():
 def test_settings_spine_has_one_kit_and_one_key_table():
     # 2026-09-09: room defaults ⊕ game overrides ⊕ session overrides — every
     # key declared once (ROOM_KEYS), every layer edited with the same rows.
-    core = (ROOT / "plugins" / "game-room" / "gameroom_core.py").read_text(encoding="utf-8")
+    core = (ROOT / "core" / "plugins" / "game-room" / "gameroom_core.py").read_text(encoding="utf-8")
     assert "ROOM_KEYS = [" in core and "def effective(" in core and "def coerce_field(" in core
     modal = (APP / "settings-modal.js").read_text(encoding="utf-8")
     for name in ("layerRowsHtml", "wireLayer", "layerAccordionsHtml"):

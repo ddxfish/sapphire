@@ -238,8 +238,8 @@ def test_lan_redirect_opt_in(monkeypatch):
 # NOT scanned (third-party band rides the env belt by design).
 _ALLOWED = {
     'core/net.py',                            # the facade itself
-    'plugins/remembrance/tests/test_ops.py',  # test double
-    'plugins/email/daemon.py',                # out-of-process daemon — can't
+    'core/plugins/remembrance/tests/test_ops.py',  # test double
+    'core/plugins/email/daemon.py',                # out-of-process daemon — can't
                                               # import core; env belt lane
 }
 _CALL = re.compile(r'\brequests\.(get|post|put|patch|delete|head|request|Session)\s*\(')
@@ -247,7 +247,7 @@ _ALIAS = re.compile(r'\bimport requests as (\w+)')
 _VERBS = r'\.(get|post|put|patch|delete|head|request|Session)\s*\('
 # root band (sapphire.py) is scanned too — a scout found the original guard
 # blind to it. interfaces/ is templates/JS, no HTTP callers.
-_BANDS = ('core', 'functions', 'plugins')
+_BANDS = ('core', 'functions')   # the shipped plugins live under core/
 
 # httpx is a SECOND lane the guard was blind to — it produced the
 # sapphire_router gap AND the embeddings twin (both LAN-capable, CIDR-blind).
@@ -258,8 +258,8 @@ _HTTPX_ALLOWED = {
     'core/routes/videos.py',                     # video metadata (cloud)
     'core/chat/llm_providers/openai_compat.py',  # LLM SDK lane (own pool + invalidator)
     'core/stt/providers/fireworks_whisper.py',   # cloud STT SDK
-    'plugins/twilio-voice/daemon.py',            # out-of-process daemon
-    'plugins/elevenlabs/provider.py',            # cloud TTS SDK
+    'core/plugins/twilio-voice/daemon.py',            # out-of-process daemon
+    'core/plugins/elevenlabs/provider.py',            # cloud TTS SDK
 }
 _HTTPX_CALL = re.compile(r'\bhttpx\.(get|post|put|patch|delete|head|request|Client|AsyncClient|stream)\s*\(')
 

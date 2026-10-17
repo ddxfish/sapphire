@@ -139,7 +139,7 @@ def ghost_inject(event):
   this hook — import the `config` module directly if you need settings.
 - User-band plugins fire after system-band contributors (the user priority band).
 
-Re-sign after any manifest/code change: `python tools/sign_plugin.py plugins/<name>`.
+Re-sign after any manifest/code change: `python tools/sign_plugin.py core/plugins/<name>` (or `user/plugins/<name>` for your own).
 
 ---
 
@@ -242,7 +242,7 @@ handle = ghost_inject   # optional fallback alias
 }
 ```
 
-Then `python tools/sign_plugin.py plugins/weather-ghost` and reload. The line will
+Then `python tools/sign_plugin.py user/plugins/weather-ghost` and reload. The line will
 appear as `- weather-ghost: …` in the envelope, seen by the assistant, never by the
 user, never saved.
 
@@ -270,4 +270,4 @@ FILES:
 RULES:
 - Never fingerprint user text to deliver invisible instructive/opinion-shaping content (Vanta-shape — rejected at store review); event.input is awareness-only
 - ghost_context saves via PUT /api/chats/{name}/settings; non-active chats write straight to storage (no live apply)
-- Re-sign after plugin changes: python tools/sign_plugin.py plugins/<name>
+- Re-sign after plugin changes: python tools/sign_plugin.py core/plugins/<name> (or user/plugins/<name>)

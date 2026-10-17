@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from core.chat.function_manager import CATEGORIES, CATEGORY_SCOPE, FunctionManager, SCOPE_REGISTRY
+from core.paths import SYSTEM_PLUGINS_DIR
 
 ROOT = Path(__file__).resolve().parent.parent
 # labeled with their OWN name on purpose: asked for by name, never swept in by a category
@@ -14,7 +15,9 @@ OWN_NAME = {'bitcoin', 'wordpress', 'game-room'}
 
 
 def _tool_files():
-    files = sorted(ROOT.glob('functions/*.py')) + sorted(ROOT.glob('plugins/*/tools/*.py'))
+    plugin_files = sorted(SYSTEM_PLUGINS_DIR.glob('*/tools/*.py'))
+    assert plugin_files, f'no plugin tool files under {SYSTEM_PLUGINS_DIR}'
+    files = sorted(ROOT.glob('functions/*.py')) + plugin_files
     for f in files:
         if f.name.startswith('_') or '/tests/' in str(f):
             continue

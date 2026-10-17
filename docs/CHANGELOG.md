@@ -1,3 +1,6 @@
+# 2.15.0 - Moved Plugins
+- moved plugins/ to core/plugins
+- user/plugins is where you should make your own plugins
 # 2.14.3 - Rebuilt startup
 - Better GPU detection and error logs
 - Removed second half-rebooted version of the app on edge case failures

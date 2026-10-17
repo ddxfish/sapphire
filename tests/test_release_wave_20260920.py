@@ -6,7 +6,7 @@ shipped fix so it can't quietly regress:
     was unquoted; `davey>=0.1.4` redirected, `py-cord[voice] @ git+…` split.
   - conda detection without `conda activate` (core/routes/plugins.py).
   - netstat orphan kill compares the port exactly (core/process_manager.py).
-  - MCP daemon takes a Proactor loop on Windows (plugins/mcp_client/daemon.py).
+  - MCP daemon takes a Proactor loop on Windows (core/plugins/mcp_client/daemon.py).
   - clock ping rides the core audio backend and warns at set-time when silent.
   - HF_HOME redirect is set in sapphire.py's env block, before any spawn.
 """
@@ -108,7 +108,7 @@ def test_mcp_daemon_uses_proactor_loop_on_windows(monkeypatch):
 
 
 def test_mcp_bridge_never_stores_an_empty_error():
-    src = (ROOT / "plugins/mcp_client/mcp_bridge.py").read_text(encoding="utf-8")
+    src = (ROOT / "core/plugins/mcp_client/mcp_bridge.py").read_text(encoding="utf-8")
     assert "self._error = str(e) or repr(e)" in src
 
 
@@ -143,7 +143,7 @@ def test_clock_ping_plays_through_core_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(ct.time, "sleep", lambda s: None)
     assert ct._play_ping() is True
     assert played == [(800, 8000), (800, 8000)]
-    src = (ROOT / "plugins/clock/tools/clock_tools.py").read_text(encoding="utf-8")
+    src = (ROOT / "core/plugins/clock/tools/clock_tools.py").read_text(encoding="utf-8")
     assert "import subprocess" not in src, "playback must not shell out again"
 
 

@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SETS = {
-    'core': ['functions/*.py', 'plugins/*/tools/*.py'],
+    'core': ['functions/*.py', 'core/plugins/*/tools/*.py'],
     'user': ['user/functions/*.py', 'user/plugins/*/tools/*.py'],
 }
 WIDTH = 100

@@ -66,12 +66,12 @@ Use the signing tool included with Sapphire:
 
 ```bash
 # Sign a single plugin
-python tools/sign_plugin.py plugins/my-plugin/
+python tools/sign_plugin.py user/plugins/my-plugin/
 
 # Sign with a specific key
-python tools/sign_plugin.py plugins/my-plugin/ --key /path/to/my_signing_key.pem
+python tools/sign_plugin.py user/plugins/my-plugin/ --key /path/to/my_signing_key.pem
 
-# Sign all system plugins (core maintainer)
+# Sign all system plugins in core/plugins/ (core maintainer)
 python tools/sign_plugin.py --all
 
 # Sign all including user/ plugins
@@ -126,5 +126,5 @@ Plugin signing = Ed25519 signature over plugin.json's serialized plugin/version/
 
 STATES: official (Sapphire key) / verified_author (authorized third-party key) / unsigned / failed. Tampered (failed) is ALWAYS blocked at boot — no override. Unsigned is blocked unless ALLOW_UNSIGNED_PLUGINS=true (default false). Managed installs add 'validated'.
 KEYS: authorized third-party keys distributed via the central key list (PLUGIN_KEYS_URL, fetched with a 24h disk-cache-first policy; user/authorized_plugin_keys.json is only the fetch cache — there is no user-local key-add mechanism).
-SIGNING: python tools/sign_plugin.py plugins/<name> [--key /path/to/private_key.pem] [--all] [--include-user]. Default key path user/plugin_signing_key.pem.
+SIGNING: python tools/sign_plugin.py core/plugins/<name> (shipped) | user/plugins/<name> --key /path/to/private_key.pem (third-party) | --all (core/plugins/) [--include-user]. Default key path user/plugin_signing_key.pem.
 SYMPTOM: plugin silently missing after an edit = signature stale — re-sign, restart. Check Settings > Plugins for the trust badge.

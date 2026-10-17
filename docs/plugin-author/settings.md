@@ -92,7 +92,7 @@ For settings that need custom JavaScript beyond what manifest settings provide, 
 ### Structure
 
 ```
-plugins/my-plugin/
+user/plugins/my-plugin/
   plugin.json
   web/
     index.js               # Entry point (required)

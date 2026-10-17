@@ -92,7 +92,7 @@ def test_put_route_refuses_a_dead_key_and_normalizes_the_pair(client, mock_syste
 # ── the twilio outbound line gets the same deadline as inbound ───────────────
 
 def test_twilio_outbound_stamps_the_call_timeout():
-    src = (ROOT / 'plugins/twilio-voice/daemon.py').read_text(encoding='utf-8')
+    src = (ROOT / 'core/plugins/twilio-voice/daemon.py').read_text(encoding='utf-8')
     body = src[src.index('def _setup_outbound_chat('):src.index('def ', src.index('def _setup_outbound_chat(') + 10)]
     assert 'patch["llm_request_timeout"] = _to' in body
 
@@ -147,14 +147,14 @@ def test_delete_sweep_survives_a_broken_store(monkeypatch):
 
 def test_status_display_is_friendly_name_and_effective_model():
     import importlib.util
-    spec = importlib.util.spec_from_file_location('status_routes', ROOT / 'plugins/status/routes/status.py')
+    spec = importlib.util.spec_from_file_location('status_routes', ROOT / 'core/plugins/status/routes/status.py')
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     assert mod._llm_display('lanbox', '') == {'llm_display': 'LAN Box', 'llm_effective_model': 'qwen'}
     assert mod._llm_display('lanbox', 'qwen-big') == {'llm_display': 'LAN Box', 'llm_effective_model': 'qwen-big'}
     assert mod._llm_display('claude', '') == {'llm_display': 'Claude', 'llm_effective_model': 'claude-opus-5'}
     assert mod._llm_display('auto', '') == {'llm_display': 'auto', 'llm_effective_model': ''}
     assert mod._llm_display('ghost', '') == {'llm_display': 'ghost', 'llm_effective_model': ''}
-    tool = (ROOT / 'plugins/status/tools/status_tool.py').read_text(encoding='utf-8')
+    tool = (ROOT / 'core/plugins/status/tools/status_tool.py').read_text(encoding='utf-8')
     assert "s.get('llm_display')" in tool and "s.get('llm_effective_model')" in tool
 
 
@@ -169,7 +169,7 @@ def test_no_resolver_copies_remain():
     checks = {
         'core/chat/chat.py': ['get_first_available_provider(', 'PROVIDER_METADATA'],
         'core/continuity/execution_context.py': ['get_first_available_provider(', 'PROVIDER_METADATA'],
-        'plugins/game-room/gameroom_core.py': ['system.llm_chat._select_provider()', 'get_first_available_provider', '_is_local_provider(key):\n    """Mirror'],
+        'core/plugins/game-room/gameroom_core.py': ['system.llm_chat._select_provider()', 'get_first_available_provider', '_is_local_provider(key):\n    """Mirror'],
         'core/chat/compress.py': ['get_provider_by_key'],
         'core/routes/chat.py': ['PROVIDER_METADATA'],
         'interfaces/web/static/features/scene.js': ["['lmstudio', 'ollama']"],
@@ -227,7 +227,7 @@ def test_set_llm_pin_on_the_real_store(tmp_path):
 
 def test_twilio_outbound_patch_carries_provider_and_timeout(monkeypatch):
     import importlib.util
-    spec = importlib.util.spec_from_file_location('twilio_daemon_pin_test', ROOT / 'plugins/twilio-voice/daemon.py')
+    spec = importlib.util.spec_from_file_location('twilio_daemon_pin_test', ROOT / 'core/plugins/twilio-voice/daemon.py')
     daemon = importlib.util.module_from_spec(spec); spec.loader.exec_module(daemon)
     from core.credentials_manager import credentials
     monkeypatch.setattr(credentials, 'get_twilio_account',

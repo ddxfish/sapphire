@@ -11,7 +11,7 @@ main.py (runner with restart loop)
 └── sapphire.py (VoiceChatSystem)
     ├── LLMChat (core/chat/)
     │   ├── llm_providers → Claude, OpenAI, Gemini (core) + custom + plugin-provided
-    │   ├── plugin_loader → plugins/*, user/plugins/*
+    │   ├── plugin_loader → core/plugins/*, user/plugins/*
     │   ├── function_manager → plugin tools, functions/*, scopes
     │   └── session_manager → chat history (SQLite)
     ├── Continuity (core/continuity/)
@@ -83,7 +83,7 @@ user/
 │   └── activity.json       # Task execution log
 ├── webui/
 │   └── plugins/            # Plugin settings (HA, email, etc.)
-├── functions/              # Legacy custom tools (most moved to plugins/memory/)
+├── functions/              # Legacy custom tools (most moved to core/plugins/memory/)
 ├── plugins/                # Your private plugins
 ├── history/
 │   └── sapphire_history.db # Chat sessions (SQLite WAL)
@@ -277,8 +277,8 @@ Plugins are signed with ed25519 to detect tampering. The signing key lives outsi
 The signing tool (`tools/sign_plugin.py`) walks every file in a plugin directory matching `SIGNABLE_EXTENSIONS` (`.py`, `.json`, `.js`, `.css`, `.html`, `.md`), computes a SHA256 hash of each, builds a JSON manifest, and signs it with an ed25519 private key. The output is `plugin.sig` in the plugin directory.
 
 ```
-python tools/sign_plugin.py plugins/stop/
-python tools/sign_plugin.py --all          # sign all plugins in plugins/
+python tools/sign_plugin.py core/plugins/voice-commands/
+python tools/sign_plugin.py --all          # sign all plugins in core/plugins/
 ```
 
 **Private key:** `user/plugin_signing_key.pem` (gitignored). Generate with `user/tools/generate_signing_key.py`.
@@ -458,9 +458,9 @@ Each chat carries per-chat settings (prompt, voice, toolset, LLM, spice, scopes)
 | `core/net.py` | Network facade — single LAN/WAN proxy decision point ([NETWORK.md](NETWORK.md)) |
 | `core/continuity/scheduler.py` | Cron-based task scheduler |
 | `core/audio/device_manager.py` | Audio device handling |
-| `plugins/memory/tools/knowledge_tools.py` | Knowledge base + people |
-| `plugins/memory/tools/memory_tools.py` | Long-term memory + embeddings |
-| `plugins/memory/tools/goals_tools.py` | Goals + progress journaling |
+| `core/plugins/memory/tools/knowledge_tools.py` | Knowledge base + people |
+| `core/plugins/memory/tools/memory_tools.py` | Long-term memory + embeddings |
+| `core/plugins/memory/tools/goals_tools.py` | Goals + progress journaling |
 
 ---
 

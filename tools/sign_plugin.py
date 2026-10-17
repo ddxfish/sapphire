@@ -2,11 +2,11 @@
 """Plugin signing tool — signs Sapphire plugins with an ed25519 private key.
 
 Usage:
-    python tools/sign_plugin.py plugins/my-plugin/
-    python tools/sign_plugin.py plugins/ssh/ plugins/email/
+    python tools/sign_plugin.py core/plugins/ssh/
+    python tools/sign_plugin.py core/plugins/ssh/ core/plugins/email/
     python tools/sign_plugin.py --all
     python tools/sign_plugin.py --all --include-user
-    python tools/sign_plugin.py plugins/my-plugin/ --key /path/to/private_key.pem
+    python tools/sign_plugin.py user/plugins/my-plugin/ --key /path/to/private_key.pem
 
 The tool hashes all signable files (.py, .json, .js, .css, .html, .md),
 builds a manifest, signs it with ed25519, and writes plugin.sig.
@@ -23,6 +23,8 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+from core.paths import SYSTEM_PLUGINS_DIR  # the one definition of the system band
 
 # Must match core/plugin_verify.py
 SIGNABLE_EXTENSIONS = {".py", ".json", ".js", ".css", ".html", ".md"}
@@ -95,7 +97,7 @@ def main():
     parser = argparse.ArgumentParser(description="Sign Sapphire plugins with ed25519")
     parser.add_argument("plugins", nargs="*", help="Plugin directories to sign")
     parser.add_argument("--key", default=None, help="Path to ed25519 private key PEM (default: user/plugin_signing_key.pem)")
-    parser.add_argument("--all", action="store_true", help="Sign all plugins in plugins/")
+    parser.add_argument("--all", action="store_true", help="Sign all shipped plugins (core/plugins/)")
     parser.add_argument("--include-user", action="store_true", help="With --all, also sign user/plugins/")
     args = parser.parse_args()
 
@@ -138,7 +140,7 @@ def main():
     # Collect plugin dirs
     plugin_dirs = []
     if args.all:
-        system_dir = PROJECT_ROOT / "plugins"
+        system_dir = SYSTEM_PLUGINS_DIR
         if system_dir.exists():
             plugin_dirs.extend(
                 d for d in sorted(system_dir.iterdir())

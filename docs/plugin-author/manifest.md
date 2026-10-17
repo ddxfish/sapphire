@@ -135,7 +135,7 @@ def _get_current_email_scope():
 
 The import resolves via `function_manager.__getattr__` — no need to import the ContextVar directly. The scope is automatically set by the chat pipeline before your tool's `execute()` is called.
 
-**Real example:** See `plugins/memory/plugin.json` for 4 scopes (memory, goal, knowledge, people) and `plugins/email/plugin.json` for the email scope.
+**Real example:** See `core/plugins/memory/plugin.json` for 4 scopes (memory, goal, knowledge, people) and `core/plugins/email/plugin.json` for the email scope.
 
 ### Sidebar Accordion
 
@@ -159,7 +159,7 @@ The import resolves via `function_manager.__getattr__` — no need to import the
 | `content` | No | HTML fragment file, resolved from the plugin's `web/` directory (served via `/plugin-web/{name}/{content}`) and injected as the panel body |
 | `script` | No | ES module in `web/`; if it exports `init(contentEl, pluginName)`, it's called once the panel is built |
 
-The HTML is guaranteed to be in the DOM before `init()` runs, so the script can query `contentEl` for nodes the fragment created. Bundled examples: `plugins/avatar`, `plugins/sd-server`.
+The HTML is guaranteed to be in the DOM before `init()` runs, so the script can query `contentEl` for nodes the fragment created. Bundled examples: `core/plugins/avatar`, `core/plugins/sd-server`.
 
 ### Cleanup Paths (Uninstall)
 
@@ -198,20 +198,21 @@ into the shipped band therefore keeps running from `user/plugins/<name>/` until 
 ## Directory Structure
 
 ```
-plugins/                          # System plugins (0-99)
-  voice-commands/
-    plugin.json
-    plugin.sig
-    hooks/stop.py
-    hooks/reset.py
-  ssh/
-    plugin.json
-    plugin.sig
-    tools/ssh_tool.py
-    web/index.js
+core/
+  plugins/                        # System plugins, shipped (0-99)
+    voice-commands/
+      plugin.json
+      plugin.sig
+      hooks/stop.py
+      hooks/reset.py
+    ssh/
+      plugin.json
+      plugin.sig
+      tools/ssh_tool.py
+      web/index.js
 
 user/
-  plugins/                        # User plugins (100-199)
+  plugins/                        # User plugins, yours (100-199)
     my-plugin/
       plugin.json
       hooks/handler.py
@@ -232,4 +233,4 @@ user/
 - Scope entry: `{key (python identifier), label, endpoint, data_key?, value_field?, name_field?, label_template?, nav_target?, default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
 - `sidebar_accordion`: `{title?, icon?, content?, script?}` — files live in the plugin's `web/` dir, served at `/plugin-web/{name}/...`; script exports `init(contentEl, pluginName)`, called after the HTML fragment lands; chat surface only; renders only while the plugin is enabled.
 - `cleanup_paths`: relative to `user/`, namespace-restricted to `plugin_state/` (filename must start with the plugin name), `webui/plugins/`, or `plugins/{name}/`; anything else is REFUSED. Auto-cleanup already covers `plugin_state/{name}*`, `webui/plugins/{name}.json`, and the plugin dir.
-- Priority bands: system plugins 0-99, user plugins 100-199; within a band: 0-19 critical intercepts, 20-49 input modification, 50-79 context enrichment, 80-99 observation (shifted for user band).
+- Priority bands: system plugins (`core/plugins/`) 0-99, user plugins (`user/plugins/`) 100-199; within a band: 0-19 critical intercepts, 20-49 input modification, 50-79 context enrichment, 80-99 observation (shifted for user band).

@@ -19,7 +19,7 @@ import pytest
 from core.plugin_loader import PluginLoader, _time_to_cron
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = ROOT / "plugins" / "discord" / "plugin.json"
+MANIFEST = ROOT / "core" / "plugins" / "discord" / "plugin.json"
 
 
 @pytest.mark.parametrize("value,expected", [

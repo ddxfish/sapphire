@@ -233,7 +233,7 @@ class VoiceChatSystem:
                 logger.critical(
                     f"ESSENTIAL PLUGIN NOT LOADED: '{_name}' — reason: {reason}. "
                     f"Sapphire is running in degraded mode. Fix: re-sign the plugin "
-                    f"(python tools/sign_plugin.py plugins/{_name}) or set ALLOW_UNSIGNED_PLUGINS=true."
+                    f"(python tools/sign_plugin.py core/plugins/{_name}) or set ALLOW_UNSIGNED_PLUGINS=true."
                 )
                 print(f"\n{'='*60}\nSAPPHIRE WARNING: Essential plugin '{_name}' did not load ({reason})\nRunning in degraded mode — memory/core tools unavailable.\n{'='*60}\n", flush=True)
                 # The boot-toast lane is what the UI actually shows (the event
@@ -243,7 +243,7 @@ class VoiceChatSystem:
                         _pl._load_errors.append({
                             'plugin': _name,
                             'error': f"essential plugin did not load ({reason}); memory/core tools are unavailable",
-                            'hint': f"python tools/sign_plugin.py plugins/{_name}, or ALLOW_UNSIGNED_PLUGINS=true, then restart",
+                            'hint': f"python tools/sign_plugin.py core/plugins/{_name}, or ALLOW_UNSIGNED_PLUGINS=true, then restart",
                         })
                 except Exception:
                     pass

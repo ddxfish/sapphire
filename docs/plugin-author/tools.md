@@ -1,6 +1,6 @@
 # Plugin Tools
 
-Plugin tools are registered with the function manager and the AI calls them like any built-in tool. The format is the same across all plugins (see `plugins/memory/tools/` for examples of core tools, or `plugins/email/tools/` for a plugin tool).
+Plugin tools are registered with the function manager and the AI calls them like any built-in tool. The format is the same across all plugins (see `core/plugins/memory/tools/` for examples of core tools, or `core/plugins/email/tools/` for a plugin tool).
 
 For simple tool creation without a full plugin, see [TOOLMAKER.md](../TOOLMAKER.md).
 
@@ -240,13 +240,13 @@ def _load_settings():
 Or via the plugin loader (merges with manifest defaults):
 
 ```python
-from pathlib import Path
 import json
+from core.paths import PROJECT_ROOT
 
 DEFAULTS = {"timeout": 30, "max_results": 10}
 
 def _load_settings():
-    path = Path(__file__).parent.parent.parent.parent / "user" / "webui" / "plugins" / "my-plugin.json"
+    path = PROJECT_ROOT / "user" / "webui" / "plugins" / "my-plugin.json"
     settings = DEFAULTS.copy()
     if path.exists():
         try:
@@ -256,6 +256,19 @@ def _load_settings():
             pass
     return settings
 ```
+
+### Finding the project root
+
+Import paths from `core/paths.py` — never count `.parent`s up from `__file__`:
+
+| Constant | Points at |
+|----------|-----------|
+| `PROJECT_ROOT` | The Sapphire folder (where `sapphire.py` lives) |
+| `SYSTEM_PLUGINS_DIR` | `core/plugins/` (shipped band) |
+| `USER_PLUGINS_DIR` | `user/plugins/` (user band) |
+| `PLUGIN_STATE_DIR` | `user/plugin_state/` |
+
+A counted chain that comes up one level short still lands on a real folder (`core/` or `user/`), so nothing errors; your files just quietly go to the wrong place. Standalone scripts and child-env modules that can't import `core` should walk upward until they find `sapphire.py` and use that folder as the root.
 
 ---
 
@@ -414,5 +427,6 @@ Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](.
 - Networking: `from core import net` — `net.get/post/put/delete/request(url, ...)` (requests-shaped), `net.session_for(url)` (pooled, lane-fixed), `net.wan_session()` (WAN lane, browser profile). Host classification is syntactic, never resolves DNS: LAN = loopback / RFC1918 / link-local / `*.local` / `*.lan` / `*.home.arpa` / single-label names / registered direct hosts → direct, redirects refused by default; WAN = everything else → proxy env when SOCKS is on. Register LAN FQDNs: `core.socks_proxy.register_direct_hosts(zero_arg_callable, owner=plugin_name)`; keyed by owner (replace-on-reregister), auto-unregistered on plugin unload.
 - `get_tools()` live refresh: re-run on settings save; only `description`/`parameters` update in place; tool names never change; add/remove needs a reload. Keep a static `TOOLS` fallback.
 - PluginState (`plugin_loader.get_plugin_state(name)`): `get/save/delete/all/clear`; thread-safe; backed by `user/plugin_state/{name}.json`.
+- Paths: `from core.paths import PROJECT_ROOT, SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR, PLUGIN_STATE_DIR` — never count `.parent`s (a short chain lands on a real folder, fails silently). Scripts that can't import core: walk up to `sapphire.py`.
 - PluginChatState (`plugin_loader.get_chat_state(name)`): `put/get` (slot), `append` (returns seq), `append_many` (one transaction, all-or-none, returns seqs), `read_all`, `replace` (atomic renumber), `delete(chat[, key])`, `keys`, `get_all_chats(key)`, `meta`. Rows ride rename/vault/delete with the chat; on a hidden (sealed) chat reads return empty and writes RAISE. Rows survive a chat *clear* (register the `chat_cleared` hook to drop turn-anchored ones).
 - Scopes: `from core.chat.function_manager import scope_email` (etc.) — resolves via `__getattr__` against the scope registry; exists only while the owning plugin is loaded. `scope_rag` and `scope_private` are always present (core).

@@ -1,0 +1,428 @@
+# Sapphire Store — browse and install plugins
+"""
+Browse the Sapphire plugin store and install plugins from GitHub, GitLab, or direct .zip URLs.
+Uses the public REST API at sapphireblue.dev (no auth needed for reads).
+Install triggers the local plugin manager endpoint.
+"""
+
+import logging
+import re
+import requests
+from core import net
+
+logger = logging.getLogger(__name__)
+
+ENABLED = True
+EMOJI = '🏪'
+TOOL_CATEGORY = 'meta_danger'
+AVAILABLE_FUNCTIONS = ['store_browse', 'store_install']
+
+DEFAULT_STORE_URL = "https://sapphireblue.dev/wp-json/sapphire-store/v1/"
+
+TOOLS = [
+    {
+        "type": "function",
+        "is_local": False,
+        "function": {
+            "name": "store_browse",
+            "description": "Browse the Sapphire plugin store. No arguments = the full list.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search": {
+                        "type": "string",
+                        "description": "Name, keyword, or an exact slug for full detail"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "e.g. automation, finance, tools, security, entertainment"
+                    },
+                    "sort": {
+                        "type": "string",
+                        "enum": ["newest", "votes", "name", "updated"],
+                        "description": "Default newest"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": False,
+        "function": {
+            "name": "store_install",
+            "description": "Install a plugin from the Sapphire Store by slug. The user confirms first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "description": "From store_browse"
+                    }
+                },
+                "required": ["slug"]
+            }
+        }
+    }
+]
+
+
+def _get_store_url(plugin_settings):
+    if plugin_settings and plugin_settings.get("store_url"):
+        return plugin_settings["store_url"].rstrip("/") + "/"
+    return DEFAULT_STORE_URL
+
+
+def _format_plugin_brief(p):
+    trust = p.get("trust_level", "community")
+    trust_tag = f" [{trust.upper()}]" if trust != "community" else ""
+    votes = f"+{p['votes_up']}/-{p['votes_down']}"
+    return f"  • {p['name']}{trust_tag} ({p['slug']}) — {p['description'][:100]} [{votes}, {p.get('category', '?')}]"
+
+
+def _format_plugin_detail(p):
+    trust = p.get("trust_level", "community")
+    total = p["votes_up"] + p["votes_down"]
+    ratio = round(p["votes_up"] / total * 100) if total > 0 else 0
+
+    lines = [
+        f"=== {p['name']} ===",
+        f"Slug: {p['slug']}",
+        f"Author: {p.get('author', 'Unknown')}",
+        f"Category: {p.get('category', '?')}",
+        f"Version: {p.get('version', '?')}",
+        f"Trust: {trust.upper()}",
+        f"Votes: +{p['votes_up']} / -{p['votes_down']} ({ratio}% positive)",
+        f"Source: {p.get('github_url', 'N/A')}",
+        "",
+        p.get("long_description") or p.get("description", ""),
+    ]
+    if p.get("min_sapphire_version"):
+        lines.insert(7, f"Requires Sapphire: {p['min_sapphire_version']}+")
+
+    return "\n".join(lines)
+
+
+def _browse(search=None, category=None, sort="newest", plugin_settings=None):
+    base = _get_store_url(plugin_settings)
+
+    try:
+        # If search looks like an exact slug, try detail first
+        if search and " " not in search.strip():
+            try:
+                r = net.get(f"{base}items/{search.strip()}", timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    if not data.get("code"):  # not an error
+                        return _format_plugin_detail(data), True
+            except Exception:
+                pass  # Fall through to list/search
+
+        # Search or list
+        if search:
+            params = {"q": search, "per_page": 15}
+            r = net.get(f"{base}items/search", params=params, timeout=10)
+        else:
+            params = {"per_page": 15, "sort": sort or "newest"}
+            if category:
+                params["category"] = category
+            r = net.get(f"{base}items", params=params, timeout=10)
+
+        if r.status_code != 200:
+            return f"Store API error: HTTP {r.status_code}", False
+
+        data = r.json()
+        plugins = data.get("items", [])
+        total = data.get("total", 0)
+
+        if not plugins:
+            msg = "No plugins found"
+            if search:
+                msg += f" matching '{search}'"
+            if category:
+                msg += f" in category '{category}'"
+            return msg + ".", False
+
+        lines = [f"Found {total} plugin{'s' if total != 1 else ''}:"]
+        lines.append("")
+        for p in plugins:
+            lines.append(_format_plugin_brief(p))
+
+        # If exactly one result, auto-expand to detail
+        if len(plugins) == 1:
+            try:
+                slug = plugins[0]["slug"]
+                dr = net.get(f"{base}items/{slug}", timeout=10)
+                if dr.status_code == 200:
+                    return _format_plugin_detail(dr.json()), True
+            except Exception:
+                pass
+
+        lines.append("")
+        lines.append(f"Use store_browse(search=\"slug\") for detail on a specific plugin.")
+        if total > 15:
+            lines.append(f"Showing 15 of {total}. Refine your search for more specific results.")
+
+        return "\n".join(lines), True
+
+    except requests.Timeout:
+        return "Store API timed out. Try again.", False
+    except requests.ConnectionError:
+        return "Could not connect to the Sapphire Store. Check network.", False
+    except Exception as e:
+        logger.error(f"[STORE] Browse error: {e}", exc_info=True)
+        return f"Error browsing store: {e}", False
+
+
+def _install(slug, plugin_settings=None):
+    base = _get_store_url(plugin_settings)
+
+    try:
+        # Get plugin detail from store
+        r = net.get(f"{base}items/{slug}", timeout=10)
+        if r.status_code != 200:
+            return f"Plugin '{slug}' not found in the store.", False
+
+        plugin = r.json()
+        if plugin.get("code"):
+            return f"Plugin '{slug}' not found.", False
+
+        # The store API field is historically named "github_url" but the value
+        # may now be GitHub, GitLab, or a direct https:// .zip URL. Same
+        # supported set as core/routes/plugins.py install endpoint.
+        source_url = plugin.get("github_url")
+        if not source_url:
+            return f"Plugin '{slug}' has no source URL — can't install.", False
+
+        trust = plugin.get("trust_level", "community")
+        name = plugin.get("name", slug)
+
+        # Download zip, extract, install via plugin_loader directly
+        import re
+        import tempfile
+        import zipfile
+        import shutil
+        import json
+        from pathlib import Path
+        from urllib.parse import urlparse
+
+        clean_url = source_url.strip()
+        # Path-only checks let URLs with query strings / fragments work
+        # (e.g. signed S3 .zip URLs, or GitHub URLs pasted with tracking params).
+        # Full URL is still used for the actual request so signed tokens reach
+        # the server. Mirrors core/routes/plugins.py logic.
+        _parsed = urlparse(clean_url)
+        _path_lower = (_parsed.path or '').lower()
+        _url_for_match = f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}"
+
+        zip_url = None
+        install_method = None
+        if _path_lower.endswith('.zip') and clean_url.startswith('https://'):
+            # Direct .zip URL — SSRF guards: https-only + private-IP block.
+            _lower = clean_url.lower()
+            if any(bad in _lower for bad in (
+                '://localhost', '://127.', '://0.0.0.0', '://169.254.',
+                '://[::1]', '://10.', '://192.168.', '://172.16.', '://172.17.',
+                '://172.18.', '://172.19.', '://172.20.', '://172.21.',
+                '://172.22.', '://172.23.', '://172.24.', '://172.25.',
+                '://172.26.', '://172.27.', '://172.28.', '://172.29.',
+                '://172.30.', '://172.31.',
+            )):
+                return f"Refusing to fetch from localhost / private IP range: {clean_url}", False
+            zip_url = clean_url
+            install_method = 'zip_url'
+            zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+            if zr.status_code != 200:
+                return f"Failed to download zip (HTTP {zr.status_code})", False
+        else:
+            m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _url_for_match)
+            m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _url_for_match)
+            if m_gh:
+                owner, repo = m_gh.group(1), m_gh.group(2)
+                install_method = 'github_url'
+                zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+                zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code in (301, 302, 303, 307, 308):
+                    loc = zr.headers.get('Location', '')
+                    if loc.startswith('https://codeload.github.com/'):
+                        zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code == 404:
+                    zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
+                    zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    if zr.status_code in (301, 302, 303, 307, 308):
+                        loc = zr.headers.get('Location', '')
+                        if loc.startswith('https://codeload.github.com/'):
+                            zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code != 200:
+                    return f"Failed to download from GitHub (HTTP {zr.status_code})", False
+            elif m_gl:
+                gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
+                full_path = f"{gl_path}/{gl_repo}"
+                install_method = 'gitlab_url'
+                zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
+                zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code in (301, 302, 303, 307, 308):
+                    loc = zr.headers.get('Location', '')
+                    if loc.startswith('https://gitlab.com/'):
+                        zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code == 404:
+                    zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
+                    zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    if zr.status_code in (301, 302, 303, 307, 308):
+                        loc = zr.headers.get('Location', '')
+                        if loc.startswith('https://gitlab.com/'):
+                            zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code != 200:
+                    return f"Failed to download from GitLab (HTTP {zr.status_code})", False
+            else:
+                return f"Invalid source URL: {source_url}. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo>, or a direct https:// .zip URL", False
+
+        # Save zip to temp
+        tmp_fd = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+        tmp_zip = Path(tmp_fd.name)
+        tmp_fd.close()
+        tmp_dir = None
+        try:
+            with open(tmp_zip, "wb") as f:
+                for chunk in zr.iter_content(8192):
+                    f.write(chunk)
+
+            if not zipfile.is_zipfile(tmp_zip):
+                return "Downloaded file is not a valid zip.", False
+
+            tmp_dir = Path(tempfile.mkdtemp())
+            with zipfile.ZipFile(tmp_zip, 'r') as zf:
+                # Basic safety checks
+                for info in zf.infolist():
+                    if '..' in info.filename or info.filename.startswith('/'):
+                        return f"Zip contains unsafe path: {info.filename}", False
+                    if info.file_size > 10 * 1024 * 1024:
+                        return f"File too large in zip: {info.filename}", False
+                zf.extractall(tmp_dir)
+
+            # Find plugin.json (root or one level deep — GitHub wraps in {repo}-main/)
+            plugin_root = None
+            if (tmp_dir / "plugin.json").exists():
+                plugin_root = tmp_dir
+            else:
+                for child in tmp_dir.iterdir():
+                    if child.is_dir() and (child / "plugin.json").exists():
+                        plugin_root = child
+                        break
+
+            if not plugin_root:
+                return "No plugin.json found in the repository. This may not be a Sapphire plugin.", False
+
+            manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
+            plugin_name = manifest.get("name", slug)
+            # Containment: the manifest name comes from a downloaded repo and
+            # goes straight into a path join — "../x", separators, drive
+            # letters or reserved device names must not escape user/plugins.
+            if (not isinstance(plugin_name, str)
+                    or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}', plugin_name)):
+                return f"Refusing install: unsafe plugin name in manifest ({plugin_name!r}).", False
+            plugin_version = manifest.get("version", "?")
+            plugin_author = manifest.get("author", "unknown")
+
+            # Check if already installed
+            from core.plugin_loader import plugin_loader
+            from core.paths import PROJECT_ROOT, USER_PLUGINS_DIR
+            # One rule with the REST installer and Toolmaker: a user plugin may
+            # not take a shipped plugin's name — at the next boot it would shadow
+            # it, or, blocked as unsigned, erase it from the registry.
+            from core.plugin_loader import core_name_collision
+            why = core_name_collision(plugin_name)
+            if why:
+                return f"Refusing install: {why}.", False
+            dest = USER_PLUGINS_DIR / plugin_name
+
+            if dest.exists():
+                try:
+                    # Explicit utf-8: plugin manifests carry emoji ("emoji": "💾"),
+                    # Windows default cp1252 raises UnicodeDecodeError here and
+                    # blocks the "already installed" branch. 2026-04-24.
+                    existing = json.loads((dest / "plugin.json").read_text(encoding='utf-8'))
+                    old_v = existing.get("version", "?")
+                except Exception:
+                    old_v = "?"
+                return (
+                    f"Plugin '{name}' is already installed (v{old_v}). "
+                    f"Store has v{plugin_version}. Uninstall first to update.",
+                    False
+                )
+
+            # Install
+            USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(plugin_root, dest, symlinks=False)
+
+            # Write install metadata
+            from datetime import datetime
+            state = plugin_loader.get_plugin_state(plugin_name)
+            state.save("installed_from", clean_url)
+            state.save("install_method", install_method)
+            state.save("installed_at", datetime.utcnow().isoformat() + "Z")
+
+            # Add to enabled list so it actually loads
+            plugins_json = PROJECT_ROOT / "user" / "webui" / "plugins.json"
+            plugins_json.parent.mkdir(parents=True, exist_ok=True)
+            pdata = {}
+            if plugins_json.exists():
+                try:
+                    pdata = json.loads(plugins_json.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            enabled = pdata.get("enabled", [])
+            if plugin_name not in enabled:
+                enabled.append(plugin_name)
+                pdata["enabled"] = enabled
+                plugins_json.write_text(json.dumps(pdata, indent=2), encoding="utf-8")
+
+            # Rescan to discover and load the new plugin
+            plugin_loader.rescan()
+
+            lines = [
+                f"Installed '{name}' v{plugin_version} successfully!",
+                f"Author: {plugin_author}",
+                f"Trust level: {trust.upper()}",
+                "",
+                "The plugin is now available. Enable it in Settings > Plugins if needed.",
+            ]
+
+            if trust == "community":
+                lines.append("")
+                lines.append("Note: This is a community plugin. Review the source code if you have concerns.")
+
+            return "\n".join(lines), True
+
+        finally:
+            if tmp_zip.exists():
+                tmp_zip.unlink(missing_ok=True)
+            if tmp_dir and tmp_dir.exists():
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    except requests.Timeout:
+        return "Download timed out. Try again.", False
+    except requests.ConnectionError:
+        return "Could not connect to source. Check network.", False
+    except Exception as e:
+        logger.error(f"[STORE] Install error: {e}", exc_info=True)
+        return f"Install failed: {e}", False
+
+
+def execute(function_name, arguments, config, plugin_settings=None):
+    if function_name == "store_browse":
+        return _browse(
+            search=arguments.get("search"),
+            category=arguments.get("category"),
+            sort=arguments.get("sort", "newest"),
+            plugin_settings=plugin_settings,
+        )
+    elif function_name == "store_install":
+        slug = arguments.get("slug")
+        if not slug:
+            return "Please specify a plugin slug to install.", False
+        return _install(slug, plugin_settings=plugin_settings)
+    else:
+        return f"Unknown function: {function_name}", False

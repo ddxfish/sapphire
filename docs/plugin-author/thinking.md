@@ -135,7 +135,7 @@ all. Without the check the reasoning would be used as the answer.
 ## Gotchas
 
 - **Never write your own pattern.** `tests/test_think_js_twin.py` fails the suite
-  if a think-tag pattern appears in any Python file under `core/`, `plugins/` or
+  if a think-tag pattern appears in any Python file under `core/` (which includes `core/plugins/`) or
   `functions/` other than `core/think.py`, or in any web file other than
   `shared/think.js`.
 - **Strip before you parse.** A model asked for JSON may reason first; run

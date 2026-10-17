@@ -47,7 +47,7 @@ Add themes to your plugin manifest and provide CSS + optional JS files.
 ### File Structure
 
 ```
-plugins/my-theme-pack/
+user/plugins/my-theme-pack/
   plugin.json
   web/
     themes/

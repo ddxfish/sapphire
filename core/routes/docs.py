@@ -12,6 +12,7 @@ router = APIRouter()
 
 DOCS_DIR = Path(__file__).parent.parent.parent / "docs"
 ROOT_DIR = DOCS_DIR.parent  # project root
+from core.paths import SYSTEM_PLUGINS_DIR
 
 
 def _build_tree():
@@ -37,7 +38,7 @@ def _build_tree():
                 items.append({"name": p.name, "path": p.name, "type": "folder", "children": children})
     # Plugin READMEs
     plugin_children = []
-    for pdir in [ROOT_DIR / "plugins", ROOT_DIR / "user" / "plugins"]:
+    for pdir in [SYSTEM_PLUGINS_DIR, ROOT_DIR / "user" / "plugins"]:
         if not pdir.exists():
             continue
         for readme in sorted(pdir.glob("*/README.md")):
@@ -82,7 +83,7 @@ async def search_docs(request: Request, q: str = "", _=Depends(require_login)):
     root_readme = ROOT_DIR / "README.md"
     if root_readme.exists():
         search_files.append(root_readme)
-    for pdir in [ROOT_DIR / "plugins", ROOT_DIR / "user" / "plugins"]:
+    for pdir in [SYSTEM_PLUGINS_DIR, ROOT_DIR / "user" / "plugins"]:
         search_files.extend(pdir.glob("*/README.md")) if pdir.exists() else None
     for md in search_files:
         try:
@@ -105,7 +106,7 @@ async def search_docs(request: Request, q: str = "", _=Depends(require_login)):
         if matches:
             if md == root_readme:
                 rel = "_root/README.md"
-            elif str(md).startswith(str(ROOT_DIR / "plugins")) or str(md).startswith(str(ROOT_DIR / "user" / "plugins")):
+            elif str(md).startswith(str(SYSTEM_PLUGINS_DIR)) or str(md).startswith(str(ROOT_DIR / "user" / "plugins")):
                 rel = f"_plugins/{md.parent.name}/README.md"
             else:
                 rel = str(md.relative_to(DOCS_DIR))
@@ -131,11 +132,11 @@ async def get_doc(path: str, request: Request, _=Depends(require_login)):
     elif path.startswith("_plugins/"):
         # e.g. _plugins/telegram/README.md → plugins/telegram/README.md
         rel = path[len("_plugins/"):]
-        target = (ROOT_DIR / "plugins" / rel).resolve()
+        target = (SYSTEM_PLUGINS_DIR / rel).resolve()
         # Also check user plugins
         if not target.exists():
             target = (ROOT_DIR / "user" / "plugins" / rel).resolve()
-        plugins_root = str((ROOT_DIR / "plugins").resolve())
+        plugins_root = str((SYSTEM_PLUGINS_DIR).resolve())
         user_plugins_root = str((ROOT_DIR / "user" / "plugins").resolve())
         if not (str(target).startswith(plugins_root) or str(target).startswith(user_plugins_root)):
             raise HTTPException(status_code=403, detail="Access denied")

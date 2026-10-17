@@ -4,8 +4,8 @@ A plugin can teach Sapphire a new *kind* of agent — a background worker she sp
 that can ask her questions while it works and reports back into her chat by itself. The engine
 (`core/agents/`) owns spawning, rows, privacy, lookups and delivery; your plugin owns the work.
 
-The two kinds that ship are the reference: `plugins/agents/agent_kind.py` (`llm` — an LLM + tool
-loop through `ExecutionContext`) and `plugins/claude-code/agent_kind.py` (`claude_code` — a
+The two kinds that ship are the reference: `core/plugins/agents/agent_kind.py` (`llm` — an LLM + tool
+loop through `ExecutionContext`) and `core/plugins/claude-code/agent_kind.py` (`claude_code` — a
 conversational session on the Claude Agent SDK).
 
 ## 1. Declare it in `plugin.json`
@@ -46,7 +46,7 @@ already-imported class and finishes on its own.
 ## 2. Write the class
 
 ```python
-# plugins/<your-plugin>/agent_kind.py
+# user/plugins/<your-plugin>/agent_kind.py
 from core.agents.base import Agent as BaseAgent
 
 class Agent(BaseAgent):
@@ -95,7 +95,7 @@ Override `say(text)` to take a follow-up turn and `stop()` to interrupt whatever
 to whatever lets you continue later: when your `run()` returns with status `resting`, the row
 rests with that token, and the next `say` builds a fresh instance from the row **with the token
 and the text as its mission** — `run()` should then resume rather than start over. See
-`plugins/claude-code/agent_kind.py` for the asyncio-on-a-thread shape.
+`core/plugins/claude-code/agent_kind.py` for the asyncio-on-a-thread shape.
 
 ## 3. What the engine does for you
 

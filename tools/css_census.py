@@ -20,7 +20,7 @@ SCRATCH = Path(__file__).parent
 
 CORPUS_GLOBS = [
     ('interfaces', '**/*.js'), ('interfaces', '**/*.html'),
-    ('plugins', '**/*.js'), ('plugins', '**/*.html'),
+    ('core/plugins', '**/*.js'), ('core/plugins', '**/*.html'),
     ('user/plugins', '**/*.js'), ('user/plugins', '**/*.html'),
     ('core', '**/*.py'),
 ]

@@ -169,12 +169,12 @@ Pixels only reach the model if the provider is known to accept them — tick the
 
 ### Where Tools Live
 
-Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `plugins/memory/tools/`, other plugin tools in `plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, meta/self-modification, ai, network, notepad, docs, scene, schedule, agents, ask_user).
+Tools are provided by **plugins**. Memory/knowledge/goals/people tools live in `core/plugins/memory/tools/`, other plugin tools in `core/plugins/*/tools/`, and AI-created tools in `user/plugins/*/tools/`. Standalone core tool modules live in `functions/` (web, meta/self-modification, ai, network, notepad, docs, scene, schedule, agents, ask_user).
 
 | Path | Purpose | Git Tracked |
 |------|---------|-------------|
-| `plugins/memory/tools/` | Memory, knowledge, goals, people tools | Yes |
-| `plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents, calendar, sd-server, clock, ...) | Yes |
+| `core/plugins/memory/tools/` | Memory, knowledge, goals, people tools | Yes |
+| `core/plugins/*/tools/` | Plugin tools (HA, SSH, email, bitcoin, toolmaker, agents, calendar, sd-server, clock, ...) | Yes |
 | `functions/` | Standalone tools (web, meta, ai, network, notepad, docs, scene, schedule, agents, ask_user) | Yes |
 | `user/plugins/*/tools/` | AI-created tool plugins | No |
 
@@ -221,9 +221,9 @@ For full plugin development (tools + hooks + voice commands + schedules + web UI
 Tools are functions the AI calls to interact with systems — web search, memory, device control.
 
 TOOL MODULES:
-- memory_tools.py (plugins/memory): save_memory, search_memory, get_recent_memories, delete_memory
-- knowledge_tools.py (plugins/memory): save_person, save_knowledge, search_knowledge, delete_knowledge
-- goals_tools.py (plugins/memory): create_goal, list_goals, update_goal, delete_goal
+- memory_tools.py (core/plugins/memory): save_memory, search_memory, get_recent_memories, delete_memory
+- knowledge_tools.py (core/plugins/memory): save_person, save_knowledge, search_knowledge, delete_knowledge
+- goals_tools.py (core/plugins/memory): create_goal, list_goals, update_goal, delete_goal
 - Mind Palace engine (when enabled) swaps in its own memory tool surface: same core verbs plus update_memory(memory_id, ...), layered saves
 - web.py: web_search, get_website(url, show_image_urls?=false|true|only), get_wikipedia, research_topic, get_site_links, web_view_images(query? | url?, count?=6, page?=1, view?=true)
 - mindpalace library_tools.py: library, read_document, memory_view_image(query? + count? | document_id | image_id=img:<id>, private_key?), local_view_images(paths? | folder?, page?, count?), memory_save_image(source, topic, caption?, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
@@ -238,7 +238,7 @@ TOOL MODULES:
 - email_tool.py: get_inbox, read_email, search_emails, archive_emails, delete_emails, forward_email, get_recipients, send_email
 - bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions
 - ssh_tool.py: ssh_get_servers, ssh_run_command
-- calendar.py (plugins/google-calendar): calendar_today, calendar_range, calendar_add, calendar_delete
+- calendar.py (core/plugins/google-calendar): calendar_today, calendar_range, calendar_add, calendar_delete
 - network.py: get_external_ip, check_internet, website_status
 - notepad.py: notepad_read, notepad_append_lines, notepad_delete_lines, notepad_insert_line
 - docs.py: search_help_docs

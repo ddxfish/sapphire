@@ -5,7 +5,7 @@ This is the heaviest test in the suite, and the highest-leverage. It loads
 the memory plugin through the REAL PluginLoader and FunctionManager (no
 mocks of the load path) and asserts the full chain works:
 
-  1. PluginLoader.scan() discovers plugins/memory
+  1. PluginLoader.scan() discovers core/plugins/memory
   2. The plugin's manifest is parsed and validated
   3. Scope ContextVars (memory/goal/knowledge/people) get registered
   4. Tool files (memory_tools, knowledge_tools, goals_tools) get exec'd
@@ -18,11 +18,11 @@ mocks of the load path) and asserts the full chain works:
 
 ISOLATION STRATEGY
 ──────────────────
-We don't run the real plugin scan against the full plugins/ tree because
+We don't run the real plugin scan against the full core/plugins/ tree because
 that loads ~30 plugins with their own dependencies. Instead, we:
 
   1. Create a temp directory `tmp_path/iso_plugins/`
-  2. Symlink `plugins/memory` into it as the only entry
+  2. Symlink `core/plugins/memory` into it as the only entry
   3. Monkey-patch core.plugin_loader.SYSTEM_PLUGINS_DIR to point at the temp
   4. Monkey-patch USER_PLUGINS_DIR to point at an empty temp dir
 
@@ -53,7 +53,7 @@ def isolated_memory_loader(tmp_path, monkeypatch):
     """Build a PluginLoader that sees ONLY the memory plugin.
 
     Creates two temp dirs (one for system plugins, one for user plugins),
-    symlinks plugins/memory into the system dir, and monkey-patches the
+    symlinks core/plugins/memory into the system dir, and monkey-patches the
     plugin_loader module constants to use them.
 
     Yields a fresh (PluginLoader, FunctionManager) pair. Both are isolated
@@ -70,7 +70,7 @@ def isolated_memory_loader(tmp_path, monkeypatch):
     iso_user.mkdir()
 
     # Symlink memory plugin in. Symlinks resolve transparently for json/exec.
-    memory_src = PROJECT_ROOT / "plugins" / "memory"
+    memory_src = PROJECT_ROOT / "core" / "plugins" / "memory"
     (iso_system / "memory").symlink_to(memory_src, target_is_directory=True)
 
     # Monkey-patch the module-level constants. monkeypatch.setattr restores
@@ -149,9 +149,9 @@ def test_memory_plugin_registers_expected_tools(isolated_memory_loader):
 
     # One sentinel tool from each of the three memory plugin tool files
     expected_tools = [
-        "save_memory",      # plugins/memory/tools/memory_tools.py
-        "search_knowledge", # plugins/memory/tools/knowledge_tools.py
-        "create_goal",      # plugins/memory/tools/goals_tools.py
+        "save_memory",      # core/plugins/memory/tools/memory_tools.py
+        "search_knowledge", # core/plugins/memory/tools/knowledge_tools.py
+        "create_goal",      # core/plugins/memory/tools/goals_tools.py
     ]
     for tool_name in expected_tools:
         assert tool_name in fm.execution_map, \

@@ -104,6 +104,21 @@ def verify() -> dict:
             "missing": sorted(missing), "mismatched": sorted(mismatched)}
 
 
+def _app_version() -> str:
+    try:
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def manifest_is_stale(report: dict) -> bool:
+    """The manifest was generated for another version of the tree. Every check
+    against it is a false alarm, and repair would chase paths HEAD no longer
+    has — the fix is a regenerated manifest (maintainer) or an update (user)."""
+    mv, av = str(report.get("version") or ""), _app_version()
+    return bool(mv and av and mv != av)
+
+
 def log_boot_status():
     """Run verify() at boot and log the outcome. A skew logs at WARNING so it surfaces
     in journalctl even from the launcher (logging's lastResort emits WARNING+ to stderr,
@@ -114,6 +129,13 @@ def log_boot_status():
             return
         if r["ok"]:
             logger.info(f"[INTEGRITY] ok - {r['matched']}/{r['total']} files match v{r.get('version')}")
+        elif manifest_is_stale(r):
+            logger.warning(
+                f"[INTEGRITY] core_manifest.json is for v{r.get('version')} but this tree is "
+                f"v{_app_version()} — the manifest predates the tree, so its {len(r['missing'])} missing / "
+                f"{len(r['mismatched'])} modified are not real drift. Maintainer: regenerate it "
+                "(tools/generate_core_manifest.py after `git add -A`). User: update."
+            )
         else:
             logger.warning(
                 f"[INTEGRITY] install does NOT match v{r.get('version')}: "
@@ -184,15 +206,27 @@ def repair(targets=None, force=False) -> dict:
     if not bad:
         return {"repaired": [], "failed": [], "skipped": [], "reverify": before,
                 "message": "Nothing to repair — install matches the manifest."}
-
     git = _is_git_install()
     skipped = []
+    dirty = set()
     if git and not force:
-        dirty = _dirty_files(bad)
-        if dirty:
-            skipped = [{"file": rel, "detail": "uncommitted local edits — refusing to overwrite"}
-                       for rel in sorted(dirty)]
-            bad = [rel for rel in bad if rel not in dirty]
+        dirty = set(_dirty_files(sorted(set(bad) | {"VERSION"})))
+    # A manifest generated for another version of the tree has nothing to
+    # restore: its paths describe files HEAD no longer has, and "re-run the
+    # updater" would send a user chasing a pull that is already current. A
+    # locally EDITED VERSION file is not a stale manifest — the dirty check
+    # owns that case and refuses the file like any other.
+    if manifest_is_stale(before) and "VERSION" not in dirty:
+        return {"repaired": [], "failed": [], "skipped": [], "reverify": before,
+                "message": (f"Nothing was changed: core_manifest.json is for v{before.get('version')} but this "
+                            f"tree is v{_app_version()}. The manifest predates the tree, so these are not real "
+                            "mismatches. Maintainer: regenerate it after `git add -A`. User: update to a "
+                            "release that ships a matching manifest.")}
+    dirty_bad = {rel for rel in dirty if rel in bad}
+    if dirty_bad:
+        skipped = [{"file": rel, "detail": "uncommitted local edits — refusing to overwrite"}
+                   for rel in sorted(dirty_bad)]
+        bad = [rel for rel in bad if rel not in dirty_bad]
 
     # Every repair run is loud — file counts up front, before anything is touched.
     logger.warning(f"[INTEGRITY] repair invoked: restoring {len(bad)} file(s)"

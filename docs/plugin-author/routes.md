@@ -78,7 +78,7 @@ All of the following are enforced automatically — you cannot disable them:
 ## Example: Webcam Capture Endpoint
 
 ```
-plugins/webcam/
+core/plugins/webcam/
   plugin.json
   routes/capture.py
   tools/webcam.py

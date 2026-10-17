@@ -2,7 +2,7 @@
 
 Ship a playable game as a plugin. The **Game Room** (system plugin `game-room`) is the host: it owns the Surface room, sessions, the **real chat rail** (table talk IS the chat), per-game settings, and Sapphire's sealed seat for moves. Your plugin brings the game — an engine, a board module, and one manifest declaration. Core carries zero game code; if the host is disabled, your registration just holds harmlessly.
 
-Reference implementations: **`plugins/game-holdem`** (turn game, sealed seat — ships with the app) and **game-darkhorse** (free-mount real-time game — lives in its own external repo and installs like any store plugin).
+Reference implementations: **`core/plugins/game-holdem`** (turn game, sealed seat — ships with the app) and **game-darkhorse** (free-mount real-time game — lives in its own external repo and installs like any store plugin).
 
 ## Anatomy
 

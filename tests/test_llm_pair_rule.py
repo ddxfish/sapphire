@@ -146,6 +146,6 @@ def test_resident_store_keeps_the_pair_coherent(tmp_path, monkeypatch):
 
 
 def test_twilio_inbound_rule_brain_rides_as_a_pair():
-    src = (ROOT / 'plugins/twilio-voice/daemon.py').read_text(encoding='utf-8')
+    src = (ROOT / 'core/plugins/twilio-voice/daemon.py').read_text(encoding='utf-8')
     assert 'normalize_pair((task or {}).get("provider"), (task or {}).get("model"))' in src
     assert 'patch["llm_model"] = task["model"]' not in src

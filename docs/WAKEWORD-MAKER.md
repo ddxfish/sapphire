@@ -141,7 +141,7 @@ button, and a run that was training shows the same on Train.
 The same engine runs headless, in the plugin's environment:
 ```
 conda activate sapphire-plugin-wakeword-maker
-cd plugins/wakeword-maker
+cd core/plugins/wakeword-maker
 python -m wakeword_maker.cli --root /path/to/wakeword datasets
 python -m wakeword_maker.cli --root /path/to/wakeword new "hey sapphire"
 python -m wakeword_maker.cli --root /path/to/wakeword run synth --project hey_sapphire

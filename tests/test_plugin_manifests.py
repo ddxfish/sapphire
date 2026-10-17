@@ -1,7 +1,7 @@
 """
 Plugin manifest validation sweep (Breadth-1).
 
-ONE parameterized test walks every plugin in `plugins/` and `user/plugins/`,
+ONE parameterized test walks every plugin in `core/plugins/` and `user/plugins/`,
 validating shape and structure. Adding a new plugin = free coverage.
 
 This catches the bug class that Chaos Scout #1 found in Phase 4: a malformed
@@ -41,7 +41,9 @@ def discover_plugins():
       - core-ui dirs (frontend-only, no python manifest contract)
     """
     found = []
-    for base in [PROJECT_ROOT / "plugins", PROJECT_ROOT / "user" / "plugins"]:
+    from core.paths import SYSTEM_PLUGINS_DIR
+    assert SYSTEM_PLUGINS_DIR.is_dir(), f"shipped plugin dir missing: {SYSTEM_PLUGINS_DIR}"
+    for base in [SYSTEM_PLUGINS_DIR, PROJECT_ROOT / "user" / "plugins"]:
         if not base.exists():
             continue
         for child in sorted(base.iterdir()):
@@ -49,6 +51,7 @@ def discover_plugins():
                 continue
             if (child / "plugin.json").exists():
                 found.append(child)
+    assert any(p.parent == SYSTEM_PLUGINS_DIR for p in found), f"no shipped plugins found under {SYSTEM_PLUGINS_DIR}"
     return found
 
 

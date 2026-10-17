@@ -48,11 +48,11 @@ def _load_by_path(rel_path, mod_name):
 
 
 def _load_oauth():
-    return _load_by_path('plugins/google-calendar/routes/oauth.py', 'gcal_oauth_easy_test')
+    return _load_by_path('core/plugins/google-calendar/routes/oauth.py', 'gcal_oauth_easy_test')
 
 
 def _load_calendar():
-    return _load_by_path('plugins/google-calendar/tools/calendar.py', 'gcal_calendar_easy_test')
+    return _load_by_path('core/plugins/google-calendar/tools/calendar.py', 'gcal_calendar_easy_test')
 
 
 # ─── credentials: relay accounts ─────────────────────────────────────────

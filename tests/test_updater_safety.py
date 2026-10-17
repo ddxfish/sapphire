@@ -140,7 +140,7 @@ def test_preflight_refuses_on_dirty_tree(updater_stub, monkeypatch):
         "# branch.oid abc123\n"
         "# branch.head main\n"
         "# branch.upstream origin/main\n"
-        "1 .M N... 100644 100644 100644 aaa bbb plugins/memory/tools/memory_tools.py\n"
+        "1 .M N... 100644 100644 100644 aaa bbb core/plugins/memory/tools/memory_tools.py\n"
         "? user/notes.txt\n"
     )
     monkeypatch.setattr(upd, '_run_git', lambda args, timeout=60: MagicMock(

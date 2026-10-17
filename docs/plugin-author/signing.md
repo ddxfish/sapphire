@@ -39,16 +39,16 @@ When enabled, unsigned plugins load with a warning. Tampered (`failed`) plugins 
 The signing tool lives at `tools/sign_plugin.py`. It requires `cryptography` (already in Sapphire's deps). The default key path is `user/plugin_signing_key.pem`; override it with `--key`.
 
 ```bash
-# Sign a single plugin (uses the default key)
-python tools/sign_plugin.py plugins/my-plugin/
+# Sign a single shipped plugin (uses the default key)
+python tools/sign_plugin.py core/plugins/ssh/
 
 # Sign multiple
-python tools/sign_plugin.py plugins/ssh/ plugins/email/
+python tools/sign_plugin.py core/plugins/ssh/ core/plugins/email/
 
-# Sign with a specific key
-python tools/sign_plugin.py plugins/my-plugin/ --key /path/to/my_signing_key.pem
+# Sign your own plugin with a specific key
+python tools/sign_plugin.py user/plugins/my-plugin/ --key /path/to/my_signing_key.pem
 
-# Sign all plugins in plugins/
+# Sign all shipped plugins in core/plugins/
 python tools/sign_plugin.py --all
 
 # ...including user/plugins/
@@ -97,6 +97,6 @@ Until your key is on the central list, a signature from it verifies against noth
 - Verification states: `official` (baked-in key), `verified_author` (key on the central authorized list), `unsigned` (no plugin.sig), `failed` (signature matches no trusted key OR files modified — shown as "Tampered"). Managed/Docker mode only: `validated` (unsigned + passed strict file validation).
 - Load gate: official / verified_author / validated always load; unsigned needs `ALLOW_UNSIGNED_PLUGINS` on (Settings > Plugins); failed never loads, no override.
 - Signable files: `.py .json .js .css .html .md` (hashes computed with CRLF→LF normalization) and `.wasm` (hashed byte for byte); extra signable files not in the manifest fail verification.
-- Signer: `python tools/sign_plugin.py <dirs...>` | `--all` [`--include-user`] [`--key path.pem`]; default key `user/plugin_signing_key.pem`; writes `plugin.sig`. Re-sign after ANY edit to a signable file. There is no PRIVATE_KEY_PATH constant to edit — the key is chosen by `--key`.
+- Signer: `python tools/sign_plugin.py <dirs...>` (e.g. `core/plugins/<name>`, `user/plugins/<name>`) | `--all` (= `core/plugins/`) [`--include-user` adds `user/plugins/`] [`--key path.pem`]; default key `user/plugin_signing_key.pem`; writes `plugin.sig`. Re-sign after ANY edit to a signable file. There is no PRIVATE_KEY_PATH constant to edit — the key is chosen by `--key`.
 - Keys: official public key baked into `core/plugin_verify.py`; third-party keys come ONLY from the central key list fetched from `PLUGIN_KEYS_URL` (`user/authorized_plugin_keys.json` is a disk cache with in-memory TTL, not a user-editable trust store). No local add-a-key mechanism exists.
 - `plugin.sig` = `{plugin, version, files: {relpath: "sha256:..."}, signature}`; signature = base64 ed25519 over the sorted-keys, compact-separator JSON of the other fields.

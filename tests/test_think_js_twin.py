@@ -99,7 +99,7 @@ def test_no_other_reader_is_left_in_the_web_ui():
 
 def test_no_other_reader_is_left_in_python():
     """core/think.py is the one module that spells a think tag in a pattern."""
-    for top in ('core', 'plugins', 'functions'):
+    for top in ('core', 'functions'):   # core covers core/plugins
         for path in (ROOT / top).rglob('*.py'):
             rel = path.relative_to(ROOT).as_posix()
             if rel == 'core/think.py' or '/tests/' in rel:

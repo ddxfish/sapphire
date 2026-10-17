@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SCAN = ["sapphire.py", "core", "functions", "plugins"]
+SCAN = ["sapphire.py", "core", "functions"]   # core covers core/plugins
 
 # (repo-relative path, snippet that must appear inside the bare call, reason)
 ALLOWED_BARE = [

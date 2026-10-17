@@ -18,7 +18,7 @@ Plugins can register custom providers for Sapphire's core inference systems: **T
 Subclass the appropriate base class:
 
 ```python
-# plugins/my-tts/provider.py
+# user/plugins/my-tts/provider.py
 from core.tts.providers.base import BaseTTSProvider
 
 class MyTTSProvider(BaseTTSProvider):
@@ -373,7 +373,7 @@ publish(Events.PLUGIN_NOTICE, {
 
 Piper combines both: `on_settings_saved` kicks off a background voice download that publishes
 `PLUGIN_NOTICE` ("Downloading... / Voice ready / failed") as it progresses. See
-`plugins/piper/provider.py` for the reference implementation.
+`core/plugins/piper/provider.py` for the reference implementation.
 
 ## Lifecycle
 
@@ -389,8 +389,8 @@ If a provider plugin is the configured provider (e.g., `TTS_PROVIDER=elevenlabs`
 
 ## Examples
 
-- `plugins/elevenlabs/` — TTS provider with API key, model selection, voice picker
-- `plugins/piper/` — local TTS provider with `on_settings_saved` + `PLUGIN_NOTICE` download progress
+- `core/plugins/elevenlabs/` — TTS provider with API key, model selection, voice picker
+- `core/plugins/piper/` — local TTS provider with `on_settings_saved` + `PLUGIN_NOTICE` download progress
 - `core/embeddings/__init__.py` — the built-in embedding providers (`LocalEmbedder`, `RemoteEmbedder`, etc.); study these for the swap + re-embed + provenance path.
 
 ## Reference for AI

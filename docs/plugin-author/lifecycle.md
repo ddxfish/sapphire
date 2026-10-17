@@ -2,12 +2,14 @@
 
 ## Startup
 
-1. `plugin_loader.scan()` reads `plugins/` (system band) then `user/plugins/` (user band)
+1. `plugin_loader.scan()` reads `core/plugins/` (system band) then `user/plugins/` (user band)
 2. Each `plugin.json` is validated and signature-checked
 3. Enabled plugins get hooks, tools, voice commands, routes, and schedules registered
 4. Scheduler tasks are deferred if the scheduler hasn't initialized yet
 
 **Same name in both bands:** the user-band copy wins — it's scanned second and replaces the system entry, with a warning in the log (`'<name>' (user band) shadows the system copy at … — only the user copy will load`). The store installer refuses a name that collides with a shipped plugin, so this only happens when a folder is placed in `user/plugins/` by hand (a local fork of a bundled plugin). Delete or rename the user copy to get the shipped one back.
+
+**Old root `plugins/` folder:** the shipped band used to live in `plugins/` at the repo root. That folder is no longer scanned — if it still holds folders with a `plugin.json`, boot logs a warning naming them (`plugins/ at the repo root is no longer scanned … your own plugins go in user/plugins/`). Move them to `user/plugins/`. Boot also logs an error if a `core/user/` folder exists, which means some code computed the project root one level short (see [Finding the project root](tools.md#finding-the-project-root)).
 
 ## Live Toggle
 
@@ -83,7 +85,7 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
 
 ## Reference for AI
 
-- Boot: `plugin_loader.scan()` reads `plugins/` (system band) then `user/plugins/` (user band) — a same-named user-band copy SHADOWS the system one (warned in the log; the installer refuses such a name, so it means a hand-placed fork); each manifest is validated and signature-checked; enabled plugins register hooks, tools, voice commands, routes, schedules; scheduler tasks defer until the scheduler initializes.
+- Boot: `plugin_loader.scan()` reads `core/plugins/` (system band) then `user/plugins/` (user band) — a same-named user-band copy SHADOWS the system one (warned in the log; the installer refuses such a name, so it means a hand-placed fork); a root-level `plugins/` is NOT scanned (warning if it holds plugin folders); `core/user/` existing logs an error (root computed one level short); each manifest is validated and signature-checked; enabled plugins register hooks, tools, voice commands, routes, schedules; scheduler tasks defer until the scheduler initializes.
 - Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable loads immediately, disable unloads immediately; unsigned/tampered plugins return 403 and the toggle reverts.
 - Hot reload: `POST /api/plugins/{name}/reload`; a failed reload leaves the plugin unloaded — no half-loaded state. `SAPPHIRE_DEV=1` enables the file watcher (auto-reload on `.py`/`.json` changes, polled).
 - Rescan: `POST /api/plugins/rescan` → `{"added": [...], "removed": [...]}` without restart.

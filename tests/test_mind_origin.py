@@ -107,7 +107,7 @@ def test_chat_turn_detaches_the_tabs_origin(client, mock_system):
 
 
 def test_librarian_workers_detach_the_origin_at_entry():
-    src = (ROOT / 'plugins' / 'mindpalace' / 'tools' / 'librarian.py').read_text(encoding='utf-8')
+    src = (ROOT / 'core' / 'plugins' / 'mindpalace' / 'tools' / 'librarian.py').read_text(encoding='utf-8')
     assert 'def _detach_origin():' in src
     worker = src[src.index('def _worker('):]
     assert worker.index('_detach_origin()') < worker.index('try:')

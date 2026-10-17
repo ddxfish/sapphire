@@ -28,7 +28,7 @@ router = APIRouter()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PLUGIN_STATE_DIR = PROJECT_ROOT / "user" / "plugin_state"
-SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
+from core.paths import SYSTEM_PLUGINS_DIR
 USER_PLUGINS_DIR = PROJECT_ROOT / "user" / "plugins"
 
 # ── Cache ────────────────────────────────────────────────────────────

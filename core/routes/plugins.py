@@ -1195,16 +1195,11 @@ def install_plugin(
         if not re.match(r'^[a-zA-Z0-9_-]+$', name):
             raise HTTPException(status_code=400, detail=f"Invalid plugin name: '{name}'. Only alphanumeric, dash, underscore allowed.")
 
-        # ── Name collision checks ──
-        # Block system plugins
-        if (PROJECT_ROOT / "plugins" / name).exists():
-            raise HTTPException(status_code=409, detail=f"'{name}' conflicts with a system plugin")
-        # Block core functions
-        if (PROJECT_ROOT / "functions" / f"{name}.py").exists():
-            raise HTTPException(status_code=409, detail=f"'{name}' conflicts with a core function")
-        # Block core-ui plugins
-        if (PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui" / name).exists():
-            raise HTTPException(status_code=409, detail=f"'{name}' conflicts with a core UI plugin")
+        # ── Name collision checks: one rule for every install door ──
+        from core.plugin_loader import core_name_collision
+        why = core_name_collision(name)
+        if why:
+            raise HTTPException(status_code=409, detail=why)
 
         # ── Size checks on extracted content ──
         total_size = 0

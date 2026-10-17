@@ -324,7 +324,7 @@ def test_uninstall_unknown_plugin_returns_404(client, temp_user_dir, monkeypatch
 
 def test_install_rejects_name_collision_with_system_plugin(client, temp_user_dir, monkeypatch):
     """Installing a plugin named 'memory' must fail with 409 — 'memory' is a
-    system plugin shipped in plugins/ and must not be overwritten by a user
+    system plugin shipped in core/plugins/ and must not be overwritten by a user
     install. Same guard applies to any system-plugin name."""
     c, csrf = client
 

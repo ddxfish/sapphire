@@ -13,7 +13,7 @@ import pytest
 from core.chat.chat_tool_calling import _extract_tool_images, strip_ui_markers
 
 ROOT = Path(__file__).resolve().parent.parent
-BANDS = ('core', 'functions', 'plugins')
+BANDS = ('core', 'functions')   # the shipped plugins live under core/
 
 
 def _py_files():

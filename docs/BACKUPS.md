@@ -298,7 +298,7 @@ RESTORE FLOW:
 
 ROUTES: GET /api/backup/list, GET /api/backup/health (enabled, sentinels, halted, scheduler_alive, newest{filename,size,age_hours}, last_scheduled_result, last_backup_error, devices{targets,shipping,last_ship} → health strip), POST /api/backup/send {filename?} (newest to every online storage device, async; 400 no device/no backup, 409 already sending), POST /api/backup/create {type: daily|weekly|monthly|manual}, POST /api/backup/estimate, DELETE /api/backup/delete/{filename}, GET /api/backup/download/{filename}, POST /api/backup/restore, POST /api/backup/restore-upload, GET/DELETE /api/backup/restore-result. All require auth.
 
-OFFSITE (plugins/remembrance, default_enabled=false):
+OFFSITE (core/plugins/remembrance, default_enabled=false):
 - Zero-knowledge: scrypt-derived AES-256-GCM, framed format (magic SAPPHIREBAK, per-frame nonce + frame-index AAD, EOF marker → truncation/reorder/tamper all fail loudly), ext .sapphirebak. Password loss = unrecoverable.
 - Flow: core creates plain tar (plugin extra excludes + size cap offsite_max_mb=2048) → encrypt → verify-ciphertext-or-refuse (CRITICAL log) → upload. Download sha256-verified before decrypt.
 - Cron: hourly check, uploads at offsite_cron_hour (default BACKUPS_HOUR+1) when auto_enabled; cadence monthly (1st) / weekly (Sun) / daily. Failure surfaces to user; success silent.

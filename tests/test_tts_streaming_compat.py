@@ -17,6 +17,7 @@ import pytest
 
 from core.tts.providers.base import BaseTTSProvider
 from core.tts.stream_pump import StreamingTTSPump
+from core.paths import SYSTEM_PLUGINS_DIR
 
 
 def _system_with(provider, voice="af_heart", speed=1.0):
@@ -63,7 +64,7 @@ def test_elevenlabs_does_not_support_streaming():
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "elevenlabs_provider",
-        "plugins/elevenlabs/provider.py",
+        str(SYSTEM_PLUGINS_DIR / "elevenlabs" / "provider.py"),
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -74,7 +75,7 @@ def test_gtts_does_not_support_streaming():
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "gtts_provider",
-        "plugins/gtts/provider.py",
+        str(SYSTEM_PLUGINS_DIR / "gtts" / "provider.py"),
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -165,9 +166,8 @@ def test_captioning_plugin_handlers_load_cleanly():
     off (default state). Its handlers are no-ops at registration time —
     only fire when the pump runs."""
     from pathlib import Path
-    handler_file = Path("plugins/captioning/hooks/captions.py")
-    if not handler_file.exists():
-        pytest.skip("captioning plugin not installed in this checkout")
+    handler_file = SYSTEM_PLUGINS_DIR / "captioning" / "hooks" / "captions.py"
+    assert handler_file.exists(), f"captioning ships with Sapphire; missing at {handler_file}"
     source = handler_file.read_text(encoding="utf-8")
     namespace = {"__name__": "captioning_hooks"}
     exec(compile(source, str(handler_file), "exec"), namespace)

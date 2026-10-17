@@ -15,7 +15,7 @@ import pytest
 
 @pytest.fixture
 def email_tool():
-    plugin_dir = Path(__file__).resolve().parent.parent / "plugins" / "email" / "tools"
+    plugin_dir = Path(__file__).resolve().parent.parent / "core" / "plugins" / "email" / "tools"
     if str(plugin_dir) not in sys.path:
         sys.path.insert(0, str(plugin_dir))
     if "email_tool" in sys.modules:

@@ -1,4 +1,4 @@
-"""plugins/claude-code: the 2026-10-07 scout fixes to the kind and its helpers."""
+"""core/plugins/claude-code: the 2026-10-07 scout fixes to the kind and its helpers."""
 import asyncio
 import importlib
 import sys
@@ -29,7 +29,7 @@ class TestHelpers:
         assert err and 'Python environment' in err
         # the check compares '/'-shaped markers against the posix form of the path,
         # so a backslash path on Windows is caught the same way
-        src = (ROOT / 'plugins' / 'claude-code' / 'tools' / 'claude_code_tools.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'tools' / 'claude_code_tools.py').read_text(encoding='utf-8')
         assert '.as_posix().lower()' in src
 
     def test_a_typed_binary_name_is_looked_up_as_typed(self, monkeypatch, tmp_path):
@@ -49,17 +49,17 @@ class TestKind:
         import json
         assert 'claude-agent-sdk' not in (ROOT / 'requirements.txt').read_text(encoding='utf-8')
         assert not (ROOT / 'install' / 'requirements-agents.txt').exists()
-        m = json.loads((ROOT / 'plugins' / 'claude-code' / 'plugin.json').read_text(encoding='utf-8'))
+        m = json.loads((ROOT / 'core' / 'plugins' / 'claude-code' / 'plugin.json').read_text(encoding='utf-8'))
         assert m['extra']['pip'] == ['claude-agent-sdk>=0.2.163'] and m['extra']['modules'] == ['claude_agent_sdk']
         assert 'pip_dependencies' not in m                       # optional: the plugin loads without it
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         assert 'click Install on the' in src.split('def _sdk')[1].split('def _head')[0]
 
     def test_the_session_runs_on_its_own_loop_not_asyncio_run(self):
         """Windows: sapphire.py pins the Selector policy; a Selector loop cannot
         spawn the CLI. The kind builds a Proactor loop in its thread (as
-        plugins/mcp_client does) and never calls asyncio.run()."""
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        core/plugins/mcp_client does) and never calls asyncio.run()."""
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         assert 'asyncio.run(self._main' not in src           # the call that inherited the Selector policy
         assert "asyncio.ProactorEventLoop() if sys.platform == 'win32' else asyncio.new_event_loop()" in src
 
@@ -76,14 +76,14 @@ class TestKind:
     def test_a_stop_before_the_cli_connects_runs_nothing(self, monkeypatch):
         """The × in the first seconds used to let the whole mission run anyway
         while the UI said 'stopped' (race scout)."""
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         main = src.split('async def _main(')[1].split('def _next_say')[0]
         assert main.index('self._client = client') < main.index('if self._cancelled.is_set():\n                    return') < main.index('await self._turn(sdk, mission)')
         run = src.split('    def run(self, mission):')[1].split('def _run_loop')[0]
         assert 'if self._cancelled.is_set():\n            return' in run.split('settings = _settings()')[0]
 
     def test_a_wake_reuses_the_rows_workspace_name_and_the_idle_timeout_takes_a_late_say(self):
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         assert "row.get('wsname')" in src and 'self.remember(wsname=self.wsname, mode=self.mode)' in src
         main = src.split('async def _main(')[1]
         assert "self.status = 'resting'\n                        text = self._next_say(0)" in main
@@ -117,7 +117,7 @@ class TestSecondWave:
         assert env['HTTPS_PROXY'] == '' and env['SAPPHIRE_SECRET'] == '' and env['ANTHROPIC_API_KEY'] == ''
         assert 'LC_ALL' not in env and 'CLAUDE_CODE_FOO' not in env         # allowlisted: inherited as-is, not blanked
         assert env['HOME'] == '/home/k' and 'PATH' in env
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         assert 'env = h._cli_env()' in src.split('def _options(')[1]
 
     def test_the_workspace_name_comes_from_the_agent_never_the_mission(self, monkeypatch):
@@ -130,7 +130,7 @@ class TestSecondWave:
         a = kind.Agent(row, eng)
         assert a.wsname == 'forge-abcdef12'
         assert 'therapy' not in a.wsname and 'export' not in a.wsname
-        src = (ROOT / 'plugins' / 'claude-code' / 'tools' / 'claude_code_tools.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'tools' / 'claude_code_tools.py').read_text(encoding='utf-8')
         assert "}, ephemeral=True)" in src.split('Events.WORKSPACE_READY')[1].split('except')[0]
 
     def test_windows_prefers_the_native_exe_and_refuses_the_npm_shim(self, monkeypatch):
@@ -166,11 +166,11 @@ class TestSecondWave:
         assert 'SAFETY' in (helpers._sanity_check(str(root / 'x'), mode='project', root=str(root)) or '')
 
     def test_the_report_is_the_final_message_not_the_narration(self):
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         turn = src.split('async def _turn(')[1].split('# --- what the director does')[0]
         assert "final = (msg.result or '').strip() or body" in turn
         assert "self.report((final or '(no text)') + tail)" in turn
-        src = (ROOT / 'plugins' / 'claude-code' / 'plugin.json').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'plugin.json').read_text(encoding='utf-8')
         assert 'READ access to user/logs' not in src
 
 
@@ -182,7 +182,7 @@ class TestWhatItRunsOn:
 
     def _kind(self):
         import importlib.util
-        spec = importlib.util.spec_from_file_location('cc_kind', ROOT / 'plugins' / 'claude-code' / 'agent_kind.py')
+        spec = importlib.util.spec_from_file_location('cc_kind', ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py')
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
@@ -206,7 +206,7 @@ class TestWhatItRunsOn:
         assert exe == 'claude' or Path(exe).is_file()       # PATH, or the SDK's bundled binary
 
     def test_every_report_names_what_it_ran_on(self):
-        src = (ROOT / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
+        src = (ROOT / 'core' / 'plugins' / 'claude-code' / 'agent_kind.py').read_text(encoding='utf-8')
         turn = src.split('async def _turn(')[1].split('# --- what the director does')[0]
         assert "else 'your Claude sign-in · ')" in turn, 'the login is named, not silent'
         assert 'billing an API key' in turn and 'no API key' in turn

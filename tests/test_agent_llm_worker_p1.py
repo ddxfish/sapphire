@@ -1,4 +1,4 @@
-"""The `llm` agent kind (plugins/agents/agent_kind.py) - the LLMWorker's startup
+"""The `llm` agent kind (core/plugins/agents/agent_kind.py) - the LLMWorker's startup
 decisions, moved behavior for behavior into agents v2 (tmp/agents-v2.md §18).
 
 Each test pins a past fix: the inline lean 'agent' persona, persona -> prompt

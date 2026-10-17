@@ -346,7 +346,7 @@ def test_continuity_event_payload_override_is_retired(monkeypatch):
 
 def test_game_seat_never_reads_the_operators_web_chat(monkeypatch):
     import sys
-    plugin_dir = str(ROOT / 'plugins' / 'game-room')
+    plugin_dir = str(ROOT / 'core' / 'plugins' / 'game-room')
     if plugin_dir not in sys.path:
         sys.path.insert(0, plugin_dir)
     import gameroom_core

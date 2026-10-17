@@ -21,12 +21,12 @@ import pytest
 
 
 def _load_gcal_calendar():
-    """Load plugins/google-calendar/tools/calendar.py by path — the hyphen
+    """Load core/plugins/google-calendar/tools/calendar.py by path — the hyphen
     in the dir name prevents a normal import."""
     if 'gcal_calendar_test' in sys.modules:
         return sys.modules['gcal_calendar_test']
     project_root = Path(__file__).resolve().parent.parent
-    module_path = project_root / 'plugins' / 'google-calendar' / 'tools' / 'calendar.py'
+    module_path = project_root / 'core' / 'plugins' / 'google-calendar' / 'tools' / 'calendar.py'
     spec = importlib.util.spec_from_file_location('gcal_calendar_test', module_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules['gcal_calendar_test'] = mod

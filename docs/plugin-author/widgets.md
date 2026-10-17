@@ -6,7 +6,7 @@ function plus a manifest entry. Same shape as the built-in System,
 Updates, Backups, Maintenance, and Spotlight panels — those are
 literally widgets too, registered through the same API.
 
-> **Canonical example:** [`plugins/sample-widgets/`](../../plugins/sample-widgets/) ships with two
+> **Canonical example:** [`core/plugins/sample-widgets/`](../../core/plugins/sample-widgets/) ships with two
 > reference widgets (`hello`, `note`). Read them alongside this doc — the
 > source IS the spec.
 
@@ -18,10 +18,10 @@ A working widget in five minutes:
 
 ```bash
 # 1. Copy the reference plugin to your own
-cp -r plugins/sample-widgets plugins/my-widget
+cp -r core/plugins/sample-widgets user/plugins/my-widget
 ```
 
-Edit `plugins/my-widget/plugin.json` — change at minimum the `name`,
+Edit `user/plugins/my-widget/plugin.json` — change at minimum the `name`,
 keep the `widgets` array shape, point `render` at your file under
 `web/widgets/`. The `name` field MUST match the directory name.
 
@@ -45,13 +45,13 @@ keep the `widgets` array shape, point `render` at your file under
 }
 ```
 
-Edit `plugins/my-widget/web/widgets/hello.js` — change the contents
+Edit `user/plugins/my-widget/web/widgets/hello.js` — change the contents
 of `paint()` to whatever you want.
 
 Sign + restart:
 
 ```bash
-python tools/sign_plugin.py plugins/my-widget
+python tools/sign_plugin.py user/plugins/my-widget
 systemctl --user restart sapphire   # or your usual restart command
 ```
 
@@ -68,7 +68,7 @@ calls it, the function fills in the panel body and returns metadata.
 This is the entire contract:
 
 ```js
-// plugins/my-widget/web/widgets/hello.js
+// user/plugins/my-widget/web/widgets/hello.js
 
 export async function render(container, ctx) {
     // 1) container — the panel's info-line wrapper. Mutate its innerHTML.
@@ -410,10 +410,10 @@ modal-only.)
 ### Forgot to re-sign after editing → blocked at boot
 
 Sapphire verifies plugin signatures on load. If you edit anything
-under `plugins/{name}/`, you must re-sign before restart:
+under `user/plugins/{name}/` (or `core/plugins/{name}/` for a shipped plugin), you must re-sign before restart:
 
 ```bash
-python tools/sign_plugin.py plugins/{name}
+python tools/sign_plugin.py user/plugins/{name}
 ```
 
 Skipping this means the plugin loads as unsigned and is blocked
@@ -475,7 +475,7 @@ Once your widget works locally, publishing follows the standard
 Sapphire plugin distribution flow. See
 **[plugin-author/publishing.md](publishing.md)**.
 
-Tl;dr: push your `plugins/{name}/` directory to a GitHub repo. Users
+Tl;dr: push your `user/plugins/{name}/` directory to a GitHub repo. Users
 install via the in-app Store or by pasting your repo URL into
 **Settings > Plugins > Install from URL**. Featured plugins (curated by
 the project maintainer) appear in the Plugin Spotlight widget on every
@@ -485,7 +485,7 @@ dashboard.
 
 ## Reference: the sample plugin
 
-The truest documentation is [`plugins/sample-widgets/`](../../plugins/sample-widgets/):
+The truest documentation is [`core/plugins/sample-widgets/`](../../core/plugins/sample-widgets/):
 
 - `plugin.json` — full manifest with two widgets, multi-instance,
   settings_schema. Read this alongside the [Manifest reference](#manifest-reference) above.
@@ -510,4 +510,4 @@ DASHBOARD WIDGETS:
 - Rules: no hardcoded element ids when multi_instance (scope by class/container), no inline onclick=, prefix CSS classes with the plugin name; host utility classes (.dash-action-panel-info-line, .dim) are stable.
 - Sizes are horizontal spans only (height is content-driven); mobile <=768px collapses to one column. api_version 1 promises: ctx only grows, api method signatures stable, render contract stable.
 - Hot-reload limitation: after POST /api/plugins/{name}/reload, already-rendered widgets keep running OLD code until the dashboard tab is reloaded.
-- Reference plugin: `plugins/sample-widgets/` (hello.js minimal, note.js full). Re-sign after edits: `python tools/sign_plugin.py plugins/{name}`.
+- Reference plugin: `core/plugins/sample-widgets/` (hello.js minimal, note.js full). Your own widget plugin goes in `user/plugins/{name}/`. Re-sign after edits: `python tools/sign_plugin.py user/plugins/{name}` (shipped: `core/plugins/{name}`).

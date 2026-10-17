@@ -368,7 +368,7 @@ def test_screen_picture_resolves_fits_and_posts(home):
 # --- said(): a device hands her words with neither microphone nor screen ------------
 
 def test_said_lands_in_the_chat_with_its_pictures_kept(home):
-    """A phone shares a picture (plugins/kdeconnect): the turn runs in the
+    """A phone shares a picture (core/plugins/kdeconnect): the turn runs in the
     device's chat with the picture kept like a pasted one, her reply stays
     in the chat (mute: no Reply, no Speech), and the line is the caller's."""
     got = {}

@@ -1,0 +1,1213 @@
+# core/plugins/memory/tools/memory_tools.py
+# Long-term memory with FTS5 full-text search, semantic embeddings, and labels
+
+import os
+import sqlite3
+import logging
+import re
+import threading
+import numpy as np
+from pathlib import Path
+from datetime import datetime
+from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
+
+ENABLED = True
+EMOJI = '💾'
+TOOL_CATEGORY = 'memory'
+
+# Database location - lazy initialized
+_db_path = None
+_db_initialized = False
+_db_lock = threading.Lock()
+
+# Embedding provider - delegated to core.embeddings
+from core.embeddings import get_embedder as _get_embedder
+
+SUGGESTED_LABELS = "family, preferences, technical, stories, people, places, routines, opinions, self"
+
+AVAILABLE_FUNCTIONS = [
+    'save_memory',
+    'search_memory',
+    'get_recent_memories',
+    'delete_memory',
+]
+
+TOOLS = [
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": True,
+        "function": {
+            "name": "save_memory",
+            "description": f"Save information to long-term memory. 450 chars max or it gets trimmed. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge. Never add today's date; add anniversary dates or other important events. Use first person wording when memories talk about yourself.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "Only if the user asks"
+                    }
+                },
+                "required": ["content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "search_memory",
+            "description": "Semantic + full-text search over memories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Comma-separated"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 10
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "Includes private rows saved with it"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "get_recent_memories",
+            "description": "Most recent memories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "default": 10
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Comma-separated"
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "Includes private rows saved with it"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": True,
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete a memory by id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "integer",
+                        "description": "Shown as [42]"
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "Required for a private row"
+                    }
+                },
+                "required": ["memory_id"]
+            }
+        }
+    },
+]
+
+
+STOPWORDS = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+             'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
+             'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+             'would', 'should', 'could', 'may', 'might', 'can', 'this', 'that',
+             'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'}
+
+SIMILARITY_THRESHOLD = 0.40
+
+
+# ─── Database ────────────────────────────────────────────────────────────────
+
+def _get_db_path():
+    global _db_path
+    if _db_path is None:
+        # Phase 4: anchor DB path to config.py location (project root) instead of
+        # this file's __file__.parent.parent. The old pattern broke when the file
+        # moved from functions/ to plugins/memory/tools/ because the relative
+        # depth changed. config.py sits at project root and is imported by every
+        # consumer, so Path(config.__file__).parent is the stable project root.
+        import config
+        _db_path = Path(config.__file__).parent / "user" / "memory.db"
+    return _db_path
+
+
+@contextmanager
+def _get_connection():
+    _ensure_db()
+    conn = sqlite3.connect(_get_db_path(), timeout=10)
+    try:
+        # busy_timeout IS honored during active transactions; sqlite3.connect's
+        # `timeout=` is ignored once BEGIN fires (CPython #124510). WAL is set
+        # once in _ensure_db — db-header-persisted, no need to re-set per conn.
+        conn.execute("PRAGMA busy_timeout=10000")
+        yield conn
+    finally:
+        conn.close()
+
+
+def _safe_rename_corrupted(db_path):
+    """Rename db_path → .db.corrupted, timestamp-suffixed if a prior backup
+    already exists. Prevents silent clobber of an earlier corruption's
+    salvage source. 2026-04-22 sapphire-killer fix A (claim 1f)."""
+    base_backup = db_path.with_suffix('.db.corrupted')
+    if not base_backup.exists():
+        target = base_backup
+    else:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        target = db_path.with_name(db_path.name + f'.corrupted.{ts}')
+    try:
+        db_path.rename(target)
+        logger.info(f"[REPAIR] Original preserved at {target}")
+        return True
+    except Exception as e:
+        logger.error(f"[REPAIR] Could not preserve corrupted DB at {target}: {e}")
+        return False
+
+
+def _repair_db(db_path):
+    """Attempt to salvage memories from a corrupted database into a fresh one.
+
+    2026-04-22 REWRITE (sapphire-killer fix A+B):
+    - Builds fresh DB at .db.new TEMP path FIRST, verifies integrity, THEN swaps.
+      Pre-rewrite, the original was renamed .corrupted BEFORE salvage succeeded,
+      so a failed salvage left users with either (a) an empty DB where their
+      memories used to be, visible only as a .corrupted sibling with no UI
+      surface, or (b) a fresh empty DB if power cut between rename and commit.
+    - SELECT tiers now include embedding, embedding_provider, embedding_dim,
+      private_key. Pre-rewrite salvage dropped these columns, which meant
+      private memories became public after recovery (cross-persona leak) and
+      all semantic-search reachability was destroyed until re-embed.
+    - Prior .corrupted backups get timestamp-suffixed rather than silently
+      clobbered on repeated corruption events.
+
+    Behavioral invariant: if anything goes wrong, the original DB is left
+    untouched on disk. User can manually inspect/recover without Sapphire
+    having already moved it.
+    """
+    # Progressively-narrower SELECTs, widest first (2.6 full schema).
+    # Pad to 12 columns: id, content, timestamp, importance, keywords, context,
+    # scope, label, embedding, embedding_provider, embedding_dim, private_key.
+    salvage_queries = [
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label, '
+         'embedding, embedding_provider, embedding_dim, private_key FROM memories', 12),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label, '
+         'embedding, embedding_provider, embedding_dim FROM memories', 11),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label, '
+         'embedding FROM memories', 9),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label FROM memories', 8),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope FROM memories', 7),
+        ('SELECT id, content, timestamp, importance, keywords, context FROM memories', 6),
+    ]
+
+    rows = None
+    chosen_cols = 0
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+        for query, n_cols in salvage_queries:
+            try:
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                chosen_cols = n_cols
+                logger.info(f"[REPAIR] Salvaged via {n_cols}-column SELECT ({len(rows)} rows)")
+                break
+            except sqlite3.DatabaseError:
+                continue
+        conn.close()
+    except Exception as e:
+        logger.error(f"[REPAIR] Cannot open corrupted DB for salvage: {e}")
+        rows = None
+
+    if rows is None:
+        # All SELECT tiers failed. Original unreadable. Preserve it (timestamped)
+        # so fresh empty DB can be created by _ensure_db.
+        logger.error("[REPAIR] Every SELECT tier failed — memories table unreadable")
+        _safe_rename_corrupted(db_path)
+        return
+
+    # Build fresh DB at TMP path. Do NOT touch the original yet.
+    tmp_path = db_path.with_suffix('.db.new')
+    in_swap = False
+    if tmp_path.exists():
+        try:
+            tmp_path.unlink()
+        except Exception as e:
+            logger.error(f"[REPAIR] Could not clear stale tmp {tmp_path}: {e}")
+            return
+
+    try:
+        conn = sqlite3.connect(tmp_path, timeout=10)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        # Full 2.6 schema. Missing columns from salvage get padded to NULL.
+        cursor.execute('''
+            CREATE TABLE memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                importance INTEGER DEFAULT 5,
+                keywords TEXT,
+                context TEXT,
+                scope TEXT NOT NULL DEFAULT 'default',
+                label TEXT,
+                embedding BLOB,
+                embedding_provider TEXT,
+                embedding_dim INTEGER,
+                private_key TEXT
+            )
+        ''')
+
+        for row in rows:
+            # Pad to 12-column shape. Column order matches the SELECT above.
+            r = list(row) + [None] * (12 - len(row))
+            # scope (index 6) is NOT NULL — default to 'default' if salvage
+            # didn't carry it (shorter-tier SELECTs) or it was NULL in source.
+            if r[6] is None:
+                r[6] = 'default'
+            cursor.execute(
+                'INSERT INTO memories (id, content, timestamp, importance, keywords, '
+                'context, scope, label, embedding, embedding_provider, embedding_dim, '
+                'private_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                r[:12]
+            )
+        conn.commit()
+
+        # Verify row count + integrity of the fresh DB before we touch the original.
+        cursor.execute('SELECT COUNT(*) FROM memories')
+        actual = cursor.fetchone()[0]
+        if actual != len(rows):
+            logger.error(f"[REPAIR] Row count mismatch — expected {len(rows)}, got {actual}")
+            conn.close()
+            tmp_path.unlink(missing_ok=True)
+            return
+
+        integ = cursor.execute("PRAGMA integrity_check").fetchone()
+        conn.close()
+        if integ and integ[0] != 'ok':
+            logger.error(f"[REPAIR] Fresh DB failed integrity check: {integ[0]}")
+            tmp_path.unlink(missing_ok=True)
+            return
+
+        logger.info(f"[REPAIR] Fresh DB verified at {tmp_path} — {actual} rows, "
+                    f"salvage schema {chosen_cols} cols")
+
+        # Swap: rename original → .corrupted (timestamped if needed), then
+        # rename tmp → original. Narrow window between these two renames where
+        # db_path doesn't exist — _ensure_db would create a fresh empty DB on
+        # next boot if we crashed here, but the .corrupted sibling holds the
+        # verified salvage + original user data.
+        # On Windows the rename-away can fail (open handle) and rename-over
+        # raises FileExistsError — the old flow then deleted the verified
+        # salvage and kept the corrupt DB live. Never destroy the salvage.
+        if not _safe_rename_corrupted(db_path):
+            logger.error(f"[REPAIR] Could not move corrupt DB aside — verified "
+                         f"salvage kept at {tmp_path} for manual recovery")
+            return
+        in_swap = True
+        os.replace(tmp_path, db_path)
+        logger.info(f"[REPAIR] Swap complete — fresh DB active at {db_path}")
+
+    except Exception as e:
+        logger.error(f"[REPAIR] Fresh DB build failed: {e}")
+        if in_swap:
+            logger.error(f"[REPAIR] Failure during swap — verified salvage kept at {tmp_path}")
+            return
+        # Clean up tmp. Original is UNTOUCHED.
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
+def _setup_fts(cursor):
+    """Create FTS5 table, triggers, and populate from existing data."""
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+            content, keywords, label,
+            content=memories, content_rowid=id
+        )
+    """)
+
+    # Drop old triggers (may have wrong scope from previous version)
+    cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
+    cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
+    cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
+
+    cursor.execute("""
+        CREATE TRIGGER memories_fts_insert
+        AFTER INSERT ON memories BEGIN
+            INSERT INTO memories_fts(rowid, content, keywords, label)
+            VALUES (new.id, new.content, new.keywords, new.label);
+        END
+    """)
+    cursor.execute("""
+        CREATE TRIGGER memories_fts_delete
+        AFTER DELETE ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
+            VALUES ('delete', old.id, old.content, old.keywords, old.label);
+        END
+    """)
+    # Only fire on FTS-indexed columns, NOT on embedding updates
+    cursor.execute("""
+        CREATE TRIGGER memories_fts_update
+        AFTER UPDATE OF content, keywords, label ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
+            VALUES ('delete', old.id, old.content, old.keywords, old.label);
+            INSERT INTO memories_fts(rowid, content, keywords, label)
+            VALUES (new.id, new.content, new.keywords, new.label);
+        END
+    """)
+
+    # Populate if empty
+    cursor.execute("SELECT COUNT(*) FROM memories")
+    mem_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM memories_fts")
+    fts_count = cursor.fetchone()[0]
+
+    if mem_count > 0 and fts_count == 0:
+        logger.info(f"Populating FTS5 index from {mem_count} existing memories...")
+        cursor.execute("""
+            INSERT INTO memories_fts(rowid, content, keywords, label)
+            SELECT id, content, keywords, label FROM memories
+        """)
+
+
+def _ensure_db():
+    """Initialize database with FTS5 + embedding column. Migrates from old schema."""
+    global _db_initialized
+    if _db_initialized:
+        return True
+    with _db_lock:
+        if _db_initialized:
+            return True
+
+        try:
+            db_path = _get_db_path()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Health check - detect corruption before doing anything
+            if db_path.exists():
+                try:
+                    conn = sqlite3.connect(db_path, timeout=10)
+                    cursor = conn.cursor()
+                    result = cursor.execute("PRAGMA integrity_check").fetchone()
+                    conn.close()
+                    if result[0] != 'ok':
+                        logger.error(f"Database integrity check failed: {result[0]}")
+                        _repair_db(db_path)
+                except sqlite3.OperationalError as e:
+                    # Locked, busy, unreadable: another process (an older instance, a
+                    # backup) still holds it. That is not corruption; renaming the live
+                    # DB for it would lose her memory. Try again on the next call.
+                    logger.error(f"Memory DB not available at boot, leaving it untouched: {e}")
+                    return False
+                except sqlite3.DatabaseError as e:
+                    logger.error(f"Database corrupted: {e}")
+                    _repair_db(db_path)
+
+            # Clean up stale WAL/journal files if db was replaced
+            for suffix in ['-wal', '-shm', '-journal']:
+                stale = db_path.with_name(db_path.name + suffix)
+                if stale.exists() and not db_path.exists():
+                    stale.unlink()
+
+            conn = sqlite3.connect(db_path, timeout=10)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+
+            # Core table (may already exist from old schema)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    importance INTEGER DEFAULT 5,
+                    keywords TEXT,
+                    context TEXT
+                )
+            ''')
+
+            # Migrations: add columns if missing
+            cursor.execute("PRAGMA table_info(memories)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'scope' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
+                logger.info("Migration: added scope column")
+            if 'label' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN label TEXT")
+                logger.info("Migration: added label column")
+            if 'embedding' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
+                logger.info("Migration: added embedding column")
+            # Provenance columns: stamp rows with the provider+dim that produced
+            # them so a future provider swap doesn't silently mix vector spaces.
+            # Legacy rows (written before provenance) get NULL stamps and are
+            # excluded from vector search unless explicitly stamped via the
+            # integrity/re-embed tooling (safer than guessing their origin).
+            if 'embedding_provider' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN embedding_provider TEXT")
+                logger.info("Migration: added embedding_provider column")
+            if 'embedding_dim' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN embedding_dim INTEGER")
+                logger.info("Migration: added embedding_dim column")
+            # Private-key gating. NULL = public (default, visible to all tool
+            # calls within the scope). Non-NULL = row only appears when a
+            # search/get/delete call explicitly passes that same plaintext key.
+            # No hashing — the threat model isn't disk encryption, it's
+            # cross-persona behavioral separation (Sapphire-GLM has the key
+            # from in-chat context, Claude-via-MCP never learns it). Plaintext
+            # is intentional so the Mind UI can render the key for review.
+            # TODO L137-139 — 2026-04-21.
+            if 'private_key' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN private_key TEXT")
+                logger.info("Migration: added private_key column")
+
+            # Indexes
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_private_key ON memories(private_key)')
+
+            # FTS5 - try setup, rebuild on corruption
+            try:
+                _setup_fts(cursor)
+            except sqlite3.DatabaseError as e:
+                logger.warning(f"FTS5 corrupted, rebuilding: {e}")
+                cursor.execute("DROP TABLE IF EXISTS memories_fts")
+                cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
+                cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
+                cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
+                conn.commit()
+                _setup_fts(cursor)
+
+            # Scope registry
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS memory_scopes (
+                    name TEXT PRIMARY KEY,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES ('default')")
+
+            conn.commit()
+            conn.close()
+
+            _db_initialized = True
+            logger.info(f"Memory database ready at {db_path} (FTS5 + embeddings)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to initialize memory database: {e}")
+            return False
+
+
+_backfill_done = False
+
+def _backfill_embeddings():
+    """Generate embeddings + stamp provenance for memories lacking either.
+    Called lazily on first search.
+
+    `_backfill_done` only flips to True when we actually complete without a
+    transient failure — old behavior flipped it after partial failure and
+    stranded the remaining rows until process restart. Now a transient
+    failure leaves the flag False so the next search retries the rest.
+    """
+    global _backfill_done
+    if _backfill_done:
+        return
+
+    embedder = _get_embedder()
+    if not embedder.available:
+        # No provider configured — nothing to do this session, and nothing to
+        # retry until the user configures one (which triggers a swap reset).
+        _backfill_done = True
+        return
+
+    # Find rows missing EITHER the blob OR the provenance stamp. The stamp gap
+    # matters because an unstamped row (from before provenance existed) won't
+    # match any active provider's filter and will silently disappear from
+    # vector search.
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT id, content, embedding, embedding_provider, embedding_dim FROM memories '
+            'WHERE embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL'
+        )
+        rows = cursor.fetchall()
+
+    if not rows:
+        _backfill_done = True
+        return
+
+    logger.info(f"Backfilling embeddings for {len(rows)} memories...")
+    batch_size = 32
+    filled = 0
+    transient_failure = False
+    from core.embeddings import stamp_embedding
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        ids = [r[0] for r in batch]
+        texts = [r[1] for r in batch]
+        embs = embedder.embed(texts, prefix='search_document')
+        if embs is None:
+            transient_failure = True
+            break
+        try:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                for row_id, emb in zip(ids, embs):
+                    blob, provider_id, dim = stamp_embedding(emb, embedder)
+                    cursor.execute(
+                        'UPDATE memories SET embedding = ?, embedding_provider = ?, embedding_dim = ? '
+                        'WHERE id = ?',
+                        (blob, provider_id, dim, row_id)
+                    )
+                conn.commit()
+                filled += len(batch)
+        except Exception as e:
+            logger.error(f"Backfill batch failed: {e}")
+            transient_failure = True
+            break
+
+    if transient_failure:
+        logger.warning(
+            f"Backfill incomplete: {filled}/{len(rows)} memories done. "
+            f"Remaining will retry on next search."
+        )
+        # Leave _backfill_done False so next search retries the remainder.
+    else:
+        _backfill_done = True
+        if filled:
+            logger.info(f"Backfill complete: {filled}/{len(rows)} memories embedded")
+
+
+def _get_current_scope():
+    try:
+        from core.chat.function_manager import scope_memory
+        return scope_memory.get()
+    except Exception as e:
+        # Return None (not 'default') so the executor falls into the
+        # "disabled" branch instead of silently writing to the default
+        # scope. Silent-default was a real bug class — see 2026-04-20
+        # witch hunt. If ContextVar resolution fails, failing disabled is
+        # safer than leaking a memory into an unrelated scope.
+        logger.warning(f"Could not get memory scope: {e}, returning None (disabled)")
+        return None
+
+
+def _scope_condition(scope, col='scope'):
+    """Return (sql_fragment, params) that includes global overlay."""
+    if scope == 'global':
+        return f"{col} = ?", [scope]
+    return f"{col} IN (?, 'global')", [scope]
+
+
+def _private_key_clause(private_key, col='private_key'):
+    """Return (sql_fragment, params) for the private_key gate.
+
+    No key supplied → caller only sees public rows (private_key IS NULL).
+    Key supplied → caller sees public rows AND any row whose key matches.
+
+    Plaintext compare on purpose — see migration comment. The "security" is
+    cross-persona behavioral, not crypto: Sapphire-GLM has the key in chat
+    context, Claude-via-MCP doesn't expose the param, public callers don't
+    pass one. A row with a key is a row that requires the matching word to
+    surface.
+    """
+    if private_key:
+        return f"({col} IS NULL OR {col} = ?)", [private_key]
+    return f"{col} IS NULL", []
+
+
+# ─── Public API (used by api_fastapi.py) ─────────────────────────────────────
+
+def get_scopes():
+    try:
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
+            memory_counts = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT name FROM memory_scopes ORDER BY name')
+            registered = [row[0] for row in cursor.fetchall()]
+        all_scopes = set(registered) | set(memory_counts.keys()) | {'default'}
+        return [{"name": name, "count": memory_counts.get(name, 0)} for name in sorted(all_scopes)]
+    except Exception as e:
+        logger.error(f"Error getting scopes: {e}")
+        return [{"name": "default", "count": 0}]
+
+
+def status_summary(scope=None):
+    """Memory-at-a-glance for the status plugin (get_self_info + the Status
+    app) — answered here because memory.db is ours (the status plugin used to
+    run this SQL itself, 2026-09-11). Counts only. Never creates the DB: a
+    status poll on a box that hasn't saved a memory yet leaves no file."""
+    out = {'memories': 0, 'memory_scopes': {}, 'scopes': {}, 'current': None}
+    try:
+        if not _get_db_path().exists():
+            return out
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
+            out['memory_scopes'] = {row[0]: row[1] for row in cursor.fetchall()}
+            out['memories'] = sum(out['memory_scopes'].values())
+            cursor.execute('SELECT name FROM memory_scopes')
+            out['scopes'] = {row[0]: 0 for row in cursor.fetchall()}
+        for name, n in out['memory_scopes'].items():
+            out['scopes'][name] = out['scopes'].get(name, 0) + n
+        if scope:
+            out['current'] = {'scope': scope, 'memories': out['memory_scopes'].get(scope, 0)}
+    except Exception as e:
+        logger.warning(f"status_summary failed: {e}")
+    return out
+
+
+def create_scope(name: str) -> bool:
+    try:
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES (?)", (name,))
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create scope '{name}': {e}")
+        return False
+
+
+def delete_scope(name: str) -> dict:
+    """Delete a memory scope and ALL memories in it. Returns {deleted_count}."""
+    if name == 'default':
+        return {"error": "Cannot delete the default scope"}
+    try:
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM memories WHERE scope = ?', (name,))
+            count = cursor.fetchone()[0]
+            cursor.execute('DELETE FROM memories WHERE scope = ?', (name,))
+            cursor.execute('DELETE FROM memory_scopes WHERE name = ?', (name,))
+            conn.commit()
+        logger.info(f"Deleted memory scope '{name}' with {count} memories")
+        # Sweep any chat whose settings still point at this now-deleted scope.
+        # Without this, apply_scopes_from_settings on next activation would set
+        # scope_memory to the ghost string and the AI writes into a room the UI
+        # can't show. Scout 2 finding (2026-04-18).
+        try:
+            from core.chat.scope_cleanup import sweep_orphaned_scope_ref
+            sweep_orphaned_scope_ref('memory_scope', name)
+        except Exception as e:
+            logger.warning(f"memory_scope sweep after delete failed: {e}")
+        return {"deleted_count": count}
+    except Exception as e:
+        logger.error(f"Failed to delete memory scope '{name}': {e}")
+        return {"error": str(e)}
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _extract_keywords(content: str) -> str:
+    words = content.lower().split()
+    keywords = [w.strip('.,!?;:\'\"()') for w in words if len(w) > 2 and w.lower() not in STOPWORDS]
+    return ' '.join(sorted(set(keywords)))
+
+
+def _format_time_ago(timestamp_str: str) -> str:
+    try:
+        from zoneinfo import ZoneInfo
+        import config
+        tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
+        try: user_tz = ZoneInfo(tz_name)
+        except Exception: user_tz = ZoneInfo('UTC')
+        ts = datetime.fromisoformat(timestamp_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=ZoneInfo('UTC'))
+        diff = datetime.now(user_tz) - ts
+        days, hours, minutes = diff.days, diff.seconds // 3600, (diff.seconds % 3600) // 60
+        if days > 0:
+            return f"{days}d ago"
+        elif hours > 0:
+            return f"{hours}h ago"
+        elif minutes > 0:
+            return f"{minutes}m ago"
+        return "just now"
+    except Exception:
+        return ""
+
+
+def _format_memory(row_id, content, timestamp, label):
+    time_ago = _format_time_ago(timestamp)
+    time_str = f" ({time_ago})" if time_ago else ""
+    label_str = f" [{label}]" if label else ""
+    # Show the full memory content — memories are already capped at 512 chars
+    # on save, so no runaway length. The previous 150-char truncation forced
+    # the LLM to re-search or call get_recent just to see the rest of a
+    # single memory, burning tokens for nothing. TODO L126 — 2026-04-21.
+    return f"[{row_id}]{time_str}{label_str} {content}"
+
+
+def _parse_labels(label) -> list:
+    """Parse comma-separated label string into list of lowercase labels."""
+    if not label:
+        return []
+    return [l.strip().lower() for l in label.split(',') if l.strip()]
+
+
+def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
+    sanitized = re.sub(r'[^\w\s"*]', ' ', query)
+    sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+    if not sanitized or '"' in sanitized:
+        return sanitized
+    terms = sanitized.split()
+    if use_prefix:
+        terms = [t + '*' if not t.endswith('*') else t for t in terms]
+    if use_or and len(terms) > 1:
+        return ' OR '.join(terms)
+    return ' '.join(terms)
+
+
+# ─── Core Operations ─────────────────────────────────────────────────────────
+
+MAX_MEMORY_LENGTH = 512
+
+
+def _trim_to_cap(content: str, cap: int = MAX_MEMORY_LENGTH) -> tuple:
+    """Over-cap content → (kept, dropped), cut at the last whitespace at or
+    before the cap so no word splits (hard cut only if there is none).
+    Refusing over-cap saves sent her into a rewrite loop — 5 tool calls for
+    one memory. Now it saves and the receipt carries what was cut."""
+    content = content.strip()
+    if len(content) <= cap:
+        return content, ''
+    head = content[:cap + 1]
+    idx = max(head.rfind(ch) for ch in (' ', '\n', '\t'))
+    if idx < cap // 2:
+        # Whitespace missing or only near the start (label + unbroken CJK/
+        # base64/URL run): a break there would save a tiny stub as the whole
+        # memory. Hard-cut at the cap instead.
+        idx = cap
+    return content[:idx].rstrip(), content[idx:].strip()
+
+# Per-scope row cap. Prevents a runaway AI (or import) from ballooning a
+# single scope to millions of rows — vector search scales poorly past this.
+# Knowledge entries already have a 50k cap; memories/people get the same
+# ceiling for consistency. Scout longevity finding: symmetric caps.
+MAX_MEMORIES_PER_SCOPE = 50_000
+
+
+def _save_memory(content: str, label: str = None, scope: str = 'default',
+                 private_key: str = None) -> tuple:
+    try:
+        if not content or not content.strip():
+            return "Cannot save empty memory.", False
+        # Over-cap content is trimmed at a word boundary and saved anyway;
+        # the receipt says what was cut.
+        content, dropped = _trim_to_cap(content)
+        # Cap check — count rows in scope before writing.
+        with _get_connection() as conn:
+            count = conn.execute(
+                'SELECT COUNT(*) FROM memories WHERE scope = ?', (scope,)
+            ).fetchone()[0]
+        if count >= MAX_MEMORIES_PER_SCOPE:
+            return (f"Memory scope '{scope}' is at the row limit ({MAX_MEMORIES_PER_SCOPE:,}). "
+                    f"Delete some memories or switch scope before saving more."), False
+
+        content = content.strip()
+        keywords = _extract_keywords(content)
+        label = label.strip().lower() if label else None
+        # Normalize private_key — empty string from a sloppy caller acts as
+        # NULL (public). Any non-empty value is stored verbatim, plaintext.
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
+
+        # Generate embedding + stamp provenance. Stamping is atomic with the
+        # embedder reference we used — a concurrent provider swap can't retag
+        # this vector with a different provider's identity.
+        embedding_blob = None
+        embedding_provider = None
+        embedding_dim = None
+        embed_failed_mid_session = False
+        embedder = _get_embedder()
+        if embedder.available:
+            embs = embedder.embed([content], prefix='search_document')
+            if embs is not None:
+                from core.embeddings import stamp_embedding
+                embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+            else:
+                # Embedder is available but the call returned None — transient
+                # failure (network blip on remote provider, model reload).
+                # Pre-fix, we silently INSERTed with embedding=NULL and the
+                # global `_backfill_done` latch may already be True from
+                # earlier in the session, so the unembedded row would never
+                # be picked up by re-embed. Clear the latch so the next
+                # search-triggered backfill sweep picks this row up. Memory
+                # day-ruiner scout 2026-05-07 #H.
+                embed_failed_mid_session = True
+                logger.warning(
+                    "[MEMORY] Embed call returned None during save — row will be "
+                    "stored with NULL vector and re-embedded on next search."
+                )
+
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO memories (content, keywords, scope, label, private_key, embedding, embedding_provider, embedding_dim) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (content, keywords, scope, label, private_key, embedding_blob, embedding_provider, embedding_dim)
+            )
+            memory_id = cursor.lastrowid
+            conn.commit()
+
+        if embed_failed_mid_session:
+            # Clear the latch so the next search-time backfill picks up
+            # this row. `global` write because `_backfill_done` is module-
+            # level state; safe under save's serialized path.
+            global _backfill_done
+            _backfill_done = False
+
+        label_str = f", label: {label}" if label else ""
+        priv_str = " [private]" if private_key else ""
+        logger.info(f"Stored memory ID {memory_id} in scope '{scope}'{label_str}{priv_str}")
+        try:
+            from core.mind_events import publish_mind_changed
+            publish_mind_changed('memory', scope, 'save')
+        except Exception:
+            pass
+        msg = f"Memory saved (ID: {memory_id}{label_str}{priv_str})"
+        if dropped:
+            logger.info(f"[MEMORY] save trimmed {len(dropped)} chars over cap (ID {memory_id})")
+            # Saved-first, no pre-filled tool call (mirrors the Mind Palace
+            # receipt, 2026-09-08): the old "delete_memory(42) and re-save"
+            # menu read as an instruction and defeated the trim.
+            msg += (f". {len(dropped)} chars TRIMMED at the {MAX_MEMORY_LENGTH} cap: "
+                    f"\"{dropped}\". Skip a re-save unless it's critical.")
+        return msg, True
+
+    except Exception as e:
+        logger.error(f"Error saving memory: {e}")
+        return f"Failed to save memory: {e}", False
+
+
+def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None):
+    scope_sql, scope_params = _scope_condition(scope, 'm.scope')
+    pk_sql, pk_params = _private_key_clause(private_key, 'm.private_key')
+    if labels:
+        placeholders = ','.join('?' * len(labels))
+        cursor.execute(f'''
+            SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
+            FROM memories_fts f JOIN memories m ON f.rowid = m.id
+            WHERE memories_fts MATCH ? AND {scope_sql} AND m.label IN ({placeholders}) AND {pk_sql}
+            ORDER BY rank LIMIT ?
+        ''', [fts_query] + scope_params + labels + pk_params + [limit])
+    else:
+        cursor.execute(f'''
+            SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
+            FROM memories_fts f JOIN memories m ON f.rowid = m.id
+            WHERE memories_fts MATCH ? AND {scope_sql} AND {pk_sql}
+            ORDER BY rank LIMIT ?
+        ''', [fts_query] + scope_params + pk_params + [limit])
+    return cursor.fetchall()
+
+
+def _vector_search(query: str, scope: str, labels: list, limit: int, private_key: str = None) -> list:
+    """
+    Semantic search via cosine similarity on stored embeddings.
+    Returns list of (id, content, timestamp, label, similarity) tuples.
+
+    Filters by provenance: only rows stamped with the current provider and
+    matching dimension are compared. Rows from other providers (legacy or
+    pre-swap) are silently skipped — they'd either crash np.dot or return
+    garbage scores. FTS5 still finds them.
+    """
+    embedder = _get_embedder()
+    if not embedder.available:
+        return []
+
+    query_emb = embedder.embed([query], prefix='search_query')
+    if query_emb is None:
+        return []
+    query_vec = query_emb[0]
+    query_dim = int(query_vec.shape[0])
+    active_provider = getattr(embedder, 'provider_id', None)
+
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Prefer fresh-timestamp rows when the DB is large — `LIMIT 10000` on
+        # bare rowid order silently drops newer memories once n > 10k. Using
+        # ORDER BY timestamp DESC makes the window recency-biased, which
+        # matches what a user expects ("search my recent memories first").
+        scope_sql, scope_params = _scope_condition(scope)
+        pk_sql, pk_params = _private_key_clause(private_key)
+        provenance_sql = (
+            'embedding IS NOT NULL AND embedding_provider = ? AND embedding_dim = ?'
+        )
+        provenance_params = [active_provider, query_dim]
+        if labels:
+            placeholders = ','.join('?' * len(labels))
+            cursor.execute(
+                f'SELECT id, content, timestamp, label, embedding FROM memories '
+                f'WHERE {scope_sql} AND label IN ({placeholders}) AND {pk_sql} AND {provenance_sql} '
+                f'ORDER BY timestamp DESC LIMIT 10000',
+                scope_params + labels + pk_params + provenance_params)
+        else:
+            cursor.execute(
+                f'SELECT id, content, timestamp, label, embedding FROM memories '
+                f'WHERE {scope_sql} AND {pk_sql} AND {provenance_sql} '
+                f'ORDER BY timestamp DESC LIMIT 10000',
+                scope_params + pk_params + provenance_params)
+
+        rows = cursor.fetchall()
+
+    if not rows:
+        return []
+
+    # Compute cosine similarity (vectors are already L2-normalized).
+    # Per-row try/except defends against malformed blobs that somehow escaped
+    # the provenance filter (partial writes, corrupted rows).
+    scored = []
+    for row_id, content, timestamp, lbl, emb_blob in rows:
+        try:
+            emb = np.frombuffer(emb_blob, dtype=np.float32)
+            if emb.shape[0] != query_dim:
+                continue
+            sim = float(np.dot(query_vec, emb))
+            if np.isnan(sim) or np.isinf(sim):
+                continue
+            if sim >= SIMILARITY_THRESHOLD:
+                scored.append((row_id, content, timestamp, lbl, sim))
+        except Exception:
+            continue
+
+    scored.sort(key=lambda x: x[4], reverse=True)
+    return scored[:limit]
+
+
+def _search_memory(query: str, limit: int = 10, label: str = None,
+                   scope: str = 'default', private_key: str = None) -> tuple:
+    """
+    Search memories with cascading strategy:
+    1. FTS5 AND (exact token match)
+    2. FTS5 OR + prefix (broader token match)
+    3. Vector similarity (semantic match)
+    4. LIKE fallback
+
+    All four strategies honor `private_key`: rows with a non-NULL private_key
+    only surface when the caller passes the matching key. Public rows
+    (private_key IS NULL) always surface.
+    """
+    try:
+        if not query or not query.strip():
+            return "Search query cannot be empty.", False
+
+        labels = _parse_labels(label)
+        label_note = f" with labels '{label}'" if labels else ""
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
+
+        # Trigger backfill on first search (lazy, one-time)
+        _backfill_embeddings()
+
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Strategy 1: FTS5 exact AND
+            fts_exact = _sanitize_fts_query(query)
+            if fts_exact:
+                try:
+                    rows = _fts_search(cursor, fts_exact, scope, labels, limit, private_key=private_key)
+                    if rows:
+                        results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                        return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+
+                    # Strategy 2: FTS5 OR + prefix
+                    fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
+                    if fts_broad != fts_exact:
+                        rows = _fts_search(cursor, fts_broad, scope, labels, limit, private_key=private_key)
+                        if rows:
+                            results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                            return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"FTS5 query failed: {e}")
+
+        # Strategy 3: Vector similarity (semantic)
+        vec_results = _vector_search(query, scope, labels, limit, private_key=private_key)
+        if vec_results:
+            results = [_format_memory(r[0], r[1], r[2], r[3]) for r in vec_results]
+            return f"Found {len(vec_results)} memories:\n" + "\n".join(results), True
+
+        # Strategy 4: LIKE fallback
+        terms = query.lower().split()[:5]
+        if terms:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                conditions = ' OR '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in terms])
+                params = []
+                for term in terms:
+                    params.extend([f'%{term}%', f'%{term}%'])
+                if labels:
+                    placeholders = ','.join('?' * len(labels))
+                    label_filter = f" AND label IN ({placeholders})"
+                    params.extend(labels)
+                else:
+                    label_filter = ""
+                scope_sql, scope_params = _scope_condition(scope)
+                pk_sql, pk_params = _private_key_clause(private_key)
+                cursor.execute(f'''
+                    SELECT id, content, timestamp, label FROM memories
+                    WHERE {scope_sql} AND ({conditions}){label_filter} AND {pk_sql}
+                    ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + params + pk_params + [limit])
+                rows = cursor.fetchall()
+            if rows:
+                results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+
+        return f"No memories found for '{query}'{label_note}.", True
+
+    except Exception as e:
+        logger.error(f"Error searching memory: {e}")
+        return f"Search failed: {e}", False
+
+
+def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'default',
+                         private_key: str = None) -> tuple:
+    try:
+        labels = _parse_labels(label)
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
+        scope_sql, scope_params = _scope_condition(scope)
+        pk_sql, pk_params = _private_key_clause(private_key)
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            if labels:
+                placeholders = ','.join('?' * len(labels))
+                cursor.execute(f'''
+                    SELECT id, content, timestamp, label FROM memories
+                    WHERE {scope_sql} AND label IN ({placeholders}) AND {pk_sql}
+                    ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + labels + pk_params + [count])
+            else:
+                cursor.execute(f'''
+                    SELECT id, content, timestamp, label FROM memories
+                    WHERE {scope_sql} AND {pk_sql}
+                    ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + pk_params + [count])
+            rows = cursor.fetchall()
+        if not rows:
+            label_note = f" with labels '{label}'" if labels else ""
+            return f"No memories stored{label_note}.", True
+        results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+        return f"Recent {len(rows)} memories:\n" + "\n".join(results), True
+    except Exception as e:
+        logger.error(f"Error getting recent memories: {e}")
+        return f"Failed to retrieve memories: {e}", False
+
+
+def _delete_memory(memory_id: int, scope: str = 'default',
+                   private_key: str = None) -> tuple:
+    try:
+        if not isinstance(memory_id, int) or memory_id < 1:
+            return "Invalid memory ID. Use the number shown in brackets [N].", False
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            # First check the row exists in this scope at all (regardless of
+            # private_key) so we can give a clean "not found" vs "key required"
+            # message — but only return the row if the private_key gate passes.
+            cursor.execute(
+                'SELECT id, content, private_key FROM memories WHERE id = ? AND scope = ?',
+                (memory_id, scope),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return f"Memory [{memory_id}] not found in current memory slot.", False
+            row_pk = row[2]
+            if row_pk is not None and row_pk != private_key:
+                # Row exists but is private and the caller didn't pass the
+                # matching key. Don't reveal content — just say it's private.
+                return f"Memory [{memory_id}] is private — pass the matching private_key to delete.", False
+            # Build DELETE matching either no private_key, or the exact key.
+            pk_sql, pk_params = _private_key_clause(private_key)
+            cursor.execute(
+                f'DELETE FROM memories WHERE id = ? AND scope = ? AND {pk_sql}',
+                [memory_id, scope] + pk_params,
+            )
+            conn.commit()
+        preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
+        logger.info(f"Deleted memory ID {memory_id} from scope '{scope}'")
+        try:
+            from core.mind_events import publish_mind_changed
+            publish_mind_changed('memory', scope, 'delete')
+        except Exception:
+            pass
+        return f"Deleted memory [{memory_id}]: {preview}", True
+    except Exception as e:
+        logger.error(f"Error deleting memory: {e}")
+        return f"Failed to delete memory: {e}", False
+
+
+# ─── Executor ────────────────────────────────────────────────────────────────
+
+def execute(function_name: str, arguments: dict, config) -> tuple:
+    try:
+        scope = _get_current_scope()
+        if scope is None:
+            return "Memory is disabled for this chat.", False
+        if scope == 'global':
+            return "Cannot write to the global scope. Global is read-only for the AI — only the user can add entries there via the UI.", False
+
+        if function_name == "save_memory":
+            return _save_memory(arguments.get("content", ""), arguments.get("label"),
+                                scope, private_key=arguments.get("private_key"))
+        elif function_name == "search_memory":
+            # Clamp: LIMIT -1 = unlimited in SQLite — a stray negative would
+            # dump the whole scope into one permanent history row.
+            limit = min(max(int(arguments.get("limit", 10) or 10), 1), 50)
+            return _search_memory(arguments.get("query", ""), limit,
+                                  arguments.get("label"), scope,
+                                  private_key=arguments.get("private_key"))
+        elif function_name == "get_recent_memories":
+            count = min(max(int(arguments.get("count", 10) or 10), 1), 50)
+            return _get_recent_memories(count, arguments.get("label"),
+                                        scope, private_key=arguments.get("private_key"))
+        elif function_name == "delete_memory":
+            memory_id = arguments.get("memory_id")
+            if memory_id is None:
+                return "Missing memory_id parameter.", False
+            return _delete_memory(int(memory_id), scope,
+                                  private_key=arguments.get("private_key"))
+        else:
+            return f"Unknown memory function: {function_name}", False
+    except Exception as e:
+        logger.error(f"Memory function error: {e}")
+        return f"Memory error: {e}", False

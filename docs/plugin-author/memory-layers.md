@@ -82,7 +82,7 @@ def note_changed(note, scope='default'):
                    source=note.path, fields={'tags': note.tags})
 ```
 
-The API (`plugins/mindpalace/tools/layer_api.py`):
+The API (`core/plugins/mindpalace/tools/layer_api.py`, imported as `plugins.mindpalace.tools.layer_api`):
 
 - `save(content, layer, scope='default', label=None, fields=None, source=None)` → `(chunk_id, message)`. Full pipeline: inline embedding, FTS, entity-mention weaving. One ledger line per call — use for single items, not loops.
 - `bulk_save(items, layer, scope='default')` → `(ids, message)`. One transaction, embeddings deferred to the background sweep, **one** ledger summary line. Use this for syncs.
@@ -174,7 +174,7 @@ ledger lines.
 MEMORY LAYERS (plugin-declared Mind Palace layers):
 - Manifest: `capabilities.memory_layers` = [{key, label?, icon?, description?, librarian? (default false), writable? (default false), mode? ('mirror' only)}]. Key: lowercase valid identifier (no hyphens), unique across plugins, first registrant wins; reserved keys refused: self, events, entities, knowledge, goals. Registered at plugin load, unregistered at unload/disable; the AI's tool schemas update live both ways.
 - Requires the `mindpalace` plugin. Import lazily INSIDE functions: `from plugins.mindpalace.tools import layer_api` wrapped in try/except ImportError — never at module top level.
-- API (`plugins/mindpalace/tools/layer_api.py`):
+- API (`core/plugins/mindpalace/tools/layer_api.py`; import name stays `plugins.mindpalace...`):
   - `save(content, layer, scope='default', label=None, fields=None, source=None) -> (chunk_id|None, message)` — full pipeline (inline embedding, FTS, entity weaving), one ledger line per call; single items only, never loops.
   - `bulk_save(items, layer, scope='default') -> (ids, message)` — items = [{'content', 'label'?, 'fields'?, 'source'?}]; one transaction, embeddings deferred to the background sweep, ONE ledger summary line; empty/over-length items skipped and counted; very large batches are cut off by a runaway backstop.
   - `delete_by_source(layer, source, scope='default') -> (count, message)` — reconciliation primitive; cleans graph edges; one ledger line.

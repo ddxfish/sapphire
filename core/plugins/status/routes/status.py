@@ -1,0 +1,816 @@
+"""Status data endpoint — gathers system state for both the app page and the AI tool."""
+
+import os
+import sys
+import time
+import shutil
+import platform
+import subprocess
+import logging
+from pathlib import Path
+from core.paths import PROJECT_ROOT
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
+
+_boot_time = time.time()
+
+
+# ── Hardware / disk / activity / custom-command helpers ─────────────────
+# All wrapped in try/except so a single failure (e.g. torch missing on a
+# stripped-down install, psutil quirk on Windows, etc.) just hides that
+# section instead of breaking get_self_info wholesale.
+
+def _get_hardware_info() -> dict:
+    """Cross-platform hardware summary. Falls back gracefully — every
+    field is optional. psutil + torch are listed deps, but defensive
+    imports keep this safe on environments where they're not present.
+    """
+    info = {}
+    try:
+        info["arch"] = platform.machine()
+        info["cores_logical"] = os.cpu_count() or 0
+    except Exception:
+        pass
+    try:
+        import psutil
+        info["cores_physical"] = psutil.cpu_count(logical=False) or 0
+        vm = psutil.virtual_memory()
+        info["ram_total_gb"] = round(vm.total / (1024**3), 1)
+        info["ram_used_pct"] = int(vm.percent)
+    except Exception:
+        pass
+    # CPU model name — Linux /proc/cpuinfo gives the most useful string.
+    # platform.processor() is empty/garbage on most Linuxes. Best-effort.
+    try:
+        if sys.platform.startswith('linux'):
+            with open('/proc/cpuinfo') as f:
+                for line in f:
+                    if line.startswith('model name'):
+                        info["cpu_model"] = line.split(':', 1)[1].strip()
+                        break
+        else:
+            proc = platform.processor()
+            if proc:
+                info["cpu_model"] = proc
+    except Exception:
+        pass
+    # GPU: torch covers NVIDIA (cuda) + Apple Silicon (mps) cross-platform.
+    # Defensive: if torch isn't importable or cuda init fails on a CPU-only
+    # box, just return empty list.
+    gpus = []
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                try:
+                    gpus.append({
+                        "index": i,
+                        "name": torch.cuda.get_device_name(i),
+                        "backend": "cuda",
+                    })
+                except Exception:
+                    pass
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            gpus.append({"index": 0, "name": "Apple Silicon GPU", "backend": "mps"})
+    except Exception:
+        pass
+    info["gpus"] = gpus
+    return info
+
+
+def _get_disk_info(user_dir: Path) -> dict:
+    """Free/total on the drive holding user_dir + size of the main DBs.
+    Skips a full `user/` walk — that can be slow on large installs and
+    isn't worth the cost for chat-start latency.
+    """
+    info = {}
+    try:
+        total, used, free = shutil.disk_usage(user_dir)
+        info["disk_total_gb"] = round(total / (1024**3), 1)
+        info["disk_free_gb"] = round(free / (1024**3), 1)
+        info["disk_used_pct"] = int(used / total * 100) if total else 0
+    except Exception:
+        pass
+    db_sizes = {}
+    # Real files by relative path. The old trio (chats.db / memory.db /
+    # knowledge.db) was the v1 layout; chats.db never lived at user/ at all.
+    for name in _DB_FILES:
+        p = user_dir / name
+        try:
+            if p.exists():
+                db_sizes[name] = round(p.stat().st_size / (1024**2), 1)
+        except Exception:
+            pass
+    if db_sizes:
+        info["db_sizes_mb"] = db_sizes
+    return info
+
+
+def _get_recent_activity(user_dir: Path, active_chat: str | None) -> dict:
+    """Messages sent today on the active chat + last activity timestamp.
+    Reads from chats.db directly to keep this independent of the rest of
+    the chat module (avoids load-order issues during early boot).
+    """
+    info = {}
+    if not active_chat:
+        return info
+    try:
+        import sqlite3
+        chats_db = user_dir / "history" / "sapphire_history.db"
+        if not chats_db.exists():
+            return info
+        # Read-only: a status poll must never contend for the chat DB's
+        # write lock. Rows-format chats (rowify 2026-07-09) keep one row per
+        # message in chat_messages with the dict as JSON; blob chats return
+        # no rows here and these fields stay absent (pre-rowify behavior).
+        conn = sqlite3.connect(f"file:{chats_db}?mode=ro", uri=True)
+        c = conn.cursor()
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            c.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE chat_name = ? "
+                "AND substr(json_extract(message_json, '$.timestamp'), 1, 10) = ?",
+                (active_chat, today)
+            )
+            row = c.fetchone()
+            if row:
+                info["messages_today"] = row[0]
+        except Exception:
+            pass
+        try:
+            c.execute(
+                "SELECT json_extract(message_json, '$.timestamp') FROM chat_messages "
+                "WHERE chat_name = ? ORDER BY seq DESC LIMIT 1",
+                (active_chat,)
+            )
+            row = c.fetchone()
+            if row and row[0]:
+                info["last_message"] = row[0]
+                # Compute relative "X ago"
+                try:
+                    last = datetime.fromisoformat(row[0].replace('Z', '+00:00').split('.')[0])
+                    delta = datetime.now() - last.replace(tzinfo=None)
+                    secs = int(delta.total_seconds())
+                    if secs < 60:
+                        info["last_message_ago"] = f"{secs}s ago"
+                    elif secs < 3600:
+                        info["last_message_ago"] = f"{secs // 60}m ago"
+                    elif secs < 86400:
+                        info["last_message_ago"] = f"{secs // 3600}h ago"
+                    else:
+                        info["last_message_ago"] = f"{secs // 86400}d ago"
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        conn.close()
+    except Exception:
+        pass
+    return info
+
+
+def _is_plugin_heartbeat(task: dict, cron_expr: str) -> bool:
+    """A plugin task whose cron fires more than once an hour is a maintenance
+    tick (Discord quiet-channel poll, distill poll), not an event she has
+    coming up. Left in, three such ticks own every 'Upcoming' slot and her
+    real tasks vanish into '(+N more)'. Rule: plugin-sourced AND the minute
+    field is not one fixed number. User tasks always show."""
+    if not str(task.get("source", "")).startswith("plugin:"):
+        return False
+    minute = str(cron_expr).split()[0] if str(cron_expr).split() else ""
+    return not minute.isdigit()
+
+
+def _get_upcoming_tasks(scheduler, hours: int = 4) -> list:
+    """Continuity tasks due in the next `hours` hours. Cron tasks only —
+    daemons/heartbeats run on intervals and aren't 'scheduled' in the
+    same sense. croniter is a continuity dep, defensive import.
+    """
+    upcoming = []
+    if not scheduler:
+        return upcoming
+    try:
+        from croniter import croniter
+    except Exception:
+        return upcoming
+    try:
+        # Same clock the scheduler fires on (USER_TIMEZONE) — the OS clock put
+        # her "Upcoming" off by the tz offset on a mismatched box (row 82).
+        try:
+            from core.continuity.scheduler import _user_now
+            now = _user_now().replace(tzinfo=None)
+        except Exception:
+            now = datetime.now()
+        cutoff = now + timedelta(hours=hours)
+        for t in scheduler.list_tasks():
+            if not t.get("enabled"):
+                continue
+            cron_expr = t.get("schedule") or t.get("cron")
+            if not cron_expr:
+                continue
+            if _is_plugin_heartbeat(t, cron_expr):
+                continue
+            try:
+                it = croniter(cron_expr, now)
+                nxt = it.get_next(datetime)
+                if nxt <= cutoff:
+                    upcoming.append({
+                        "name": t.get("name", "Unknown"),
+                        "when": nxt.strftime("%H:%M"),
+                    })
+            except Exception:
+                continue
+        upcoming.sort(key=lambda x: x["when"])
+    except Exception:
+        pass
+    return upcoming
+
+
+def _run_custom_commands(commands_text: str, max_per_output: int = 500, timeout_s: int = 5) -> list:
+    """Run user-configured shell commands and return their output.
+    Format: one per line, `LABEL ::: COMMAND`. Lines starting with #
+    are skipped. Output capped at `max_per_output` chars (label + marker
+    show truncation). Stderr merged into stdout. sudo prefix refused.
+    Pipes/redirects work via shell=True — that's the whole point.
+    """
+    results = []
+    if not commands_text or not commands_text.strip():
+        return results
+    for raw in commands_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if '::: ' in line:
+            label, cmd = line.split('::: ', 1)
+        elif ':::' in line:
+            label, cmd = line.split(':::', 1)
+        else:
+            # No separator — use the line as both label and command
+            label, cmd = line, line
+        label = label.strip()[:40] or "(unnamed)"
+        cmd = cmd.strip()
+        if not cmd:
+            continue
+        # Refuse sudo — cheap footgun guard.
+        if cmd.startswith('sudo ') or cmd == 'sudo':
+            results.append({"label": label, "command": cmd, "output": "(sudo refused)", "ok": False})
+            continue
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                timeout=timeout_s,
+                encoding='utf-8', errors='replace',
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            out = out.strip()
+            if not out:
+                out = f"(exit {r.returncode}, no output)" if r.returncode else "(no output)"
+            if len(out) > max_per_output:
+                out = out[:max_per_output] + f"… [+{len(out) - max_per_output} chars truncated]"
+            results.append({"label": label, "command": cmd, "output": out, "ok": r.returncode == 0})
+        except subprocess.TimeoutExpired:
+            results.append({"label": label, "command": cmd, "output": f"(timed out after {timeout_s}s)", "ok": False})
+        except Exception as e:
+            results.append({"label": label, "command": cmd, "output": f"(error: {e})", "ok": False})
+    return results
+
+
+_DB_FILES = ("history/sapphire_history.db", "memory/mind.db", "memory/library.db",
+             "memory.db", "knowledge.db", "goals.db", "metrics/token_usage.db")
+
+_FROM_CHAT = object()   # get_full_status_sync(scope=): "derive from chat settings"
+
+
+def _norm_scope(val):
+    """Chat-settings scope value → ContextVar value ('none'/'' → off/default,
+    mirrors apply_scopes_from_settings)."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        v = val.strip()
+        if v.lower() == 'none':
+            return None
+        return v or 'default'
+    return val
+
+
+def _memory_plugin():
+    """(name, label, [status_summary callables]) of the LOADED memory plugin
+    (manifest essential: "memory"), or (None, None, []).
+
+    Discovery = loader `loaded` flag + sys.modules lookup of each tool file's
+    canonical module (the name register_plugin_tools installs). NEVER a bare
+    import: the plugin dirs are namespace packages, so importing a not-loaded
+    plugin execs a fresh copy from disk with its module-level side effects.
+    Generic over any plugin in the memory group — the classic plugin answers
+    from three modules, the palace from one; each answers only for the DB it
+    owns (B ruling, 2026-09-11)."""
+    try:
+        from core.plugin_loader import plugin_loader
+        # list() snapshot: a concurrent rescan() pops from _plugins mid-iteration
+        for name, info in list(plugin_loader._plugins.items()):
+            if not info.get("loaded"):
+                continue
+            manifest = info.get("manifest", {}) or {}
+            if manifest.get("essential") != "memory":
+                continue
+            label = manifest.get("short_name") or manifest.get("display_name") or name
+            dirname = Path(str(info.get("path") or name)).name
+            fns = []
+            for rel in (manifest.get("capabilities", {}) or {}).get("tools", []) or []:
+                canonical = "plugins." + ".".join([dirname] + list(Path(rel).with_suffix('').parts))
+                fn = getattr(sys.modules.get(canonical), "status_summary", None)
+                if callable(fn):
+                    fns.append(fn)
+            return name, label, fns
+    except Exception as e:
+        logger.debug(f"memory plugin discovery failed: {e}")
+    return None, None, []
+
+
+def _get_mind_info(scope, plugin):
+    """Merge the memory plugin's status_summary answers into one dict:
+    `scopes` counts are summed, `current` blocks are folded into one, every
+    other key is taken as-is. engine=None → no memory plugin loaded."""
+    name, label, fns = plugin
+    mind = {"engine": name, "engine_label": label, "scopes": {}, "current": None}
+    if not name:
+        return mind
+    for fn in fns:
+        try:
+            part = dict(fn(scope) or {})
+        except Exception as e:
+            logger.debug(f"status_summary failed ({getattr(fn, '__module__', '?')}): {e}")
+            continue
+        for k, v in (part.pop("scopes", None) or {}).items():
+            mind["scopes"][k] = mind["scopes"].get(k, 0) + v
+        cur = part.pop("current", None)
+        if cur:
+            mind["current"] = {**(mind["current"] or {}), **cur}
+        mind.update(part)
+    return mind
+
+
+def _session_scopes(chat_settings, plugin_name):
+    """{scope_key: value} for the scopes the loaded memory plugin registered
+    (the registry is the truth — the old block hardcoded memory + knowledge,
+    and 'knowledge' isn't a scope under the palace)."""
+    out = {}
+    try:
+        from core.chat.function_manager import SCOPE_REGISTRY
+        for key, reg in list(SCOPE_REGISTRY.items()):
+            if reg.get('plugin') != plugin_name or not reg.get('setting'):
+                continue
+            out[key] = _norm_scope(chat_settings.get(reg['setting'], reg.get('default')))
+    except Exception:
+        pass
+    return out
+
+
+def _is_docker():
+    try:
+        return Path('/.dockerenv').exists() or 'docker' in Path('/proc/1/cgroup').read_text()
+    except Exception:
+        return False
+
+
+def _get_git_branch():
+    try:
+        head = PROJECT_ROOT / '.git' / 'HEAD'
+        content = head.read_text().strip()
+        if content.startswith('ref: refs/heads/'):
+            return content.replace('ref: refs/heads/', '')
+        return content[:8]  # detached HEAD
+    except Exception:
+        return ''
+
+
+async def get_full_status(**kwargs):
+    """GET /api/plugin/status/full — comprehensive system snapshot."""
+    return get_full_status_sync()
+
+
+def get_full_status_sync(scope=_FROM_CHAT):
+    """GET /api/plugin/status/full — comprehensive system snapshot.
+
+    scope: the memory scope the Mind block reports "this scope" for. The tool
+    passes the turn's ContextVar (authoritative on every channel — web, wake,
+    phone, continuity all set it); the web page has no turn, and the
+    ContextVar's default is the string 'default' (indistinguishable from a
+    real one), so the route derives it from the chat's memory_scope setting.
+    None = memory off for this chat."""
+    try:
+        import config
+        from core.api_fastapi import get_system, APP_VERSION
+
+        system = get_system()
+        session = system.llm_chat.session_manager
+        fm = system.llm_chat.function_manager
+
+        # Identity
+        import locale
+        try:
+            tz_name = datetime.now().astimezone().tzname()
+            tz_offset = datetime.now().astimezone().strftime('%z')
+        except Exception:
+            tz_name, tz_offset = "UTC", "+0000"
+
+        identity = {
+            "app_version": APP_VERSION,
+            "python_version": platform.python_version(),
+            "os": f"{platform.system()} {platform.release()}",
+            "docker": _is_docker(),
+            "uptime_seconds": int(time.time() - _boot_time),
+            "hostname": platform.node(),
+            "branch": _get_git_branch(),
+            "timezone": f"{tz_name} ({tz_offset})",
+            "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # Active session. Two context-awareness layers (2026-08-06 — a Discord
+        # get_self_info reported the operator's web chat + model as its own):
+        # 1) stream_brain override (daemon/phone runs): get_chat_settings()
+        #    already resolves it; the chat NAME must match or the block mixes
+        #    the stream's settings with the web chat's name.
+        # 2) tool_context (continuity runs): carries the RESOLVED provider /
+        #    model / toolset of the run — authoritative over per-chat settings,
+        #    which say 'auto' while the run's provider came from task/event
+        #    routing. Web-path calls have neither set → byte-identical output.
+        chat_settings = session.get_chat_settings()
+        chat_name = session.get_active_chat_name()
+        try:
+            from core.chat.stream_brain import get_override
+            _o = get_override()
+            if _o and _o.get("chat"):
+                chat_name = _o["chat"]
+        except Exception:
+            pass
+        _tc = {}
+        try:
+            from core.chat.function_manager import tool_context
+            _c = tool_context.get() or {}
+            if _c.get("channel") == "continuity":
+                _tc = _c
+        except Exception:
+            pass
+        memory_plugin = _memory_plugin()
+        if scope is _FROM_CHAT:
+            scope = _norm_scope(chat_settings.get("memory_scope", "default"))
+        active_session = {
+            "chat": chat_name,
+            "prompt": chat_settings.get("prompt", ""),
+            "persona": chat_settings.get("persona", ""),
+            "llm_primary": _tc.get("provider") or chat_settings.get("llm_primary", "auto"),
+            "llm_model": _tc.get("model") or chat_settings.get("llm_model", ""),
+            # What she should SEE (2026-09-21): the friendly name and the
+            # model that actually runs — the raw key is a birth-name fossil
+            # ("fireworksglm-5p2" after a rename to GLM 5.3) and an empty
+            # override printed as "()".
+            **_llm_display(_tc.get("provider") or chat_settings.get("llm_primary", "auto"),
+                           _tc.get("model") or chat_settings.get("llm_model", "")),
+            "toolset": _tc.get("toolset") or fm.current_toolset_name,
+            "function_count": len(fm._enabled_tools),
+            "tool_names": sorted(t['function']['name'] for t in fm._enabled_tools),
+            "scopes": _session_scopes(chat_settings, memory_plugin[0]),
+            "parallel_tool_calls": getattr(config, 'MAX_PARALLEL_TOOLS', 1),
+            "max_iterations": getattr(config, 'MAX_TOOL_ITERATIONS', 10),
+            "theme": getattr(config, 'THEME', 'default'),
+            "user_timezone": getattr(config, 'USER_TIMEZONE', ''),
+        }
+
+        # Services
+        tts_provider = getattr(config, 'TTS_PROVIDER', 'none')
+        stt_provider = getattr(config, 'STT_PROVIDER', 'none')
+        wakeword_on = getattr(config, 'WAKE_WORD_ENABLED', False)
+        embedding_provider = getattr(config, 'EMBEDDING_PROVIDER', 'local')
+
+        # SOCKS proxy
+        socks_enabled = getattr(config, 'SOCKS_ENABLED', False)
+        socks_has_creds = False
+        try:
+            from core.credentials_manager import credentials
+            socks_has_creds = credentials.has_socks_credentials()
+        except Exception:
+            pass
+
+        # Detect actual runtime devices for TTS + STT. Shows the truth
+        # (post-fallback) when KOKORO_DEVICE=cuda fell back to cpu, or
+        # FASTER_WHISPER_DEVICE=cuda fell back to cpu. The CONFIG value
+        # may say cuda even when reality is cpu.
+        tts_device_configured = (getattr(config, 'KOKORO_DEVICE', 'cuda') or 'cuda').strip().lower()
+        tts_device_actual = None
+        try:
+            # Ping the Kokoro subprocess /health endpoint — its 'device'
+            # field is the post-fallback truth.
+            import urllib.request as _ur
+            import json as _json
+            tts_port = getattr(config, 'TTS_SERVER_PORT', 5012)
+            with _ur.urlopen(f"http://127.0.0.1:{tts_port}/health", timeout=0.5) as r:
+                tts_device_actual = _json.loads(r.read()).get('device')
+        except Exception:
+            pass
+
+        stt_device_configured = (getattr(config, 'FASTER_WHISPER_DEVICE', 'cuda') or 'cuda').strip().lower()
+        stt_device_actual = None
+        try:
+            # WhisperModel.model.device is the post-init device. Faster-whisper
+            # stores the underlying ctranslate2 model; its .device attr is the
+            # cleanest source of truth.
+            stt_obj = getattr(system, 'stt', None)
+            wm = getattr(stt_obj, 'model', None) if stt_obj else None
+            if wm is not None:
+                # ctranslate2 model exposes .device as a string ('cuda' or 'cpu')
+                stt_device_actual = getattr(wm, 'device', None) or getattr(getattr(wm, 'model', None), 'device', None)
+        except Exception:
+            pass
+
+        services = {
+            "tts": {
+                "provider": tts_provider,
+                "enabled": bool(tts_provider and tts_provider != 'none'),
+                "voice": getattr(system.tts, '_voice', '') if hasattr(system, 'tts') else '',
+                "device_configured": tts_device_configured,
+                "device_actual": tts_device_actual,  # None = couldn't query
+            },
+            "stt": {
+                "provider": stt_provider,
+                "enabled": bool(stt_provider and stt_provider != 'none'),
+                "device_configured": stt_device_configured,
+                "device_actual": stt_device_actual,  # None = couldn't query
+            },
+            "wakeword": {
+                "enabled": wakeword_on,
+                "model": getattr(config, 'WAKEWORD_MODEL', ''),
+            },
+            "embeddings": {
+                "provider": embedding_provider,
+                "enabled": bool(embedding_provider and embedding_provider != 'none'),
+            },
+            "socks": {
+                "enabled": socks_enabled,
+                "has_credentials": socks_has_creds,
+            },
+        }
+
+        try:
+            from core import gpu_status
+            services["gpu"] = gpu_status.peek()   # why cuda fell back to cpu, when it did
+        except Exception:
+            pass
+
+        # Daemons
+        daemons = {}
+        try:
+            from core.plugin_loader import plugin_loader
+            for pname, info in plugin_loader._plugins.items():
+                if info.get("daemon_started"):
+                    daemons[pname] = "running"
+                elif info.get("daemon_module"):
+                    daemons[pname] = "loaded"
+        except Exception:
+            pass
+
+        # LLM Providers
+        providers = []
+        try:
+            all_pconfig = {**dict(getattr(config, 'LLM_PROVIDERS', {})), **dict(getattr(config, 'LLM_CUSTOM_PROVIDERS', {}))}
+            from core.chat.llm_providers import provider_registry
+            all_registry = {**provider_registry._core, **provider_registry._plugins}
+            for key, pconfig in all_pconfig.items():
+                reg = all_registry.get(key, {})
+                providers.append({
+                    "key": key,
+                    "name": reg.get("display_name") or pconfig.get("display_name", key),
+                    "enabled": pconfig.get("enabled", False),
+                    "is_local": reg.get("is_local", pconfig.get("is_local", False)),
+                    "has_key": bool(_check_provider_key(key)),
+                })
+        except Exception as e:
+            logger.debug(f"Provider listing failed: {e}")
+
+        # Tasks (with type breakdown)
+        tasks_info = {"total": 0, "enabled": 0, "running": 0, "tasks": 0, "heartbeats": 0, "daemons": 0, "webhooks": 0}
+        try:
+            if hasattr(system, 'continuity_scheduler') and system.continuity_scheduler:
+                sched = system.continuity_scheduler
+                all_tasks = sched.list_tasks()
+                tasks_info["total"] = len(all_tasks)
+                tasks_info["enabled"] = sum(1 for t in all_tasks if t.get("enabled"))
+                tasks_info["running"] = sum(1 for t in all_tasks if t.get("running"))
+                for t in all_tasks:
+                    tt = t.get("type", "task")
+                    if tt == "heartbeat":
+                        tasks_info["heartbeats"] += 1
+                    elif tt == "daemon":
+                        tasks_info["daemons"] += 1
+                    elif tt == "webhook":
+                        tasks_info["webhooks"] += 1
+                    else:
+                        tasks_info["tasks"] += 1
+        except Exception:
+            pass
+
+        # Plugins (with verification status)
+        plugins = []
+        try:
+            from core.plugin_loader import plugin_loader
+            for name, info in plugin_loader._plugins.items():
+                plugins.append({
+                    "name": name,
+                    "loaded": info.get("loaded", False),
+                    "enabled": info.get("enabled", False),
+                    "band": info.get("band", ""),
+                    "version": info.get("manifest", {}).get("version", ""),
+                    "verify_tier": info.get("verify_tier", "unsigned"),
+                    "missing_deps": info.get("missing_deps", []),
+                })
+        except Exception:
+            pass
+
+        # Token metrics (the singleton is `metrics` — the old `token_metrics`
+        # import never existed, so this section silently reported {} forever)
+        metrics = {}
+        try:
+            from core.metrics import metrics as token_metrics
+            metrics = token_metrics.summary(days=7)
+        except Exception:
+            pass
+
+        # Audio devices
+        audio_info = {}
+        try:
+            audio_info["input"] = getattr(config, 'AUDIO_INPUT_DEVICE', 'default')
+            audio_info["output"] = getattr(config, 'AUDIO_OUTPUT_DEVICE', 'default')
+        except Exception:
+            pass
+
+        # Backup stats
+        backup_info = {}
+        try:
+            from core.backup import backup_manager
+            # list_backups returns a DICT of tiers — len() was 5 forever and
+            # backups[0] KeyError'd into the bare except, so this panel showed
+            # "5 backups" with no date on a box that hadn't produced a tarball
+            # in months (X1 F2, negspace 2026-08-31). Flatten + pick latest.
+            tiers = backup_manager.list_backups()
+            allb = [b for lst in tiers.values() for b in lst]
+            backup_info["count"] = len(allb)
+            if allb:
+                latest = max(allb, key=lambda b: (b.get("date", ""), b.get("time", "")))
+                backup_info["latest"] = latest.get("filename", "")
+                backup_info["latest_date"] = latest.get("date", "")
+                backup_info["latest_size"] = latest.get("size", 0)
+        except Exception:
+            pass
+
+        # Update check (use cached result if available)
+        update_info = {}
+        try:
+            update_file = PROJECT_ROOT / "user" / "webui" / "update_check.json"
+            if update_file.exists():
+                import json as _json
+                cached = _json.loads(update_file.read_text(encoding="utf-8"))
+                update_info["available"] = cached.get("update_available", False)
+                update_info["latest_version"] = cached.get("latest_version", "")
+                update_info["current_version"] = APP_VERSION
+        except Exception:
+            pass
+
+        # Mind — asked of the LOADED memory plugin through its own
+        # status_summary() (see _memory_plugin). The old block ran raw SQL
+        # against user/memory.db + user/knowledge.db — the classic v1 files,
+        # which the palace's import copies and never deletes — so a palace box
+        # reported ghost v1 counts as current and a fresh box reported zeros,
+        # every failure swallowed into "0" (2026-09-11).
+        mind_info = _get_mind_info(scope, memory_plugin)
+        user_dir = PROJECT_ROOT / "user"
+
+        # Hardware / disk / activity / upcoming tasks / custom commands.
+        # Each gatherer is independently try/except'd inside — failures
+        # produce empty dicts/lists instead of breaking get_self_info.
+        hardware_info = _get_hardware_info()
+        disk_info = _get_disk_info(user_dir)
+        recent_activity = _get_recent_activity(user_dir, active_session.get("chat"))
+        upcoming = _get_upcoming_tasks(getattr(system, 'continuity_scheduler', None))
+
+        custom_results = []
+        try:
+            from core.plugin_loader import plugin_loader
+            settings_obj = plugin_loader.get_plugin_settings("status") or {}
+            cmds_text = settings_obj.get("custom_status_commands", "")
+            if cmds_text:
+                custom_results = _run_custom_commands(cmds_text)
+        except Exception as e:
+            logger.debug(f"Custom commands skipped: {e}")
+
+        return {
+            "identity": identity,
+            "session": active_session,
+            "services": services,
+            "daemons": daemons,
+            "providers": providers,
+            "tasks": tasks_info,
+            "plugins": plugins,
+            "metrics": metrics,
+            "audio": audio_info,
+            "backup": backup_info,
+            "update": update_info,
+            "mind": mind_info,
+            "hardware": hardware_info,
+            "disk": disk_info,
+            "recent_activity": recent_activity,
+            "upcoming_tasks": upcoming,
+            "custom": custom_results,
+        }
+
+    except Exception as e:
+        logger.error(f"Status gathering failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+LOG_PATH = PROJECT_ROOT / "user" / "logs" / "sapphire.log"
+LOG_LEVELS = {'DEBUG': 10, 'INFO': 20, 'WARNING': 30, 'ERROR': 40, 'CRITICAL': 50}
+
+
+async def get_logs(**kwargs):
+    """GET /api/plugin/status/logs?lines=200&level=WARNING&search=telegram"""
+    return get_logs_sync(kwargs.get('request'))
+
+
+def get_logs_sync(request=None):
+    lines_param = 200
+    level_param = 'ALL'
+    search_param = ''
+
+    if request:
+        lines_param = int(request.query_params.get('lines', 200))
+        level_param = request.query_params.get('level', 'ALL').upper()
+        search_param = request.query_params.get('search', '').strip()
+
+    lines_param = min(lines_param, 2000)  # cap at 2000
+
+    if not LOG_PATH.exists():
+        return {"lines": [], "total": 0, "filtered": 0}
+
+    # Read last N*3 lines to have enough after filtering
+    try:
+        with open(LOG_PATH, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+    except Exception as e:
+        return {"lines": [], "total": 0, "error": str(e)}
+
+    total = len(all_lines)
+
+    # Parse and filter
+    min_level = LOG_LEVELS.get(level_param, 0)
+    search_lower = search_param.lower()
+    result = []
+
+    for raw in all_lines:
+        raw = raw.rstrip('\n')
+        if not raw:
+            continue
+
+        # Parse level from format: "2026-04-02 12:51:43,953 - name - LEVEL - message"
+        level = 'INFO'
+        parts = raw.split(' - ', 3)
+        if len(parts) >= 3:
+            level = parts[2].strip()
+
+        level_num = LOG_LEVELS.get(level, 20)
+
+        if level_param != 'ALL' and level_num < min_level:
+            continue
+        if search_lower and search_lower not in raw.lower():
+            continue
+
+        result.append({"text": raw, "level": level})
+
+    # Return last N
+    filtered = result[-lines_param:]
+    return {"lines": filtered, "total": total, "filtered": len(result), "showing": len(filtered)}
+
+
+def _check_provider_key(provider_key):
+    """Check if a provider has an API key via credentials or env."""
+    try:
+        from core.credentials_manager import credentials
+        return bool(credentials.get_llm_api_key(provider_key))
+    except Exception:
+        return False
+
+
+def _llm_display(key: str, override: str) -> dict:
+    """{llm_display, llm_effective_model} from the ONE resolver's helpers — no
+    probe, no provider build: 'auto' stays 'auto' (the pick happens per turn)."""
+    try:
+        from core.chat.llm_providers.resolve import display_name, providers_config
+        key = str(key or 'auto')
+        if key in ('auto', 'none'):
+            return {"llm_display": key, "llm_effective_model": override or ''}
+        conf = providers_config().get(key) or {}
+        return {"llm_display": display_name(key, conf),
+                "llm_effective_model": override or str(conf.get('model') or '')}
+    except Exception:
+        return {"llm_display": str(key or 'auto'), "llm_effective_model": override or ''}

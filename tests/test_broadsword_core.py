@@ -20,13 +20,13 @@ def _src(rel):
 # ── H1: cloud tools must not declare themselves local ──────────────────────
 
 _CLOUD_TOOLS = {
-    "plugins/email/tools/email_tool.py": ["get_inbox", "read_email", "archive_emails", "delete_emails",
+    "core/plugins/email/tools/email_tool.py": ["get_inbox", "read_email", "archive_emails", "delete_emails",
                                           "search_emails", "forward_email", "get_recipients", "send_email"],
-    "plugins/twilio-voice/tools/phone_tool.py": ["phone_call"],
+    "core/plugins/twilio-voice/tools/phone_tool.py": ["phone_call"],
     # claude-code: code_session died with agents v2 (2026-10-06). Claude Code is an agent KIND now,
     # gated by the engine (cloud: true refused from a private chat) - see test_agents_engine.py.
-    "plugins/sapphire-store/tools/store_tools.py": ["store_browse", "store_install"],
-    "plugins/bitcoin/tools/bitcoin_tool.py": ["get_wallet", "send_bitcoin", "get_transactions"],
+    "core/plugins/sapphire-store/tools/store_tools.py": ["store_browse", "store_install"],
+    "core/plugins/bitcoin/tools/bitcoin_tool.py": ["get_wallet", "send_bitcoin", "get_transactions"],
 }
 
 
@@ -61,7 +61,9 @@ def test_h1_cloud_tools_are_not_local(path, tools):
 
 
 def test_h1_mail_protocol_modules_declare_no_local_tool():
-    for path in (ROOT / "plugins").glob("*/tools/*.py"):
+    files = list((ROOT / "core" / "plugins").glob("*/tools/*.py"))
+    assert files, "no shipped plugin tool files found"
+    for path in files:
         src = path.read_text(encoding="utf-8")
         if "import smtplib" in src or "import imaplib" in src:
             assert '"is_local": True' not in src, f"{path} talks SMTP/IMAP yet flags a tool local"

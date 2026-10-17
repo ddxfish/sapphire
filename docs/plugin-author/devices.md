@@ -4,7 +4,7 @@ Teach Sapphire to use a machine or a gadget. **Devices** is part of core: it own
 
 Anything can be a device: a thermostat, a television, a robot arm. If your code can reach it, Sapphire can use it, and it gets the same page, the same three tools and the same help as every built-in device.
 
-Reference drivers: **`plugins/ssh`** (stored logins, user-written commands), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the three that ship inside core, `core/devices/drivers/satellite.py`, `computer.py` and `sapphire.py` (another Sapphire).
+Reference drivers: **`core/plugins/ssh`** (stored logins, user-written commands), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the three that ship inside core, `core/devices/drivers/satellite.py`, `computer.py` and `sapphire.py` (another Sapphire).
 
 ## What Sapphire sees
 
@@ -473,7 +473,7 @@ list looks again on its own every few seconds, so a state that changes on the
 other side (a phone that asks to pair) shows up by itself. A phone is paired
 this way in the Add window, and its driver's `validate` refuses to add one
 that is not paired: a setup that does not set the thing up is no setup
-(`plugins/kdeconnect`).
+(`core/plugins/kdeconnect`).
 
 ### A board on USB
 

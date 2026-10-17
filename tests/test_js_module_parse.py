@@ -23,7 +23,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "interfaces" / "web" / "static"
-PLUGIN_WEB = sorted((ROOT / "plugins").glob("*/web/**/*.js")) if (ROOT / "plugins").exists() else []
+from core.paths import SYSTEM_PLUGINS_DIR
+PLUGIN_WEB = sorted(SYSTEM_PLUGINS_DIR.glob("*/web/**/*.js"))
+assert PLUGIN_WEB, f"no plugin web JS under {SYSTEM_PLUGINS_DIR} — did the shipped band move?"
 
 NODE = shutil.which("node")
 

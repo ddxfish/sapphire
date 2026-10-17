@@ -14,7 +14,7 @@ if str(_root) not in sys.path:
 
 
 def _load_email_tool():
-    path = _root / "plugins" / "email" / "tools" / "email_tool.py"
+    path = _root / "core" / "plugins" / "email" / "tools" / "email_tool.py"
     spec = importlib.util.spec_from_file_location("email_tool_n1_test", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

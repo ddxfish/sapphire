@@ -41,6 +41,7 @@ Spawn the process when your plugin loads, tear it down when it unloads:
 ```python
 # daemon.py — managing an external server process
 from pathlib import Path
+from core.paths import PROJECT_ROOT
 from core.process_manager import ProcessManager
 
 _proc = None
@@ -48,7 +49,7 @@ _proc = None
 
 def start(plugin_loader, settings):
     global _proc
-    base_dir = Path(__file__).absolute().parents[2]   # sapphire project root (.absolute, not .resolve — symlink-safe)
+    base_dir = PROJECT_ROOT   # never count .parents — a short chain lands on a real folder and fails silently
     server = Path(__file__).parent / "bin" / "my-server"
 
     _proc = ProcessManager(

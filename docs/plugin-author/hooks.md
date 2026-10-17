@@ -233,8 +233,8 @@ Declare it **top-level in `plugin.json`** (next to `name`, not inside `capabilit
 doesn't write chat text or chat names into plaintext stores, doesn't ship them
 off-box, and doesn't log them. If your plugin mirrors conversation anywhere,
 leave the flag off — being withheld in private chats is the safe default, not a
-bug. Bundled examples that declare it: `plugins/game-room`, `plugins/mindpalace`,
-`plugins/captioning`.
+bug. Bundled examples that declare it: `core/plugins/game-room`, `core/plugins/mindpalace`,
+`core/plugins/captioning`.
 
 ### `chat_vaulted` — a chat just went private
 

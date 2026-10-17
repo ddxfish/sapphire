@@ -27,12 +27,12 @@ import pytest
 
 
 def _load_cct():
-    """Load plugins/claude-code/tools/claude_code_tools.py by file path.
+    """Load core/plugins/claude-code/tools/claude_code_tools.py by file path.
     The hyphenated dir name can't be imported normally."""
     if 'claude_code_tools_test' in sys.modules:
         return sys.modules['claude_code_tools_test']
     project_root = Path(__file__).resolve().parent.parent
-    module_path = project_root / 'plugins' / 'claude-code' / 'tools' / 'claude_code_tools.py'
+    module_path = project_root / 'core' / 'plugins' / 'claude-code' / 'tools' / 'claude_code_tools.py'
     spec = importlib.util.spec_from_file_location('claude_code_tools_test', module_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules['claude_code_tools_test'] = mod
