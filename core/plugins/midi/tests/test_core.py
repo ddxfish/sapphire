@@ -47,6 +47,18 @@ def test_port_missing_says_so(box):
         midi.find_port(('FM-1_BLE', 'FM-1'), listing=[THRU])
 
 
+def test_windows_dressed_up_names_still_match(box):
+    """Windows met the FM-1 twice (redirected, then passed through) and
+    listed its port as '2- FM-1' (Krem's VM, 2026-10-18)."""
+    midi._backend = 'winmm'
+    gs = 'Microsoft GS Wavetable Synth 0'
+    assert midi.find_ports(('FM-1_BLE', 'FM-1'), listing=[gs, '2- FM-1 1']) == [('2- FM-1 1', 'FM-1')]
+    assert midi.find_ports(('FM-1',), listing=[gs, 'MIDIOUT2 (FM-1) 1']) == [('MIDIOUT2 (FM-1) 1', 'FM-1')]
+    assert midi.find_ports(('FM-1',), listing=['FM-1 1', '2- FM-1 2']) == [('FM-1 1', 'FM-1')]    # equal wins
+    for other in ('FM-1_BLE 1', 'FM-10 1', 'XFM-1 1', 'FM-1-BLE 1'):
+        assert midi.find_ports(('FM-1',), listing=[gs, other]) == [], other              # still not these
+
+
 def test_names_per_system(box):
     assert midi.client_name(BLE) == 'FM-1_BLE' and midi.client_name(THRU) == 'Midi Through'
     midi._backend = 'winmm'

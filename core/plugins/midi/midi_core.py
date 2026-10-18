@@ -126,16 +126,21 @@ def client_name(port):
 def find_ports(names, direction='out', listing=None):
     """Every name that is here -> [(port, name), ...] in the order of names,
     the name in the caller's own spelling. May be empty. A name matches a
-    device's own name exactly, whatever the case: 'FM-1' is not 'FM-1_BLE'."""
+    device's own name exactly, whatever the case: 'FM-1' is not 'FM-1_BLE'.
+    Windows dresses a name up ('2- FM-1' the second time it meets a device,
+    'MIDIOUT2 (FM-1)' for a second port), so when nothing is equal to the
+    name, the name as a whole word inside a device's name is still it."""
     if listing is None:
         listing = ports(direction)
     found = []
     for name in names:
         want = str(name).strip().lower()
-        for port in listing:
-            if client_name(port).lower() == want:
-                found.append((port, name))
-                break
+        hit = next((p for p in listing if client_name(p).lower() == want), None)
+        if hit is None and want:
+            inside = re.compile(r'(?<![\w-])' + re.escape(want) + r'(?![\w-])', re.I)
+            hit = next((p for p in listing if inside.search(client_name(p))), None)
+        if hit is not None:
+            found.append((hit, name))
     return found
 
 
