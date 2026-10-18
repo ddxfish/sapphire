@@ -185,7 +185,10 @@ treated the same way.
 
 It needs `fluidsynth`, `alsa-utils` and a SoundFont. On Debian and Ubuntu the
 packages are `fluidsynth`, `alsa-utils` and `fluid-soundfont-gm`. The Status
-tab says which one is missing.
+tab says which one is missing. The hardware synth device and the MIDI tools
+need none of these: they talk to the ports through the plugin's own MIDI
+library, installed with one click on the plugin's card, on Windows, Linux and
+macOS alike.
 
 ## Connections
 

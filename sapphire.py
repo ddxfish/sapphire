@@ -1310,6 +1310,7 @@ class VoiceChatSystem:
             ("device health", lambda: __import__('core.devices.health', fromlist=['stop']).stop()),
             ("plugin services", _pl.stop_all_services),
             ("plugin daemons", _pl.stop_all_daemons),
+            ("plugin tools", _pl.stop_all_tools),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
             ("voice components", self.stop_components),
             ("cadence organ", lambda: __import__('core.cadence', fromlist=['stop']).stop()),

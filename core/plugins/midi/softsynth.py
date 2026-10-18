@@ -11,11 +11,14 @@ count, and keep() makes the synth match: on while one is here, linked to
 exactly those, off a little after the last one left. fluidsynth links
 nothing by itself.
 
-Linux only. Needs fluidsynth and a SoundFont (Debian and Ubuntu: the packages
-fluidsynth and fluid-soundfont-gm).
+Linux only, for now: fluidsynth is steered over the ALSA sequencer and the
+keyboards are patched into it with aconnect (alsa-utils). Needs fluidsynth and
+a SoundFont (Debian and Ubuntu: fluidsynth, alsa-utils, fluid-soundfont-gm).
+Her own playing and listening (midi_core) need none of this.
 """
 import logging
 import os
+import platform
 import re
 import shutil
 import signal
@@ -39,7 +42,7 @@ PERIOD = 256               # frames per cycle it asks the audio system for. Its 
 RATE = 48000               # what a desktop graph runs at; 44100 meant resampling every buffer
 GRACE = 20                 # seconds it stays on after the last source left
 PLUMBING = ('System', 'Midi Through', NAME)             # never a source
-OURS = ('aplaymidi', 'aseqdump', 'aseqsend', 'aconnect')   # her own playing and listening
+OURS = ('aplaymidi', 'aseqdump', 'aseqsend', 'aconnect', 'Sapphire MIDI')   # her own playing and listening
 SOCKETS = ('/dev/snd/by-id', '/dev/snd/by-path')        # hardware, by a name that holds across a replug
 CARDS = '/proc/asound'
 _CLIENT = re.compile(r"^client (\d+): '([^']*)' \[type=(\w+)(?:,card=(\d+))?")
@@ -91,8 +94,18 @@ def font(wanted=''):
                      "On Debian and Ubuntu the package is fluid-soundfont-gm.")
 
 
+NOT_HERE = "The computer's own synth is Linux only for now (fluidsynth over ALSA)."
+
+
+def supported():
+    """Whether this machine can be the synth at all: Linux, with alsa-utils."""
+    return platform.system() == 'Linux' and shutil.which('aconnect') is not None
+
+
 def missing():
     """What stops the computer from making the sound, or ''."""
+    if platform.system() != 'Linux':
+        return NOT_HERE
     if not shutil.which('fluidsynth'):
         return "fluidsynth is not installed."
     if not shutil.which('aconnect'):
@@ -160,6 +173,8 @@ def sources():
     """Every MIDI source that is here right now: a keyboard on USB, a synth
     over Bluetooth, a program. -> [{'id', 'name', 'kind', 'ports'}]. The
     system's own plumbing and her own players are never one."""
+    if not shutil.which('aconnect'):
+        return []
     out = subprocess.run(['aconnect', '-i'], capture_output=True, text=True, timeout=5).stdout
     found, cur, seen = [], None, {}
     for line in out.splitlines():

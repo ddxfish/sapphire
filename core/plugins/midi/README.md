@@ -2,7 +2,8 @@
 
 Play music with her over MIDI. A hardware synth linked to the machine she runs
 on, or the computer's own synth, or both. Regular chat tools, two device types,
-and a live tap any page can listen to. Linux only.
+and a live tap any page can listen to. Windows, Linux and macOS; the computer's
+own synth is Linux only for now.
 
 ## What she can do
 
@@ -20,15 +21,27 @@ chat tools stay for a chat without devices, and `song_save` is a tool only.
 
 ## Setup
 
-1. Install `alsa-utils` on the machine she runs on. Linux only.
+1. Enable the plugin and click **Install** on its card in Settings → Plugins:
+   that puts the MIDI library (python-rtmidi) in her environment. No system
+   package is needed, on any OS.
 2. Link a synth over Bluetooth or plug it in by USB, or plug in a plain MIDI
-   keyboard and let the computer be the sound (below).
-3. Enable the plugin. Add the device in Settings → Devices, or add the tools to
-   the toolset her chat uses.
+   keyboard and let the computer be the sound (below, Linux).
+3. Add the device in Settings → Devices, or add the tools to the toolset her
+   chat uses.
 
-No Bluetooth address is configured anywhere. A synth is found by its MIDI port
-name (`aconnect -l` lists them). Leave **Synth port names** empty and she looks
-for every synth she has a profile for; name your own to pin the order.
+No Bluetooth address is configured anywhere. A synth is found by the name the
+system gives it; while none is found, the synth device's Status tab lists what
+the machine does see under **seen**. Leave **Synth port names** empty and she
+looks for every synth she has a profile for; name your own to pin the order,
+or to teach her a synth under the name your machine uses for it.
+
+**Windows.** USB only: Windows keeps Bluetooth MIDI in a newer stack the MIDI
+library cannot see, so `FM-1_BLE` will not appear there. Windows allows one
+program at a time on a MIDI port, so she holds a synth's port only while
+something of hers sounds or listens, and lets go in between. Windows also
+ships a General MIDI synth of its own: put `Microsoft GS Wavetable Synth` in
+**Synth port names** and she plays through the computer's speakers with no
+hardware at all.
 
 ## Synths she knows: profiles
 
@@ -59,7 +72,8 @@ you have a MIDI keyboard device, its list of what plays through it holds for
 her ears too.
 
 A keyboard makes no sound by itself. Add it as a MIDI keyboard device and the
-computer makes its sound. Or patch it into a synth to hear it there:
+computer makes its sound (Linux). Or, on Linux, patch it into a synth to hear
+it there:
 
 ```
 aconnect AKM320:0 FM-1:0
@@ -76,7 +90,8 @@ Every take she hears is saved too, with the timing and touch it was played with
 rather than the rounded notation. Takes render as a General MIDI FM electric
 piano.
 
-The MP3 needs `fluidsynth` with a SoundFont, plus `ffmpeg`. Without them the
+The MP3 needs `fluidsynth` with a SoundFont, plus `ffmpeg`, on the PATH of any
+OS (Windows: the official FluidSynth zip and an ffmpeg build). Without them the
 song is still saved as MIDI. The MP3 is a General MIDI instrument, so it does
 not sound like the synth in the room. In a private chat nothing is saved,
 because these files live outside the vault.
@@ -145,7 +160,9 @@ device_action("synth","sound","effect","reverb on mix=60 decay=40")
 
 **MIDI keyboard (the computer makes its sound)** — a keyboard that makes no
 sound of its own plays through the computer: `softsynth.py` runs fluidsynth
-with a General MIDI SoundFont. Plugging a keyboard in is all it takes.
+with a General MIDI SoundFont. Plugging a keyboard in is all it takes. Linux
+only for now: fluidsynth is steered over the ALSA sequencer. On another OS its
+Status tab says so.
 
 It runs only while it has something to play for — presence, a feature of the
 device manager:
@@ -167,10 +184,10 @@ two entries. Sapphire's own players and the system's own ports are never on
 the list. `off` by hand holds until `on`, until she plays, or until a keyboard
 is plugged in. One synth serves every MIDI keyboard device.
 
-| Needs | Debian and Ubuntu package |
+| The computer's synth needs (Linux) | Debian and Ubuntu package |
 |---|---|
 | `fluidsynth` | `fluidsynth` |
-| `aconnect`, `aseqdump`, `aplaymidi`, `aseqsend` | `alsa-utils` |
+| `aconnect`, `aseqdump` | `alsa-utils` |
 | a SoundFont | `fluid-soundfont-gm` |
 
 The tools play on the computer's synth when no hardware synth is linked. When
@@ -191,6 +208,13 @@ Loudness is a quiet slider by design: turn the room up, not the synth.
 sends controller 11. Both reach the computer's synth scaled to 48-127 in place
 of 0-127 (`softsynth.ROUTER`), so they still work and can never reach silence.
 Every other controller, the pitch wheel and the sustain pedal pass unchanged.
+
+## Coming from 1.x
+
+2.0 plays through the MIDI library (python-rtmidi) in place of alsa-utils, on
+Windows, Linux and macOS alike: click **Install** on the plugin card once.
+Settings, device rows, profiles and saved songs carry over. alsa-utils is still
+needed for the computer's own synth, which stays Linux for now.
 
 ## Coming from the FM-1 plugin
 

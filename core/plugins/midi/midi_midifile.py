@@ -1,4 +1,4 @@
-"""Minimal Standard MIDI File writer, no deps. Played with aplaymidi.
+"""Minimal Standard MIDI File writer, no deps. For the songs she saves.
 
 events: list of (start_beat, dur_beats, note, vel, channel). Beats = quarter notes.
 """

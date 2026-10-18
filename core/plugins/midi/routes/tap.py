@@ -13,9 +13,7 @@ import asyncio
 import importlib
 import json
 import logging
-import os
-import select
-import subprocess
+import queue
 import sys
 import threading
 import time
@@ -30,8 +28,9 @@ import midi_core as midi
 
 logger = logging.getLogger(__name__)
 
-MAX_TAPS = 4          # pages listening at once; a tap is one aseqdump each
+MAX_TAPS = 4          # pages listening at once; each is one subscriber to the plugin's reader
 HEARTBEAT = 15        # seconds between ": still here" lines on a quiet stream
+GONE_CHECK = 2        # seconds between looks at whether the keys are still plugged in
 _open = 0
 _lock = threading.Lock()
 
@@ -63,42 +62,33 @@ def clock(settings=None, **_):
 
 
 def read_keys(ports, emit, stopped):
-    """Run aseqdump on `ports` and hand every note to emit(event) until
-    stopped is set or the dump ends. Raw reads behind select, as capture()
-    does: no hidden buffer to starve the select on."""
-    proc = subprocess.Popen(['aseqdump', '-p', ports], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    fd, buf = proc.stdout.fileno(), b''
+    """Hear the keys on `ports` through the plugin's own reader (one open
+    input per port, shared with every other listener) and hand every note to
+    emit(event) until stopped is set or the keys go away. `t` is the moment
+    the key arrived, in this machine's clock."""
+    sub = midi.subscribe(ports)
+    checked = time.monotonic()
     try:
         while not stopped.is_set():
-            if not select.select([fd], [], [], 0.25)[0]:
-                if proc.poll() is not None:
-                    return
+            try:
+                t, kind, note, vel = sub.get(timeout=0.25)
+            except queue.Empty:
+                if time.monotonic() - checked >= GONE_CHECK:
+                    checked = time.monotonic()
+                    if not midi.present(ports):
+                        return
                 continue
-            chunk = os.read(fd, 4096)
-            if not chunk:
-                return
-            t = now_ms()
-            buf += chunk
-            *lines, buf = buf.split(b'\n')
-            for raw in lines:
-                ev = midi.parse_dump_line(raw.decode('ascii', 'replace'))
-                if ev:
-                    kind, note, vel = ev
-                    emit({'type': 'note', 'on': kind == 'on', 'n': note, 'v': vel, 't': t})
+            emit({'type': 'note', 'on': kind == 'on', 'n': note, 'v': vel, 't': round(t * 1000, 1)})
     finally:
-        midi._end(proc)
-        try:
-            proc.stdout.close()
-        except Exception:
-            pass
+        sub.close()
 
 
 async def stream(settings=None, request=None, **_):
     from fastapi.responses import JSONResponse, StreamingResponse
     global _open
-    if midi.missing_tools():
-        return JSONResponse({'error': "This machine is missing alsa-utils, so the keys can't be heard."},
-                            status_code=503)
+    why = midi.missing()
+    if why:
+        return JSONResponse({'error': why}, status_code=503)
     ports, names = _ports(settings)
     if ports is None:
         return JSONResponse({'error': names}, status_code=409)

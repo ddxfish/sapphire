@@ -72,13 +72,19 @@ def status(device, config, secrets):
     settings = _settings()
     try:
         found = midi.find_ports(tools._names(settings))
-        keys = midi.find_ports(tools._keyboards(settings))
+        keys = midi.find_ports(tools._keyboards(settings), 'in')
     except midi.MidiError as e:
         return {'online': False, 'detail': str(e)}
     readings = {}
     if keys:
         readings['keyboards'] = ', '.join(name for _, name in keys)
     if not found:
+        # what IS here, by the names this machine gives: a synth under another
+        # name is found by putting that name in the settings
+        try:
+            readings['seen'] = ', '.join(midi.names()) or 'no MIDI device at all'
+        except midi.MidiError:
+            pass
         return {'online': False, 'detail': OFFLINE, 'readings': readings}
     port, name = found[0]
     prof = synths.for_port(name)

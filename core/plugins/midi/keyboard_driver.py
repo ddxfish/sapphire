@@ -112,6 +112,8 @@ def watch(changed, stopped):
     """The system says when a MIDI port comes, goes, or is linked. One quiet
     process reads that, so nothing is polled. Her own players come and go
     too: that costs one look, which finds nothing to do."""
+    if not _tools().synth.supported():           # the computer's synth is not here: the heartbeat is enough
+        return stopped.wait()
     if not shutil.which('aseqdump'):
         logger.warning("[midi] aseqdump is not installed, so a keyboard that is plugged in is "
                        "found by the heartbeat, a little later")

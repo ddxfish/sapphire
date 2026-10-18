@@ -1,6 +1,7 @@
 # MIDI tools: she plays a synth, loops a beat, listens to the keys, shapes the sound.
-# Any synth found by its ALSA port name; what a synth calls its voices and how its
-# effects switch comes from a profile (synths.py) — the FM-1 ships as the first.
+# Any synth found by its own name as the system reports it (midi_core: one MIDI
+# library on every OS); what a synth calls its voices and how its effects switch
+# comes from a profile (synths.py) — the FM-1 ships as the first.
 # Regular chat tools. Listening never blocks her turn: the take is recorded on a
 # thread and handed back through the chat's inbox (core.chat.inbox.tell) as a new turn on the chat
 # that asked, the same server-side door the wake word and the phone use.
@@ -184,18 +185,22 @@ def _keyboards(settings):
     if names:
         return names
     try:
-        ids = synth.counting_ids() if synth.wanted else None
-        return tuple(s['name'] for s in synth.sources()
-                     if (ids is None or s['id'] in ids) and s['name'] not in _names(settings))
+        allowed = None
+        if synth.wanted and synth.supported():   # a keyboard device's filter holds for her ears too
+            ids = synth.counting_ids()
+            allowed = {s['name'] for s in synth.sources() if s['id'] in ids}
+        synths_ = {n.lower() for n in _names(settings)}
+        return tuple(s['name'] for s in midi.sources()
+                     if (allowed is None or s['name'] in allowed) and s['name'].lower() not in synths_)
     except Exception as e:
         logger.warning(f"[midi] could not look for keyboards: {e}")
         return ()
 
 
 def _listen_ports(settings):
-    """-> ('128:0,20:0', 'FM-1_BLE and AKM320'): one synth port (first found)
-    plus every other keyboard that is connected."""
-    found = midi.find_ports(_names(settings))[:1] + midi.find_ports(_keyboards(settings))
+    """-> ([ports], 'FM-1_BLE and AKM320'): the synth's keys (the first synth
+    found that is a source) plus every other keyboard that is connected."""
+    found = midi.find_ports(_names(settings), 'in')[:1] + midi.find_ports(_keyboards(settings), 'in')
     seen, ports = set(), []
     for port, name in found:
         if port not in seen:
@@ -204,7 +209,7 @@ def _listen_ports(settings):
     if not ports:
         raise midi.MidiError("Nothing to listen to: no synth and no MIDI keyboard is linked to "
                            "the machine I run on.")
-    return ','.join(p for p, _ in ports), ' and '.join(n for _, n in ports)
+    return [p for p, _ in ports], ' and '.join(n for _, n in ports)
 
 
 def _private():
@@ -270,15 +275,15 @@ def _keep_take(played, bpm, private):
         return ''
 
 
-def _listen_run(chat, port, seconds, bpm, speak, cancel, after, private=True):
+def _listen_run(chat, ports, seconds, bpm, speak, cancel, after, private=True):
     try:
-        while after is not None and after.poll() is None and not cancel.is_set():
-            time.sleep(0.1)                     # trading phrases: her phrase finishes first
+        while after is not None and not cancel.is_set() and not after.done.wait(0.1):
+            pass                                # trading phrases: her phrase finishes first
         if cancel.is_set():
             logger.info("[midi] listen cancelled before it began")
             return
-        logger.info(f"[midi] listening on {port} for '{chat}' (up to {seconds:g}s)")
-        notes = midi.capture(port, max_seconds=seconds, first_wait=FIRST_WAIT,
+        logger.info(f"[midi] listening on {', '.join(ports)} for '{chat}' (up to {seconds:g}s)")
+        notes = midi.capture(ports, max_seconds=seconds, first_wait=FIRST_WAIT,
                             quiet_end=QUIET_END, cancel=cancel)
         if cancel.is_set():
             logger.info(f"[midi] listen cancelled; {len(notes)} notes discarded")
@@ -338,7 +343,7 @@ def _play(a, settings):
                f"{r['low']} to {r['high']}, {r['seconds']:.1f}s. It sounds in the background.")
     if then > 0:
         seconds, bpm = _listen_args({'seconds': then, 'bpm': a.get('bpm')}, 'seconds')
-        after = None if r['slot'] == 'loop' else r['proc']
+        after = None if r['slot'] == 'loop' else r['player']
         ears, _ = _listen_ports(settings)
         if _start_listen(chat, ears, seconds, bpm, _speak(settings), after=after):
             when = 'now' if after is None else 'when the phrase ends'
@@ -449,6 +454,20 @@ def _stop(a, settings):
     msg = 'Stopped. Your phrase and loop are off'
     msg += ' and every note is silenced' if ports else ' (no synth is connected, so no note-offs went out)'
     return msg + ('. Listening was cancelled.' if cancelled else '.')
+
+
+def shutdown():
+    """The plugin is going away (switched off, reloaded, or Sapphire stopping):
+    nothing of ours keeps sounding, listening, or holding a port. Core calls
+    this before the module is dropped."""
+    with _lock:
+        if _listen and _listen['thread'].is_alive():
+            _listen['cancel'].set()
+    for what, end in (('MIDI', midi.shutdown), ("the computer's synth", lambda: synth.stop(by_hand=False))):
+        try:
+            end()
+        except Exception as e:
+            logger.warning(f"[midi] shutdown, {what}: {e}")
 
 
 def execute(function_name, arguments, config, plugin_settings=None):

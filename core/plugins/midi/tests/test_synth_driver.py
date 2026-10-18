@@ -37,13 +37,14 @@ def rig():
         played.append((port, text, kw))
         slot = 'loop' if kw.get('loop_minutes') else 'phrase'
         return {'slot': slot, 'notes': 3, 'beats': 3.0, 'bpm': float(kw.get('bpm') or 120),
-                'low': 'C4', 'high': 'G4', 'reps': 4, 'seconds': 1.5, 'proc': None}
+                'low': 'C4', 'high': 'G4', 'reps': 4, 'seconds': 1.5, 'player': None}
 
     settings = {'synth_names': 'FM-1_BLE, FM-1', 'keyboard_names': 'AKM320'}
     call_tool = lambda name, args=None: tools.execute(name, args or {}, None, settings)
-    with patch.object(midi, 'find_port', lambda names=None, listing=None: ('128:0', 'FM-1_BLE')), \
-         patch.object(midi, 'find_ports', lambda names, listing=None:
+    with patch.object(midi, 'find_port', lambda names=None, direction='out', listing=None: ('128:0', 'FM-1_BLE')), \
+         patch.object(midi, 'find_ports', lambda names, direction='out', listing=None:
                       [('128:0', n) for n in names if n == 'FM-1_BLE'] + [('20:0', n) for n in names if n == 'AKM320']), \
+         patch.object(midi, 'names', lambda direction='out': ['AKM320', 'Minilogue']), \
          patch.object(midi, 'play', fake_play), \
          patch.object(midi, 'program', lambda port, n: sent.append(('voice', n))), \
          patch.object(midi, 'fx', lambda port, effects, ch, effect, on, levels: sent.append(('fx', effect, on, levels)) or levels), \
@@ -147,28 +148,31 @@ def test_status_online_reads_the_tools_own_state(rig):
 
 
 def test_status_offline(rig):
-    with patch.object(rig.midi, 'find_ports', lambda names, listing=None: []):
+    with patch.object(rig.midi, 'find_ports', lambda names, direction='out', listing=None: []):
         st = rig.drv.status(DEV, {}, None)
-    assert st == {'online': False, 'detail': rig.drv.OFFLINE, 'readings': {}}
+    assert st == {'online': False, 'detail': rig.drv.OFFLINE,
+                  'readings': {'seen': 'AKM320, Minilogue'}}            # what this machine does see
+    with patch.object(rig.midi, 'find_ports', lambda names, direction='out', listing=None: []), \
+         patch.object(rig.midi, 'names', lambda direction='out': []):
+        assert rig.drv.status(DEV, {}, None)['readings'] == {'seen': 'no MIDI device at all'}
 
-    def no_alsa(names, listing=None):
-        raise rig.midi.MidiError('This machine is missing aconnect (install alsa-utils).')
-    with patch.object(rig.midi, 'find_ports', no_alsa):
-        assert rig.drv.status(DEV, {}, None) == {
-            'online': False, 'detail': 'This machine is missing aconnect (install alsa-utils).'}
+    def no_library(names, direction='out', listing=None):
+        raise rig.midi.MidiError(rig.midi.NOT_INSTALLED)
+    with patch.object(rig.midi, 'find_ports', no_library):
+        assert rig.drv.status(DEV, {}, None) == {'online': False, 'detail': rig.midi.NOT_INSTALLED}
 
 
 def test_the_driver_holds_no_midi_code():
     src = (_ROOT / 'synth_driver.py').read_text(encoding='utf-8')
-    for banned in ('subprocess', 'aplaymidi', 'aseqsend', 'aseqdump', 'import midi_core', 'mido'):
+    for banned in ('subprocess', 'aplaymidi', 'aseqsend', 'aseqdump', 'import midi_core', 'mido', 'rtmidi'):
         assert banned not in src, banned
 
 
 def test_a_synth_without_a_profile_plays_gm_and_has_no_effects(rig):
     """The generic path: a synth nobody wrote a profile for gets General MIDI
     names and a plain answer about effects, never an FM-1 error."""
-    with patch.object(rig.midi, 'find_port', lambda names=None, listing=None: ('24:0', 'Minilogue')), \
-         patch.object(rig.midi, 'find_ports', lambda names, listing=None: [('24:0', 'Minilogue')]):
+    with patch.object(rig.midi, 'find_port', lambda names=None, direction='out', listing=None: ('24:0', 'Minilogue')), \
+         patch.object(rig.midi, 'find_ports', lambda names, direction='out', listing=None: [('24:0', 'Minilogue')]):
         text, ok = run(rig, 'sound', 'voice', 'organ')
         assert ok and rig.sent[-1] == ('voice', 20) and 'Voice 20 organ' in text
         text, ok = run(rig, 'sound', 'voice', 'list')

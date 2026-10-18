@@ -1,5 +1,8 @@
-"""FM-1 plugin: the pure parts. No ALSA, no synth, no Sapphire needed."""
+"""MIDI plugin: the pure parts, and her playing and listening on a pretend
+machine. No real MIDI, no synth, no Sapphire needed."""
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -9,27 +12,62 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import midi_core as midi  # noqa: E402
+import fake_rtmidi as fake  # noqa: E402
 
-LISTING = ("client 0: 'System' [type=kernel]\n"
-           "client 32: 'FM-1' [type=kernel,card=4]\n"
-           "    0 'FM-1 MIDI 1     '\n"
-           "client 128: 'FM-1_BLE' [type=user,pid=2469]\n")
-
-
-def test_port_prefers_first_name_found():
-    assert midi.find_port(('FM-1_BLE', 'FM-1'), LISTING) == ('128:0', 'FM-1_BLE')
-    assert midi.find_port(('FM-1',), LISTING) == ('32:0', 'FM-1')
+BLE = 'FM-1_BLE:FM-1_BLE Bluetooth 129:0'
+USB = 'FM-1:FM-1 MIDI 1 32:0'
+AKM = 'AKM320:AKM320 MIDI 1 20:0'
+THRU = 'Midi Through:Midi Through Port-0 14:0'
+LISTING = [THRU, USB, BLE]
 
 
-def test_port_name_is_exact_not_prefix():
-    only_ble = "client 128: 'FM-1_BLE' [type=user,pid=1]\n"
+@pytest.fixture
+def box(monkeypatch):
+    """A pretend machine with the FM-1 on USB and Bluetooth and a keyboard."""
+    fake.box = fake.Box(ins=[THRU, AKM, BLE, USB, 'Sapphire MIDI:out 130:0'], outs=LISTING)
+    monkeypatch.setitem(sys.modules, 'rtmidi', fake)
+    monkeypatch.setattr(midi, '_backend', 'alsa')
+    yield fake.box
+    midi.shutdown()
+
+
+def test_port_prefers_first_name_found(box):
+    assert midi.find_port(('FM-1_BLE', 'FM-1'), listing=LISTING) == (BLE, 'FM-1_BLE')
+    assert midi.find_port(('FM-1',), listing=LISTING) == (USB, 'FM-1')
+    assert midi.find_port(('fm-1',)) == (USB, 'fm-1')                   # the machine's own listing, any case
+
+
+def test_port_name_is_exact_not_prefix(box):
     with pytest.raises(midi.MidiError):
-        midi.find_port(('FM-1',), only_ble)
+        midi.find_port(('FM-1',), listing=[BLE])
 
 
-def test_port_missing_says_so():
+def test_port_missing_says_so(box):
     with pytest.raises(midi.MidiError, match='No synth is connected.*FM-1_BLE, FM-1'):
-        midi.find_port(('FM-1_BLE', 'FM-1'), "client 0: 'System' [type=kernel]\n")
+        midi.find_port(('FM-1_BLE', 'FM-1'), listing=[THRU])
+
+
+def test_names_per_system(box):
+    assert midi.client_name(BLE) == 'FM-1_BLE' and midi.client_name(THRU) == 'Midi Through'
+    midi._backend = 'winmm'
+    assert midi.client_name('FM-1 0') == 'FM-1' and midi.client_name('Midi Through 1') == 'Midi Through'
+    assert midi.find_ports(('FM-1',), listing=['Midi Through 0', 'FM-1 1']) == [('FM-1 1', 'FM-1')]
+    midi._backend = 'coremidi'
+    assert midi.client_name('IAC Driver Bus 1') == 'IAC Driver Bus 1'
+
+
+def test_what_is_here_leaves_out_the_plumbing_and_us(box):
+    assert midi.names() == ['FM-1', 'FM-1_BLE']
+    assert [s['name'] for s in midi.sources()] == ['AKM320', 'FM-1_BLE', 'FM-1']
+    fake.box = fake.Box(ins=[AKM, 'AKM320:AKM320 MIDI 1 21:0'])
+    assert [s['id'] for s in midi.sources()] == ['AKM320', 'AKM320#2']   # two alike are still two
+
+
+def test_without_the_library_every_door_says_so(box, monkeypatch):
+    monkeypatch.setitem(sys.modules, 'rtmidi', None)
+    assert 'Install button' in midi.missing()
+    with pytest.raises(midi.MidiError, match='python-rtmidi'):
+        midi.find_ports(('FM-1',))
 
 
 def test_note_numbers_round_trip():
@@ -73,13 +111,14 @@ def test_loop_repeats_to_fill_and_caps():
     assert capped == midi.MAX_LOOP_MIN * 60
 
 
-def test_dump_lines():
-    assert midi.parse_dump_line(' 14:0   Note on                 0, note 60, velocity 100') == ('on', 60, 100)
-    assert midi.parse_dump_line(' 14:0   Note off                0, note 60, velocity 0') == ('off', 60, 0)
-    assert midi.parse_dump_line(' 14:0   Note off                0, note 64') == ('off', 64, 0)
-    assert midi.parse_dump_line(' 14:0   Note on                 0, note 64, velocity 0') == ('off', 64, 0)
-    assert midi.parse_dump_line(' 14:0   Control change          0, controller 64, value 127') is None
-    assert midi.parse_dump_line('Source  Event                  Ch  Data') is None
+def test_messages():
+    assert midi.parse_message([0x90, 60, 100]) == ('on', 60, 100)
+    assert midi.parse_message([0x80, 60, 0]) == ('off', 60, 0)
+    assert midi.parse_message([0x91, 64, 0]) == ('off', 64, 0)            # a note-on at zero is a release
+    assert midi.parse_message([0xB0, 64, 127]) is None                     # a pedal is not a key
+    assert midi.parse_message([0xF8]) is None
+    assert midi._messages('B1 04 01 B1 07 3C B1 06 64') == [[0xB1, 4, 1], [0xB1, 7, 0x3C], [0xB1, 6, 0x64]]
+    assert midi._messages('') == []
 
 
 def test_notation_reads_back_what_was_played():
@@ -159,11 +198,106 @@ def test_program_change(monkeypatch):
 
 # -- several keyboards ------------------------------------------------------
 
-def test_find_ports_returns_every_connected_name():
-    listing = LISTING + "client 20: 'AKM320' [type=kernel,card=1]\n"
-    assert midi.find_ports(('AKM320', 'Nope', 'FM-1'), listing) == [('20:0', 'AKM320'), ('32:0', 'FM-1')]
-    assert midi.find_ports(('Nope',), listing) == []
-    assert midi.find_ports((), listing) == []
+def test_find_ports_returns_every_connected_name(box):
+    assert midi.find_ports(('AKM320', 'Nope', 'FM-1'), 'in') == [(AKM, 'AKM320'), (USB, 'FM-1')]
+    assert midi.find_ports(('Nope',), 'in') == []
+    assert midi.find_ports((), 'in') == []
+
+
+# -- her playing, and the keys, on a pretend machine ------------------------
+
+def _wait(cond, timeout=3):
+    end = time.monotonic() + timeout
+    while not cond() and time.monotonic() < end:
+        time.sleep(0.01)
+    assert cond()
+
+
+def test_a_phrase_plays_in_time_on_a_port_held_only_while_it_sounds(box):
+    r = midi.play(USB, 'C4 E4', bpm=400, voice=11)                      # 0.15 s a beat
+    assert r['slot'] == 'phrase' and r['notes'] == 2 and midi.playing() == ['phrase']
+    assert r['player'].done.wait(3)
+    assert [m for _, m in box.sent] == [[0xC0, 10], [0x90, 60, 90], [0x80, 60, 0], [0x90, 64, 90], [0x80, 64, 0]]
+    assert all(p == USB for p, _ in box.sent)
+    _wait(lambda: box.open('out') == 0)                                  # let go when the music ended
+    assert midi.playing() == []
+
+
+def test_a_loop_and_a_phrase_share_the_one_output(box):
+    loop = midi.play(USB, 'C2', bpm=60, loop_minutes=1)
+    phrase = midi.play(USB, 'C4', bpm=60)
+    assert midi.playing() == ['loop', 'phrase']
+    _wait(lambda: len(box.sent) >= 2)
+    assert box.open('out') == 1 and box.opened.count(('out', USB)) == 1  # one port, two players
+    midi.stop_all(USB)
+    assert loop['player'].done.is_set() and phrase['player'].done.is_set()
+    offs = [m for _, m in box.sent if m[0] == 0x80]
+    assert [0x80, 36, 0] in offs and [0x80, 60, 0] in offs              # what was held is let go
+    assert len(offs) >= 128 + 2 and box.open('out') == 0                 # then every note, then the port
+
+
+def test_a_new_phrase_replaces_the_old(box):
+    first = midi.play(USB, 'C4:100', bpm=60)
+    second = midi.play(USB, 'E4', bpm=400)
+    assert first['player'].done.is_set() and midi.playing() == ['phrase']
+    assert second['player'].done.wait(3)
+
+
+def test_capture_hears_what_is_played(box):
+    def play():
+        time.sleep(0.1)
+        box.key(AKM, [0x90, 60, 100])
+        time.sleep(0.2)
+        box.key(AKM, [0x90, 64, 80])
+        time.sleep(0.1)
+        box.key(AKM, [0x80, 60, 0])
+        box.key(AKM, [0x90, 64, 0])
+    threading.Thread(target=play, daemon=True).start()
+    notes = midi.capture([AKM, BLE], max_seconds=5, first_wait=2, quiet_end=0.3)
+    assert [(n, v) for _, _, n, v in notes] == [(60, 100), (64, 80)]
+    assert 0.12 < notes[1][0] < 0.28 and 0.22 < notes[0][1] < 0.38      # when, and for how long
+    assert box.open('in') == 0                                           # both ports let go
+
+
+def test_capture_gives_up_waiting_and_can_be_cancelled(box):
+    assert midi.capture(AKM, first_wait=0.3) == []
+    cancel = threading.Event()
+    threading.Timer(0.2, cancel.set).start()
+    t0 = time.monotonic()
+    assert midi.capture(AKM, first_wait=10, cancel=cancel) == [] and time.monotonic() - t0 < 2
+
+
+def test_one_reader_per_port_however_many_listen(box):
+    a, b = midi.subscribe(AKM), midi.subscribe([AKM, BLE])
+    assert box.open('in') == 2 and box.opened.count(('in', AKM)) == 1
+    box.key(AKM, [0x90, 60, 100])
+    assert a.get()[1:] == ('on', 60, 100) and b.get()[1:] == ('on', 60, 100)
+    a.close()
+    assert box.open('in') == 2                                           # b still listens to the AKM
+    b.close()
+    assert box.open('in') == 0
+
+
+def test_a_port_that_is_gone_or_busy_is_said_plainly(box):
+    with pytest.raises(midi.MidiError, match='Casio is not connected any more'):
+        midi.send('Casio:Casio 40:0', '90 3C 64')
+    box.fail_open.add(USB)
+    with pytest.raises(midi.MidiError, match='FM-1 did not open'):
+        midi.send(USB, '90 3C 64')
+    assert box.open('out') == 0 and midi._outputs == {}
+    midi._backend = 'winmm'
+    with pytest.raises(midi.MidiError, match='one program at a time'):
+        midi.send(USB, '90 3C 64')
+
+
+def test_shutdown_ends_everything_and_lets_go_of_every_port(box):
+    midi.play(USB, 'C2', bpm=60, loop_minutes=1)
+    sub = midi.subscribe(AKM)
+    _wait(lambda: box.open('out') == 1)
+    midi.shutdown()
+    assert midi.playing() == [] and box.open('out') == 0 and box.open('in') == 0
+    assert midi._players == {} and midi._readers == {} and midi._outputs == {}
+    sub.close()                                                          # a late close is harmless
 
 
 # -- saved songs ------------------------------------------------------------
@@ -189,6 +323,24 @@ def test_instruments():
     for bad in ('0', '129', 'kazoo'):
         with pytest.raises(midi.MidiError):
             songs.pick_instrument(bad)
+
+
+def test_render_runs_the_two_programs_and_cleans_up(tmp_path, monkeypatch):
+    """The real renderer, with fluidsynth and ffmpeg faked: it found the take
+    reaching for a constant the core no longer had (live, 2026-10-18)."""
+    ran = []
+
+    def run(cmd, **kw):
+        ran.append(cmd[0])
+        Path(cmd[cmd.index('-F') + 1] if cmd[0] == 'fluidsynth' else cmd[-1]).write_bytes(b'x' * 2000)
+        return __import__('types').SimpleNamespace(returncode=0, stderr='')
+    monkeypatch.setattr(songs.shutil, 'which', lambda n: f'/usr/bin/{n}')
+    monkeypatch.setattr(songs.subprocess, 'run', run)
+    monkeypatch.setattr(songs.tempfile, 'gettempdir', lambda: str(tmp_path))
+    mp3 = tmp_path / 'song.mp3'
+    assert songs.render_mp3(tmp_path / 'song.mid', mp3) is None
+    assert ran == ['fluidsynth', 'ffmpeg'] and mp3.exists()
+    assert list(tmp_path.glob(f'{songs.TMP_TAG}*.wav')) == []        # the wav is gone
 
 
 def test_save_writes_midi_and_meta_without_audio(tmp_path):

@@ -24,6 +24,15 @@ FM1 = ('129', 'FM-1_BLE', 'type=user,pid=2469', 'FM-1_BLE Bluetooth')
 VMPK = ('131', 'VMPK Output', 'type=user,pid=777', 'out')
 HERS = ('132', 'aplaymidi', 'type=user,pid=888', 'aplaymidi')
 A, F, V = 'name:AKM320', 'name:FM-1_BLE', 'name:VMPK Output'
+SYN = 'Sapphire Synth:Sapphire Synth 128:0'
+
+import fake_rtmidi as fake  # noqa: E402
+
+
+def P(entry):
+    """An entry of the pretend machine as the MIDI library lists it."""
+    client, name, _, port = entry
+    return f"{name}:{port.strip()} {client}:0"
 
 
 def _load(name, path):
@@ -55,7 +64,7 @@ class FakeProc:
 
 
 @pytest.fixture
-def rig(tmp_path):
+def rig(tmp_path, monkeypatch):
     had = sys.modules.get(CANON)
     (tmp_path / 'cards' / 'card2').mkdir(parents=True)
     (tmp_path / 'cards' / 'card2' / 'usbid').write_text('1acc:3c01\n')
@@ -101,6 +110,11 @@ def rig(tmp_path):
                 'bpm': float(kw.get('bpm') or 120), 'low': 'C4', 'high': 'G4', 'reps': 4,
                 'seconds': 1.5, 'proc': None}
 
+    def rt_ports():                                             # the same machine, as the MIDI library lists it
+        return [P(e) for e in box.here] + ([SYN] if alive() else [])
+    fake.box = fake.Box(ins=rt_ports, outs=rt_ports)
+    monkeypatch.setitem(sys.modules, 'rtmidi', fake)
+
     settings = {'synth_names': 'FM-1_BLE, FM-1', 'keyboard_names': ''}
     call_tool = lambda name, args=None: tools.execute(name, args or {}, None, settings)
     synth._proc = synth._idle_since = None
@@ -113,7 +127,7 @@ def rig(tmp_path):
          patch.object(synth, 'SOCKETS', ()), \
          patch.object(synth, 'CARDS', str(tmp_path / 'cards')), \
          patch.object(synth, 'READY_WAIT', 0.3), \
-         patch.object(midi, '_listing', listing), \
+         patch.object(synth.platform, 'system', lambda: 'Linux'), \
          patch.object(midi, 'play', fake_play), \
          patch.object(midi, 'send', lambda port, data: box.sent.append((port, data[:8]))), \
          patch.object(midi, 'stop_all', lambda port=None: box.sent.append(('stop', port))), \
@@ -354,7 +368,7 @@ def test_every_keyboard_device_shares_the_one_synth(rig):
 
 
 def test_what_is_missing_is_said_once_not_on_every_heartbeat(rig, caplog):
-    with patch.object(rig.synth.shutil, 'which', lambda n: None):
+    with patch.object(rig.synth.shutil, 'which', lambda n: None if n == 'fluidsynth' else f"/usr/bin/{n}"):
         with caplog.at_level('WARNING'):
             for _ in range(5):
                 tend(rig, A)
@@ -523,7 +537,7 @@ def test_her_notes_go_to_the_computers_synth(rig):
     assert ok and text.startswith("Playing on the computer's synth: 3 notes")
     assert rig.synth.running()                                          # playing switched it on
     port, notes, kw = rig.box.played[0]
-    assert (port, notes) == ('128:0', 'C4 E4 G4') and kw['bpm'] == 90.0 and kw['velocity'] == 70
+    assert (port, notes) == (SYN, 'C4 E4 G4') and kw['bpm'] == 90.0 and kw['velocity'] == 70
     assert kw['voice'] is None                                          # FM-1 voice numbers never reach it
     text, ok = run(rig, 'notes', 'loop', 'C2 R C2 G2 minutes=2 instrument=bass')
     assert ok and text.startswith("Looping on the computer's synth")
@@ -542,7 +556,7 @@ def test_a_synth_she_switched_on_links_the_keyboard_that_is_here(rig):
 def test_stop(rig):
     run(rig, 'sound', 'on')
     text, ok = run(rig, 'notes', 'stop')
-    assert ok and text.startswith('Stopped.') and rig.box.sent == [('stop', '128:0')]
+    assert ok and text.startswith('Stopped.') and rig.box.sent == [('stop', SYN)]
     assert rig.box.procs[0].told[-len(HUSH):] == HUSH                   # a held pedal ends too
 
 
@@ -564,7 +578,7 @@ def test_she_hears_every_keyboard_that_counts(rig):
     assert rig.tools._keyboards(rig.settings) == ('AKM320', 'VMPK Output')   # the FM-1 is the synth itself
     rig.synth.wanted['keys'] = {A}                                      # a keyboard device's filter holds
     assert rig.tools._keyboards(rig.settings) == ('AKM320',)
-    assert rig.tools._listen_ports(rig.settings) == ('129:0,20:0', 'FM-1_BLE and AKM320')
+    assert rig.tools._listen_ports(rig.settings) == ([P(FM1), P(AKM)], 'FM-1_BLE and AKM320')
     rig.synth.wanted['keys'] = set()
     assert rig.tools._keyboards(rig.settings) == ()
     assert rig.tools._keyboards(dict(rig.settings, keyboard_names='Casio, AKM320')) == ('Casio', 'AKM320')
@@ -637,31 +651,6 @@ def test_only_a_real_synth_of_ours_is_ever_ended(rig, tmp_path):
     assert killed == [100]
     import inspect
     assert 'pkill' not in inspect.getsource(rig.synth)
-
-
-def test_only_a_real_player_of_ours_is_ever_ended(rig, tmp_path):
-    import builtins
-    import inspect
-    lines = {'100': b'aplaymidi\0-p\0128:0\0/tmp/midi_sapphire_loop.mid\0',
-             '200': b'aplaymidi\0-p\0128:0\0/home/me/my_own_song.mid\0',
-             '300': b'bash\0-c\0echo aplaymidi /tmp/midi_sapphire_loop.mid\0'}
-    real_open = builtins.open
-
-    def fake_open(path, mode='r', *a, **k):
-        pid = str(path).split('/')[2] if str(path).startswith('/proc/') else None
-        if pid in lines:
-            f = tmp_path / pid
-            f.write_bytes(lines[pid])
-            return real_open(f, mode)
-        if pid:
-            raise OSError('gone')
-        return real_open(path, mode, *a, **k)
-
-    with patch.object(rig.midi.subprocess, 'run',
-                      lambda cmd, **kw: SimpleNamespace(stdout='100\n200\n', stderr='', returncode=0)), \
-         patch.object(builtins, 'open', fake_open):
-        assert rig.midi.stray_players() == [100]                  # the user's own song plays on
-    assert 'pkill' not in inspect.getsource(rig.midi)
 
 
 def test_a_keyboards_volume_slider_can_never_silence_it(rig):

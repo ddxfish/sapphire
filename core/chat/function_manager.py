@@ -596,6 +596,7 @@ class FunctionManager:
                         'emoji': emoji,
                         'group': group,  # optional display-group (Toolsets UI merges)
                         '_plugin': plugin_name,
+                        'canonical': canonical_name,  # its sys.modules name, for shutdown()
                         'get_tools': get_tools_fn,  # settings-aware rebuilder, or None
                     }
                     self._record_tool_meta(tools, module_name, category, plugin_name)
@@ -673,6 +674,29 @@ class FunctionManager:
             except Exception as e:
                 logger.error(f"Failed to load plugin tool '{tool_path}': {e}", exc_info=True)
 
+    @staticmethod
+    def _shutdown_tool_module(canonical, plugin_name):
+        """A tool module that holds something (an open port, a thread, a child
+        process) lets go here, before it is dropped from sys.modules: its
+        optional module-level shutdown(). Never raises into core."""
+        import sys
+        fn = getattr(sys.modules.get(canonical or ''), 'shutdown', None)
+        if not callable(fn):
+            return
+        try:
+            fn()
+            logger.info(f"Plugin '{plugin_name}' tool module {canonical} shut down")
+        except Exception as e:
+            logger.warning(f"Plugin '{plugin_name}' tool module shutdown() failed: {e}")
+
+    def shutdown_all_plugin_tools(self):
+        """Sapphire is stopping: every plugin tool module lets go of what it holds."""
+        with self._tools_lock:
+            leaving = [(i.get('canonical'), i.get('_plugin')) for i in self.function_modules.values()
+                       if i.get('_plugin') and i.get('canonical')]
+        for canonical, plugin_name in leaving:
+            self._shutdown_tool_module(canonical, plugin_name)
+
     def unregister_plugin_tools(self, plugin_name: str):
         """Remove all tools belonging to a plugin.
 
@@ -682,8 +706,18 @@ class FunctionManager:
         would reuse the stale module on reload and the edits would never take
         effect. Since unregister is always called as part of a reload cycle,
         it's safe (and necessary) to drop sys.modules entries here.
+
+        Before any of that, each tool module's optional shutdown() runs (2026-10-18):
+        a module whose globals hold an open MIDI port or a player thread would
+        otherwise be orphaned by the purge, and on Windows an orphaned open
+        port blocks the next open.
         """
         import sys
+        with self._tools_lock:
+            leaving = [info.get('canonical') for info in self.function_modules.values()
+                       if info.get('_plugin') == plugin_name]
+        for canonical in leaving:                # outside the lock: a shutdown may wait on a thread
+            self._shutdown_tool_module(canonical, plugin_name)
         with self._tools_lock:
             to_remove = [name for name, info in self.function_modules.items()
                          if info.get('_plugin') == plugin_name]

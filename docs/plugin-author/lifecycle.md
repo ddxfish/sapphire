@@ -15,7 +15,7 @@
 
 Settings > Plugins calls `PUT /api/webui/plugins/toggle/{name}`:
 - **Enable**: Loads immediately — all capabilities register
-- **Disable**: Unloads immediately — hooks, tools, routes, schedules removed
+- **Disable**: Unloads immediately — device drivers let go (presence), each tool module's optional `shutdown()` runs, then hooks, tools, routes, schedules are removed and the plugin's modules leave `sys.modules`
 
 Unsigned/tampered plugins return 403 and the toggle reverts.
 
@@ -86,7 +86,7 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
 ## Reference for AI
 
 - Boot: `plugin_loader.scan()` reads `core/plugins/` (system band) then `user/plugins/` (user band) — a same-named user-band copy SHADOWS the system one (warned in the log; the installer refuses such a name, so it means a hand-placed fork); a root-level `plugins/` is NOT scanned (warning if it holds plugin folders); `core/user/` existing logs an error (root computed one level short); each manifest is validated and signature-checked; enabled plugins register hooks, tools, voice commands, routes, schedules; scheduler tasks defer until the scheduler initializes.
-- Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable loads immediately, disable unloads immediately; unsigned/tampered plugins return 403 and the toggle reverts.
+- Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable loads immediately, disable unloads immediately; unsigned/tampered plugins return 403 and the toggle reverts. Unload order: device presence release → each tool module's optional `shutdown()` (also at Sapphire's own shutdown) → hooks/tools/routes unregistered → the plugin's modules purged from `sys.modules`.
 - Hot reload: `POST /api/plugins/{name}/reload`; a failed reload leaves the plugin unloaded — no half-loaded state. `SAPPHIRE_DEV=1` enables the file watcher (auto-reload on `.py`/`.json` changes, polled).
 - Rescan: `POST /api/plugins/rescan` → `{"added": [...], "removed": [...]}` without restart.
 - The `plugins_ready` hook fires after the boot scan AND after reload, rescan, and toggle-on — handlers must be idempotent (see hooks.md).

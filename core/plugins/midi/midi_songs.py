@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 MAX_MINUTES = 10
 TAIL_SECONDS = 2.0              # quiet after the last note, so it can ring out
+TMP_TAG = 'midi_sapphire_'      # our temp files while rendering, told apart from anyone else's
 URL_BASE = '/api/plugin/midi/song/'
 _FILE = re.compile(r'^[0-9a-f]{10}\.(mid|mp3)$')
 INSTRUMENTS = {                 # General MIDI programs, numbered 1-128
@@ -70,7 +71,7 @@ def render_mp3(mid, mp3):
     miss = renderers_missing()
     if miss:
         return f"this machine is missing {' and '.join(miss)}"
-    wav = Path(tempfile.gettempdir()) / f'{midi.TMP_TAG}{Path(mp3).stem}.wav'
+    wav = Path(tempfile.gettempdir()) / f'{TMP_TAG}{Path(mp3).stem}.wav'
     try:
         subprocess.run(['fluidsynth', '-ni', '-q', '-F', str(wav), '-r', '44100', str(mid)],
                        capture_output=True, text=True, timeout=180)

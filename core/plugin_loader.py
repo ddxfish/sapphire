@@ -2633,6 +2633,14 @@ class PluginLoader:
         self._watcher_thread.start()
         logger.info("[PLUGINS] File watcher started (dev mode)")
 
+    def stop_all_tools(self):
+        """Every plugin tool module with a shutdown() lets go of what it holds
+        (an open port, a thread). Called at shutdown alongside the daemons; a
+        single plugin's runs in unregister_plugin_tools when it is disabled
+        or reloaded."""
+        if self._function_manager:
+            self._function_manager.shutdown_all_plugin_tools()
+
     def stop_all_daemons(self):
         """Stop all loaded plugin daemons. Must be called before audio/system teardown."""
         with self._lock:

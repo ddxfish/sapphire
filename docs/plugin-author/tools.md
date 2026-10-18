@@ -69,6 +69,7 @@ def execute(function_name, arguments, config, plugin_settings=None, credentials=
 | `TOOL_CATEGORY` | str | The category of every tool in this file (one of the twelve below, or your plugin's own name). A tool overrides with its own `"category"` flag. Missing → your plugin's name: your tools stand alone as a group, asked for by name |
 | `execute()` | function | Dispatcher — returns `(message, success)` |
 | `get_tools()` | function | *Optional.* Returns `TOOLS`-shaped schemas built from current settings — enables [dynamic descriptions](#dynamic-tool-descriptions) |
+| `shutdown()` | function | *Optional.* Called when the plugin is disabled, reloaded or uninstalled, and when Sapphire stops, before the module is dropped from `sys.modules`: let go of what the module holds (an open port, a thread, a child process). Must not call tools. An exception is logged, never raised into core |
 
 **Categories** — the words an agent's toolset is made of (`toolset: 'web, files'`), the groups of the
 Toolsets picker, and the scope a tool needs: `web` · `memory` · `knowledge` · `people` · `goals` ·
@@ -419,7 +420,7 @@ Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](.
 
 ## Reference for AI
 
-- Tool file exports: `ENABLED`, `EMOJI`, `AVAILABLE_FUNCTIONS`, `TOOLS`, `execute(function_name, arguments, config, plugin_settings=None, credentials=None)` → `(message: str, success: bool)`. Signature is inspected — declare 3, 4, or 5 params; extras are passed only if accepted. Optional `get_tools()` returns TOOLS-shaped schemas from current settings.
+- Tool file exports: `ENABLED`, `EMOJI`, `AVAILABLE_FUNCTIONS`, `TOOLS`, `execute(function_name, arguments, config, plugin_settings=None, credentials=None)` → `(message: str, success: bool)`. Signature is inspected — declare 3, 4, or 5 params; extras are passed only if accepted. Optional `get_tools()` returns TOOLS-shaped schemas from current settings. Optional `shutdown()` runs before the module is dropped (disable, reload, uninstall, Sapphire stopping): release ports, threads, child processes; never call tools from it.
 - Files for the user: `from core import attachments`; append `attachments.marker(title, [{url, name}, ...])` to the result text. URLs must be the plugin's own routes (`/api/plugin/<name>/...`, else `ValueError`); audio renders a player, every file a download button; max 12; UI-only (stripped from the model's copy). Also valid in the text of a turn the plugin starts through the inbox.
 - Starting a turn yourself: `from core.chat import inbox; inbox.tell(chat, text, source='my-plugin', header_line=inbox.header('My plugin', kind, what), speak=None|'browser'|'speakers', on_drop=fn)` — waits its turn (busy, locked, sealed alike), own reply (no folding); dropped only for gone / privacy-downhill / ttl / removed / restart, with `item.drop_kind` saying which. `inbox.ask(...)` returns her reply. Missing chat → `inbox.InboxRefused`. `core.cadence.fire_once` raises `ChatBusy` instead of waiting — only for a result that goes stale.
 - Schema flags: `is_local` `True|False|"endpoint"` gates PRIVATE chats only (True runs; False/"endpoint" refused; unset refused unless `PRIVATE_ALLOW_UNFLAGGED_TOOLS`); `network: true` = UI "network tools" labeling only; `hidden: true` = out of the Toolsets picker but still registered and callable. No flag routes traffic.

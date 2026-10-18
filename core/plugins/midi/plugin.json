@@ -1,13 +1,23 @@
 {
   "name": "midi",
   "short_display_name": "MIDI",
-  "version": "1.0.0",
-  "description": "Play music together over MIDI. She plays a hardware synth or the computer's own, loops a beat, listens to the keys, shapes the sound, saves songs as MP3 and MIDI, and a plain MIDI keyboard gets a voice from the computer. Synths she knows by name (the M-VAVE FM-1) get their own voices and effects; any other plays with General MIDI. Pages such as the Game Room's piano board can hear the keys live. Linux only (alsa-utils).",
+  "version": "2.0.0",
+  "description": "Play music together over MIDI. She plays a hardware synth or the computer's own, loops a beat, listens to the keys, shapes the sound, saves songs as MP3 and MIDI, and a plain MIDI keyboard gets a voice from the computer. Synths she knows by name (the M-VAVE FM-1) get their own voices and effects; any other plays with General MIDI. Pages such as the Game Room's piano board can hear the keys live. Windows, Linux and macOS; the computer's own synth is Linux only for now.",
   "author": "sapphire",
   "icon": "🎹",
   "priority": 150,
   "default_enabled": true,
   "settingsUI": "auto",
+  "extra": {
+    "label": "MIDI library",
+    "pip": [
+      "python-rtmidi>=1.5,<2"
+    ],
+    "modules": [
+      "rtmidi"
+    ],
+    "note": "python-rtmidi, a small library that talks to this machine's MIDI ports (Windows, Linux, macOS). Every MIDI tool and device needs it; nothing else in Sapphire uses it. No system package is needed."
+  },
   "capabilities": {
     "tools": [
       "tools/midi_tools.py"
@@ -36,7 +46,7 @@
         "label": "Synth port names",
         "default": "",
         "placeholder": "empty = every synth she knows (FM-1_BLE, FM-1)",
-        "help": "MIDI port names of hardware synths to look for, in order; the first one that is connected wins. Leave it empty to look for every synth she has a profile for. No Bluetooth address is needed. `aconnect -l` lists the names."
+        "help": "MIDI port names of hardware synths to look for, in order; the first one that is connected wins. Leave it empty to look for every synth she has a profile for. No Bluetooth address is needed. While no synth is found, the synth device's Status tab lists the names this machine sees."
       },
       {
         "key": "keyboard_names",
