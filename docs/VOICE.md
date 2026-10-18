@@ -63,7 +63,7 @@ Where her voice comes out:
 
 ### Streaming TTS
 
-Off by default. With **Streaming** on (Settings → TTS → Streaming section), Sapphire synthesizes and starts speaking each chunk as the LLM finishes it — speech starts a second or two after generation begins instead of after the whole reply. Only streaming-capable providers do this (Kokoro, Piper); others fall back to whole-reply playback automatically, no harm done.
+On by default. With **Streaming** on (Settings → TTS → Streaming section), Sapphire synthesizes and starts speaking each chunk as the LLM finishes it — speech starts a second or two after generation begins instead of after the whole reply. Only streaming-capable providers do this (Kokoro, Piper); others fall back to whole-reply playback automatically, no harm done.
 
 Tuning lives in the same section: split mode (`paragraph` keeps prosody natural, `sentence` gets audio out faster), min/max chunk sizes, pauses after paragraph/sentence boundaries, and how `*stage directions*` and `(parentheticals)` are rendered as pauses.
 
@@ -192,7 +192,7 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 | `KOKORO_CUDA_DEVICE` | *(empty)* | GPU index for multi-GPU setups | TTS tab, advanced |
 | `TTS_SERVER_HOST` / `TTS_SERVER_PORT` | `0.0.0.0` / `5012` | The local Kokoro server subprocess bind | TTS tab, advanced |
 | `TTS_PRIMARY_SERVER` / `TTS_FALLBACK_SERVER` | localhost URLs | Where the app reaches the TTS server | TTS tab, advanced |
-| `TTS_STREAMING_ENABLED` | `false` | Speak sentence-sized chunks as the LLM writes; required for Conversation-mode audio | TTS tab, Streaming |
+| `TTS_STREAMING_ENABLED` | `true` | Speak sentence-sized chunks as the LLM writes; required for Conversation-mode audio | TTS tab, Streaming |
 | `TTS_STREAMING_SPLIT_MODE` | `paragraph` | Chunk on paragraphs (natural) or sentences (faster first audio) | TTS tab, Streaming |
 | `TTS_STREAMING_MIN_CHARS` | `15` | Smallest chunk emitted at a boundary | TTS tab, Streaming |
 | `TTS_STREAMING_MAX_CHARS` | `750` | Force-split cap | TTS tab, Streaming |
@@ -269,6 +269,8 @@ STT: registry core/stt/providers (faster_whisper local, fireworks_whisper cloud,
 TTS: registry core/tts/providers (kokoro local subprocess :5012, sapphire_router managed, none) + plugin providers (piper local, elevenlabs, gtts). 28 Kokoro voices (11 AF, 9 AM, 4 BF, 4 BM). supports_streaming: kokoro + piper only. supports_pitch: kokoro + piper (native); others = client-side resample (duration changes). Voice/pitch/speed are PER-CHAT settings (`voice`, `pitch`, `speed` in chat settings; sidebar "TTS (Voice)" accordion; applied on chat switch via tts.set_voice/set_pitch/set_speed). Defaults af_heart / 0.98 / 1.3; pitch clamped 0.5–2.0. Routes: POST /api/tts (play=server speakers, file=browser blob), /api/tts/stream (SSE chunks; 503 if streaming off → client falls back), /api/tts/test, /api/tts/stop, GET /api/tts/status, /api/tts/voices.
 
 STREAMING TTS: core/tts/streaming.py (chunker) + stream_pump.py. Pump enabled iff TTS_ENABLED && TTS_STREAMING_ENABLED && provider.supports_streaming. Web replies auto-speak in browser (SSE tts_chunk); streaming off = whole-blob after generation. Strips think/reasoning/tools blocks + code fences before synth.
+
+PLAY SPEECH HERE (2026-10-17): `TTS_LOCAL_PLAYBACK`, Settings > Voice, default on. "Make speech" and "play it on this computer" are two switches. Off = synthesis and every TTS hook unchanged, nothing plays on this machine or in the browser: speak()/speak_sync() return after pre_tts; the pump fires the chunk hooks and emits nothing (counted as voiced, no drop notice); /api/tts file mode answers 204. Lane ownership: the stream owner stamps `stream.tts_plays_here` (default True = the browser; cadence's device lane and the conversation driver's phone/Discord turns stamp False) and the pump takes `plays_here`; tts.render(plays_here=True) for the browser route and the MCP persona, default False for devices/Telegram. Not governed: satellites, phone/Discord, Telegram voice notes, voice preview, ding. Also: a plugin that forwarded a chunk sets `skip_tts` in tts_chunk_audio = consumed (not lost); the browser's whole-blob route now goes through render (gate + cleanup + pre_tts), no longer the raw primitive, and `render` reasons in `QUIET_REASONS` are silence on purpose (204), the rest 503. Plugin side: docs/plugin-author/voice-routing.md.
 
 WAKEWORD: core/wakeword/ (openWakeWord). Builtin: alexa, hey_mycroft, hey_jarvis, hey_rhasspy, timer, weather; bundled: hey_sapphire (core/wakeword/models); custom: user/wakeword/models/*.onnx|.tflite auto-discovered (GET /api/settings/wakeword-models). WAKEWORD_MODEL change = hot-swap (reload_wakeword_model), no restart. Wake turn: tone → record (RECORDER_NO_SPEECH_TIMEOUT abort) → transcribe → post_stt hook → process_llm_query(voice_turn=True) → streams to page (VOICE_TURN events) + server speakers. Suppressed during web activity (_web_active) and conversation mode. Requires STT.
 

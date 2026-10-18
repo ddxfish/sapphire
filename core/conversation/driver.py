@@ -272,6 +272,10 @@ class ConversationDriver:
                     # sentence synthesizes while the rest still generates. Inert
                     # when TTS streaming is globally off (pump stays disabled).
                     stream.tts_split_override = self._tts_split
+                if self._chat_name:
+                    # A phone call or a bot's channel is elsewhere: Settings >
+                    # Voice > Play speech here does not govern this stream.
+                    stream.tts_plays_here = False
                 if self._llm_timeout > 0:
                     # One silent regen if the provider never sends a first token
                     # before the read timeout — the caller only hears the tick.
@@ -279,6 +283,12 @@ class ConversationDriver:
                     stream.on_timeout_retry = self._retry_cue
                 try:
                     armed = False    # barge-in stays blocked until AUDIO actually flows
+                    # Play speech here off on the local/browser sink: no audio
+                    # will come this turn. The pulse covers the wait for her
+                    # first token and stops there; nothing to barge into, so
+                    # the turn stays unarmed and ends on its own. 2026-10-17.
+                    from core.tts.tts_client import local_playback_on
+                    muted_here = not self._chat_name and not local_playback_on()
                     for event in stream.chat_stream(text):
                         et = event.get("type") if isinstance(event, dict) else None
                         # D1: arm only on tts_chunk (real audio), NOT "content". Thinking
@@ -289,6 +299,8 @@ class ConversationDriver:
                             pulse_stop.set()          # her voice takes over from the pulse
                             self.engine.arm_barge()   # she's speaking now — interruptible
                             armed = True
+                        if muted_here and et == "content" and not pulse_stop.is_set():
+                            pulse_stop.set()          # she answered; the answer plays elsewhere
                         if et == "content":
                             publish(Events.VOICE_TURN_CHUNK,
                                     {"message_id": message_id, "text": event.get("text", ""),

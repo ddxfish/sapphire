@@ -9,7 +9,7 @@ A plugin is a self-contained package that extends Sapphire — a folder with a s
 - **Filter or rewrite the AI's response** before it's saved to history (`post_llm`)
 - **Inject context into the system prompt** every turn (`prompt_inject` for long-lived state; `ghost_inject` for cache-friendly per-turn ephemera like time, weather, or mood)
 - **Block or modify tool arguments** before execution (`pre_execute`)
-- **Control TTS** — change the voice, rewrite text, or cancel speech entirely (`pre_tts`)
+- **Control TTS** — change the voice, rewrite text, cancel speech, or send her voice to an avatar, a game or a robot instead of these speakers (`pre_tts`, `tts_chunk_audio`; [voice routing](voice-routing.md))
 - **React to wakeword detection** before recording starts (`on_wake`)
 - **Provide custom inference providers** — TTS, STT, Embedding, or LLM backends that appear in settings dropdowns ([guide](providers.md))
 - **Run scheduled tasks** on cron timers, independent of any conversation
@@ -34,6 +34,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Design Principles](design-principles.md) | Read first: core is minimal, plugin or core, one system, one feature one sentence, what shipping costs — the bar for a plugin that ships with Sapphire |
 | [Manifest](manifest.md) | `plugin.json` reference — fields, priority bands, directory structure |
 | [Hooks](hooks.md) | All hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
+| [Voice Routing](voice-routing.md) | Sending her voice somewhere else — what each TTS hook carries, the Play speech here switch, consumed chunks, an avatar example |
 | [Voice Commands](voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |
 | [Tools](tools.md) | Tool file format, schema flags, scopes, reading settings, plugin + chat-scoped state, privacy patterns |
 | [Routes](routes.md) | Custom HTTP endpoints — path params, auth enforcement, handler signature |

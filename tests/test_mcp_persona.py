@@ -197,7 +197,8 @@ def test_speak_uses_the_personas_voice_speed_and_pitch_and_never_her_speak(world
     text, ok = mcp.call(world.system, 'speak', {'text': 'Tap the screen now.'}, persona='claude')
     assert ok and text == 'Said.'
     world.tts.render.assert_called_once_with('Tap the screen now.', chat_settings={'private_chat': False},
-                                             voice='bm_fable', speed=1.3, pitch=0.9)
+                                             voice='bm_fable', speed=1.3, pitch=0.9,
+                                             plays_here=True)    # these speakers: Play speech here governs it
     world.tts.speak.assert_not_called()          # her speak() stops her mid-sentence and uses her voice
     world.tts.stop.assert_not_called()
     assert world.played == [b'OggS-audio']
@@ -303,7 +304,7 @@ def test_listen_warns_in_the_personas_voice_then_plays_its_own_chime(world, ears
     assert mcp.call(world.system, 'listen', {'seconds': 12}, persona='claude') == ('Heard: "yes"', True)
     assert ears == {'system': world.system, 'seconds': 12}
     world.tts.render.assert_called_once_with(mp.WARNING, chat_settings={'private_chat': False},
-                                             voice='bm_fable', speed=1.3, pitch=0.9)
+                                             voice='bm_fable', speed=1.3, pitch=0.9, plays_here=True)
     assert world.played == [b'OggS-audio', mp.LISTEN]          # the words, then the chime, and never the ding
 
 

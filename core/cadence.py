@@ -365,6 +365,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
             stream.suppress_tts = False
             stream.tts_split_override = 'sentence'
             stream.tts_force = True
+            stream.tts_plays_here = False     # the satellite is elsewhere: Play speech here does not govern it
             stream.tts_chat_settings = sm.get_settings_for(chat) or {'private_chat': True}
         else:
             stream.suppress_tts = True        # the pump stays inert; the lane below speaks

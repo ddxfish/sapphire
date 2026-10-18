@@ -30,6 +30,7 @@ Token metrics
 ### TTS
 Kokoro local
 Sentence streaming
+Play speech here
 Per-chat voice/pitch/speed
 Plugin providers
 ### STT

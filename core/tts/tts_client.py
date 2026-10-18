@@ -25,6 +25,21 @@ def get_temp_dir():
     return tempfile.gettempdir()
 
 
+# render() reasons that mean "quiet on purpose", not a failure. The browser's
+# whole-blob route turns these into 204 (nothing to play); the rest are 503.
+NOTHING_TO_SAY = "There was nothing to say after cleanup."
+CANCELLED_BY_PLUGIN = "Speech was cancelled by a plugin."
+NOT_PLAYED_HERE = "Speech is not played on this computer (Settings > Voice > Play speech here is off)."
+QUIET_REASONS = frozenset({NOTHING_TO_SAY, CANCELLED_BY_PLUGIN, NOT_PLAYED_HERE})
+
+
+def local_playback_on() -> bool:
+    """Settings > Voice > Play speech here. Off = speech is still made for
+    plugins and devices (every TTS hook fires); nothing plays on this
+    computer or in its browser. Satellites, phones and bots are elsewhere."""
+    return bool(getattr(config, 'TTS_LOCAL_PLAYBACK', True))
+
+
 class TTSClient:
     """TTS orchestrator — text processing, playback, hooks. Delegates audio generation to a provider."""
 
@@ -287,13 +302,19 @@ class TTSClient:
                 return False
             processed_text = tts_event.tts_text
 
+        # After pre_tts on purpose: text consumers (an avatar plugin) still
+        # hear what she would have said here.
+        if not local_playback_on():
+            logger.info("[TTS] speak: Play speech here is off - not played")
+            return False
+
         self.stop()
         self._generation += 1
         gen = self._generation
         self.should_stop.clear()
 
         # Route to streaming variant when the provider supports it AND
-        # the user has opted in via TTS_STREAMING_ENABLED. Falls back to
+        # TTS_STREAMING_ENABLED is on (the default since 2026-10-17). Falls back to
         # the existing blob path transparently otherwise. 2026-05-17.
         target = self._select_play_target()
         threading.Thread(
@@ -310,7 +331,7 @@ class TTSClient:
         the provider self-reports available. Without the is_available check
         a dead Kokoro subprocess accepted a 200 OK queue, returned no audio,
         no error toast — user thinks Sapphire is mute. 2026-05-20."""
-        if not getattr(config, 'TTS_STREAMING_ENABLED', False):
+        if not getattr(config, 'TTS_STREAMING_ENABLED', True):
             return self._generate_and_play_audio
         if not getattr(self._provider, 'supports_streaming', False):
             return self._generate_and_play_audio
@@ -357,6 +378,10 @@ class TTSClient:
             if tts_event.skip_tts:
                 return False
             processed_text = tts_event.tts_text
+
+        if not local_playback_on():
+            logger.info("[TTS] speak_sync: Play speech here is off - not played")
+            return False
 
         logger.debug(f"[TTS] speak_sync: {len(text)} chars raw -> {len(processed_text)} chars processed")
         self.stop()
@@ -740,16 +765,22 @@ class TTSClient:
             _time.sleep(0.1)
         return not self._is_playing
 
-    def render(self, text, chat_settings=None, voice=None, speed=None, pitch=None):
-        """Speech as audio bytes, for a speaker that is not this machine (a
-        satellite). The same privacy gate, text cleanup and pre_tts hook as
+    def render(self, text, chat_settings=None, voice=None, speed=None, pitch=None,
+               plays_here=False):
+        """Speech as audio bytes for a speaker other than speak()'s thread: a
+        satellite, a persona at the MCP door, the browser's whole-blob
+        playback. The same privacy gate, text cleanup and pre_tts hook as
         speak(), so what a device says is what these speakers would have said.
 
         chat_settings: the settings of the chat that PRODUCED the text; None
         resolves the effective chat (see speak()).
         voice, speed, pitch: another speaker's own (a persona at the MCP
         door), used for this render only; None keeps her live values.
-        Returns (bytes, content_type), or (None, the reason in plain words)."""
+        plays_here: the bytes will play on this computer or in its browser,
+        so Settings > Voice > Play speech here governs them (after pre_tts,
+        so text consumers still hear it). False = elsewhere, never muted.
+        Returns (bytes, content_type), or (None, the reason in plain words);
+        a reason in QUIET_REASONS is silence on purpose, not a failure."""
         from core.voice_privacy import tts_gate_reason
         gate = tts_gate_reason(chat_settings)
         if gate:
@@ -757,14 +788,16 @@ class TTSClient:
             return None, gate
         processed = self._process_text_for_tts(text)
         if not processed or len(processed) < 3:
-            return None, "There was nothing to say after cleanup."
+            return None, NOTHING_TO_SAY
         from core.hooks import hook_runner, HookEvent
         if hook_runner.has_handlers("pre_tts"):
             event = HookEvent(tts_text=processed, config=config, metadata={'tts_client': self})
             hook_runner.fire("pre_tts", event)
             if event.skip_tts:
-                return None, "Speech was cancelled by a plugin."
+                return None, CANCELLED_BY_PLUGIN
             processed = event.tts_text
+        if plays_here and not local_playback_on():
+            return None, NOT_PLAYED_HERE
         audio = self.generate_audio_data(processed, voice=voice, speed=speed, pitch=pitch)
         if not audio:
             return None, "The voice engine returned no audio."

@@ -430,23 +430,24 @@ def _generate_voice(text: str, gate_chat: str = None) -> bytes:
         if not system or not hasattr(system, 'tts') or not system.tts:
             logger.warning("[TELEGRAM] TTS not available for voice generation")
             return None
-        from core.voice_privacy import tts_gate_reason
         _settings = None
         if gate_chat:
             _settings = system.llm_chat.session_manager.get_settings_for(gate_chat)
             if _settings is None:
                 _settings = {"private_chat": True}  # unreadable — fail closed
-        _gate = tts_gate_reason(_settings)
-        if _gate:
-            logger.info(f"[TELEGRAM] Voice note skipped: {_gate}")
-            return None
         # Strip avatar tags and other markup
         import re
         clean = re.sub(r'<<avatar:\s*[a-zA-Z0-9_]+(?:\s+\d+(?:\.\d+)?s)?>>', '', text)
         clean = clean.strip()
         if not clean:
             return None
-        audio_data = system.tts.generate_audio_data(clean)
+        # The hooked door: the same privacy gate as before (judging _settings),
+        # plus text cleanup and pre_tts, so plugins see voice notes too. A
+        # voice note plays on the phone, not here, so Play speech here does
+        # not govern it. 2026-10-17.
+        audio_data, why = system.tts.render(clean, chat_settings=_settings)
+        if not audio_data:
+            logger.info(f"[TELEGRAM] Voice note skipped: {why}")
         return audio_data
     except Exception as e:
         logger.error(f"[TELEGRAM] TTS generation failed: {e}")

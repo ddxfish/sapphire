@@ -67,7 +67,9 @@ class StreamingTTSPump:
             SSE emission. The audio carrier is a dict at
             `event.metadata['audio']` == {'audio_bytes', 'content_type'};
             mutate `metadata['audio']['audio_bytes']` (and optionally
-            'content_type') to transform or replace the audio. metadata
+            'content_type') to transform or replace the audio. Set
+            `skip_tts` to take the chunk (sent elsewhere): not emitted
+            here, counted as voiced, no drop notice. metadata
             also has: `chunk_index`, `chunk_text`, `boundary`,
             `pause_after_ms`, `stream_id`.
         tts_stream_end:   once per turn. metadata: `chunk_count`,
@@ -81,9 +83,16 @@ class StreamingTTSPump:
                  split_override: Optional[str] = None,
                  disabled: bool = False,
                  chat_settings: Optional[dict] = None,
-                 force: bool = False):
+                 force: bool = False,
+                 plays_here: bool = True):
         self.system = system
         self.tts = getattr(system, "tts", None)
+        # plays_here=True: this pump's chunks play on this computer or in its
+        # browser (a web turn, the Replay button, the local conversation
+        # sink), so Settings > Voice > Play speech here governs them: hooks
+        # still fire, no audio is emitted. False = a satellite's or a phone's
+        # pump, elsewhere, never muted by that switch. 2026-10-17.
+        self._plays_here = bool(plays_here)
         # force=True: the owner wants speech as it is made whatever the
         # Settings > TTS streaming switch says (a satellite's turn: the only
         # way its speaker gets the first sentence early). A provider without
@@ -179,7 +188,7 @@ class StreamingTTSPump:
             return self.provider is not None
         return bool(
             getattr(config, "TTS_ENABLED", False)
-            and getattr(config, "TTS_STREAMING_ENABLED", False)
+            and getattr(config, "TTS_STREAMING_ENABLED", True)
             and self.provider is not None
             and getattr(self.provider, "supports_streaming", False)
         )
@@ -651,7 +660,7 @@ class StreamingTTSPump:
         content_type = getattr(self.provider, "audio_content_type", "audio/ogg")
         # Hook event uses a dict carrier so plugins can mutate or replace.
         carrier = {"audio_bytes": audio_bytes, "content_type": content_type}
-        self._fire_hook(
+        ev = self._fire_hook(
             "tts_chunk_audio",
             metadata={
                 "stream_id": self._stream_id,
@@ -669,6 +678,14 @@ class StreamingTTSPump:
             return None
         self._chunk_count += 1
         self._total_chars += len(meta["text"] or "")
+        # Voiced, just not here: a plugin took the chunk (skip_tts in
+        # tts_chunk_audio = "I sent this somewhere else"), or Play speech
+        # here is off and this pump plays here. Counted as spoken, so the
+        # end-of-stream drop notice stays honest. 2026-10-17.
+        consumed = bool(ev is not None and ev.skip_tts)
+        if consumed or (self._plays_here and not getattr(config, "TTS_LOCAL_PLAYBACK", True)):
+            meta["segments_emitted"] = meta.get("segments_emitted", 0) + 1
+            return None
         return {
             "type": "tts_chunk",
             "audio_b64": base64.b64encode(final_bytes).decode("ascii"),

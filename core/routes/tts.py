@@ -107,11 +107,21 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         _voice = data.get('voice') or None
         if _voice:
             _voice = _validate_tts_voice(_voice)
-        audio_data = await asyncio.to_thread(
-            system.tts.generate_audio_data, text,
-            voice=_voice, speed=data.get('speed'), pitch=data.get('pitch'))
+        # The hooked door (render = gate + cleanup + pre_tts + synth), the one
+        # satellites use, so a plugin's skip_tts and Settings > Voice > Play
+        # speech here reach the browser's whole-blob playback too. A quiet
+        # reason is 204 (nothing to play, on purpose); the rest stay 503.
+        # Before 2026-10-17 this called the raw primitive and no hook ever
+        # saw the browser's speech.
+        from core.tts.tts_client import QUIET_REASONS
+        audio_data, kind = await asyncio.to_thread(
+            system.tts.render, text,
+            voice=_voice, speed=data.get('speed'), pitch=data.get('pitch'), plays_here=True)
         if not audio_data:
-            raise HTTPException(status_code=503, detail="TTS generation failed")
+            if kind in QUIET_REASONS:
+                from fastapi import Response
+                return Response(status_code=204)
+            raise HTTPException(status_code=503, detail=kind or "TTS generation failed")
 
         # Optional re-encoding for downstream consumers that can't decode the
         # provider's native format. Added 2026-05-21 — Unity / FMOD can't
@@ -140,8 +150,8 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
             except FileNotFoundError:
                 raise HTTPException(status_code=503, detail="ffmpeg not available on server")
         else:
-            content_type = getattr(system.tts, 'audio_content_type', 'audio/ogg')
-            ext = 'mp3' if 'mpeg' in content_type else 'ogg'
+            content_type = kind or getattr(system.tts, 'audio_content_type', 'audio/ogg')
+            ext = 'mp3' if 'mpeg' in content_type else 'wav' if 'wav' in content_type else 'ogg'
 
         return StreamingResponse(
             io.BytesIO(audio_data),
@@ -180,7 +190,7 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
     import json
     check_endpoint_rate(request, 'tts', max_calls=30, window=60)
 
-    if not getattr(config, 'TTS_STREAMING_ENABLED', False):
+    if not getattr(config, 'TTS_STREAMING_ENABLED', True):
         raise HTTPException(status_code=503, detail="Streaming TTS disabled in settings")
 
     if not config.TTS_ENABLED:

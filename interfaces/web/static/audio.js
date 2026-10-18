@@ -157,6 +157,12 @@ export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
             ui.updateStatus('Playing cached TTS...');
         } else {
             blob = await api.fetchAudio(clean, ttsCtrl.signal, voiceOpts);
+            if (blob === null) {
+                // 204: not voiced here (a plugin took it, or Settings > Voice >
+                // Play speech here is off). Quiet finish, nothing to cache.
+                if (mine()) { isStreaming = false; ui.hideStatus(); }
+                return;
+            }
             // Cache if key provided
             if (cacheKey !== null) {
                 // LRU eviction
@@ -259,8 +265,11 @@ export const replayTts = async (idx) => {
 };
 
 /** Stream a known text via /api/tts/stream → SSE → existing playback queue.
- * Returns true if at least one chunk arrived, false if the endpoint was
- * unavailable (503) so the caller can fall back. Other errors throw. */
+ * Returns true if the server ran the stream (a chunk arrived, or the turn
+ * ended with none: a plugin took the audio, or Play speech here is off),
+ * false if the endpoint was unavailable (503) so the caller can fall back.
+ * A ran-but-silent stream must NOT fall back: the whole-blob path would
+ * fire the TTS hooks a second time for the same text. Other errors throw. */
 // `chat`: the chat that produced the text (a room's bound session). The
 // server's privacy gate judges THAT chat instead of the operator's active
 // one — a private room speaking through a public active chat used to reach
@@ -302,6 +311,7 @@ export const playTextStreaming = async (text, voice = null, chat = null, opts = 
     const decoder = new TextDecoder();
     let buffer = '';
     let sawChunk = false;
+    let sawEnd = false;
     try {
         while (true) {
             const { done, value } = await reader.read();
@@ -324,6 +334,7 @@ export const playTextStreaming = async (text, voice = null, chat = null, opts = 
                     sawChunk = true;
                 } else if (data.type === 'tts_stream_end') {
                     endTtsStream(data);
+                    sawEnd = true;
                 } else if (data.type === 'notice') {
                     // Dropped-chunks notice from the brain pump. Route
                     // through the same 'chat_notice' bus event that chat-
@@ -344,7 +355,7 @@ export const playTextStreaming = async (text, voice = null, chat = null, opts = 
     } finally {
         try { await reader.cancel(); } catch {}
     }
-    return sawChunk;
+    return sawChunk || sawEnd;
 };
 
 // Extract prose text for TTS (mirrors ui.extractProseText logic)

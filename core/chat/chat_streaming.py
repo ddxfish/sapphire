@@ -281,6 +281,11 @@ class StreamingChat:
             # whatever the streaming switch says, gated by THAT chat's settings.
             force=bool(getattr(self, "tts_force", False)),
             chat_settings=getattr(self, "tts_chat_settings", None),
+            # Where the chunks play. A web turn plays here (the browser), so
+            # Settings > Voice > Play speech here governs it; a satellite's
+            # turn (cadence) or a phone's (the conversation driver) stamps
+            # False - elsewhere, never muted by that switch.
+            plays_here=bool(getattr(self, "tts_plays_here", True)),
         )
         self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 

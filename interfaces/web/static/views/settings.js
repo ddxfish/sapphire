@@ -1024,7 +1024,7 @@ function _showVoicePicker(voices, targetInput, parentEl) {
 
 // ── Helpers ──
 
-const LABEL_OVERRIDES = {};
+const LABEL_OVERRIDES = { TTS_LOCAL_PLAYBACK: 'Play speech here' };
 
 function formatLabel(key) {
     if (LABEL_OVERRIDES[key]) return LABEL_OVERRIDES[key];

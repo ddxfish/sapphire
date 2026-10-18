@@ -41,6 +41,14 @@ export default {
         const cfg = _mergedConfig || tabConfig;
         let html = renderProviderTab(cfg, ctx);
 
+        // Play speech here (2026-10-17): "make speech" and "play it on this
+        // computer" used to be one switch. Off = plugins and devices still
+        // get every chunk, nothing plays locally or in the browser.
+        html += `
+            <div style="margin-top: 1rem;">
+                ${ctx.renderFields(['TTS_LOCAL_PLAYBACK'])}
+            </div>`;
+
         // Streaming TTS section (v2.7.0). Streaming only kicks in when a
         // capable provider is active (currently Kokoro); otherwise the
         // setting is harmless — non-streaming providers fall back to the

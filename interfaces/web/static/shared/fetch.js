@@ -33,7 +33,12 @@ export const fetchWithTimeout = async (url, opts = {}, timeout = 60000) => {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || err.error || `HTTP ${res.status}`);
     }
-    
+
+    // 204: nothing to return, on purpose (speech the server chose not to
+    // voice here). null, never a raw Response the caller would read as a
+    // bad content-type. 2026-10-17.
+    if (res.status === 204) return null;
+
     const ct = res.headers.get('content-type');
     if (ct?.includes('application/json')) return await res.json();
     if (ct?.includes('audio/')) {

@@ -93,7 +93,8 @@ class HookEvent:
         arguments: Tool arguments for pre_execute (mutable — plugins can modify)
         result: Tool result for post_execute
         tts_text: Text about to be spoken for pre_tts (mutable) / spoken text for post_tts
-        skip_tts: Set True in pre_tts to cancel TTS entirely
+        skip_tts: Set True in pre_tts / tts_stream_start to cancel TTS; in tts_chunk_audio it means
+                  the plugin took this chunk (sent elsewhere: not played here, counted as voiced)
         ephemeral: Set True with skip_llm to show response without persisting to history
         chat_name: THIS turn's effective chat (stamped by the runner via the
                    privacy resolver; fire sites may pre-stamp). None until resolved.

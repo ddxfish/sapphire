@@ -204,7 +204,8 @@ def _voice(system, persona, text):
     # All three are passed, always: one left out would fall back to HER live value.
     voice = validate_voice(str(held.get('voice') or '').strip()) or default_voice()
     audio, kind = tts.render(text, chat_settings=_NOT_A_CHAT, voice=voice,
-                             speed=_number(held.get('speed'), 1.0), pitch=_number(held.get('pitch'), 1.0))
+                             speed=_number(held.get('speed'), 1.0), pitch=_number(held.get('pitch'), 1.0),
+                             plays_here=True)    # these speakers: Play speech here governs it
     return (audio, voice) if audio else (None, str(kind))
 
 

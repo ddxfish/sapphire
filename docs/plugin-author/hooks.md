@@ -15,11 +15,11 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `pre_execute` | Before tool call | `function_name`, `arguments` | Modify args, block tools |
 | `post_execute` | After tool call | `function_name`, `result` | Audit, react to results |
 | `tools_filter` | After toolset resolution, before each LLM call | `tools` (subtract-only) | Withhold tools from this turn — [see below](#tools_filter--per-turn-tool-fence) |
-| `pre_tts` | Before speech (legacy/whole-blob) | `tts_text`, `skip_tts` | Modify text, cancel TTS |
+| `pre_tts` | Before whole-blob speech: the speakers, satellites, the browser's non-streaming playback, Telegram voice notes | `tts_text`, `skip_tts` | Modify text, cancel TTS — [route her voice elsewhere](voice-routing.md) |
 | `post_tts` | After playback ends (legacy/whole-blob) | `tts_text` | Analytics, reactions, subtitles |
 | `tts_stream_start` | Streaming TTS: turn begins | `skip_tts` | Disable the whole turn's streaming speech |
 | `tts_chunk_text` | Streaming TTS: per chunk, before synth | `tts_text`, `skip_tts` | Rewrite or mute a chunk before it's voiced |
-| `tts_chunk_audio` | Streaming TTS: per chunk, after synth | `metadata['audio']` carrier | Transform/replace chunk audio bytes |
+| `tts_chunk_audio` | Streaming TTS: per chunk, after synth | `metadata['audio']` carrier, `skip_tts` | Transform/replace chunk audio bytes; `skip_tts` = you took it (not played here, not counted as lost) |
 | `tts_stream_end` | Streaming TTS: turn ends | — | Finalize captions/recording |
 | `on_wake` | Wakeword detected | — | Play sounds, log, custom reactions |
 | `provider_switched` | After a TTS/STT/embed provider hot-swap | metadata `kind`, `provider` | Warm caches / reset state (observational) |
@@ -272,7 +272,9 @@ def chat_vaulted(event):
 When streaming TTS is enabled (`TTS_STREAMING_ENABLED`) and the active provider
 supports it (Kokoro), the brain synthesizes speech in chunks *while the LLM is
 still generating*. Four hooks let a plugin observe or transform that stream —
-enough to build live captions, an audio recorder, or a lipsync driver.
+enough to build live captions, an audio recorder, or a lipsync driver. Sending
+her voice to another speaker (an avatar, a game, a robot) and silencing this
+computer is its own page: [Sending her voice somewhere else](voice-routing.md).
 
 These fire **only** for streaming-capable providers. Legacy/whole-blob providers
 use `pre_tts` / `post_tts` instead.
@@ -301,7 +303,7 @@ per-handler error isolation means `tts_stream_end` still fires even if your
 |------|---------|--------------|
 | `tts_stream_start` | `skip_tts` (True disables the whole turn's speech) | `voice`, `speed`, `stream_id`, `system` |
 | `tts_chunk_text` | `tts_text` (rewrite; `""`/whitespace mutes this chunk; `skip_tts` skips it) | `chunk_index`, `boundary`, `pause_after_ms`, `stream_id`, `system` |
-| `tts_chunk_audio` | `metadata['audio']['audio_bytes']` and `['content_type']` (the carrier dict; falsy bytes drops the chunk) | `chunk_index`, `chunk_text`, `boundary`, `pause_after_ms`, `stream_id`, `system` |
+| `tts_chunk_audio` | `metadata['audio']['audio_bytes']` and `['content_type']` (the carrier dict; falsy bytes *drops* the chunk and raises the end-of-turn notice); `skip_tts` *consumes* it (you sent it elsewhere: not played here, counted as voiced, no notice) | `chunk_index`, `chunk_text`, `boundary`, `pause_after_ms`, `stream_id`, `system` |
 | `tts_stream_end` | None (observational) | `chunk_count`, `total_chars`, `interrupted`, `stream_id`, `system` |
 
 `stream_id` is stable across all four hooks for the same turn — use it to
@@ -634,6 +636,7 @@ The ghost rail is **labeled operator metadata**, not invisible puppetry. If you 
 - Register: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`; never `def run` (schedule-only, silently fails to register).
 - Pipeline hooks: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`).
 - `plugins_ready` fires on the boot scan AND on hot reload, rescan, and toggle-on — handlers must be idempotent and re-check their plugin is still loaded.
+- Voice elsewhere (avatar, game, robot): listen on `pre_tts` (text, whole-blob lanes incl. the browser's non-streaming playback and Telegram voice notes) and `tts_chunk_audio` (her audio, streaming only); the user mutes this computer with Settings > Voice > Play speech here (`TTS_LOCAL_PLAYBACK`, hooks keep firing). Per turn: `skip_tts` in `pre_tts`/`tts_stream_start` cancels; `skip_tts` in `tts_chunk_audio` = consumed (not played here, counted as voiced, no drop notice; nulling `audio_bytes` = dropped, notice shown). Page: voice-routing.md.
 - `tools_filter`: `event.tools` = final tool-schema list for this turn; subtract-only (additions discarded by intersection); handler errors fail open (unfiltered list ships); no `system`/`config` on the event; `chat_name` pre-stamped.
 - `chat_cleared`: chat-scoped store rows SURVIVE a clear (unlike delete) — use this hook to drop turn-anchored rows whose message anchors are gone.
 - `event.metadata.get("system")` (VoiceChatSystem) is stamped on: `post_stt`, `pre_chat`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, and the `tts_stream_*`/`tts_chunk_*` hooks. NOT on: `prompt_inject`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`, or the lifecycle hooks.

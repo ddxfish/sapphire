@@ -308,9 +308,13 @@
     "short": "Timeout before trying fallback server (seconds)",
     "long": "How long to wait for primary TTS server before switching to fallback. 0.2 seconds (200ms) provides quick failover. Too low may not give primary server enough time. Too high causes noticeable delays when primary is down."
   },
+  "TTS_LOCAL_PLAYBACK": {
+    "short": "Play speech on this computer and in the browser",
+    "long": "OFF sends her voice elsewhere: speech is still synthesized and every TTS plugin hook still fires, so an avatar, a game or a robot body can take the text or the audio, but nothing plays on this computer's speakers or in the browser. Satellites, phone calls and chat bots are unaffected; they were never 'here'. The voice preview button keeps working so you can still pick a voice."
+  },
   "TTS_STREAMING_ENABLED": {
     "short": "Stream speech in sentence-sized chunks (Kokoro only)",
-    "long": "When ON, Sapphire synthesizes and starts playing each sentence as soon as the LLM finishes it — speech starts ~1-2s after you press send instead of waiting for the whole reply. Falls back to whole-reply playback automatically for providers that don't support streaming (ElevenLabs, gTTS). Default OFF in 2.7.0 — opt-in while we shake out edge cases."
+    "long": "When ON, Sapphire synthesizes and starts playing each sentence as soon as the LLM finishes it — speech starts ~1-2s after you press send instead of waiting for the whole reply. Falls back to whole-reply playback automatically for providers that don't support streaming (ElevenLabs, gTTS). On by default; turn it off to hear each reply in one piece after it finishes."
   },
   "TTS_STREAMING_MIN_CHARS": {
     "short": "Minimum chars before emitting a chunk",

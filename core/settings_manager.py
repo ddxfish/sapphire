@@ -750,6 +750,8 @@ class SettingsManager:
             'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA', 'SOCKS_REMOTE_DNS',
             # Providers hot-swap at runtime via switch_*_provider() methods
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
+            # Play speech here - read at every speak()/render()/pump chunk
+            'TTS_LOCAL_PLAYBACK',
             # Tool settings - read per-request
             'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS',
             # Continuity caps - the scheduler reads them at task-create time
