@@ -40,10 +40,11 @@ async function load(el, ctx, p) {
       </div>
       <div class="wwm-card">
         <h2>Satellites ${qbtn('install_satellite')}</h2>
-        ${d.satellites.length ? `<table class="wwm-table"><thead><tr><th>Device</th><th>Where</th><th>Has</th><th></th></tr></thead><tbody>
-          ${d.satellites.map(s => `<tr><td>${esc(s.id)}${s.online ? '' : ' <span class="wwm-muted">(offline)</span>'}</td><td>${esc(s.location || '')}</td><td>${s.installed ? `${esc(s.installed.run)} at ${s.installed.threshold}` : '<span class="wwm-muted">not sent yet</span>'}</td>
-            <td><button class="wwm-btn" data-send="${esc(s.id)}" ${s.online && (s.format === 'tflite' ? mww : oww) ? '' : 'disabled'}>Send</button> <span class="wwm-muted" data-told="${esc(s.id)}"></span></td></tr>`).join('')}
+        ${d.satellites.length ? `<table class="wwm-table"><thead><tr><th>Device</th><th>Where</th><th>Listening for</th><th></th></tr></thead><tbody>
+          ${d.satellites.map(s => `<tr><td>${esc(s.id)}${s.online ? '' : ' <span class="wwm-muted">(offline)</span>'}</td><td>${esc(s.location || '')}</td><td>${s.listening ? esc(s.listening) : '<span class="wwm-muted">not said yet</span>'}${s.ours ? ' <span class="wwm-pill ok">this one</span>' : s.set ? ' <span class="wwm-muted">(set to it, not taken yet)</span>' : ''}</td>
+            <td><button class="wwm-btn" data-send="${esc(s.id)}" ${(s.format === 'tflite' ? mww : oww) ? '' : 'disabled'}>Send</button> <span class="wwm-muted" data-told="${esc(s.id)}"></span></td></tr>`).join('')}
           </tbody></table>` : '<div class="wwm-muted">No satellite with a wake word is set up in Devices.</div>'}
+        <div class="wwm-muted" style="margin-top:6px">Sent models land in the wake word library (Settings > Wakeword); afterwards a board picks between them on its own Wake word tab in Devices, this computer from the wake word dropdown. A board restarts on its new word, about twenty seconds; one that is offline is set to it and gets it when it is next seen.</div>
       </div>
       <div class="wwm-card">
         <h2>Files, to copy by hand</h2>
@@ -63,7 +64,7 @@ async function load(el, ctx, p) {
     el.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', async () => {
         const told = el.querySelector(`[data-told="${CSS.escape(b.dataset.send)}"]`);
         b.disabled = true; told.textContent = 'sending…';
-        try { const r = await api(`/projects/${p.slug}/install/satellite`, { method: 'POST', body: { device: b.dataset.send } }); told.textContent = `sent ${r.sent} at ${r.threshold}`; ctx.toast(`${b.dataset.send} has it`, 'success'); setTimeout(() => load(el, ctx, p), 1200); }
+        try { const r = await api(`/projects/${p.slug}/install/satellite`, { method: 'POST', body: { device: b.dataset.send } }); told.textContent = `sent ${r.sent} at ${r.threshold}; the board restarts on it`; ctx.toast(`${b.dataset.send} has it`, 'success'); setTimeout(() => load(el, ctx, p), 1200); }
         catch (e) { told.textContent = e.message; b.disabled = false; }
     }));
 }

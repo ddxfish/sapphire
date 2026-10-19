@@ -161,7 +161,9 @@ Push your changes to GitHub, then visit the same [Submit Your Plugin](https://sa
 
 ## Step 5: Branch Naming
 
-The installer tries to download from the `main` branch first, then falls back to `master`. If you use a different default branch name, it won't work. Stick with `main`.
+A bare repo URL installs the `main` branch, falling back to `master`. Stick with `main` as your default.
+
+To share another branch, give people the branch URL: `https://github.com/you/my-plugin/tree/my-branch` (GitLab: `.../-/tree/my-branch`, or GitHub's `.../archive/refs/heads/my-branch.zip`). That branch is installed, and update checks follow it.
 
 ---
 
@@ -320,7 +322,7 @@ Ask Sapphire: "What's the weather in Tokyo?"
 
 ## Reference for AI
 
-- Store is a directory, not a host: listings link to public GitHub repos; install downloads the repo zip (`main` branch, `master` fallback — no other default branch works) and extracts to `user/plugins/{name}/`.
+- Store is a directory, not a host: listings link to public GitHub repos; install downloads the repo zip (`main` branch, `master` fallback; a `/tree/<branch>` URL pins that branch, and updates follow it) and extracts to `user/plugins/{name}/`.
 - `plugin.json` must be at the repo ROOT (no `src/` or `plugin/` nesting). Everything tracked in the repo gets installed.
 - `name`: lowercase, hyphen-separated, unique (becomes the folder name; can't collide with system plugins). `version` semver. `README.md` at repo root is required for store approval (what it does, setup, usage, requirements).
 - Trust levels = verification states: Official (`official`, baked-in key) / Verified Author (`verified_author`, central key list) / Community (`unsigned`, needs `ALLOW_UNSIGNED_PLUGINS`).

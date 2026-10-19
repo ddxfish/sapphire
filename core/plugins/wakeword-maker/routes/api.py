@@ -914,14 +914,17 @@ def _pushes(h):
 
 def _wake_format(device, h=None):
     """Which model family a satellite runs: 'tflite' (microWakeWord, an ESP32) or 'onnx' (openWakeWord, a Pi). The
-    board states it in its health (`wakeword.format`); a body that does not is read from its board name, then its
-    device name, and a Pi is the default."""
+    driver's reading (satellite.wake_format): the board's health (`wakeword.format`), else its device row's hints,
+    else its board and device names; a Pi is the default."""
+    from core.devices.drivers import satellite
     h = _health_of(device) if h is None else h
-    fmt = str((h.get('wakeword') or {}).get('format') or '').lower()
-    if fmt in ('tflite', 'onnx'):
-        return fmt
-    hint = f"{h.get('board') or ''} {device}".lower()
-    return 'tflite' if any(k in hint for k in ('esp', '-s3', '-c3', '-c6', 'xiao')) else 'onnx'
+    row = None
+    try:
+        from core.devices import engine
+        row = engine.get(device)
+    except Exception:
+        pass
+    return satellite.wake_format(device, h or None, row)
 
 
 def _listen(device, seconds, vad=True):
@@ -1745,9 +1748,11 @@ def job_log(jid, query=None, settings=None, **_):
 
 
 # --- install ---------------------------------------------------------------------------------------------
-# Desktop: the model file goes under user/wakeword/models/<slug>.onnx, the two settings change, the live detector
-# is swapped (the same call the Settings page makes). Satellites: PUT /wakeword/model on the body, a door a body may
-# not have yet (then the files are there to copy by hand). Install reads the ★ run of each kind.
+# Install goes through the wake word library (core/wakeword/library.py, Settings > Wakeword): the ★ model of each
+# kind lands under user/wakeword/models/<slug>.<family> with the sidecar, then library.switch() makes the listener
+# take it (desktop: the two settings and the live detector; a satellite: its wake_model wish, sent through
+# PUT /wakeword/model by the driver, the board restarts on it; one that cannot be reached is sent it when next
+# seen). The library page and a board's Wake word tab switch between the same models afterwards. 2026-10-19.
 
 from core.paths import PROJECT_ROOT
 
@@ -1813,9 +1818,10 @@ def _loads_ours(slug):
 
 def _desktop_state(slug):
     import config as _cfg
+    from core.wakeword import library
     model = str(getattr(_cfg, 'WAKEWORD_MODEL', '') or '')
-    made = read_json(USER_MODELS / f"{slug}.json") or {}
-    ours = model == slug and made.get('made_by') == 'wakeword-maker' and _loads_ours(slug)
+    mine = library.get(slug, 'onnx') or {}
+    ours = model == slug and mine.get('source') == 'user' and mine.get('made_by') == 'wakeword-maker' and _loads_ours(slug)
     return {'model': model, 'threshold': getattr(_cfg, 'WAKEWORD_THRESHOLD', None), 'enabled': bool(getattr(_cfg, 'WAKE_WORD_ENABLED', False)),
             'file': (USER_MODELS / f"{slug}.onnx").is_file(), 'ours': ours}
 
@@ -1831,13 +1837,15 @@ def install_status(slug, settings=None, **_):
     picks = {tr: _run_brief(r) for tr, r in _chosen(pdir).items()}
     sats = []
     try:
-        from core.devices import engine
-        for d in engine.fleet():
-            if 'wake' in (d.get('caps') or []) and not d.get('every'):
-                sats.append({'id': d['id'], 'location': d.get('location', ''), 'online': d.get('online'), 'format': _wake_format(d['id']),
-                             'installed': ((pr.get('settings') or {}).get('install') or {}).get(d['id'])})
+        from core.wakeword import library
+        for l in library.listeners():
+            if l.get('kind') != 'device':
+                continue
+            sats.append({'id': l['id'], 'location': l.get('location', ''), 'online': l.get('online'), 'format': l.get('family'),
+                         'listening': l.get('model'), 'ours': l.get('model') == slug,
+                         'set': l.get('wish') == slug and l.get('model') != slug})
     except Exception as e:
-        logger.debug(f"[WWM] install fleet: {e}")
+        logger.debug(f"[WWM] install listeners: {e}")
     inst = (pr.get('settings') or {}).get('install') or {}
     return {'picks': picks, 'desktop': {**_desktop_state(slug), 'previous': inst.get('previous_desktop')}, 'satellites': sats, 'phrase': pr.get('phrase')}
 
@@ -1862,28 +1870,23 @@ def install_desktop(slug, body=None, settings=None, **_):
         return {'error': 'the desktop takes the openWakeWord model (.onnx), not the ESP32 one'}, 400
     run = json.loads((rdir / 'run.json').read_text(encoding='utf-8'))
     thr = float(run.get('threshold') or (run.get('heldout') or {}).get('threshold') or 0.5)
-    USER_MODELS.mkdir(parents=True, exist_ok=True)
-    tmp = USER_MODELS / f"{slug}.onnx.tmp"
-    shutil.copyfile(mf, tmp)
-    os.replace(tmp, USER_MODELS / f"{slug}.onnx")
-    write_json(USER_MODELS / f"{slug}.json", {'name': slug, 'phrase': pr.get('phrase'), 'threshold': thr, 'framework': 'onnx',
-                                             'run': rid, 'label': run.get('label'), 'installed': time.time(), 'made_by': 'wakeword-maker'}, indent=1)
+    from core.wakeword import library
     before = _desktop_state(slug)
     try:
-        from core.settings_manager import settings as _settings
+        library.add(slug, mf.read_bytes(), 'onnx', {'threshold': thr, 'run': rid, 'label': run.get('label')},
+                    overwrite=True, made_by='wakeword-maker', phrase=pr.get('phrase'))
         if not before['ours'] and before['model']:
             _remember_install(root, slug, previous_desktop={'model': before['model'], 'threshold': before['threshold']})
-        _settings.set('WAKEWORD_MODEL', slug, persist=True)      # the model first: a failure here leaves the old one at its own threshold
-        _settings.set('WAKEWORD_THRESHOLD', thr, persist=True)
-        from core.api_fastapi import get_system
-        ok = get_system().reload_wakeword_model()
+        told = library.switch('desktop', slug)                    # the two settings, then the live detector
+        ok = told.get('sent')
+    except library.LibraryError as e:
+        return {'error': str(e)}, 502
     except Exception as e:
-        return {'error': f"the file is in place but the live swap failed: {e}"}, 502
+        return {'error': f"the install failed: {e}"}, 502
     if not _loads_ours(slug):                     # an older core that still prefers its own file under this name
         return {'error': f"the file is in place and the setting is {slug}, but this Sapphire loads its own {slug} model first. "
                          "Update Sapphire (user/ wins since 2.13.4), or install the file under another name.", 'code': 'shadowed',
                 'desktop': _desktop_state(slug)}, 409
-    _remember_install(root, slug, desktop={'run': rid, 'threshold': thr, 'when': time.time()})
     return {'desktop': _desktop_state(slug), 'swapped': bool(ok), 'run': rid, 'threshold': thr}
 
 
@@ -1948,14 +1951,20 @@ def install_satellite(slug, body=None, settings=None, **_):
     if mf.suffix == '.tflite':
         man = (read_json(rdir / 'model.json') or {}).get('micro') or {}
         extra = {'sliding_window': man.get('sliding_window_size', 5), 'step_ms': man.get('feature_step_size', 10)}
+    from core.wakeword import library
+    meta = {'threshold': thr, 'run': want, 'label': run.get('label')}
+    if extra:
+        meta['micro'] = {'sliding_window': extra['sliding_window'], 'step_ms': extra['step_ms']}
     try:
-        told = satellite.put_model(row, dict(part.get('config') or {}), secrets, slug, mf.read_bytes(), fmt, thr,
-                                   phrase=pr.get('phrase') or slug, **extra) or {}
-    except satellite.Missing:
-        return {'error': "this body has no model door yet (PUT /wakeword/model). Copy the files below onto it by hand.", 'code': 'no_door'}, 409
+        library.add(slug, mf.read_bytes(), fmt, meta, overwrite=True, made_by='wakeword-maker', phrase=pr.get('phrase'))
+        told = library.switch(row['id'], slug)                    # its wish; the driver sends it and the board restarts
+    except library.LibraryError as e:
+        return {'error': str(e)}, 400
     except Exception as e:
         return {'error': f"{device}: {getattr(e, 'args', [e])[0]}"}, 502
-    _remember_install(root, slug, **{row['id']: {'run': want, 'threshold': thr, 'when': time.time()}})
+    if not told.get('sent'):
+        code = 'no_door' if 'no door' in str(told.get('warning') or '') else 'not_sent'
+        return {'error': f"{device} is set to {slug}, but: {told.get('warning')}", 'code': code}, 502
     return {'sent': want, 'threshold': thr, 'told': told}
 
 

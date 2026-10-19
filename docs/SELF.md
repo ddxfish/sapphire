@@ -41,6 +41,8 @@ Hallucination filter
 ### Wakeword
 openWakeWord
 Custom models
+Wakeword library
+Per-listener switch
 Hot swap
 ### Conversation
 Hands-free speech

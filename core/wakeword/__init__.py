@@ -11,86 +11,39 @@ else:
     from .wakeword_null import NullAudioRecorder as AudioRecorder
     from .wakeword_null import NullWakeWordDetector as WakeWordDetector
 
-# Built-in models bundled with openwakeword
-BUILTIN_MODELS = ['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', 'weather']
+from .library import BUILTIN as BUILTIN_MODELS, CORE_DIR as CORE_MODELS_DIR, USER_DIR as USER_MODELS_DIR
 
-# Core models dir (ships with Sapphire, not user-customizable)
-CORE_MODELS_DIR = Path(__file__).parent / 'models'
 
 def get_available_models():
     """
-    Discover available wakeword models.
-    
+    Discover available wakeword models, from the library (core.wakeword.library).
+
     Returns dict with:
         - builtin: list of built-in model names (OWW bundled)
-        - core: list of {name, path} dicts for Sapphire-bundled models
-        - custom: list of {name, path} dicts for user models
-        - all: combined list of all model names for dropdown
+        - core: list of {name, path, type} for Sapphire-bundled models
+        - custom: list of {name, path, type} for user models (path relative to the Sapphire folder)
+        - all: the names this computer's detector can load (openWakeWord, .onnx), for the dropdown.
+          A .tflite in the library is a microWakeWord model for an ESP32: listed in core/custom
+          with type 'tflite', never offered to the desktop detector (2026-10-19).
     """
-    core_models = []
+    from . import library
+    rows = library.entries()
+    core_models = [{'name': e['name'], 'path': e['path'], 'type': e['family']} for e in rows if e['source'] == 'core']
     custom_models = []
-    
-    # Scan core/wakeword/models/ for Sapphire-bundled models
-    if CORE_MODELS_DIR.exists():
-        for model_file in CORE_MODELS_DIR.rglob('*.onnx'):
-            name = model_file.stem
-            core_models.append({
-                'name': name,
-                'path': str(model_file),
-                'type': 'onnx'
-            })
-            logger.debug(f"Found core wakeword model: {name}")
-        
-        for model_file in CORE_MODELS_DIR.rglob('*.tflite'):
-            name = model_file.stem
-            core_models.append({
-                'name': name,
-                'path': str(model_file),
-                'type': 'tflite'
-            })
-            logger.debug(f"Found core wakeword model: {name}")
-    
-    # Scan user/wakeword/models/ for user custom models
-    user_models_dir = Path(__file__).parent.parent.parent / 'user' / 'wakeword' / 'models'
-    
-    if user_models_dir.exists():
-        for model_file in user_models_dir.rglob('*.onnx'):
-            name = model_file.stem
-            rel_path = str(model_file.relative_to(Path(__file__).parent.parent.parent))
-            custom_models.append({
-                'name': name,
-                'path': rel_path,
-                'type': 'onnx'
-            })
-            logger.debug(f"Found custom wakeword model: {name} at {rel_path}")
-        
-        for model_file in user_models_dir.rglob('*.tflite'):
-            name = model_file.stem
-            rel_path = str(model_file.relative_to(Path(__file__).parent.parent.parent))
-            custom_models.append({
-                'name': name,
-                'path': rel_path,
-                'type': 'tflite'
-            })
-            logger.debug(f"Found custom wakeword model: {name} at {rel_path}")
-    
-    # Build combined list: builtins -> core -> custom (no duplicates)
+    for e in rows:
+        if e['source'] != 'user':
+            continue
+        try:
+            rel = str(Path(e['path']).relative_to(library.PROJECT_ROOT))
+        except ValueError:
+            rel = e['path']
+        custom_models.append({'name': e['name'], 'path': rel, 'type': e['family']})
     all_models = list(BUILTIN_MODELS)
-    for model in core_models:
-        if model['name'] not in all_models:
+    for model in core_models + custom_models:
+        if model['type'] == 'onnx' and model['name'] not in all_models:
             all_models.append(model['name'])
-    for model in custom_models:
-        if model['name'] not in all_models:
-            all_models.append(model['name'])
-    
-    return {
-        'builtin': BUILTIN_MODELS,
-        'core': core_models,
-        'custom': custom_models,
-        'all': all_models
-    }
+    return {'builtin': BUILTIN_MODELS, 'core': core_models, 'custom': custom_models, 'all': all_models}
 
-USER_MODELS_DIR = Path(__file__).parent.parent.parent / 'user' / 'wakeword' / 'models'
 
 
 def resolve_model_path(model_name):

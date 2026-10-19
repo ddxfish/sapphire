@@ -1,0 +1,8 @@
+{
+ "name": "hey_sapphire",
+ "phrase": "hey sapphire",
+ "onnx": {
+  "threshold": 0.6,
+  "made_by": "sapphire"
+ }
+}

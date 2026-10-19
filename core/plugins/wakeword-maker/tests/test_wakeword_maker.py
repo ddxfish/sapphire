@@ -888,3 +888,38 @@ def test_room_day_starts_a_keeping_watch_on_every_online_satellite(settings, roo
     assert api.room_library(query={'project': 'hey_day'}, settings=settings)['minutes'] == 0
     r3 = api.room_day_stop('hey_day', settings=settings)
     assert not any(w['running'] for w in r3['watches'])
+
+
+def test_install_satellite_goes_through_the_library(root, monkeypatch):
+    """The ★ ESP32 model lands in the wake word library with its manifest, then the device's wish is switched
+    (the driver sends it, the board restarts). A board that could not be told is set and said so (2026-10-19)."""
+    root.mkdir()
+    pr = store.create_project(root, 'hey marcus')
+    pdir = paths.project_dir(root, pr['slug'])
+    d = pdir / 'runs' / 'e-mww'
+    d.mkdir(parents=True)
+    (d / 'model.tflite').write_bytes(b'\0\0\0\0TFL3' + b'\0' * 5000)
+    (d / 'model.json').write_text(json.dumps({'micro': {'sliding_window_size': 6, 'feature_step_size': 10}}))
+    (d / 'run.json').write_text(json.dumps({'id': 'e-mww', 'trainer': 'mww', 'state': 'done', 'threshold': 0.9,
+                                            'heldout': {'recall': 0.9, 'near_fires': 0, 'n_near': 10, 'threshold': 0.9}}))
+    from core.devices import engine
+    from core.wakeword import library
+    monkeypatch.setattr(engine, '_usable', lambda dev: {'id': 'esp', 'parts': [{'driver': 'satellite', 'config': {}}]})
+    monkeypatch.setattr(engine, '_part', lambda row, drv: row['parts'][0])
+    monkeypatch.setattr(engine, '_part_secrets', lambda dev, drv: {})
+    monkeypatch.setattr(api, '_wake_format', lambda device, h=None: 'tflite')
+    added, switched = [], []
+    monkeypatch.setattr(library, 'add', lambda name, data, fam, meta=None, **kw: added.append((name, fam, meta, kw)) or {'name': name})
+    monkeypatch.setattr(library, 'switch', lambda l, m: switched.append((l, m)) or {'sent': True, 'warning': '', 'model': m})
+    out = api.install_satellite(pr['slug'], body={'device': 'esp'}, settings={'data_dir': str(root)})
+    assert out['sent'] == 'e-mww' and out['threshold'] == 0.9 and out['told']['sent'] is True
+    name, fam, meta, kw = added[0]
+    assert (name, fam) == ('hey_marcus', 'tflite')
+    assert meta == {'threshold': 0.9, 'run': 'e-mww', 'label': None, 'micro': {'sliding_window': 6, 'step_ms': 10}}
+    assert kw == {'overwrite': True, 'made_by': 'wakeword-maker', 'phrase': 'hey marcus'}
+    assert switched == [('esp', 'hey_marcus')]
+    monkeypatch.setattr(library, 'switch', lambda l, m: {'sent': False, 'warning': 'satellite: Could not reach it.', 'model': m})
+    body, code = api.install_satellite(pr['slug'], body={'device': 'esp'}, settings={'data_dir': str(root)})
+    assert code == 502 and 'Could not reach' in body['error'] and body['code'] == 'not_sent'
+    st = api.install_status(pr['slug'], settings={'data_dir': str(root)})
+    assert 'satellites' in st and 'desktop' in st

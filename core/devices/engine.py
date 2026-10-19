@@ -324,6 +324,7 @@ def _is_bindings(field):
 _SLOT = re.compile(r'[a-z0-9][a-z0-9_.-]{0,39}$')
 _DO = re.compile(r'[a-z0-9][a-z0-9_-]{0,23}$')
 MAX_SLOTS = 32           # slots one bindings field keeps
+MAX_OPTIONS = 200        # choices one dynamic select offers
 BINDING_TEXT = 500       # characters of the text a pick may carry
 
 
@@ -352,6 +353,30 @@ def _menu(row, part, field):
     except Exception as e:
         logger.warning(f"[DEVICES] {row['id']}: {part['driver']} could not say what {field['key']} offers: {e}")
         return {}
+
+
+def _options(row, part, field):
+    """What a dynamic select offers on this device, from its driver's
+    options(device, config, key) -> [{'value', 'label'}]: a list that is this
+    device's own (the wake words of the family it runs). Never raises. The
+    stored value is always among the choices, so a save round-trips even when
+    the driver cannot say (the library unreadable, a model since removed)."""
+    out = []
+    try:
+        mod, _ = _driver(part['driver'], part.get('plugin', ''))
+        said = mod.options(dict(_brief(row), has=part.get('has'), takes=part.get('takes'),
+                                fingerprint=str(row.get('fingerprint') or '')),
+                           dict(part.get('config') or {}), field['key'])
+        for o in said if isinstance(said, (list, tuple)) else []:
+            if isinstance(o, dict) and 'value' in o:
+                out.append({'value': str(o['value'])[:200], 'label': str(o.get('label') or o['value'])[:80]})
+    except Exception as e:
+        logger.warning(f"[DEVICES] {row['id']}: {part['driver']} could not say what {field['key']} offers: {e}")
+    out = out[:MAX_OPTIONS]
+    have = str((part.get('config') or {}).get(field['key']) or '')
+    if have and have not in [o['value'] for o in out]:
+        out.append({'value': have, 'label': f"{have} (not in the library now)"})
+    return out
 
 
 def _picks(field, value):
@@ -1014,7 +1039,12 @@ def public(row):
                 continue
             f = dict(f, capability=cap) if isinstance(f.get('capability'), (list, tuple)) else f
             # a bindings field's menu is the device's own (its buttons, what it can do by itself)
-            schema.append(dict(f, menu=_menu(row, part, f)) if _is_bindings(f) else f)
+            if _is_bindings(f):
+                schema.append(dict(f, menu=_menu(row, part, f)))
+            elif f.get('dynamic') and f.get('type') == 'select':   # its choices are this device's own (driver.options)
+                schema.append(dict(f, options=_options(row, part, f)))
+            else:
+                schema.append(f)
         values = dict(part.get('config') or {})
         unreadable = []
         for field in schema:

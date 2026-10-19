@@ -116,10 +116,14 @@ the judge knows nothing about whispers.
   (firmware 0.7.6) pushes its room in pieces from its own task, keeps hearing its wake word, and its own fires
   are counted beside the models'; *board test mode* makes it count and answer nothing. The breakdown shows
   which held-out clip each model missed or fired on.
-- **Install.** *This computer*: copies the ★ desktop model to `user/wakeword/models/` and switches the wake
-  word setting to it, live, with a *Put back* button. *Satellites*: sends the right family to each one through
-  its model door; a body without the door says so and you copy the files by hand. *Files*: the model, its
-  manifest and a copy of the judge's verdict, for anything else.
+- **Install.** Everything goes through the wake word library (Settings > Wakeword, `user/wakeword/models/`),
+  so the ★ models land there; afterwards this computer picks from the wake word dropdown and a board from its
+  own Wake word tab in Devices. *This computer*: copies the ★ desktop model into the library
+  and switches the wake word setting to it, live, with a *Put back* button. *Satellites*: copies the right
+  family into the library and sends it through the body's model door; the board restarts on it, about twenty
+  seconds; a body that is offline is set to it and gets it when it is next seen; a body without the door says
+  so and you copy the files by hand. *Files*: the model, its manifest and a copy of the judge's verdict, for
+  anything else.
 
 ## What happens to a job when Sapphire restarts
 
@@ -134,8 +138,9 @@ button, and a run that was training shows the same on Train.
 - Runs: `wakeword/projects/<phrase>/runs/<stamp>-<family>/` with `run.json`, the model, and `judge.json`.
 - Voices and models the tools need: `wakeword/voices/` (Piper voices; under `hf/` the Kokoro model and packs and
   Whisper's model). Nothing is written to your home folder.
-- Installed desktop models: `user/wakeword/models/<phrase>.onnx` with a `.json` sidecar that says the Wakeword
-  Maker made it. Since 2.13.4 a model there wins over a bundled one of the same name.
+- Installed models: `user/wakeword/models/<phrase>.onnx` and `<phrase>.tflite` with one `<phrase>.json` sidecar
+  (a block per family: threshold, the microWakeWord window and step, who made it). That folder is the wake
+  word library (Settings > Wakeword); a model there wins over a bundled one of the same name (since 2.13.4).
 
 ## From a terminal
 The same engine runs headless, in the plugin's environment:

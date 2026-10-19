@@ -70,8 +70,9 @@ def pi():
 
     sat._about.clear()
     sat._palettes.clear()
-    with patch.object(sat.net, 'request', fake):
-        yield calls
+    from core.devices import glass
+    with patch.object(sat.net, 'request', fake), patch.object(glass, 'sync_soon', lambda d: None):
+        yield calls                 # no screen-sync thread: it looks the name up in the real device store
     sat._about.clear()
     sat._palettes.clear()
 
@@ -616,3 +617,138 @@ def test_say_is_refused_on_the_device_she_is_already_answering(board):
     finally:
         with voice._lock:
             voice._running.pop(DEV['id'], None)
+
+
+# --- the wake word it listens for (core/wakeword/library.py, 2026-10-19) ---------
+# A board that states its model family (/health wakeword.format) takes a model from
+# the library through PUT /wakeword/model and restarts on it. The library is a temp
+# folder here; the board is the fake above with the ESP32's health.
+
+TFL = b'\0\0\0\0TFL3' + b'\0' * 5000
+ESP = dict(BOARD, has=["speaker", "mic", "wake", "firmware"], model="ai-speaker-mic", firmware="0.7.6", slot="ota_0",
+           wakeword={"enabled": True, "running": True, "model": "hey_jarvis", "format": "tflite"})
+
+
+@pytest.fixture
+def esp(pi, tmp_path, monkeypatch):
+    from core.wakeword import library as lib
+    monkeypatch.setattr(lib, 'USER_DIR', tmp_path / 'models')
+    monkeypatch.setattr(lib, 'CORE_DIR', tmp_path / 'core')
+    lib.add('hey_marcus', TFL, 'tflite', {'threshold': 0.9, 'micro': {'sliding_window_size': 6, 'feature_step_size': 10}})
+    from core.devices import glass
+    monkeypatch.setattr(glass, 'sync_soon', lambda d: None)      # apply's screen sync runs a thread against the real store: not here
+    sat._settled.clear()
+    with patch.dict(REAL, {('GET', '/health'): ESP, ('PUT', '/led/looks'): {"ok": True},
+                           ('GET', '/wakeword'): {"enabled": True, "running": True, "model": "hey_jarvis", "format": "tflite", "stored": False}}):
+        yield pi
+    sat._settled.clear()
+
+
+def test_a_board_that_states_its_model_family_takes_a_wake_word():
+    assert 'wake.model' in sat._takes(ESP) and 'wake.model' not in sat._takes(BOARD)
+    told = sat.describe(dict(DEV, has=ESP['has'], takes=['wake.model']), CFG)
+    assert told['wake']['actions']['install']['values'] == '<model name> | own'
+    assert 'install' not in sat.describe(dict(DEV, has=BOARD['has'], takes=[]), CFG)['wake']['actions']
+    assert sat.wake_format('pi2') == 'onnx'
+    assert sat.wake_format('pi2', row={'fingerprint': 'aa:bb', 'parts': []}) == 'tflite'
+    assert sat.wake_format('pi2', row={'parts': [{'driver': 'satellite', 'has': ['wake', 'firmware']}]}) == 'tflite'
+    assert sat.wake_format('esp32-den') == 'tflite'
+    assert sat.wake_format('pi2', health=ESP) == 'tflite'
+
+
+def test_options_are_the_librarys_models_of_this_boards_family(esp):
+    sat.status(DEV, CFG, KEY)                                        # its health is now known: tflite
+    assert sat.wake_state('pi2') == {'model': 'hey_jarvis', 'format': 'tflite', 'enabled': True}
+    assert sat.options(dict(DEV, has=ESP['has']), CFG, 'wake_model') == [
+        {'value': '', 'label': "the board's own word"}, {'value': 'hey_marcus', 'label': 'hey marcus (hey_marcus)'}]
+    assert sat.options(DEV, CFG, 'rotation') == []
+    sat._about.clear()
+    pi_health = {k: v for k, v in BOARD.items() if k != 'board'}    # a Pi: no board name, no format stated: onnx
+    with patch.dict(REAL, {('GET', '/health'): pi_health}):
+        sat.status(DEV, CFG, KEY)
+    assert sat.options(dict(DEV, has=pi_health['has']), CFG, 'wake_model') == [{'value': '', 'label': "the board's own word"}]
+
+
+def test_a_save_sends_the_wake_word_last_and_the_board_restarts_on_it(esp):
+    sat.apply(DEV, dict(CFG, **LOOKS, wake_model='hey_marcus'), KEY)
+    mine = [c for c in esp if c.kw['headers']['Authorization'] == 'Bearer ' + KEY['token']]
+    sent = [c for c in mine if c.path.startswith('/wakeword/model?')]
+    assert len(sent) == 1 and sent[0].method == 'PUT' and mine.index(sent[0]) == len(mine) - 1   # last of the save
+    from urllib.parse import parse_qs
+    q = {k: v[0] for k, v in parse_qs(sent[0].path.split('?', 1)[1]).items()}
+    assert q == {'name': 'hey_marcus', 'threshold': '0.9', 'format': 'tflite', 'phrase': 'hey marcus',
+                 'sliding_window': '6', 'step_ms': '10'}
+    assert sent[0].kw['data'] == TFL and sent[0].kw['timeout'] == 180
+    assert [c.path for c in mine if c.path == '/led/looks'] == ['/led/looks']     # the looks went first
+
+
+def test_the_word_it_already_listens_for_and_an_unset_wish_send_nothing(esp):
+    sat.apply(DEV, dict(CFG, **LOOKS, wake_model='hey_jarvis'), KEY)
+    sat.apply(DEV, dict(CFG, **LOOKS), KEY)
+    assert not [c for c in esp if c.path.startswith('/wakeword/model')]
+
+
+def test_its_own_word_forgets_a_stored_model_and_nothing_else(esp):
+    sat.apply(DEV, dict(CFG, **LOOKS, wake_model=''), KEY)
+    assert not [c for c in esp if c.method == 'DELETE']                           # nothing stored: already its own
+    with patch.dict(REAL, {('GET', '/wakeword'): {"enabled": True, "model": "hey_marcus", "format": "tflite", "stored": True}}):
+        sat.apply(DEV, dict(CFG, **LOOKS, wake_model='own'), KEY)
+    assert [(c.method, c.path) for c in esp if c.path == '/wakeword/model'] == [('DELETE', '/wakeword/model')]
+
+
+def test_a_wish_the_board_has_not_taken_is_said_and_sent_once_at_a_probe(esp):
+    st = sat.status(DEV, dict(CFG, wake_model='hey_marcus'), KEY)
+    assert st['readings']['wake word'] == 'listening for hey_jarvis; set to hey_marcus, not taken yet'
+    sent = [c for c in esp if c.path.startswith('/wakeword/model?')]
+    assert len(sent) == 1
+    sat.status(DEV, dict(CFG, wake_model='hey_marcus'), KEY)                     # the same wish: not again
+    assert len([c for c in esp if c.path.startswith('/wakeword/model?')]) == 1
+    st = sat.status(DEV, dict(CFG, wake_model='hey_jarvis'), KEY)                # what it has: no note
+    assert st['readings']['wake word'] == 'listening for hey_jarvis'
+
+
+def test_a_library_model_that_is_gone_is_a_reason_at_save(esp):
+    from core.devices.engine import DeviceError
+    with pytest.raises(DeviceError, match='no microWakeWord model named hey_nova'):
+        sat.apply(DEV, dict(CFG, **LOOKS, wake_model='hey_nova'), KEY)
+
+
+def test_an_older_program_that_states_no_family_is_left_alone(esp):
+    with patch.dict(REAL, {('GET', '/health'): BOARD}):
+        sat.apply(DEV, dict(CFG, **LOOKS, wake_model='hey_marcus'), KEY)
+    assert not [c for c in esp if c.path.startswith('/wakeword/model')]
+
+
+def test_validate_keeps_the_wish_a_safe_name():
+    cfg, err = sat.validate(dict(CFG, wake_model='Hey Marcus!'))
+    assert err == '' and cfg['wake_model'] == 'hey_marcus'
+    assert sat.validate(dict(CFG, wake_model='own'))[0]['wake_model'] == ''
+    assert 'wake_model' not in sat.validate(dict(CFG))[0]
+
+
+def test_the_install_action_goes_through_the_library(esp, monkeypatch):
+    from core.wakeword import library as lib
+    asked = []
+    monkeypatch.setattr(lib, 'switch', lambda d, m: asked.append((d, m)) or {'model': m, 'sent': True, 'warning': ''})
+    assert run('wake', 'install', 'hey_marcus') == ('pi2 is restarting on hey_marcus. Back in about twenty seconds.', True)
+    assert asked == [('pi2', 'hey_marcus')]
+    monkeypatch.setattr(lib, 'switch', lambda d, m: {'model': '', 'sent': False, 'warning': 'satellite: Could not reach it.'})
+    assert run('wake', 'install', 'own') == ('pi2 is set to its own word, but: satellite: Could not reach it.', False)
+    monkeypatch.setattr(lib, 'switch', lambda d, m: (_ for _ in ()).throw(lib.LibraryError('no such model')))
+    assert run('wake', 'install', 'x') == ('no such model', False)
+
+
+def test_the_engine_asks_the_driver_what_a_dynamic_select_offers(monkeypatch):
+    from core.devices import engine
+    row = {'id': 'pi2', 'label': 'Kitchen', 'fingerprint': 'aa:bb'}
+    part = {'driver': 'satellite', 'has': ['wake'], 'takes': ['wake.model'], 'config': {'wake_model': 'hey_gone'}}
+    field = {'key': 'wake_model', 'type': 'select', 'dynamic': True}
+    seen = {}
+    fake = SimpleNamespace(options=lambda device, config, key: seen.update(device=device, key=key) or
+                           [{'value': '', 'label': 'own'}, {'value': 'hey_marcus', 'label': 'hey marcus'}, 'junk'])
+    monkeypatch.setattr(engine, '_driver', lambda d, p='': (fake, {}))
+    assert engine._options(row, part, field) == [{'value': '', 'label': 'own'}, {'value': 'hey_marcus', 'label': 'hey marcus'},
+                                                 {'value': 'hey_gone', 'label': 'hey_gone (not in the library now)'}]
+    assert seen['key'] == 'wake_model' and seen['device']['fingerprint'] == 'aa:bb' and seen['device']['takes'] == ['wake.model']
+    monkeypatch.setattr(engine, '_driver', lambda d, p='': (_ for _ in ()).throw(RuntimeError('off')))
+    assert engine._options(row, part, field) == [{'value': 'hey_gone', 'label': 'hey_gone (not in the library now)'}]

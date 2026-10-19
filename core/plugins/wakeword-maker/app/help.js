@@ -71,12 +71,12 @@ Then trains the best one properly. About an hour on a gaming PC.`],
 Each one's threshold and ★ live in that table too; this page is for listening.`],
     synth: ['Synthetic voices', `Which made voices train this run. All, one engine, or none (only what you recorded).
 Piper brings hundreds of plain readers; Kokoro brings a few dozen polished ones. Train the same run both ways and the judge says which your room prefers.`],
-    install: ['Install', `Puts the ★ models where they listen. This computer swaps live, no restart.
+    install: ['Install', `Puts the ★ models where they listen, through the wake word library (Settings > Wakeword): the models land there; afterwards this computer picks from the wake word dropdown and a board from its own Wake word tab in Devices. This computer swaps live, no restart.
 A satellite takes its model through a door in its body (PUT /wakeword/model); a body without the door gets the files copied by hand.
 Each kind of device wants its own kind of model: openWakeWord for desktop and Pi, microWakeWord for the ESP32.`],
-    install_desktop: ['This computer', `Copies the model under user/wakeword/models, sets the wake word model and threshold, and swaps the live detector.
+    install_desktop: ['This computer', `Copies the model into the library (user/wakeword/models), sets the wake word model and threshold, and swaps the live detector.
 "Put back" returns to the model that was listening before. Both stay on disk; Settings can pick either.`],
-    install_satellite: ['Satellites', `Sends the model bytes and the threshold to the body. The body stores it and starts listening for it.
+    install_satellite: ['Satellites', `Copies the model into the library, then sends it to the body through its door (PUT /wakeword/model): the body stores it and restarts on it, about twenty seconds. A body that cannot be reached now is set to it and gets it when it is next seen.
 Pi and ESP32 bodies older than that door answer "no door": copy the files instead.`],
     sources: ['Sources', `What this run trains on. Synthetic voices: all, one engine, or none. Your takes: all, or none (then the model learns the phrase from made voices alone and is judged on you). Own weight: how many extra times each of your takes is varied into training, 8 by default against thousands of synthetic clips.
 The held-out slice is never touched by any of this: every run is judged on every microphone. Your own near misses always train.`],

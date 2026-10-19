@@ -1023,17 +1023,25 @@ def install_plugin(
             # signed-URL tokens reach the server. 2026-04-26 enhancement.
             _parsed = urlparse(clean_url)
             _path_lower = (_parsed.path or '').lower()
-            # Strip query/fragment for regex matching against repo URL shapes
-            # (GitHub/GitLab repo URLs don't use meaningful params for cloning).
-            _url_for_match = f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}"
 
+            # Repo URL (GitHub/GitLab, optionally pinned to a branch) first, so
+            # a GitHub branch-zip link gets the codeload redirect allowance
+            # instead of the redirect-refusing direct-zip path. Parsing lives
+            # in core/repo_url.py, shared with check-update and the store.
+            from core import repo_url
+            src = repo_url.parse(clean_url)
+            if src:
+                url_install_method = f"{src['host']}_url"
+                r = repo_url.open_archive(src)
+                if r.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"Failed to download from {src['label']} (HTTP {r.status_code})")
             # Direct .zip URL — undocumented fallback for plugin authors without
             # a reachable GitHub. Downstream validation (zip structure, manifest,
             # signing gate) catches bad content. Two guards here against SSRF:
             # require https:// (no plain http) and reject obvious localhost
             # variants. Doesn't catch DNS rebinding or redirect-to-localhost,
             # but the realistic attack surface for a single-user app is small.
-            if _path_lower.endswith('.zip') and clean_url.startswith('https://'):
+            elif _path_lower.endswith('.zip') and clean_url.startswith('https://'):
                 _lower = clean_url.lower()
                 if any(bad in _lower for bad in (
                     '://localhost', '://127.', '://0.0.0.0', '://169.254.',
@@ -1053,61 +1061,7 @@ def install_plugin(
                 if r.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Failed to download zip (HTTP {r.status_code})")
             else:
-                # Parse GitHub URL → zip download
-                m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _url_for_match)
-                # Parse GitLab URL → zip download. GitLab supports nested subgroups
-                # so the pre-repo path can have multiple segments (e.g.
-                # gitlab.com/group/subgroup/repo). Capture the full path before
-                # the last segment as <gl_path>, last segment as <gl_repo>.
-                # 2026-04-26 — GitLab support added.
-                m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _url_for_match)
-                if m_gh:
-                    owner, repo = m_gh.group(1), m_gh.group(2)
-                    zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
-                    url_install_method = 'github_url'
-                    # GitHub serves the zip via 302 -> codeload.github.com; explicit allowlist.
-                    r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                    if r.status_code in (301, 302, 303, 307, 308):
-                        loc = r.headers.get('Location', '')
-                        if loc.startswith('https://codeload.github.com/'):
-                            r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                    if r.status_code == 404:
-                        zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
-                        r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                        if r.status_code in (301, 302, 303, 307, 308):
-                            loc = r.headers.get('Location', '')
-                            if loc.startswith('https://codeload.github.com/'):
-                                r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                    if r.status_code != 200:
-                        raise HTTPException(status_code=400, detail=f"Failed to download from GitHub (HTTP {r.status_code})")
-                elif m_gl:
-                    gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
-                    full_path = f"{gl_path}/{gl_repo}"
-                    # GitLab archive URL pattern. The archive filename inside the
-                    # zip is <repo>-<branch>-<sha>/, which the downstream extract
-                    # already handles via the "find plugin.json at root or one
-                    # level deep, hoist wrapper" logic. allow_redirects=False to
-                    # preserve the SSRF guard pattern from the GitHub branch.
-                    zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
-                    url_install_method = 'gitlab_url'
-                    r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                    # GitLab may redirect within gitlab.com (e.g. moved repos).
-                    # Allow only same-host redirects.
-                    if r.status_code in (301, 302, 303, 307, 308):
-                        loc = r.headers.get('Location', '')
-                        if loc.startswith('https://gitlab.com/'):
-                            r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                    if r.status_code == 404:
-                        zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
-                        r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                        if r.status_code in (301, 302, 303, 307, 308):
-                            loc = r.headers.get('Location', '')
-                            if loc.startswith('https://gitlab.com/'):
-                                r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                    if r.status_code != 200:
-                        raise HTTPException(status_code=400, detail=f"Failed to download from GitLab (HTTP {r.status_code})")
-                else:
-                    raise HTTPException(status_code=400, detail="Invalid URL format. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo>, or a direct https:// .zip URL")
+                raise HTTPException(status_code=400, detail="Invalid URL format. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo> (either with /tree/<branch>), or a direct https:// .zip URL")
             try:
                 content_length = int(r.headers.get("Content-Length", 0))
             except (TypeError, ValueError):
@@ -1439,7 +1393,6 @@ def check_plugin_update(plugin_name: str, _=Depends(require_login)):
 
     Plain `def` — up to four sequential 10s network fetches; threadpool keeps
     the event loop live (C3)."""
-    import re
     from core.plugin_loader import plugin_loader
 
     info = plugin_loader.get_plugin_info(plugin_name)
@@ -1450,49 +1403,20 @@ def check_plugin_update(plugin_name: str, _=Depends(require_login)):
     source_url = state.get("installed_from")
     if not source_url:
         return {"update_available": False, "reason": "no_source"}
-    source_url_stripped = source_url.strip()
-    # Strip query/fragment for regex matching — defensive in case a stored
-    # installed_from URL was saved with tracking params. Match install path.
-    from urllib.parse import urlparse
-    _src_parsed = urlparse(source_url_stripped)
-    _src_for_match = f"{_src_parsed.scheme}://{_src_parsed.netloc}{_src_parsed.path}"
-
-    m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _src_for_match)
-    m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _src_for_match)
-
+    from core import repo_url
+    src = repo_url.parse(source_url)
     current_version = info.get("manifest", {}).get("version", "0.0.0")
-
-    # Fetch the remote manifest (root plugin.json, main then master).
-    # 2026-04-26 — GitLab support added alongside GitHub.
-    remote_manifest = None
-    if m_gh:
-        # Contents-API-first — raw.githubusercontent lags pushes by ~5 min,
-        # which read as "no updates available" right after a release.
-        from core.github_files import fetch_github_file
-        owner, repo = m_gh.group(1), m_gh.group(2)
-        for branch in ("main", "master"):
-            text = fetch_github_file(f"{owner}/{repo}", branch, "plugin.json")
-            if text is not None:
-                try:
-                    remote_manifest = json.loads(text)
-                except Exception:
-                    remote_manifest = None
-                break
-    elif m_gl:
-        import requests as req
-        from core import net
-        gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
-        full_path = f"{gl_path}/{gl_repo}"
-        for branch in ("main", "master"):
-            try:
-                r = net.get(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json", timeout=10)
-                if r.status_code == 200:
-                    remote_manifest = r.json()
-                    break
-            except Exception:
-                continue
-    else:
+    if not src:
         return {"update_available": False, "reason": "unsupported_source"}
+
+    # Root plugin.json on the pinned branch, or main then master.
+    remote_manifest = None
+    text = repo_url.fetch_file(src, "plugin.json")
+    if text is not None:
+        try:
+            remote_manifest = json.loads(text)
+        except Exception:
+            remote_manifest = None
 
     if not isinstance(remote_manifest, dict):
         remote_manifest = None

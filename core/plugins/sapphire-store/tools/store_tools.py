@@ -215,11 +215,18 @@ def _install(slug, plugin_settings=None):
         # the server. Mirrors core/routes/plugins.py logic.
         _parsed = urlparse(clean_url)
         _path_lower = (_parsed.path or '').lower()
-        _url_for_match = f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}"
 
-        zip_url = None
         install_method = None
-        if _path_lower.endswith('.zip') and clean_url.startswith('https://'):
+        # Repo URL (optionally pinned to a branch) before the direct-zip path —
+        # shared parser in core/repo_url.py, same as the install route.
+        from core import repo_url
+        src = repo_url.parse(clean_url)
+        if src:
+            install_method = f"{src['host']}_url"
+            zr = repo_url.open_archive(src)
+            if zr.status_code != 200:
+                return f"Failed to download from {src['label']} (HTTP {zr.status_code})", False
+        elif _path_lower.endswith('.zip') and clean_url.startswith('https://'):
             # Direct .zip URL — SSRF guards: https-only + private-IP block.
             _lower = clean_url.lower()
             if any(bad in _lower for bad in (
@@ -237,47 +244,7 @@ def _install(slug, plugin_settings=None):
             if zr.status_code != 200:
                 return f"Failed to download zip (HTTP {zr.status_code})", False
         else:
-            m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _url_for_match)
-            m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _url_for_match)
-            if m_gh:
-                owner, repo = m_gh.group(1), m_gh.group(2)
-                install_method = 'github_url'
-                zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
-                zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                if zr.status_code in (301, 302, 303, 307, 308):
-                    loc = zr.headers.get('Location', '')
-                    if loc.startswith('https://codeload.github.com/'):
-                        zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                if zr.status_code == 404:
-                    zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
-                    zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                    if zr.status_code in (301, 302, 303, 307, 308):
-                        loc = zr.headers.get('Location', '')
-                        if loc.startswith('https://codeload.github.com/'):
-                            zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                if zr.status_code != 200:
-                    return f"Failed to download from GitHub (HTTP {zr.status_code})", False
-            elif m_gl:
-                gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
-                full_path = f"{gl_path}/{gl_repo}"
-                install_method = 'gitlab_url'
-                zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
-                zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                if zr.status_code in (301, 302, 303, 307, 308):
-                    loc = zr.headers.get('Location', '')
-                    if loc.startswith('https://gitlab.com/'):
-                        zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                if zr.status_code == 404:
-                    zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
-                    zr = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
-                    if zr.status_code in (301, 302, 303, 307, 308):
-                        loc = zr.headers.get('Location', '')
-                        if loc.startswith('https://gitlab.com/'):
-                            zr = net.get(loc, stream=True, timeout=30, allow_redirects=False)
-                if zr.status_code != 200:
-                    return f"Failed to download from GitLab (HTTP {zr.status_code})", False
-            else:
-                return f"Invalid source URL: {source_url}. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo>, or a direct https:// .zip URL", False
+            return f"Invalid source URL: {source_url}. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo> (either with /tree/<branch>), or a direct https:// .zip URL", False
 
         # Save zip to temp
         tmp_fd = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)

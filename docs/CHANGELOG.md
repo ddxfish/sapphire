@@ -1,3 +1,7 @@
+# 2.15.1 - Wakeword Expansions
+- Settings > Wakeword - new library
+- Device Manager can read wakeword library
+- Plugins accept github branches and trees
 # 2.15.0 - Moved Plugins
 - moved plugins/ to core/plugins
 - user/plugins is where you should make your own plugins

@@ -191,6 +191,18 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # `confirm_embedding_swap: true` when the swap would invalidate vectors.
     # Scout finding #3 — 2026-04-20.
     # One gate for both doors — the single-key PUT below shares it (M-C9).
+    # A wake word model listens at its own threshold (its sidecar in the library, core/wakeword/
+    # library.py): a switch from the dropdown takes it along, as the Wakeword Maker's Install does.
+    # A threshold the person set in the same save wins. 2026-10-19.
+    if 'WAKEWORD_MODEL' in settings_dict and 'WAKEWORD_THRESHOLD' not in settings_dict:
+        try:
+            from core.wakeword import library
+            own = library.threshold_of(str(settings_dict['WAKEWORD_MODEL'] or ''), 'onnx')
+        except Exception as e:
+            logger.warning(f"the wake word's own threshold could not be read: {e}")
+            own = None
+        if own is not None:
+            settings_dict['WAKEWORD_THRESHOLD'] = own
     if 'EMBEDDING_PROVIDER' in settings_dict:
         await _guard_embedding_swap(settings, settings_dict['EMBEDDING_PROVIDER'],
                                     bool(data.get('confirm_embedding_swap')))

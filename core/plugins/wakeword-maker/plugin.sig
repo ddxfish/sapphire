@@ -6,11 +6,11 @@
     "app/api.js": "sha256:f913521f65abe294a8ec02d295a2774f331e56bfc3ca35eb1b918a1a1abe16e6",
     "app/app.css": "sha256:f9e9ff55dff07b89b4d8ec750ab960f235892735a5a1e87b8d5dcedcc102b477",
     "app/folder.js": "sha256:390f2c0364b1d39857290e22eccbe7e134b8ca8864b0f9c98696942c34ae4bb3",
-    "app/help.js": "sha256:c735bda2e2ccfbb1a94fb14975cec001e15ba69beb295c290ae17d3a09adfd63",
+    "app/help.js": "sha256:18bb0ddb53cf70bb3a9c4500d34419e586a0207c18db8cb4f8631021c1a9e49e",
     "app/index.js": "sha256:6d910459c29458711ea9f76695b8c13e64ce87ec7972d365708ef9f5d66cda5f",
     "app/recorder.js": "sha256:7af7aa0b8831a082a5ea84231bb3fe404e94f98c66264f50607d0580ef058783",
     "app/tabs/check.js": "sha256:d5d5106ab94bb285dbacb061879f3fc6852df3aea0c25b93993fc2b727f7ab24",
-    "app/tabs/install.js": "sha256:e1bbe7c491171aca08da8406f996624e6a049a9ba18fb6c9b8cf8fde87e023b0",
+    "app/tabs/install.js": "sha256:be2489cd2fb02390c5c44ab558ce8dd027147cbb218ce92f2df58163d14d7482",
     "app/tabs/record.js": "sha256:59713d9fef895f95c719b47e604d85184aafe9ce44cfa5cb4774f2fabe3f5ab6",
     "app/tabs/settings.js": "sha256:519b4ce9ab001190dafdf407befb078b06e55e5f8c6b97b8a20d614b232e7e95",
     "app/tabs/test.js": "sha256:30f81af5fd76cc8da30ab0895143d719e4a17ad7d9bb95f1151ce8881dc1b341",
@@ -20,8 +20,8 @@
     "app/tabs/wakewords.js": "sha256:eacc13d8ca63808cba460883751caa4fc89bec4b92998f523fc4269a083298af",
     "daemon.py": "sha256:c08962dabb034ddd627e0222e4657494e9707b593bf39861c587d27345cc0a2d",
     "plugin.json": "sha256:0de0509f387b8250af8dfbd6297d255a16e507c685c6a36badec204a8369f267",
-    "routes/api.py": "sha256:d62ed9fd4140526835b7a5e27edb47b635946c6132621e6cf9156892e1d442ea",
-    "tests/test_wakeword_maker.py": "sha256:fd866a0d08f0c7d33767b658aeb55d09c4f75df872b5d65df3d0da0d2e4a3c4f",
+    "routes/api.py": "sha256:5b7838b070d7d6004ee98c5c73049a9f0ceadb64b4c147387c22ccbc80a0444d",
+    "tests/test_wakeword_maker.py": "sha256:801e929b17d5d140c96b6d017d2035df046a93ba59dc147551d4c96e63a18f4f",
     "wakeword_maker/__init__.py": "sha256:721dc1b5f2f2a867b8f1dd00cbbd4c8b19f02d012590d86b096c07eb5e4a84b6",
     "wakeword_maker/augment.py": "sha256:55742b51ffb13ee713f795f71e333e485057ad07792071a09c3391080f103f12",
     "wakeword_maker/catalog.py": "sha256:d373ee05af4bcd09d0a88ea5c2694bc7fe7f1c64d6b06da0f5ec6c2c879874e8",
@@ -46,5 +46,5 @@
     "wakeword_maker/voices.py": "sha256:8f204033e069a6c93c89741f44d70fa7cfa16c95a5a8cf3e88bc6ddcd8750ac9",
     "wakeword_maker/watch.py": "sha256:a8aeee29b9b9c4ba6a89a869db875ab6dcb538cfb013281d9276710ffc11ad03"
   },
-  "signature": "jD61irHJi/XadDZ51KwsfaC38JJvtnd/PzEpdZRigCot/S1Nbzvf5/+IhfgD3r1lIaEqadTp9MCTXIHj6So1CA=="
+  "signature": "M4Nwt+STo+ZbhkEo8f4+giFH/cc+v5YDsutWZUljARHIJJjC5prpil5A8MugfrjkPDzkH7Lg+zdPttMQBX5xBw=="
 }
