@@ -1877,7 +1877,7 @@ def install_desktop(slug, body=None, settings=None, **_):
                     overwrite=True, made_by='wakeword-maker', phrase=pr.get('phrase'))
         if not before['ours'] and before['model']:
             _remember_install(root, slug, previous_desktop={'model': before['model'], 'threshold': before['threshold']})
-        told = library.switch('desktop', slug)                    # the two settings, then the live detector
+        told = library.switch(library.DESKTOP, slug)              # the two settings, then the live detector
         ok = told.get('sent')
     except library.LibraryError as e:
         return {'error': str(e)}, 502
@@ -1949,7 +1949,8 @@ def install_satellite(slug, body=None, settings=None, **_):
     thr = float(run.get('threshold') or run.get('cutoff') or (run.get('heldout') or {}).get('threshold') or 0.5)
     extra = {}
     if mf.suffix == '.tflite':
-        man = (read_json(rdir / 'model.json') or {}).get('micro') or {}
+        mj = read_json(rdir / 'model.json')
+        man = (mj.get('micro') if isinstance(mj, dict) else None) or {}
         extra = {'sliding_window': man.get('sliding_window_size', 5), 'step_ms': man.get('feature_step_size', 10)}
     from core.wakeword import library
     meta = {'threshold': thr, 'run': want, 'label': run.get('label')}
@@ -1962,7 +1963,7 @@ def install_satellite(slug, body=None, settings=None, **_):
         return {'error': str(e)}, 400
     except Exception as e:
         return {'error': f"{device}: {getattr(e, 'args', [e])[0]}"}, 502
-    if not told.get('sent'):
+    if not told.get('sent') and not told.get('had'):
         code = 'no_door' if 'no door' in str(told.get('warning') or '') else 'not_sent'
         return {'error': f"{device} is set to {slug}, but: {told.get('warning')}", 'code': code}, 502
     return {'sent': want, 'threshold': thr, 'told': told}

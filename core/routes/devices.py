@@ -89,8 +89,10 @@ def update_device(device_id, body):
     row, failed = e.update(device_id, label=body.get("label"), enabled=body.get("enabled"),
                            parts=body.get("parts"), new_id=body.get("new_id"),
                            location=body.get("location"), locked=body.get("locked"),
-                           order=body.get("order"))
-    return _saved(row, failed, e.tell(row) if row.get("enabled", True) else [])
+                           order=body.get("order"), poke=False)
+    problems = e.tell(row) if row.get("enabled", True) else []
+    e.look_soon(row["id"])             # after the telling, never before (a probe mid-save sent the wake word under the save)
+    return _saved(row, failed, problems)
 
 
 def connect_device(device_id, body):

@@ -10,7 +10,7 @@
     "app/index.js": "sha256:6d910459c29458711ea9f76695b8c13e64ce87ec7972d365708ef9f5d66cda5f",
     "app/recorder.js": "sha256:7af7aa0b8831a082a5ea84231bb3fe404e94f98c66264f50607d0580ef058783",
     "app/tabs/check.js": "sha256:d5d5106ab94bb285dbacb061879f3fc6852df3aea0c25b93993fc2b727f7ab24",
-    "app/tabs/install.js": "sha256:be2489cd2fb02390c5c44ab558ce8dd027147cbb218ce92f2df58163d14d7482",
+    "app/tabs/install.js": "sha256:b968f9a25e61c55d80c74991ef7424d3529cb5e4c3cd31de7634edc2c52b299b",
     "app/tabs/record.js": "sha256:59713d9fef895f95c719b47e604d85184aafe9ce44cfa5cb4774f2fabe3f5ab6",
     "app/tabs/settings.js": "sha256:519b4ce9ab001190dafdf407befb078b06e55e5f8c6b97b8a20d614b232e7e95",
     "app/tabs/test.js": "sha256:30f81af5fd76cc8da30ab0895143d719e4a17ad7d9bb95f1151ce8881dc1b341",
@@ -20,7 +20,7 @@
     "app/tabs/wakewords.js": "sha256:eacc13d8ca63808cba460883751caa4fc89bec4b92998f523fc4269a083298af",
     "daemon.py": "sha256:c08962dabb034ddd627e0222e4657494e9707b593bf39861c587d27345cc0a2d",
     "plugin.json": "sha256:0de0509f387b8250af8dfbd6297d255a16e507c685c6a36badec204a8369f267",
-    "routes/api.py": "sha256:5b7838b070d7d6004ee98c5c73049a9f0ceadb64b4c147387c22ccbc80a0444d",
+    "routes/api.py": "sha256:5b531c7a95cb2ee16113c310355eaff0fa2e6c1bd83feda147b2309506fecb24",
     "tests/test_wakeword_maker.py": "sha256:801e929b17d5d140c96b6d017d2035df046a93ba59dc147551d4c96e63a18f4f",
     "wakeword_maker/__init__.py": "sha256:721dc1b5f2f2a867b8f1dd00cbbd4c8b19f02d012590d86b096c07eb5e4a84b6",
     "wakeword_maker/augment.py": "sha256:55742b51ffb13ee713f795f71e333e485057ad07792071a09c3391080f103f12",
@@ -46,5 +46,5 @@
     "wakeword_maker/voices.py": "sha256:8f204033e069a6c93c89741f44d70fa7cfa16c95a5a8cf3e88bc6ddcd8750ac9",
     "wakeword_maker/watch.py": "sha256:a8aeee29b9b9c4ba6a89a869db875ab6dcb538cfb013281d9276710ffc11ad03"
   },
-  "signature": "M4Nwt+STo+ZbhkEo8f4+giFH/cc+v5YDsutWZUljARHIJJjC5prpil5A8MugfrjkPDzkH7Lg+zdPttMQBX5xBw=="
+  "signature": "dpHNtxUE/aitwnNUrdxDamMAdKnr1VT+K6737qI3xWNKES1u27rpBiRhZmD9t7kJHzLIpI4TNA/D2UaPWSQQDg=="
 }

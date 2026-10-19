@@ -495,8 +495,12 @@ function renderInput(key, value, type) {
 
     // Special dropdowns
     if (key === 'WAKEWORD_MODEL' && wakewordModels.length) {
+        // the saved value stays visible even when the library no longer lists it: a select without a
+        // selected option shows its first one, and the next flush then committed Alexa (2026-10-19)
+        const names = !value || wakewordModels.includes(value) ? wakewordModels : [...wakewordModels, value];
+        const label = m => m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + (wakewordModels.includes(m) ? '' : ' (not in the library now)');
         return `<select id="${id}" data-key="${key}">
-            ${wakewordModels.map(m => `<option value="${m}" ${value === m ? 'selected' : ''}>${m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>`).join('')}
+            ${names.map(m => `<option value="${m}" ${value === m ? 'selected' : ''}>${label(m)}</option>`).join('')}
         </select>`;
     }
     if (key === 'WAKEWORD_FRAMEWORK') {

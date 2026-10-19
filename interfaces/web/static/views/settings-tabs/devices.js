@@ -729,7 +729,7 @@ async function openDevice(id, tab, opts = {}) {
             const res = await call('PUT', `/${encodeURIComponent(device.id)}`, {
                 label: form['device.label'], location: form['device.location'] || '',
                 enabled: form['device.enabled'], parts, locked,
-            });
+            }, 90000);          // a wake word goes to the board last and it restarts on it: longer than a plain save
             showToast(res.warning || 'Saved', res.warning ? 'warning' : 'success');
             const fresh = (await call('GET', `/${encodeURIComponent(device.id)}`)).device;
             draw(fresh, activeTab());

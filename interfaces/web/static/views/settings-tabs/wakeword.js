@@ -100,20 +100,25 @@ function paint(body, d, ctx) {
     }
     const cell = (m, fam, name) => {
         if (!m) return '<td style="text-align:center;color:var(--text-muted)">—</td>';
-        const uses = fam === 'onnx'
-            ? (desktop && desktop.model === name ? ['listening'] : [])
-            : boards.filter(b => b.family === 'tflite' && (b.model === name || (b.model == null && b.wish === name))).map(b => b.label || b.id);
-        const note = fam === 'onnx' ? uses[0] || '' : uses.length ? `on ${uses.join(', ')}` : '';
+        if (m.ok === false)       // a file dropped into the folder by hand that fails the library's gates: listed, never offered
+            return `<td style="text-align:center;white-space:nowrap" title="${esc(m.why || '')}"><span style="color:var(--error,#e53935)">unusable</span></td>`;
+        // who hears it now: this computer (only while its detector really runs) and the boards of this family;
+        // a board that has not said yet counts by what it was set to
+        const hears = b => b.model === name || (b.model == null && b.wish === name);
+        const notes = [];
+        if (fam === 'onnx' && desktop && desktop.model === name && desktop.enabled && desktop.running !== false) notes.push('listening');
+        const on = boards.filter(b => b.family === fam && hears(b)).map(b => b.label || b.id);
+        if (on.length) notes.push(`on ${on.join(', ')}`);
         const title = [FAMILY[fam], SOURCE[m.source] || m.made_by || '', `threshold ${m.threshold}`].filter(Boolean).join(' · ');
         return `<td style="text-align:center;white-space:nowrap" title="${esc(title)}"><span style="color:var(--success,#22c55e)">✓</span>${
-            note ? ` <span style="color:var(--text-muted)">${esc(note)}</span>` : ''}</td>`;
+            notes.length ? ` <span style="color:var(--text-muted)">${esc(notes.join(' · '))}</span>` : ''}</td>`;
     };
     const order = [...rows.values()].sort((a, b) => {
         const own = r => (r.onnx?.source === 'user' || r.tflite?.source === 'user') ? 0 : (r.onnx?.source === 'core' || r.tflite?.source === 'core') ? 1 : 2;
         return own(a) - own(b) || a.phrase.localeCompare(b.phrase);
     });
     body.innerHTML = order.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%">
-        <thead><tr style="text-align:left"><th>Phrase</th><th style="text-align:center" title="openWakeWord (.onnx): this computer, a Pi">PC</th><th style="text-align:center" title="microWakeWord (.tflite): an ESP32">Satellite</th><th></th></tr></thead>
+        <thead><tr style="text-align:left"><th>Phrase</th><th style="text-align:center" title="openWakeWord (.onnx): this computer, and a Pi body">PC</th><th style="text-align:center" title="microWakeWord (.tflite): an ESP32">Satellite</th><th></th></tr></thead>
         <tbody>${order.map(r => `<tr>
             <td><b>${esc(r.phrase)}</b> <span style="color:var(--text-muted)">${esc(r.name)}</span></td>
             ${cell(r.onnx, 'onnx', r.name)}${cell(r.tflite, 'tflite', r.name)}

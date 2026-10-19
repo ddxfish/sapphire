@@ -39,8 +39,9 @@ def get_available_models():
             rel = e['path']
         custom_models.append({'name': e['name'], 'path': rel, 'type': e['family']})
     all_models = list(BUILTIN_MODELS)
+    usable = {(e['name'], e['family']) for e in rows if e.get('ok', True)}
     for model in core_models + custom_models:
-        if model['type'] == 'onnx' and model['name'] not in all_models:
+        if model['type'] == 'onnx' and (model['name'], 'onnx') in usable and model['name'] not in all_models:
             all_models.append(model['name'])
     return {'builtin': BUILTIN_MODELS, 'core': core_models, 'custom': custom_models, 'all': all_models}
 
@@ -48,16 +49,20 @@ def get_available_models():
 
 def resolve_model_path(model_name):
     """
-    Resolve a model name to its path.
+    Resolve a model name to its path for THIS computer's detector (openWakeWord).
 
     The user's own file wins: user/wakeword/models/ first, then core/wakeword/models/, then the built-in names
     (which OWW resolves itself). So a wake word someone trained under the same name as a shipped model (the
     Wakeword Maker installs "hey sapphire" as hey_sapphire) is the one that listens. 2026-10-05.
+    Only .onnx files are the desktop's (a .tflite in the library is a microWakeWord model for an ESP32,
+    which this detector cannot load: a satellite install of hey_sapphire used to hide the shipped onnx and
+    leave the desktop deaf, 2026-10-19); .tflite is looked at only when WAKEWORD_FRAMEWORK says so.
     For builtins without a user file, returns just the name; otherwise the full path.
     """
-    for folder in (USER_MODELS_DIR, CORE_MODELS_DIR):
-        if folder.exists():
-            for ext in ['.onnx', '.tflite']:
+    exts = ['.onnx'] + (['.tflite'] if getattr(config, 'WAKEWORD_FRAMEWORK', 'onnx') == 'tflite' else [])
+    for ext in exts:
+        for folder in (USER_MODELS_DIR, CORE_MODELS_DIR):
+            if folder.exists():
                 for model_file in folder.rglob(f'{model_name}{ext}'):
                     return str(model_file)
 

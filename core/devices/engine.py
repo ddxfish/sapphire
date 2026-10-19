@@ -53,7 +53,7 @@ MAX_ROWS = 50            # items in one rows field
 MAX_PICTURES = 4         # pictures one action may answer with
 MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
 PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
-LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage', 'ptz', 'sms')    # these carry a "Sapphire may use this" switch
+LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage', 'ptz', 'sms', 'wake')    # these carry a "Sapphire may use this" switch (wake: its install restarts the board, 2026-10-19)
 MAX_FOUND = 64           # things one driver may report as found
 ALL = 'all'              # the composite device: her voice on every device that can speak
 RESERVED = ('found', ALL, 'firmware', 'provision', 'here', 'flash')   # names a device may not have: the routes and `all` use them
@@ -179,6 +179,13 @@ def rows():
     """Every device row, by id. A copy - callers may change it freely."""
     data = _store().get('devices', {}) or {}
     return json.loads(json.dumps({k: v for k, v in sorted(data.items()) if isinstance(v, dict)}))
+
+
+def look_soon(device_id):
+    """Have the health keeper look at this device soon. A save calls it AFTER the device was told its
+    settings, never before: a probe landing mid-save sent the wake word under the save's own send and the
+    board restarted under it (2026-10-19)."""
+    _health().poke(_slug(device_id))
 
 
 def get(device_id):
@@ -697,7 +704,7 @@ def add(device_id, label, driver_id, config=None, location=''):
 
 
 def update(device_id, label=None, enabled=None, parts=None, new_id=None, location=None,
-           locked=None, order=None):
+           locked=None, order=None, poke=True):
     """Change a device. parts: {driver: submitted config}. order: its
     connections' drivers, first to last (the first that has a capability is
     the one that does it). locked: what she
@@ -767,8 +774,8 @@ def update(device_id, label=None, enabled=None, parts=None, new_id=None, locatio
     if target != device_id:
         _voice_forget(device_id)
         _health().rename(device_id, target)
-    else:
-        _health().poke(target)           # its settings may have changed: look again soon
+    elif poke:
+        _health().poke(target)           # its settings may have changed: look again soon (poke=False: the caller looks after telling)
     _changed()
     return row, failed
 
@@ -1534,7 +1541,7 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
         told, ok = mod.run(_brief(row), cap_name, act, '' if value is None else str(value),
                            dict(part.get('config') or {}), secrets,
                            _call_tool_for(spec['plugin_name'], spec.get('uses_tools') or ()))
-        if ok and owner and cap_name in ('firmware', 'power', 'storage'):
+        if ok and owner and cap_name in ('firmware', 'power', 'storage', 'wake'):
             _health().poke(row['id'])         # the board changed under the page: its strip should say so soon
         return _result(told, secrets), bool(ok)
     except DeviceError as e:

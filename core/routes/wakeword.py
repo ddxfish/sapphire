@@ -10,12 +10,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
-from core.auth import require_login
+from core.auth import require_login, check_endpoint_rate
 from core.wakeword import library
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 MANIFEST_MAX = 64 * 1024
+WRITES_PER_MIN = 60           # uploads, removals and switches, per client address
 
 
 def _fail(e):
@@ -41,19 +42,24 @@ async def library_get(_=Depends(require_login)):
         models, who = await asyncio.to_thread(lambda: (library.entries(), library.listeners()))
     except Exception as e:
         raise _fail(e)
+    models = [{k: v for k, v in m.items() if k != 'path'} for m in models]      # where a file sits is the server's business
     return {'models': models, 'listeners': who, 'families': library.FAMILIES}
 
 
 @router.post("/api/wakeword/library")
-async def library_add(file: UploadFile = File(...), manifest: Optional[UploadFile] = File(None),
+async def library_add(request: Request, file: UploadFile = File(...), manifest: Optional[UploadFile] = File(None),
                       name: str = Form(''), phrase: str = Form(''), overwrite: bool = Form(False),
                       _=Depends(require_login)):
     """A model into the library: the file (.onnx or .tflite), and its manifest when there is one
     (esphome's, the Wakeword Maker's, or the library's own shape). 409 when the name is taken."""
+    check_endpoint_rate(request, "wakeword:write", max_calls=WRITES_PER_MIN)
     family = library.family_of(file.filename)
     if not family:
         raise HTTPException(status_code=400, detail="A model is a .onnx (openWakeWord) or a .tflite (microWakeWord).")
-    data = await file.read()
+    most = library.LIMITS[family][1]
+    data = await file.read(most + 1)                   # never more than a model can be: the check in add() sees the size
+    if len(data) > most:
+        raise HTTPException(status_code=413, detail=f"A {library.FAMILIES[family]} model is {library.SIZES[family]}.")
     meta = {}
     if manifest is not None and manifest.filename:
         raw = await manifest.read()
@@ -72,8 +78,9 @@ async def library_add(file: UploadFile = File(...), manifest: Optional[UploadFil
 
 
 @router.delete("/api/wakeword/library/{family}/{name}")
-async def library_remove(family: str, name: str, _=Depends(require_login)):
+async def library_remove(family: str, name: str, request: Request, _=Depends(require_login)):
     """Out of the library. Allowed while in use: the answer names who was using it (they keep their copy)."""
+    check_endpoint_rate(request, "wakeword:write", max_calls=WRITES_PER_MIN)
     try:
         users = await asyncio.to_thread(library.remove, name, family)
     except Exception as e:
@@ -92,7 +99,8 @@ async def library_file(family: str, name: str, _=Depends(require_login)):
 
 @router.post("/api/wakeword/switch")
 async def library_switch(request: Request, _=Depends(require_login)):
-    """{listener: 'desktop' | device id, model: name | '' | 'own'}: make it listen for that."""
+    """{listener: library.DESKTOP (this computer) | device id, model: name | '' | 'own'}: make it listen for that."""
+    check_endpoint_rate(request, "wakeword:write", max_calls=WRITES_PER_MIN)
     try:
         body = await request.json()
     except Exception:

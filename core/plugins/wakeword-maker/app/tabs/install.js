@@ -64,7 +64,7 @@ async function load(el, ctx, p) {
     el.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', async () => {
         const told = el.querySelector(`[data-told="${CSS.escape(b.dataset.send)}"]`);
         b.disabled = true; told.textContent = 'sending…';
-        try { const r = await api(`/projects/${p.slug}/install/satellite`, { method: 'POST', body: { device: b.dataset.send } }); told.textContent = `sent ${r.sent} at ${r.threshold}; the board restarts on it`; ctx.toast(`${b.dataset.send} has it`, 'success'); setTimeout(() => load(el, ctx, p), 1200); }
+        try { const r = await api(`/projects/${p.slug}/install/satellite`, { method: 'POST', body: { device: b.dataset.send } }); told.textContent = r.told?.had ? `${r.sent} is on it already` : `sent ${r.sent} at ${r.threshold}; the board restarts on it`; ctx.toast(`${b.dataset.send} has it`, 'success'); setTimeout(() => load(el, ctx, p), 1200); setTimeout(() => load(el, ctx, p), 40000); }   // once now, once after the board's restart
         catch (e) { told.textContent = e.message; b.disabled = false; }
     }));
 }

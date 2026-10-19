@@ -194,7 +194,8 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # A wake word model listens at its own threshold (its sidecar in the library, core/wakeword/
     # library.py): a switch from the dropdown takes it along, as the Wakeword Maker's Install does.
     # A threshold the person set in the same save wins. 2026-10-19.
-    if 'WAKEWORD_MODEL' in settings_dict and 'WAKEWORD_THRESHOLD' not in settings_dict:
+    if 'WAKEWORD_MODEL' in settings_dict and 'WAKEWORD_THRESHOLD' not in settings_dict \
+            and str(settings_dict['WAKEWORD_MODEL'] or '') != str(getattr(config, 'WAKEWORD_MODEL', '') or ''):   # a change of model, not a re-save
         try:
             from core.wakeword import library
             own = library.threshold_of(str(settings_dict['WAKEWORD_MODEL'] or ''), 'onnx')

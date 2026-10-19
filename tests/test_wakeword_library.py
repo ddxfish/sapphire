@@ -23,7 +23,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(lib, 'USER_DIR', user)
     monkeypatch.setattr(lib, 'CORE_DIR', core)
     monkeypatch.setattr(lib, 'listeners', lambda: [
-        {'id': 'desktop', 'kind': 'desktop', 'family': 'onnx', 'model': 'hey_sapphire', 'wish': None, 'online': True},
+        {'id': lib.DESKTOP, 'kind': 'desktop', 'family': 'onnx', 'model': 'hey_sapphire', 'wish': None, 'online': True},
         {'id': 'esp', 'kind': 'device', 'family': 'tflite', 'model': 'hey_marcus', 'wish': 'hey_marcus', 'online': True},
     ])
     return SimpleNamespace(user=user, core=core)
@@ -121,8 +121,12 @@ def test_the_other_family_keeps_its_block_even_from_the_makers_old_flat_sidecar(
 def test_entries_user_first_then_core_then_builtin_and_a_user_file_hides_a_shipped_one(home):
     (home.core / 'hey_sapphire.onnx').write_bytes(ONNX)
     (home.core / 'hey_sapphire.json').write_text(json.dumps({'onnx': {'threshold': 0.6}}))
-    lib.add('hey_sapphire', ONNX, 'onnx', {'threshold': 0.42})
-    lib.add('hey_jarvis', TFL, 'tflite', dict(ESPHOME, wake_word='hey jarvis'))   # the ESP32's word: not the builtin onnx
+    with pytest.raises(lib.Exists, match='ships with Sapphire'):
+        lib.add('hey_sapphire', ONNX, 'onnx', {'threshold': 0.42})
+    with pytest.raises(lib.Exists, match="openWakeWord's own"):
+        lib.add('alexa', ONNX, 'onnx')
+    lib.add('hey_sapphire', ONNX, 'onnx', {'threshold': 0.42}, overwrite=True)
+    lib.add('hey_jarvis', TFL, 'tflite', dict(ESPHOME, wake_word='hey jarvis'))   # the ESP32's word: not the builtin onnx, no clash
     rows = [(e['name'], e['family'], e['source']) for e in lib.entries()]
     assert rows[:2] == [('hey_jarvis', 'tflite', 'user'), ('hey_sapphire', 'onnx', 'user')]
     assert ('hey_sapphire', 'onnx', 'core') not in rows
@@ -168,28 +172,29 @@ def test_listeners_this_computer_and_every_satellite_with_a_wake_word(tmp_path, 
     monkeypatch.setattr(engine, 'rows', lambda: {
         'esp': {'id': 'esp', 'label': 'Kitchen box', 'location': 'Kitchen', 'fingerprint': 'aa:bb',
                 'parts': [{'driver': 'satellite', 'has': ['speaker', 'mic', 'wake', 'firmware'], 'config': {'wake_model': 'hey_marcus'}}]},
-        'pi': {'id': 'pi', 'parts': [{'driver': 'satellite', 'has': ['speaker', 'mic', 'wake'], 'config': {}}]},
+        'pi': {'id': 'pi', 'parts': [{'driver': 'satellite', 'has': ['speaker', 'mic', 'wake'], 'config': {'wake_model': 'keep'}}]},
         'typer': {'id': 'typer', 'parts': [{'driver': 'satellite', 'has': ['keyboard'], 'config': {}}]},
         'lamp': {'id': 'lamp', 'parts': [{'driver': 'lamp', 'config': {}}]},
         'off': {'id': 'off', 'enabled': False, 'parts': [{'driver': 'satellite', 'has': ['wake'], 'config': {}}]},
     })
     monkeypatch.setattr(satellite, 'wake_state', lambda d: {'model': 'hey_sapphire', 'format': 'onnx', 'enabled': True} if d == 'pi' else {})
     who = lib.listeners()
-    assert [w['id'] for w in who] == ['desktop', 'esp', 'pi']
-    assert who[0] == {'id': 'desktop', 'label': 'This computer', 'kind': 'desktop', 'location': '', 'family': 'onnx',
-                      'model': 'hey_sapphire', 'wish': None, 'online': True, 'enabled': True,
-                      'threshold': getattr(config, 'WAKEWORD_THRESHOLD', None)}
+    assert [w['id'] for w in who] == [lib.DESKTOP, 'esp', 'pi']
+    assert {k: v for k, v in who[0].items() if k != 'running'} == {
+        'id': lib.DESKTOP, 'label': 'This computer', 'kind': 'desktop', 'location': '', 'family': 'onnx',
+        'model': 'hey_sapphire', 'wish': None, 'online': True, 'enabled': True,
+        'threshold': getattr(config, 'WAKEWORD_THRESHOLD', None)}
     esp = who[1]
     assert (esp['family'], esp['model'], esp['wish'], esp['online'], esp['label']) == ('tflite', None, 'hey_marcus', False, 'Kitchen box')
-    assert (who[2]['family'], who[2]['model'], who[2]['online']) == ('onnx', 'hey_sapphire', True)
+    assert (who[2]['family'], who[2]['model'], who[2]['online'], who[2]['wish']) == ('onnx', 'hey_sapphire', True, None)   # keep = no wish
 
 
 def test_listeners_is_only_this_computer_when_the_devices_cannot_be_listed(monkeypatch):
     from core.devices import engine
     monkeypatch.setattr(engine, 'refusal', lambda: 'hosted')
-    assert [w['id'] for w in lib.listeners()] == ['desktop']
+    assert [w['id'] for w in lib.listeners()] == [lib.DESKTOP]
     monkeypatch.setattr(engine, 'refusal', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
-    assert [w['id'] for w in lib.listeners()] == ['desktop']
+    assert [w['id'] for w in lib.listeners()] == [lib.DESKTOP]
 
 
 def test_switch_desktop_sets_both_settings_then_swaps_live(home, monkeypatch):
@@ -198,35 +203,45 @@ def test_switch_desktop_sets_both_settings_then_swaps_live(home, monkeypatch):
     calls = []
     monkeypatch.setattr(settings_manager.settings, 'set', lambda k, v, **kw: calls.append((k, v, kw.get('persist'))))
     monkeypatch.setattr(api_fastapi, 'get_system', lambda: SimpleNamespace(reload_wakeword_model=lambda: calls.append('reload') or True))
-    out = lib.switch('desktop', 'hey_nova')
+    out = lib.switch(lib.DESKTOP, 'hey_nova')
     assert calls == [('WAKEWORD_MODEL', 'hey_nova', True), ('WAKEWORD_THRESHOLD', 0.42, True), 'reload']
-    assert out == {'listener': 'desktop', 'model': 'hey_nova', 'threshold': 0.42, 'sent': True, 'warning': ''}
-    with pytest.raises(lib.LibraryError, match='no desktop'):
-        lib.switch('desktop', 'hey_marcus')
-    with pytest.raises(lib.LibraryError, match='no desktop'):
-        lib.switch('desktop', 'own')
+    assert out == {'listener': lib.DESKTOP, 'model': 'hey_nova', 'threshold': 0.42, 'sent': True, 'had': False, 'warning': ''}
+    with pytest.raises(lib.LibraryError, match='no usable desktop'):
+        lib.switch(lib.DESKTOP, 'hey_marcus')
+    with pytest.raises(lib.LibraryError, match='no built-in word'):
+        lib.switch(lib.DESKTOP, 'own')
+    with pytest.raises(lib.LibraryError, match='Pick a wake word'):
+        lib.switch(lib.DESKTOP, 'keep')
 
 
 def test_switch_a_device_stores_the_wish_and_tells_the_board(home, monkeypatch):
     lib.add('hey_marcus', TFL, 'tflite', ESPHOME)
     from core.devices import engine
     from core.devices.drivers import satellite
-    row = {'id': 'esp', 'parts': [{'driver': 'satellite', 'config': {}}], 'enabled': True}
+    row = {'id': 'esp', 'label': 'Kitchen', 'parts': [{'driver': 'satellite', 'config': {'url': 'http://x'}}], 'enabled': True}
     seen = {}
     monkeypatch.setattr(engine, 'get', lambda d: row)
-    monkeypatch.setattr(engine, 'update', lambda d, **kw: seen.update(kw) or (row, []))
-    monkeypatch.setattr(engine, 'tell', lambda r: seen.setdefault('told', []) or [])
+    monkeypatch.setattr(engine, 'update', lambda d, **kw: (seen.update(kw), row['parts'][0]['config'].update(kw['parts']['satellite'])) and (row, []))
+    monkeypatch.setattr(engine, 'tell', lambda r: (_ for _ in ()).throw(AssertionError('a switch never runs apply')))
+    monkeypatch.setattr(engine, '_part_secrets', lambda d, drv: {'token': 'k'})
+    monkeypatch.setattr(engine, 'look_soon', lambda d: seen.setdefault('looked', []).append(d))
     monkeypatch.setattr(satellite, 'wake_state', lambda d: {'format': 'tflite', 'model': 'hey_jarvis'})
+    monkeypatch.setattr(satellite, 'send_wake_model', lambda dev, cfg, sec, force=False: seen.update(sent=(dev['id'], cfg['wake_model'], force)) or 'sent')
     out = lib.switch('esp', 'hey_marcus')
-    assert seen['parts'] == {'satellite': {'wake_model': 'hey_marcus'}}
-    assert out == {'listener': 'esp', 'model': 'hey_marcus', 'threshold': 0.9, 'sent': True, 'warning': ''}
-    with pytest.raises(lib.LibraryError, match='no microWakeWord model'):
+    assert seen['parts'] == {'satellite': {'wake_model': 'hey_marcus'}} and seen['poke'] is False
+    assert seen['sent'] == ('esp', 'hey_marcus', True) and seen['looked'] == ['esp']
+    assert out == {'listener': 'esp', 'model': 'hey_marcus', 'threshold': 0.9, 'sent': True, 'had': False, 'warning': ''}
+    monkeypatch.setattr(satellite, 'send_wake_model', lambda *a, **k: 'has')
+    out = lib.switch('esp', 'hey_marcus')
+    assert (out['sent'], out['had'], out['warning']) == (False, True, '')          # those bytes are on it: nothing went, nothing wrong
+    monkeypatch.setattr(satellite, 'send_wake_model', lambda dev, cfg, sec, force=False: 'sent')
+    with pytest.raises(lib.LibraryError, match='no usable microWakeWord model'):
         lib.switch('esp', 'hey_nova')
     out = lib.switch('esp', 'own')
-    assert seen['parts'] == {'satellite': {'wake_model': ''}} and out['model'] == '' and out['threshold'] is None
-    monkeypatch.setattr(engine, 'tell', lambda r: ['satellite: Could not reach 192.168.1.100.'])
+    assert seen['parts'] == {'satellite': {'wake_model': 'own'}} and out['model'] == 'own' and out['threshold'] is None
+    monkeypatch.setattr(satellite, 'send_wake_model', lambda *a, **k: (_ for _ in ()).throw(engine.DeviceError('the wake word hey_marcus could not be sent now: Could not reach 192.168.1.100. It goes when the board answers.')))
     out = lib.switch('esp', 'hey_marcus')
-    assert out['sent'] is False and 'Could not reach' in out['warning']       # the wish is kept; told when it is seen
+    assert out['sent'] is False and 'Could not reach' in out['warning']       # the wish is kept; the probe sends it when it answers
 
 
 # --- the doors ----------------------------------------------------------------------------------
@@ -235,8 +250,8 @@ def test_the_doors(home, client, monkeypatch):
     c, csrf = client
     h = {'X-CSRF-Token': csrf}
     r = c.get('/api/wakeword/library')
-    assert r.status_code == 200
-    assert [w['id'] for w in r.json()['listeners']] == ['desktop', 'esp'] and r.json()['families'] == lib.FAMILIES
+    assert r.status_code == 200 and not any('path' in m for m in r.json()['models'])
+    assert [w['id'] for w in r.json()['listeners']] == [lib.DESKTOP, 'esp'] and r.json()['families'] == lib.FAMILIES
     assert ('alexa', 'onnx') in [(m['name'], m['family']) for m in r.json()['models']]
     files = {'file': ('hey_marcus.tflite', TFL, 'application/octet-stream'),
              'manifest': ('hey_marcus.json', json.dumps(ESPHOME).encode(), 'application/json')}
@@ -265,8 +280,50 @@ def test_the_doors(home, client, monkeypatch):
     assert r.status_code == 200 and r.json()['used_by'] == ['esp']
     assert c.delete('/api/wakeword/library/tflite/hey_marcus', headers=h).status_code == 400
     assert c.delete('/api/wakeword/library/onnx/alexa', headers=h).status_code == 400
-    r = c.post('/api/wakeword/switch', json={'listener': 'desktop', 'model': 'nope'}, headers=h)
-    assert r.status_code == 400 and 'no desktop' in r.json()['detail']
+    r = c.post('/api/wakeword/switch', json={'listener': lib.DESKTOP, 'model': 'nope'}, headers=h)
+    assert r.status_code == 400 and 'no usable desktop' in r.json()['detail']
     monkeypatch.setattr(lib, 'switch', lambda l, m: {'listener': l, 'model': m, 'sent': True, 'warning': '', 'threshold': 0.5})
     r = c.post('/api/wakeword/switch', json={'listener': 'esp', 'model': 'hey_marcus'}, headers=h)
     assert r.status_code == 200 and r.json()['model'] == 'hey_marcus'
+
+
+def test_files_dropped_in_by_hand_are_listed_but_never_used(home, monkeypatch):
+    home.user.mkdir(parents=True)
+    (home.user / 'empty.onnx').write_bytes(b'')
+    (home.user / 'weird.tflite').write_bytes(TFL)                       # no manifest beside it
+    (home.user / 'fine.onnx').write_bytes(ONNX)
+    rows = {(e['name'], e['family']): e for e in lib.entries()}
+    assert rows[('empty', 'onnx')]['ok'] is False and 'bytes' in rows[('empty', 'onnx')]['why']
+    assert rows[('weird', 'tflite')]['ok'] is False and 'manifest' in rows[('weird', 'tflite')]['why']
+    assert rows[('fine', 'onnx')]['ok'] is True
+    assert lib.get('empty', 'onnx') is None and lib.get('weird', 'tflite') is None and lib.get('fine', 'onnx')
+    assert lib.threshold_of('empty') is None
+    from core.wakeword import get_available_models
+    got = get_available_models()['all']
+    assert 'fine' in got and 'empty' not in got
+    assert lib.remove('empty', 'onnx') == []                            # a bad file can still be taken out
+
+
+def test_the_sidecar_lands_before_the_model(home, monkeypatch):
+    order = []
+    real = lib._write
+    monkeypatch.setattr(lib, '_write', lambda path, data: order.append(path.name) or real(path, data))
+    lib.add('hey_marcus', TFL, 'tflite', ESPHOME)
+    assert order == ['hey_marcus.json', 'hey_marcus.tflite']
+
+
+def test_the_desktop_resolver_never_picks_a_satellite_model(tmp_path, monkeypatch):
+    import core.wakeword as ww
+    import config
+    user, core = tmp_path / 'user', tmp_path / 'core'
+    user.mkdir(); core.mkdir()
+    monkeypatch.setattr(ww, 'USER_MODELS_DIR', user)
+    monkeypatch.setattr(ww, 'CORE_MODELS_DIR', core)
+    monkeypatch.setattr(config, 'WAKEWORD_FRAMEWORK', 'onnx', raising=False)
+    (core / 'hey_sapphire.onnx').write_bytes(ONNX)
+    (user / 'hey_sapphire.tflite').write_bytes(TFL)                     # a satellite install of the desktop's own word
+    assert ww.resolve_model_path('hey_sapphire') == str(core / 'hey_sapphire.onnx')
+    (user / 'hey_jarvis.tflite').write_bytes(TFL)                       # esphome's hey_jarvis for a board
+    assert ww.resolve_model_path('hey_jarvis') == 'hey_jarvis'          # the builtin name, as before
+    (user / 'hey_sapphire.onnx').write_bytes(ONNX)
+    assert ww.resolve_model_path('hey_sapphire') == str(user / 'hey_sapphire.onnx')

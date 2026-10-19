@@ -100,10 +100,10 @@ SPEC = {
         # PUT /wakeword/model; the board restarts on it. Shown only on a board that states its model family
         # (/health wakeword.format: the program with the door). Its choices are this board's (options() below)
         {'key': 'wake_model', 'takes': 'wake.model', 'type': 'select', 'dynamic': True, 'label': 'Listens for',
-         'capability': 'wake', 'default': '',
+         'capability': 'wake', 'default': 'keep',
          'help': "A wake word from the library (Settings > Wakeword). Save sends it to the board, which restarts on it, "
-                 "about twenty seconds; a board that cannot be reached now is sent it when it is next seen. "
-                 "The board's own word is the one built into its program."},
+                 "about half a minute; a board that cannot be reached now is sent it when it is next seen. "
+                 "'What it has now' leaves the board as it is; the board's own word is the one built into its program."},
         # the glass: its backlight is the board's biggest draw that can be chosen (firmware 0.5.5)
         {'key': 'brightness', 'takes': 'screen.brightness', 'type': 'number', 'label': 'Brightness in use', 'capability': 'screen',
          'default': 80, 'min': 0, 'max': 100,
@@ -223,10 +223,7 @@ def validate(config):
         elif pick.get('do') != voice.TELL:
             pick['text'] = ''                 # only a message to her has words
     config['buttons'] = held
-    wish = config.get('wake_model')
-    if wish is not None:                      # a library name, or '' for the board's own word
-        from core.wakeword import library
-        config['wake_model'] = '' if wish in ('', 'own') else library.slug(wish)
+    config['wake_model'] = _wish(config)      # keep | own | a library name
     for name in LOOKS:
         text = str(config.get(f'look_{name}') or '').strip()
         try:
@@ -245,6 +242,19 @@ def validate(config):
 
 
 def apply(device, config, secrets):
+    """After a save: the settings to the board, the wake word last (the board restarts on a new one);
+    the probe sends no wake word while this runs."""
+    with _lock:
+        _saving.add(device['id'])
+    try:
+        _apply(device, config, secrets)
+        send_wake_model(device, config, secrets)
+    finally:
+        with _lock:
+            _saving.discard(device['id'])
+
+
+def _apply(device, config, secrets):
     """After a save: the looks and the hours go to the board. An early Pi
     body (before 0.7.0) has no such door and keeps its own; that is not a fault.
     First what needs no answer from the board: its chat is made when it is
@@ -299,7 +309,6 @@ def apply(device, config, secrets):
             raise _engine_error(str(e))
     from core.devices import glass
     glass.sync_soon(device['id'])          # "Talks in chat" may have changed: its screen follows
-    _push_wake_model(device, config, secrets)   # last: the board restarts on a new word
 
 
 def _engine_error(text):
@@ -532,8 +541,9 @@ def describe(device, config):
     if 'wake.model' in (device.get('takes') or []):     # it states its model family: the program with the model door
         told['wake']['actions']['install'] = {
             'help': "listen for a wake word from the library (Settings > Wakeword): the model is sent to the board, "
-                    "which restarts on it, about twenty seconds. 'own' = the word built into its program",
-            'example': 'hey_marcus', 'values': '<model name> | own', 'wait': 25}
+                    "which restarts on it, about half a minute. 'own' = the word built into its program. "
+                    "Sent even when it has that name already (a retrained model lands)",
+            'example': 'hey_marcus', 'values': '<model name> | own', 'wait': 35}
     told['power'] = {'label': 'Power', 'help': 'restart it or shut it down', 'actions': {
         'restart': {'help': 'restart the whole satellite. Back in about a minute', 'example': ''},
         'shutdown': {'help': 'switch it off. Someone must unplug and replug it to bring it back',
@@ -648,76 +658,135 @@ def bindings(device, config, key):
                     "wait a third of a second, only on a button that has one set."}
 
 
+KEEP, OWN = 'keep', 'own'      # the wake_model wish: never set here (leave the board alone) | its built-in word | a library name
+SENT_FRESH = 60                # seconds within which the same wake word is not sent to a board twice (a save and a probe, two saves)
+
+
+def _wish(config):
+    """The wake_model wish as kept: KEEP, OWN or a library name (as the library lists it, never slugged:
+    it only picks an entry)."""
+    w = config.get('wake_model')
+    w = '' if w is None else str(w).strip()
+    return KEEP if w in ('', KEEP) else OWN if w == OWN else w[:48]
+
+
 def options(device, config, key):
-    """The choices of a dynamic select on this device (engine._options). `wake_model`: the library's models of
-    the family this board runs, and its own word. openWakeWord's built-in names have no file to send."""
+    """The choices of a dynamic select on this device (engine._options). `wake_model`: what it has now,
+    its own word, and the library's usable models of the family this board runs. openWakeWord's built-in
+    names have no file to send."""
     if key != 'wake_model':
         return []
     from core.wakeword import library
     row = {'fingerprint': device.get('fingerprint'), 'parts': [{'driver': 'satellite', 'has': device.get('has')}]}
-    fam = wake_state(device['id']).get('format') or wake_format(device['id'], row=row)
-    out = [{'value': '', 'label': "the board's own word"}]
+    said = wake_state(device['id'])
+    fam = said.get('format') or wake_format(device['id'], row=row)
+    out = [{'value': KEEP, 'label': f"what it has now ({said['model']})" if said.get('model') else 'what it has now'},
+           {'value': OWN, 'label': "the board's own word"}]
     out += [{'value': e['name'], 'label': f"{e['phrase']} ({e['name']})"}
-            for e in library.entries() if e['family'] == fam and e['source'] != 'builtin']
+            for e in library.entries() if e['family'] == fam and e['source'] != 'builtin' and e.get('ok', True)]
     return out
 
 
-def _push_wake_model(device, config, secrets):
-    """The wish `wake_model` to a board that states its model family and does not listen for it yet:
-    PUT /wakeword/model with the library's bytes, '' = DELETE (its own word). Last of apply: the board
-    restarts on it. A board without a format stated is left alone (an older program: no door)."""
-    wish = config.get('wake_model')
-    if wish is None:
-        return
-    h = _health(device, config, secrets)
-    ww = h.get('wakeword') if isinstance(h.get('wakeword'), dict) else {}
-    fmt = str(ww.get('format') or '').lower()
-    if fmt not in ('tflite', 'onnx'):
-        return
-    wish = '' if wish in ('', 'own') else str(wish)
-    if wish and wish == str(ww.get('model') or ''):
-        return
-    if not wish:
-        try:
-            said = _json(_call('GET', '/wakeword', config, secrets))
-            if said.get('stored') is not True:
-                return                                  # already on its own word, or a body that cannot say
-            _call('DELETE', '/wakeword/model', config, secrets, timeout=30)
-        except Missing:
-            return
-        except Problem as e:
-            raise _engine_error(str(e))
-        forget_health(device['id'])
-        return
-    from core.wakeword import library
-    e = library.get(wish, fmt)
-    if not e or not e.get('path'):
-        raise _engine_error(f"the library has no {library.FAMILIES[fmt]} model named {wish}; pick another on its Wake word tab")
-    micro = e.get('micro') or {}
+# ONE owner for sending a wake word to a board (2026-10-19). Three lanes call it: a save (apply, no force:
+# only a changed choice goes), an explicit switch (the Wakeword Maker's Send, her `wake install`: force, so a
+# retrained model under the same name, or a model the board stopped trusting, lands), and the probe (_settle_wake:
+# only what was never tried in this process or failed last time). The last send per board is remembered, so the
+# same bytes never go twice within SENT_FRESH and the readings can say what became of a wish.
+_pushed = {}      # device id -> {'ident': (name, sha8) | (OWN, ''), 'ok': bool, 'at': monotonic}
+_saving = set()   # device ids being told their settings right now: the probe sends nothing under a save
+
+
+def _wake_now(device, config, secrets):
+    """What the board listens for now, fresh (GET /wakeword): {'model', 'stored', 'format'}; None when its
+    program has no such door or states no model family (an older program: nothing is sent to it)."""
     try:
-        put_model(device, config, secrets, wish, Path(e['path']).read_bytes(), fmt, float(e['threshold']),
-                  phrase=e.get('phrase') or wish, sliding_window=micro.get('sliding_window'), step_ms=micro.get('step_ms'))
+        said = _json(_call('GET', '/wakeword', config, secrets))
+    except Missing:
+        return None
+    fmt = str(said.get('format') or '').lower()
+    if fmt not in ('tflite', 'onnx'):
+        return None
+    return {'model': str(said.get('model') or ''), 'stored': said.get('stored') is True, 'format': fmt}
+
+
+def _tried(device_id, wish):
+    """The last send of this wish on this board, or None when it was never sent in this process."""
+    with _lock:
+        last = _pushed.get(device_id)
+    return last if last and last['ident'][0] == wish else None
+
+
+def send_wake_model(device, config, secrets, force=False):
+    """The wake_model wish to the board: PUT /wakeword/model with the library's bytes, or DELETE for its own
+    word; the board restarts on it. Returns 'sent', 'has' (it listens for it already, or the same bytes went
+    moments ago) or None (nothing to send: KEEP, or a program without the door). Raises DeviceError in words
+    when it could not go; the failure is remembered, so the probe sends it when the board answers."""
+    wish = _wish(config)
+    if wish == KEEP:
+        return None
+    now = _wake_now(device, config, secrets)
+    if now is None:
+        if force:
+            raise _engine_error("this board's program has no door for a wake word model: update it, or copy the files by hand")
+        return None
+    from core.wakeword import library
+    data = e = None
+    if wish == OWN:
+        if not force and not now['stored']:
+            return 'has'
+        ident = (OWN, '')
+    else:
+        if not force and now['model'] == wish:
+            return 'has'
+        e = library.get(wish, now['format'])
+        if not e or not e.get('path'):
+            raise _engine_error(f"the library has no usable {library.FAMILIES[now['format']]} model named {wish}; pick another on its Wake word tab")
+        data = Path(e['path']).read_bytes()
+        ident = (wish, hashlib.sha256(data).hexdigest()[:8])
+    with _lock:
+        last = _pushed.get(device['id'])
+        if last and last['ident'] == ident and last['ok'] and time.monotonic() - last['at'] < SENT_FRESH:
+            return 'has'                            # the same bytes went moments ago: the board is restarting on them
+    try:
+        if wish == OWN:
+            _call('DELETE', '/wakeword/model', config, secrets, timeout=30)
+            forget_health(device['id'])
+        else:
+            micro = e.get('micro') or {}
+            put_model(device, config, secrets, wish, data, now['format'], float(e['threshold']),
+                      phrase=e.get('phrase') or wish, sliding_window=micro.get('sliding_window'), step_ms=micro.get('step_ms'))
     except Missing:
         raise _engine_error("this board's program has no door for a wake word model: update it, or copy the files by hand")
     except Problem as ex:
-        raise _engine_error(str(ex))
-
-
-_settled = {}   # device id -> the wish last sent from a probe: once per wish, so a refused model is not sent at every look
-
-
-def _settle_wake(device, config, secrets, wish):
-    """A wish met at a probe that the board does not listen for yet is sent once: a board that was off
-    when it was set gets it when it is next seen; one that refuses it is left alone until the wish changes."""
+        with _lock:
+            _pushed[device['id']] = {'ident': ident, 'ok': False, 'at': time.monotonic()}
+        raise _engine_error(f"the wake word ({'its own word' if wish == OWN else wish}) could not be sent now: {ex} It goes when the board answers.")
     with _lock:
-        if _settled.get(device['id']) == wish:
+        _pushed[device['id']] = {'ident': ident, 'ok': True, 'at': time.monotonic()}
+    logger.info(f"[DEVICES] {device['id']}: sent the wake word {'(its own word)' if wish == OWN else wish}"
+                f"{' again' if force else ''}; it restarts on it")
+    return 'sent'
+
+
+def _settle_wake(device, config, secrets):
+    """At a probe, a wish the board does not listen for yet: sent when it was never tried in this process (a
+    board that was off when it was set, or Sapphire restarted since) or the last try failed (unreachable, or
+    busy with a backup). Never under a save, and never again after a send the board did not keep (it crashed
+    on it, or was reflashed): that is said in the readings and left to the person. The wish is read live, not
+    from this probe's row, so a save that just changed it is not undone."""
+    with _lock:
+        if device['id'] in _saving:
             return
-        _settled[device['id']] = wish
     try:
-        _push_wake_model(device, config, secrets)
-        logger.info(f"[DEVICES] {device['id']}: sent the wake word it was set to, {wish}")
+        from core.devices import engine
+        live = engine._part(engine.get(device['id']), 'satellite')
+        config = dict(config, wake_model=(live.get('config') or {}).get('wake_model')) if live else config
+        last = _tried(device['id'], _wish(config))
+        if last and last['ok']:
+            return
+        send_wake_model(device, config, secrets)
     except Exception as e:
-        logger.warning(f"[DEVICES] {device['id']}: the wake word it was set to, {wish}, could not be sent: {e}")
+        logger.warning(f"[DEVICES] {device['id']}: the wake word it was set to could not be sent: {e}")
 
 
 def _has(device):
@@ -811,7 +880,8 @@ def wake_state(device_id):
     ww = said.get('wakeword') if isinstance(said, dict) and isinstance(said.get('wakeword'), dict) else None
     if not ww:
         return {}
-    return {'model': str(ww.get('model') or ''), 'format': str(ww.get('format') or '').lower(),
+    fmt = str(ww.get('format') or '').lower()
+    return {'model': str(ww.get('model') or ''), 'format': fmt if fmt in ('tflite', 'onnx') else '',
             'enabled': bool(ww.get('enabled'))}
 
 
@@ -903,10 +973,14 @@ def status(device, config, secrets):
         readings['wake word'] = ('paused while a backup lands' if wake.get('paused') else
                                  'listening' if wake.get('enabled') and wake.get('running') else 'off') \
             + (f" for {wake['model']}" if wake.get('model') else '')
-        wish = config.get('wake_model')
-        if isinstance(wish, str) and wish and wish != str(wake.get('model') or '') and 'format' in wake:
-            readings['wake word'] += f"; set to {wish}, not taken yet"
-            _settle_wake(device, config, secrets, wish)
+        wish = _wish(config)                           # health says the model, not `stored`: only a named wish can be judged here
+        if wish not in (KEEP, OWN) and wish != str(wake.get('model') or '') and 'format' in wake:
+            last = _tried(device['id'], wish)
+            readings['wake word'] += f"; set to {wish}, " + ('not sent yet' if last is None else
+                                                            'will be sent when it answers' if not last['ok'] else
+                                                            'the board did not keep it')
+            if last is None or not last['ok']:
+                _settle_wake(device, config, secrets)
     cap = h.get('capture') if isinstance(h.get('capture'), dict) else {}
     if cap.get('active'):                                              # the room in pieces to the Wakeword Maker (0.7.6)
         readings['capturing'] = (f"room to Sapphire: {cap.get('sent', 0)} pieces, {cap.get('fires', 0)} wake fires"
@@ -1427,9 +1501,11 @@ def run(device, capability, action, value, config, secrets, call_tool):
                     out = library.switch(device['id'], value)
                 except library.LibraryError as e:
                     return str(e), False
-                name = out['model'] or 'its own word'
+                name = 'its own word' if out['model'] == OWN else out['model']
                 if out['sent']:
-                    return f"{device['id']} is restarting on {name}. Back in about twenty seconds.", True
+                    return f"{device['id']} is restarting on {name}. Back in about half a minute.", True
+                if out.get('had'):
+                    return f"{device['id']} has {name} already.", True
                 return f"{device['id']} is set to {name}, but: {out['warning']}", False
             if action in ('on', 'off'):
                 _call('POST', f"/wakeword?enabled={'true' if action == 'on' else 'false'}", config, secrets)
