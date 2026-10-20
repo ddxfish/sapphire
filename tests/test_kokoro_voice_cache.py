@@ -28,7 +28,7 @@ def test_no_process_wide_offline_flag():
 
 def test_stream_resolves_voice_before_committing_headers():
     stream = SRC[SRC.index("def _handle_tts_stream"):]
-    assert stream.index("_voice_pack(voice)") < stream.index("self.send_response(200)")
+    assert stream.index("_voice_pack(voice") < stream.index("self.send_response(200)")
 
 
 def test_voice_pack_uses_cache_then_downloads_then_blends(monkeypatch):
@@ -83,7 +83,7 @@ def test_generator_raising_on_next_becomes_a_json_500(monkeypatch):
     """The exact failure class of the report: nothing runs when kokoro's
     pipeline is *called*; the error surfaces on the first next()."""
     ts = import_tts_server()
-    monkeypatch.setattr(ts, "_voice_pack", lambda v: torch.zeros(1))
+    monkeypatch.setattr(ts, "_voice_pack", lambda v, **k: torch.zeros(1))
 
     def boom(text, voice, speed):
         raise RuntimeError("CUDA error: device-side assert")
@@ -108,3 +108,11 @@ def test_stream_voice_failure_is_json_before_any_200(monkeypatch):
     status, body = _status_and_json(h)
     assert status == 503 and "unavailable" in body["error"]
     assert b"HTTP/1.0 200" not in h.wfile.getvalue()
+
+
+def test_another_computer_names_a_voice_never_a_file():
+    import pytest
+    ts = import_tts_server()
+    for voice in ("/etc/some.pt", "some.pt", "../voices/x"):
+        with pytest.raises(ValueError):
+            ts._voice_pack(voice, remote=True)

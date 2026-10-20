@@ -2,6 +2,7 @@
 computer's Kokoro through its shared door: a server setting that holds a
 pairing string (core/worker_door.py) is reached over pinned TLS with its key."""
 import logging
+import ssl
 import time
 from typing import Iterator, List, Optional, Tuple
 
@@ -78,6 +79,7 @@ class KokoroTTSProvider(BaseTTSProvider):
         self.fallback_server = config.TTS_FALLBACK_SERVER
         self.fallback_timeout = config.TTS_FALLBACK_TIMEOUT
         self._doors = {}            # pairing string -> (session, base)
+        self._ok = {}               # pairing string -> when it last answered: one TLS check per few seconds, not per sentence
         self.served_by = None       # the last call: {"lane": primary|fallback, "server", "why"}
         self._health_why = None
         logger.info(f"Kokoro TTS provider: {_shown(self.primary_server)}")
@@ -93,7 +95,7 @@ class KokoroTTSProvider(BaseTTSProvider):
                 door = self._doors[server] = worker_door.session(server, timeout=timeout or 5)
             s, base = door
             return s.request(method.upper(), f"{base}{path}", timeout=timeout, **kw)
-        except requests.exceptions.SSLError:
+        except (requests.exceptions.SSLError, ssl.SSLError):
             self._doors.pop(server, None)               # a new cert on the worker: checked afresh next time, and refused
             worker_door.forget(*worker_door.parse(server)[::2])
             raise
@@ -129,6 +131,7 @@ class KokoroTTSProvider(BaseTTSProvider):
                     break  # client error — retrying won't help
             except Exception as e:
                 last_error = e
+                self._ok.clear()            # the next try checks the primary afresh
 
             if attempt < len(delays):
                 logger.warning(f"Kokoro TTS attempt {attempt + 1} failed, retrying in {delays[attempt]}s...")
@@ -154,6 +157,7 @@ class KokoroTTSProvider(BaseTTSProvider):
         if clamped_speed != speed:
             logger.warning(f"Kokoro: clamped speed {speed} -> {clamped_speed}")
 
+        sent = 0
         try:
             server_url = self._get_server_url()
             response = self._call(
@@ -201,6 +205,7 @@ class KokoroTTSProvider(BaseTTSProvider):
                 complete, remaining = _split_complete_oggs(bytes(buffer))
                 for ogg in complete:
                     oggs_split += 1
+                    sent += 1
                     yield ogg
                 buffer = bytearray(remaining)
             # Any final non-EOS-terminated remainder (shouldn't normally
@@ -215,7 +220,11 @@ class KokoroTTSProvider(BaseTTSProvider):
             # server-environment cause of "no audio". 2026-05-28.
             logger.info(f"[Kokoro] stream voice={voice} oggs_split={oggs_split} trailing={len(buffer)}")
         except Exception as e:
-            logger.warning(f"Kokoro /tts/stream failed: {e!r} — falling back to non-streaming")
+            self._ok.clear()
+            if sent:                    # part of it was spoken: saying it all again would repeat her
+                logger.warning(f"Kokoro /tts/stream broke after {sent} pieces: {type(e).__name__}")
+                return
+            logger.warning(f"Kokoro /tts/stream failed: {type(e).__name__} — falling back to non-streaming")
             audio = self.generate(text, voice, speed, **kwargs)
             if audio:
                 yield audio
@@ -242,10 +251,17 @@ class KokoroTTSProvider(BaseTTSProvider):
         return KOKORO_VOICES
 
     def _check_health(self, server_url: str, timeout: float = None) -> bool:
-        """True when it answers. Else _health_why says why, in words."""
+        """True when it answers. Else _health_why says why, in words. Another
+        computer through its door gets longer (two TLS handshakes cold) and
+        is trusted for a few seconds once it answered."""
+        door = worker_door.is_pairing(server_url)
+        if door:
+            if time.monotonic() - self._ok.get(server_url, -1e9) < 10:
+                return True
+            timeout = max(timeout or 0, 1.5)
         try:
             response = self._call('get', server_url, '/health', timeout=timeout)
-        except requests.exceptions.SSLError as e:
+        except (requests.exceptions.SSLError, ssl.SSLError) as e:
             self._health_why = (str(e) if "certificate changed" in str(e)
                                 else "its certificate is not the one paired (paste its new pairing string)")
             return False
@@ -262,6 +278,8 @@ class KokoroTTSProvider(BaseTTSProvider):
             self._health_why = "it refused the key (that computer was removed, or the pairing string is old)"
         elif response.status_code != 200:
             self._health_why = f"HTTP {response.status_code}"
+        if door and response.status_code == 200:
+            self._ok[server_url] = time.monotonic()
         return response.status_code == 200
 
 

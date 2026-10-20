@@ -2030,6 +2030,7 @@ class PluginLoader:
                 env = dict(os.environ)
                 env["SAPPHIRE_PLUGIN"] = plugin
                 env["SAPPHIRE_ROOT"] = str(PROJECT_ROOT)
+                env.setdefault("PYTHONUTF8", "1")   # Windows: open() and the log file in UTF-8, not cp1252
                 if service_port:
                     env["SAPPHIRE_SERVICE_PORT"] = str(service_port)
                 try:

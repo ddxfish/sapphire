@@ -1,3 +1,5 @@
+# Part of Sapphire core (AGPL-3.0). Copies carried inside plugins are offered
+# under the MIT license by the same author, Sapphire Blue AI LLC.
 """The worker door: a worker (Kokoro, a FlashHead GPU) shared on the network, safely.
 
 One file, stdlib + `cryptography` (server half) + `requests` (client
@@ -38,6 +40,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 _NAME = re.compile(r"[^a-z0-9_-]")
+DEVICES = {"con", "prn", "aux", "nul", *(f"{d}{i}" for d in ("com", "lpt") for i in range(1, 10))}   # Windows: never a file name
 logger = logging.getLogger("worker_door")
 
 
@@ -80,7 +83,7 @@ def _fingerprint(pem):
 def _write_private(path, data):
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     os.replace(tmp, path)
@@ -111,7 +114,8 @@ def clients(folder):
 
 
 def slug(name):
-    return _NAME.sub("", str(name or "").strip().lower().replace(" ", "-"))[:32]
+    s = _NAME.sub("", str(name or "").strip().lower().replace(" ", "-"))[:32]
+    return s + "-" if s in DEVICES else s
 
 
 def add_client(folder, name):
@@ -223,6 +227,7 @@ def serve(server_cls, handler, host, port, folder):
 
     class Door(server_cls):
         door = Path(folder)
+        allow_reuse_address = sys.platform != "win32"     # Windows lets a second server share a taken port, silently
 
         def finish_request(self, request, client_address):
             request.settimeout(10)
@@ -237,7 +242,7 @@ def serve(server_cls, handler, host, port, folder):
                     logger.warning(f"A connection from {ip} failed before its key ({type(e).__name__}): "
                                    "plain http, or a client that doesn't trust this cert")
                 return
-            tls.settimeout(None)
+            tls.settimeout(60)        # a caller that stops reading or never sends its request lets go of the thread
             self.RequestHandlerClass(tls, client_address, self)
 
         def handle_error(self, request, client_address):

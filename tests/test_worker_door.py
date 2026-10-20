@@ -81,7 +81,7 @@ def test_kokoro_reaches_a_paired_kokoro_and_keeps_its_key_out_of_logs(worker, ca
     door.add_client(folder, "vm")
     text = door.pairing(folder, "vm", address)
     p = kokoro.KokoroTTSProvider.__new__(kokoro.KokoroTTSProvider)
-    p._doors = {}
+    p._doors, p._ok = {}, {}
     assert p._check_health(text, timeout=5) is True
     assert p._check_health(text.replace("key=", "key=x"), timeout=5) is False
     assert kokoro._shown(text) == f"https://{address}/"
@@ -121,3 +121,10 @@ def test_the_door_says_who_came_and_who_was_refused(tmp_path, caplog):
         assert "vm" not in door.seen(tmp_path)
     finally:
         srv.shutdown()
+
+
+def test_a_client_named_like_a_windows_device_still_gets_a_folder_name():
+    assert door.slug("AUX") == "aux-"
+    assert door.slug("com3") == "com3-"
+    assert door.slug("vm sapphire") == "vm-sapphire"
+    assert door.slug("console") == "console"

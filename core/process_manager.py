@@ -84,7 +84,7 @@ def kill_process_on_port(port: int, owner: str = None) -> bool:
             name = proc.name()
         except Exception:
             continue                        # cannot identify it: cannot kill it
-        if owner not in cmd:
+        if os.path.normcase(owner) not in os.path.normcase(cmd):    # Windows: C:\Users and c:/users are one folder
             logger.warning(f"Port {port} is held by pid {c.pid} ({name}), not one of ours; leaving it alone")
             continue
         try:

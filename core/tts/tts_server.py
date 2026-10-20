@@ -181,7 +181,7 @@ def _hf_file(filename):
 _packs = {}   # voice name -> CPU tensor (kokoro's own cache is keyed by the string it is given)
 
 
-def _voice_pack(voice):
+def _voice_pack(voice, remote=False):
     """Voice name (or comma blend) to a loaded voice tensor, resolving each
     file from the cache (one download if missing) and loading it here.
     kokoro splits a voice STRING on commas, so handing it cache paths would
@@ -192,6 +192,8 @@ def _voice_pack(voice):
     packs = []
     for name in names:
         pack = _packs.get(name)
+        if pack is None and remote and (name.endswith('.pt') or '/' in name or '\\' in name):
+            raise ValueError("voice files are this computer's own: another computer names a voice")
         if pack is None:
             path = name if name.endswith('.pt') else _hf_file(f'voices/{name}.pt')
             pack = _packs[name] = _torch.load(path, map_location='cpu', weights_only=True)
@@ -414,10 +416,10 @@ class TTSHandler(BaseHTTPRequestHandler):
         # ThreadingMixIn close the socket with no response, which the main
         # app can only report as "Remote end closed connection".
         try:
-            voice_pack = _voice_pack(voice)
+            voice_pack = _voice_pack(voice, remote=getattr(self, 'remote', False))
         except Exception as e:
             logger.error(f"Voice '{voice}' unavailable: {e}")
-            _json_response(self, {'error': f"Voice '{voice}' unavailable: {e}"}, _unavailable_status(e))
+            _json_response(self, {'error': f"Voice '{voice}' unavailable: {_said(self, e)}"}, _unavailable_status(e))
             return
 
         generation_start = time.time()
@@ -432,7 +434,7 @@ class TTSHandler(BaseHTTPRequestHandler):
             _private_error(f"Synthesis failed (voice={voice})", e)
             # The caller sent the text, so the reply may say what broke (a CUDA
             # error is the Test button's whole use); only the log holds it back.
-            _json_response(self, {'error': f'Synthesis failed: {e}'}, 500)
+            _json_response(self, {'error': f'Synthesis failed: {_said(self, e)}'}, 500)
             return
 
         if not audio_segments:
@@ -532,10 +534,10 @@ class TTSHandler(BaseHTTPRequestHandler):
         # Resolve the voice BEFORE committing headers: a missing voice or an
         # unreachable Hugging Face is still a clean JSON answer (404 / 503) here.
         try:
-            voice_pack = _voice_pack(voice)
+            voice_pack = _voice_pack(voice, remote=getattr(self, 'remote', False))
         except Exception as e:
             logger.error(f"Voice '{voice}' unavailable: {e}")
-            _json_response(self, {'error': f"Voice '{voice}' unavailable: {e}"}, _unavailable_status(e))
+            _json_response(self, {'error': f"Voice '{voice}' unavailable: {_said(self, e)}"}, _unavailable_status(e))
             return
 
         # Headers committed — past this point we can't return JSON errors,
@@ -677,6 +679,12 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         super().server_bind()
 
 
+def _said(handler, e):
+    """An error as the caller may read it: in full here, only its kind for
+    another computer (the text can hold this computer's paths)."""
+    return type(e).__name__ if getattr(handler, 'remote', False) else str(e)
+
+
 def _open_shared_door():
     """Other computers reach this Kokoro here: TLS, a key per client
     (core/worker_door.py). The plain door above stays as it was."""
@@ -685,6 +693,8 @@ def _open_shared_door():
     port = int(getattr(config, 'TTS_SHARE_PORT', 5013) or 5013)
 
     class Shared(TTSHandler):
+        remote = True
+
         def _let_in(self):
             if worker_door.admit(self):
                 return True
