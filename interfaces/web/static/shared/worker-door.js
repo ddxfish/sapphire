@@ -4,6 +4,10 @@
 // shuts it out. Used by the TTS tab (kokoro) and plugins with a client mode.
 
 const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
+const ago = t => {
+    const m = Math.round((Date.now() / 1000 - t) / 60);
+    return m < 2 ? 'just now' : m < 120 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export function mountWorkerDoor(el, door, { title = 'Shared with other computers', note = '' } = {}) {
@@ -39,11 +43,12 @@ export function mountWorkerDoor(el, door, { title = 'Shared with other computers
 
     async function refresh() {
         try {
-            const { clients, address } = await call('GET');
+            const { clients, seen = {}, address } = await call('GET');
             $('.wd-note').textContent = note || `Others reach it at ${address}.`;
             $('.wd-list').innerHTML = clients.length
                 ? clients.map(n => `<div style="display:flex;gap:8px;align-items:center;">
-                        <span style="flex:1;">${esc(n)}</span>
+                        <span style="flex:1;">${esc(n)} <span style="color:var(--text-muted);font-size:var(--font-sm,12px);">${
+                            seen[n] ? `last seen ${ago(seen[n].at)} from ${esc(seen[n].from)}` : 'never seen: not connected yet'}</span></span>
                         <button class="btn btn-sm wd-remove" data-name="${esc(n)}" type="button">Remove</button></div>`).join('')
                 : '<div style="color:var(--text-muted);font-size:var(--font-sm,12px);">No computers yet.</div>';
             el.querySelectorAll('.wd-remove').forEach(b => b.onclick = async () => {

@@ -420,7 +420,8 @@ async def test_tts(request: Request, _=Depends(require_login), system=Depends(ge
         reason = getattr(provider, '_last_error', None) or "no audio returned (see the app log)"
         return {"success": False, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms,
                 "error": f"Reachable, but synthesis failed: {reason}"}
-    return {"success": True, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms, "bytes": len(audio)}
+    return {"success": True, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms, "bytes": len(audio),
+            "served_by": getattr(provider, 'served_by', None)}     # Kokoro: primary or its fallback, and why
 
 
 @router.get("/api/tts/voices")

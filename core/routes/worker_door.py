@@ -39,7 +39,7 @@ def _address(door):
 @router.get("/api/worker-door/{door}")
 def list_clients(door: str, _=Depends(require_login)):
     folder = _folder(door)
-    return {"clients": sorted(worker_door.clients(folder)), "address": _address(door)}
+    return {"clients": sorted(worker_door.clients(folder)), "seen": worker_door.seen(folder), "address": _address(door)}
 
 
 @router.post("/api/worker-door/{door}")

@@ -126,9 +126,14 @@ export default {
                 if (!res.ok) throw new Error(`Server error (${res.status})`);
                 const data = await res.json();
                 if (data.success) {
-                    result.style.color = 'var(--color-success, #4caf50)';
+                    const by = data.served_by;
+                    const fellBack = by?.lane === 'fallback';
+                    result.style.color = fellBack ? 'var(--color-warning, #e0a020)' : 'var(--color-success, #4caf50)';
                     const spoke = data.synth_ms != null ? `, spoke a test phrase in ${data.synth_ms}ms` : '';
-                    result.textContent = `${data.provider} — reachable in ${data.ms}ms${spoke}`;
+                    const where = !by ? '' : fellBack
+                        ? ` on the FALLBACK (${by.server}): the primary ${by.primary} ${by.why || 'did not answer'}`
+                        : ` on the primary (${by.server})`;
+                    result.textContent = `${data.provider} — reachable in ${data.ms}ms${spoke}${where}`;
                 } else {
                     result.style.color = 'var(--color-error, #f44336)';
                     result.textContent = data.error || 'Test failed';

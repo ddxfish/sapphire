@@ -78,6 +78,8 @@ class KokoroTTSProvider(BaseTTSProvider):
         self.fallback_server = config.TTS_FALLBACK_SERVER
         self.fallback_timeout = config.TTS_FALLBACK_TIMEOUT
         self._doors = {}            # pairing string -> (session, base)
+        self.served_by = None       # the last call: {"lane": primary|fallback, "server", "why"}
+        self._health_why = None
         logger.info(f"Kokoro TTS provider: {_shown(self.primary_server)}")
 
     def _call(self, method, server, path, timeout=None, **kw):
@@ -224,10 +226,15 @@ class KokoroTTSProvider(BaseTTSProvider):
                self._check_health(self.fallback_server, timeout=1.0)
 
     def _get_server_url(self) -> str:
-        """Get available server URL with fallback."""
+        """Get available server URL with fallback. Which one served, and why
+        not the primary, is kept for the Test button (served_by)."""
         if self._check_health(self.primary_server, timeout=self.fallback_timeout):
+            self.served_by = {"lane": "primary", "server": _shown(self.primary_server)}
             return self.primary_server
-        logger.info(f"Kokoro primary unavailable, using fallback: {_shown(self.fallback_server)}")
+        why = self._health_why
+        self.served_by = {"lane": "fallback", "server": _shown(self.fallback_server),
+                          "primary": _shown(self.primary_server), "why": why}
+        logger.info(f"Kokoro primary unavailable ({why}), using fallback: {_shown(self.fallback_server)}")
         return self.fallback_server
 
     def list_voices(self) -> list:
@@ -235,11 +242,27 @@ class KokoroTTSProvider(BaseTTSProvider):
         return KOKORO_VOICES
 
     def _check_health(self, server_url: str, timeout: float = None) -> bool:
+        """True when it answers. Else _health_why says why, in words."""
         try:
             response = self._call('get', server_url, '/health', timeout=timeout)
-            return response.status_code == 200
-        except Exception:
+        except requests.exceptions.SSLError as e:
+            self._health_why = (str(e) if "certificate changed" in str(e)
+                                else "its certificate is not the one paired (paste its new pairing string)")
             return False
+        except requests.exceptions.Timeout:
+            self._health_why = f"no answer within {timeout} s"
+            return False
+        except requests.exceptions.ConnectionError:
+            self._health_why = "not reachable (off, wrong address or port, or a firewall)"
+            return False
+        except Exception as e:
+            self._health_why = type(e).__name__
+            return False
+        if response.status_code == 401:
+            self._health_why = "it refused the key (that computer was removed, or the pairing string is old)"
+        elif response.status_code != 200:
+            self._health_why = f"HTTP {response.status_code}"
+        return response.status_code == 200
 
 
 def _shown(server):

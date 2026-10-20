@@ -686,7 +686,7 @@ def _open_shared_door():
 
     class Shared(TTSHandler):
         def _let_in(self):
-            if worker_door.client_of(self.server.door, self.headers.get('Authorization')):
+            if worker_door.admit(self):
                 return True
             _json_response(self, {'error': 'unauthorized'}, 401)
             return False

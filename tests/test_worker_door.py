@@ -96,3 +96,28 @@ def test_plugin_copies_say_exactly_what_core_says():
     root = Path(door.__file__).parent.parent
     for copy in [*root.glob("user/plugins/*/worker_door.py"), *root.glob("core/plugins/*/worker_door.py")]:
         assert copy.read_bytes() == core, f"{copy} differs from core/worker_door.py: copy it again"
+
+
+def test_the_door_says_who_came_and_who_was_refused(tmp_path, caplog):
+    class Seen(Echo):
+        def do_GET(self):
+            who = door.admit(self)
+            self.send_response(200 if who else 401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+    srv = door.serve(ThreadingHTTPServer, Seen, "127.0.0.1", 0, tmp_path)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        door.add_client(tmp_path, "vm")
+        text = door.pairing(tmp_path, "vm", f"127.0.0.1:{srv.server_address[1]}")
+        with caplog.at_level("INFO", logger="worker_door"):
+            s, base = door.session(text)
+            assert s.get(f"{base}/", timeout=5).status_code == 200
+            bad, _ = door.session(text.replace("key=", "key=x"))
+            assert bad.get(f"{base}/", timeout=5).status_code == 401
+        assert door.seen(tmp_path)["vm"]["from"] == "127.0.0.1"
+        assert "vm came in from 127.0.0.1" in caplog.text and "Refused a key from 127.0.0.1" in caplog.text
+        door.remove_client(tmp_path, "vm")
+        assert "vm" not in door.seen(tmp_path)
+    finally:
+        srv.shutdown()
