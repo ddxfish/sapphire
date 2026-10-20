@@ -1,5 +1,5 @@
 # store.py - projects and clips on disk. A clip is <id>.wav (16 kHz mono int16) beside <id>.json, the sidecar:
-#   {id, collection, source, seconds, peak, rms, created, ...tags (device, style, voice, engine, speed, text), qa}
+#   {id, collection, source, seconds, peak, rms, created, ...tags (device, how, where, noise, who, voice, engine, speed, text), qa}
 # Writers append nothing to shared indexes: counting is a scandir, a page is the newest files with their sidecars,
 # so 50k clips in a folder stay cheap and nothing corrupts when a job dies.
 import io
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import paths
+from . import paths, tags
 from .paths import write_json
 from .paths import COLLECTIONS, SAMPLE_RATE, collection_dir, project_dir, projects_dir, room_dir, slug_of
 
@@ -412,7 +412,8 @@ def take_recording(pdir, collection, data, meta, do_trim=True, drop_head_ms=0, d
     meta = {**(meta or {}), 'floor_db': mic['floor_db'], 'mic_verdict': mic['verdict']}
     # the lift is for satellites, whose processing chain is quiet by design; a person's soft, whispered or
     # far-away take is quiet on purpose and stays so
-    quiet_style = str(meta.get('style') or '') in ('soft', 'whisper', 'far away')
+    t = tags.of(meta)
+    quiet_style = t['how'] in ('soft', 'whisper') or t['where'] != 'close'
     if boost and meta.get('via') == 'satellite' and not quiet_style and not collection.startswith('ambient/'):
         audio, gain = boost_if_faint(audio, mic['floor_db'])
         if gain:

@@ -1,7 +1,7 @@
 # judge.py - a trained run against real audio, inside the warm sampler process (the plugin env has torch and the
 # tflite runtime). Two doors:
-#   judge(root, slug, run)         every held-out clip scored by that run's model, with its mic, style and phrase,
-#                                  so the page can break recall down by microphone and way of speaking; and the
+#   judge(root, slug, run)         every held-out clip scored by that run's model, with its mic, tags and phrase,
+#                                  so the page can break recall down by microphone, how, where, noise and who; and the
 #                                  stress rows: every held-out take under STRESS draws of a rough recipe, drawn
 #                                  from the held-out room alone, the same draws for every model
 #   score(root, slug, runs, audio) one utterance (the Try it button) scored by several runs at once
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import augment, catalog, features, features_mww, holdout, paths, store
+from . import augment, catalog, features, features_mww, holdout, paths, store, tags
 from .paths import write_json
 
 _cache = {}
@@ -142,6 +142,34 @@ def _pct(values, q):
     return round(float(np.percentile(values, q)), 4) if values else None
 
 
+TAG_AXES = ('device', 'how', 'where', 'noise', 'who')
+
+
+def by_tag(rows, threshold):
+    """Recall at one threshold by microphone and by each tag, for the held-out takes and for their stress draws:
+    {axis: {value: {n, hit, recall, stress_n, stress_hit, stress}}}. Old rows carrying one `style` map like sidecars."""
+    out = {ax: {} for ax in TAG_AXES}
+    for r in rows:
+        if r['kind'] not in ('positive', 'stress'):
+            continue
+        t = tags.of(r)
+        t['device'] = r.get('device') or 'unknown'
+        hit = int(float(r['score']) >= threshold)
+        for ax in TAG_AXES:
+            cell = out[ax].setdefault(t[ax], {'n': 0, 'hit': 0, 'stress_n': 0, 'stress_hit': 0})
+            if r['kind'] == 'positive':
+                cell['n'] += 1
+                cell['hit'] += hit
+            else:
+                cell['stress_n'] += 1
+                cell['stress_hit'] += hit
+    for table in out.values():
+        for cell in table.values():
+            cell['recall'] = round(cell['hit'] / cell['n'], 4) if cell['n'] else None
+            cell['stress'] = round(cell['stress_hit'] / cell['stress_n'], 4) if cell['stress_n'] else None
+    return out
+
+
 def summary(rows, eval_rows=None, trainer='oww'):
     """The judge's verdict at every threshold, and the one to install: no ordinary negative fires, at most one
     sound-alike, the standard false-alarm rate under 0.5/h where the trainer measured it, then the best recall,
@@ -167,7 +195,7 @@ def summary(rows, eval_rows=None, trainer='oww'):
               'stress_min': _pct(stress, 0), 'stress_p10': _pct(stress, 10),
               'gap': round(min(pos) - top_neg, 4) if pos and top_neg is not None else None}
     return {'n_pos': len(pos), 'n_near': len(near), 'n_neg': len(other), 'n_stress': len(stress), 'table': table, 'clean': bool(ok),
-            'margin': margin,
+            'margin': margin, 'by_tag': by_tag(rows, pick['threshold']) if pick else {},
             **({k: pick[k] for k in ('threshold', 'recall', 'stress_recall', 'near_fires', 'neg_fires', 'fp_per_hour')} if pick else {'threshold': None, 'recall': None, 'stress_recall': None})}
 
 
@@ -196,7 +224,7 @@ def judge(root, slug, rid, force=False):
             except Exception:
                 continue
             best, _ = model.stream_max(audio)
-            rows.append({'kind': kind, 'id': side.get('id'), 'collection': side.get('collection'), 'device': side.get('device'), 'style': side.get('style') or 'normal',
+            rows.append({'kind': kind, 'id': side.get('id'), 'collection': side.get('collection'), 'device': side.get('device'), **tags.of(side),
                          'near': bool(side.get('near')), 'text': side.get('text'), 'score': round(best, 4)})
             if kind == 'positive':
                 takes.append((audio, side))
@@ -212,7 +240,7 @@ def judge(root, slug, rid, force=False):
                 best, _ = model.stream_max(varied)
             except Exception:
                 continue
-            rows.append({'kind': 'stress', 'id': side.get('id'), 'device': side.get('device'), 'style': side.get('style') or 'normal',
+            rows.append({'kind': 'stress', 'id': side.get('id'), 'device': side.get('device'), **tags.of(side),
                          'draw': i, 'applied': applied, 'score': round(best, 4)})
     out = {'run': rid, 'trainer': run.get('trainer'), 'rows': rows, 'seconds': round(time.time() - t0, 1), 'when': time.time(),
            'holdout_when': held_when, 'held_key': held_key, 'stress_key': STRESS_KEY, 'stress': STRESS}

@@ -94,8 +94,9 @@ async function load(el, ctx, p) {
         <div class="wwm-card"><h3>Loudness (peak)</h3>
           ${hist([{ name: 'yours', data: ch.level_own, color: 'var(--accent, var(--accent-blue))' }, { name: 'made', data: ch.level_synth, color: 'var(--text-muted)' }], { lo: -40, hi: 0, unit: ' dB' })}
           <div class="wwm-muted">Training varies level anyway; a pile at the far left is a mic too quiet, at 0 is clipping.</div></div>
-        <div class="wwm-card"><h3>Ways of speaking (yours)</h3>
-          ${hbars(Object.entries(r.styles).map(([name, n]) => ({ name, n })), 'n')}</div>
+        <div class="wwm-card"><h3>Your takes, by tag</h3>
+          ${[['how', 'How it was said'], ['where', 'From where'], ['noise', 'What was on'], ['who', 'Who']].map(([ax, title]) => { const t = r.tags?.[ax] || {}; return Object.keys(t).length ? `<div class="wwm-muted" style="margin-top:6px">${title}</div>${hbars(Object.entries(t).map(([name, n]) => ({ name, n })), 'n')}` : ''; }).join('') || '<div class="wwm-muted">no recordings yet</div>'}
+          ${r.judge ? `<div class="wwm-muted" style="margin-top:6px">${r.judge} recorded for the judge: held out from the start, never trained on.</div>` : ''}</div>
       </div>
       <div class="wwm-grid2">
         <div class="wwm-card"><h3>Your microphones</h3>

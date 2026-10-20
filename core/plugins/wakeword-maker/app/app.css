@@ -276,3 +276,5 @@ button.wwm-pill small { opacity: .7; }
 .wwm-wrap { flex-wrap: wrap; }
 .wwm-chip.wwm-chosen { border-color: var(--success, #6c6); }
 .wwm-stale { opacity: .6; }
+.wwm-flag.judge { border-color: var(--success, #6c6); color: var(--success, #6c6); }
+.wwm-rec.judge { box-shadow: inset 0 0 0 2px var(--success, #6c6); border-radius: var(--radius-md, 8px); }

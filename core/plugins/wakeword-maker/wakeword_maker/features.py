@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import augment, catalog, compat, holdout, paths, store
+from . import augment, catalog, compat, holdout, paths, store, tags
 from .paths import read_json, write_json
 
 SR = paths.SAMPLE_RATE
@@ -114,12 +114,15 @@ class Embedder:
         return self.f.embed_clips(pcm_int16, batch_size=batch, ncpu=self.threads).astype(np.float32)
 
 
-SOURCES_DEFAULT = {'synth': 'all', 'human': 'all', 'devices': None, 'styles': None, 'own_repeat': OWN_REPEAT, 'mined': True, 'room_devices': None}
+SOURCES_DEFAULT = {'synth': 'all', 'human': 'all', 'devices': None, 'styles': None, 'how': None, 'where': None, 'noise': None, 'who': None,
+                   'own_repeat': OWN_REPEAT, 'mined': True, 'room_devices': None}
+TAG_FILTERS = ('how', 'where', 'noise', 'who')
 
 
 def sources_of(args):
     """What a run trains on, as one block: `synth` (all | piper | kokoro | none | [voices]), `human` (all | none: your
-    own takes of the phrase), `devices` / `styles` (only takes from these mics or ways of speaking; None = every),
+    own takes of the phrase), `devices` / `how` / `where` / `noise` / `who` (only takes from these mics or with these
+    tags; None = every; `styles` is the old name of `how` and still filters on the old sidecar field),
     `own_repeat` (how many extra times each of your takes is varied), `mined` (false accepts a watch kept). The
     old single `synth` arg still works. Your own negatives are always in: a near miss in your voice is never a
     liability. The held-out slice is never touched by any of this: it judges every run on every mic."""
@@ -134,7 +137,8 @@ def sources_of(args):
     src['synth'] = sorted(src['synth']) if isinstance(src['synth'], (list, tuple, set)) else (str(src['synth'] or 'all'))
     src['human'] = 'none' if str(src['human']).lower() in ('none', 'false', '0', 'off') else 'all'
     src['devices'] = sorted(str(d) for d in src['devices']) if isinstance(src['devices'], (list, tuple, set)) and src['devices'] else None
-    src['styles'] = sorted(str(s) for s in src['styles']) if isinstance(src['styles'], (list, tuple, set)) and src['styles'] else None
+    for k in ('styles',) + TAG_FILTERS:
+        src[k] = sorted(str(s) for s in src[k]) if isinstance(src[k], (list, tuple, set)) and src[k] else None
     src['room_devices'] = sorted(str(d) for d in src['room_devices']) if isinstance(src['room_devices'], (list, tuple, set)) and src['room_devices'] else None
     src['own_repeat'] = max(1, min(64, int(src['own_repeat'] or OWN_REPEAT)))
     src['mined'] = src['mined'] not in (False, 'false', 0, '0')
@@ -156,6 +160,9 @@ def sources_label(src):
         parts.append('mics ' + ','.join(src['devices']))
     if src.get('styles'):
         parts.append('styles ' + ','.join(src['styles']))
+    for k in TAG_FILTERS:
+        if src.get(k):
+            parts.append(f"{k} " + ','.join(src[k]))
     if src.get('own_repeat') not in (None, OWN_REPEAT):
         parts.append(f"own x{src['own_repeat']}")
     if src.get('mined') is False:
@@ -173,6 +180,10 @@ def human_ok(r, src):
         return False
     if src.get('styles') and (r.get('style') or 'normal') not in src['styles']:
         return False
+    if any(src.get(k) for k in TAG_FILTERS):
+        t = tags.of(r)
+        if any(src.get(k) and t[k] not in src[k] for k in TAG_FILTERS):
+            return False
     return True
 
 

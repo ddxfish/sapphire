@@ -63,7 +63,7 @@ python -m wakeword_maker.cli --root /path/to/wakeword run train --project hey_sa
   tools/                         the pinned microWakeWord source, fetched on the first ESP32 build
   projects/<slug>/               project.json, holdout.json, and the collections:
      positive/{synth,recorded,uploaded}  negative/{synth,recorded,uploaded,mined}  ambient/{recorded,uploaded}
-     each clip = <id>.wav (16 kHz mono) + <id>.json (source, device, voice, style, text, qa, verdict)
+     each clip = <id>.wav (16 kHz mono) + <id>.json (source, device, how, where, noise, who, judge, voice, text, qa, verdict)
      qa/summary.json qa/worst.json   features/{oww,mww}/<key>/   runs/<stamp>-<family>/   watch/<id>/
   jobs/<id>/                     job.json status.json progress.jsonl log.txt (newest 100 kept)
 ```

@@ -38,7 +38,7 @@ function draw(el, ctx, p, data) {
         : '<div class="wwm-muted">No finished models yet. Train one first.</div>'}
       </div>
       <div class="wwm-card">
-        <div class="wwm-row wwm-between"><h2 style="margin:0">How it hears you, by microphone and way of speaking ${qbtn('breakdown')}</h2><select id="wwm-bd-run">${runs.slice().sort((a, b) => (sel.has(b.id) - sel.has(a.id))).map(r => `<option value="${esc(r.id)}">${esc(r.label || r.id)}</option>`).join('')}</select></div>
+        <div class="wwm-row wwm-between"><h2 style="margin:0">How it hears you, by microphone and tag ${qbtn('breakdown')}</h2><select id="wwm-bd-run">${runs.slice().sort((a, b) => (sel.has(b.id) - sel.has(a.id))).map(r => `<option value="${esc(r.id)}">${esc(r.label || r.id)}</option>`).join('')}</select></div>
         <div id="wwm-bd" class="wwm-muted">Pick a run above.</div>
       </div>
       <div class="wwm-card">
@@ -84,13 +84,14 @@ function draw(el, ctx, p, data) {
         try {
             const j = await api(`/projects/${p.slug}/runs/${rid}/judge`);
             const pos = j.rows.filter(x => x.kind === 'positive'), neg = j.rows.filter(x => x.kind === 'negative');
-            const group = (rows, key) => { const g = {}; rows.forEach(x => { const k = x[key] || '?'; (g[k] = g[k] || []).push(x); }); return Object.entries(g).map(([k, xs]) => ({ k, n: xs.length, hit: xs.filter(x => x.score >= thr).length, min: Math.min(...xs.map(x => x.score)) })).sort((a, b) => a.hit / a.n - b.hit / b.n); };
+            const group = (rows, key) => { const g = {}; rows.forEach(x => { const k = x[key] || (key === 'who' ? '(nobody tagged)' : '?'); (g[k] = g[k] || []).push(x); }); return Object.entries(g).map(([k, xs]) => ({ k, n: xs.length, hit: xs.filter(x => x.score >= thr).length, min: Math.min(...xs.map(x => x.score)) })).sort((a, b) => a.hit / a.n - b.hit / b.n); };
+            const tagLine = (x) => [x.device, x.how !== 'normal' && x.how, x.where !== 'close' && x.where, x.noise !== 'quiet' && x.noise, x.who].filter(Boolean).map(esc).join(' · ') || 'normal';
             const tbl = (title, rows) => `<div><h3>${title}</h3><table class="wwm-table"><tbody>${rows.map(x => `<tr><td>${esc(x.k)}</td><td class="num">${x.hit}/${x.n}</td><td><div class="wwm-bar" style="width:120px"><i style="width:${100 * x.hit / x.n}%;background:${x.hit / x.n >= 0.9 ? 'var(--success, #6c6)' : x.hit / x.n >= 0.7 ? '#e9a33a' : 'var(--error, #e66)'}"></i></div></td></tr>`).join('')}</tbody></table></div>`;
             const misses = pos.filter(x => x.score < thr).sort((a, b) => a.score - b.score);
             const fires = neg.filter(x => x.score >= thr).sort((a, b) => b.score - a.score);
             box.innerHTML = `<div class="wwm-muted">${pos.length} held-out phrase clips, ${neg.length} held-out negatives, at threshold ${thr}.</div>
-              <div class="wwm-grid2">${tbl('By microphone', group(pos, 'device'))}${tbl('By way of speaking', group(pos, 'style'))}</div>
-              ${misses.length ? `<h3>Missed (${misses.length})</h3><div class="wwm-muted">${misses.map(x => `${esc(x.device)} · ${esc(x.style)} · score ${x.score}`).join('<br>')}</div>` : '<h3>Nothing missed</h3>'}
+              <div class="wwm-grid2">${[['device', 'By microphone'], ['how', 'How it was said'], ['where', 'From where'], ['noise', 'What was on'], ['who', 'Who']].map(([k, title]) => { const g = group(pos, k); return (g.length > 1 || k === 'device') ? tbl(title, g) : ''; }).join('')}</div>
+              ${misses.length ? `<h3>Missed (${misses.length})</h3><div class="wwm-muted">${misses.map(x => `${tagLine(x)} · score ${x.score}`).join('<br>')}</div>` : '<h3>Nothing missed</h3>'}
               ${fires.length ? `<h3>Negatives that fire (${fires.length})</h3><div class="wwm-muted">${fires.map(x => `${x.near ? '"' + esc(x.text || '') + '"' : 'other words'} · ${esc(x.device)} · score ${x.score}`).join('<br>')}</div>` : '<h3>No negative fires</h3>'}`;
         } catch (e) { box.innerHTML = `<span class="wwm-error">${esc(e.message)}</span>`; }
     };

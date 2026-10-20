@@ -1,5 +1,9 @@
 /* shared.css - Common UI components for Sapphire */
 
+/* Any author display rule (.setting-row is grid) beats the browser's own
+   [hidden] style, so a hidden element stayed on screen: make hidden win. */
+[hidden] { display: none !important; }
+
 /* =============================================================================
    CSS VARIABLES - BASE DEFAULTS (dark fallback)
    Theme files override these via [data-theme="name"] selectors

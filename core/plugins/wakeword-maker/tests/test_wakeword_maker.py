@@ -664,6 +664,12 @@ def test_sources_block_picks_what_trains_and_never_touches_the_held_out(root):
     assert dict((Path(w).stem, n) for w, n in s['positive'])[own_b['id']] == 3
     s = features._clips(pdir, set(), sources={'styles': ['fast']})
     assert own_a['id'] not in ids(s['positive']) and own_b['id'] in ids(s['positive'])
+    s = features._clips(pdir, set(), sources={'how': ['fast']})                       # the tag name of the same filter
+    assert own_a['id'] not in ids(s['positive']) and own_b['id'] in ids(s['positive'])
+    far = store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'hyperx', 'style': 'far away'})   # an old sidecar
+    s = features._clips(pdir, set(), sources={'where': ['close']})
+    assert far['id'] not in ids(s['positive']) and own_a['id'] in ids(s['positive'])
+    assert features.sources_label(features.sources_of({'sources': {'where': ['close'], 'who': ['Sam']}})) == 'where close · who Sam'
     src = features.sources_of({'synth': 'kokoro'})                     # the old single knob still rides
     assert src['synth'] == 'kokoro' and src['human'] == 'all' and src['own_repeat'] == features.OWN_REPEAT
     assert features.sources_label(src) == 'kokoro only'
@@ -682,9 +688,10 @@ def test_grid_expands_the_axes_queues_every_cell_and_pivots(settings, root, monk
     store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'hyperx', 'style': 'normal'})
     store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'esp32', 'style': 'fast'})
     opts = api.sources_options('hey_grid', settings=settings)
-    assert opts['devices'] == ['esp32', 'hyperx'] and opts['styles'] == ['fast', 'normal']
+    assert opts['devices'] == ['esp32', 'hyperx'] and opts['tags']['how'] == ['fast', 'normal'] and opts['tags']['who'] == []
     names = {p['name']: p for p in opts['presets']}
     assert names['without esp32']['sources'] == {'devices': ['hyperx']} and names['piper only']['label'] == 'piper only'
+    assert names['without fast']['sources'] == {'how': ['normal']} and 'without close' not in names     # one where: nothing to leave out
     monkeypatch.setattr(api, '_python_for', lambda kind: (sys.executable, None))
     queued = []
     monkeypatch.setattr(api.jobs, 'enqueue', lambda root, kind, args, py, pdir, project=None, publish=None: queued.append((kind, args)) or {'id': f"j{len(queued)}"})
@@ -923,3 +930,103 @@ def test_install_satellite_goes_through_the_library(root, monkeypatch):
     assert code == 502 and 'Could not reach' in body['error'] and body['code'] == 'not_sent'
     st = api.install_status(pr['slug'], settings={'data_dir': str(root)})
     assert 'satellites' in st and 'desktop' in st
+
+
+# --- tags: how, where, noise, who; and takes recorded for the judge --------------------------------------------
+
+def test_tags_map_old_sidecars_and_clean_input():
+    from wakeword_maker import tags
+    assert tags.of({'style': 'far away'}) == {'how': 'normal', 'where': 'across the room', 'noise': 'quiet', 'who': ''}
+    assert tags.of({'style': 'TV on', 'who': 'Sam'}) == {'how': 'normal', 'where': 'close', 'noise': 'TV or music', 'who': 'Sam'}
+    assert tags.of({'style': 'whisper'})['how'] == 'whisper' and tags.of({})['how'] == 'normal'
+    assert tags.of({'style': 'fast', 'how': 'slow'})['how'] == 'slow'                    # the new field wins over the old one
+    assert tags.clean({'how': 'fast', 'where': 'nowhere', 'noise': 'busy', 'who': '  Sam  ', 'style': 'x'}) == {'how': 'fast', 'noise': 'busy', 'who': 'Sam'}
+    assert tags.clean({}) == {} and tags.key({'style': 'far away'}) == ('normal', 'across the room', 'quiet', '')
+    assert tags.label({'how': 'fast', 'where': 'next room', 'who': 'Sam'}) == 'fast · next room · Sam' and tags.label({}) == ''
+
+
+def test_takes_for_the_judge_are_held_out_from_the_start(settings, root):
+    from wakeword_maker import features, holdout
+    api.create_project(body={'phrase': 'hey judge'}, settings=settings)
+    pdir = paths.project_dir(root, 'hey_judge')
+    for i in range(8):
+        store.add_clip(pdir, 'positive/recorded', tone(1.0), {'device': 'hyperx', 'how': 'normal'})
+    h = holdout.make(pdir)
+    assert len(h['positive']) == 2 and h['counts']['positive'] == [2, 8]
+    k0 = holdout.key(pdir)
+    req = _Request(_Form({'collection': 'positive/recorded', 'device': 'esp32', 'where': 'next room', 'noise': 'TV or music', 'who': 'Sam', 'judge': '1',
+                          'audio': _Upload('s.wav', wav_bytes(tone()))}, []))
+    r = asyncio.run(api.record('hey_judge', request=req, settings=settings))
+    c = r['clip']
+    assert c['judge'] is True and c['where'] == 'next room' and c['noise'] == 'TV or music' and c['who'] == 'Sam' and 'style' not in c and 'how' not in c
+    h = holdout.read(pdir)
+    assert c['id'] in h['positive'] and h['counts']['positive'] == [3, 9] and c['id'] in holdout.ids(pdir)
+    assert holdout.key(pdir) != k0                                               # a new judge take: old verdicts go stale
+    s = features._clips(pdir, holdout.ids(pdir))
+    assert c['id'] in {Path(w).stem for w, _ in s['val_positive']} and c['id'] not in {Path(w).stem for w, _ in s['positive']}
+    h = holdout.make(pdir)                                                        # a reshuffle keeps it
+    assert c['id'] in h['positive'] and len(h['positive']) == 3
+    r = api.tag_clip('hey_judge', 'positive', 'recorded', c['id'], body={'judge': False, 'how': 'fast'}, settings=settings)
+    assert r['clip']['judge'] is False and r['clip']['how'] == 'fast' and c['id'] not in holdout.read(pdir)['positive']
+    r = api.tag_clip('hey_judge', 'positive', 'recorded', c['id'], body={'judge': True}, settings=settings)
+    assert c['id'] in holdout.read(pdir)['positive']
+    # a near miss for the judge lands in the near part; the browser shows the tags as facets
+    req = _Request(_Form({'collection': 'negative/recorded', 'near': '1', 'judge': '1', 'how': 'whisper', 'audio': _Upload('s.wav', wav_bytes(tone()))}, []))
+    n = asyncio.run(api.record('hey_judge', request=req, settings=settings))['clip']
+    assert n['id'] in holdout.read(pdir)['near']
+    b = api.browse('hey_judge', query={'kind': 'positive'}, settings=settings)
+    assert b['facets']['where'] == {'close': 8, 'next room': 1} and b['facets']['who'] == {'(nobody tagged)': 8, 'Sam': 1} and b['judge'] == 1
+    assert api.browse('hey_judge', query={'kind': 'positive', 'where': 'next room'}, settings=settings)['total'] == 1
+    assert api.browse('hey_judge', query={'kind': 'positive', 'judge': '1'}, settings=settings)['clips'][0]['id'] == c['id']
+    g = api.guide('hey_judge', settings=settings)
+    assert any('1 take(s) recorded for the judge' in x['text'] for x in g['checks']) and any('Sam' in x['text'] for x in g['checks'])
+    ck = api.check_report('hey_judge', settings=settings)
+    assert ck['tags']['where'] == {'close': 8, 'next room': 1} and ck['judge'] == 1
+
+
+def test_judge_summary_reads_recall_by_tag():
+    from wakeword_maker import judge
+    rows = [{'kind': 'positive', 'device': 'hyperx', 'how': 'normal', 'where': 'close', 'score': 0.9},
+            {'kind': 'positive', 'device': 'hyperx', 'style': 'far away', 'score': 0.2},                   # an old row: style maps
+            {'kind': 'positive', 'device': 'esp32', 'where': 'across the room', 'score': 0.8},
+            {'kind': 'negative', 'near': True, 'score': 0.1},
+            {'kind': 'stress', 'device': 'esp32', 'where': 'across the room', 'score': 0.2},
+            {'kind': 'stress', 'device': 'esp32', 'where': 'across the room', 'score': 0.7}]
+    v = judge.summary(rows, [], 'oww')
+    assert v['threshold'] == 0.5
+    bt = v['by_tag']
+    assert bt['where']['close'] == {'n': 1, 'hit': 1, 'stress_n': 0, 'stress_hit': 0, 'recall': 1.0, 'stress': None}
+    assert bt['where']['across the room'] == {'n': 2, 'hit': 1, 'stress_n': 2, 'stress_hit': 1, 'recall': 0.5, 'stress': 0.5}
+    assert bt['device']['hyperx']['recall'] == 0.5 and bt['device']['esp32']['recall'] == 1.0 and bt['who'][''] ['n'] == 3
+    assert judge.summary([], [], 'oww')['by_tag'] == {}
+
+
+def test_a_grid_with_a_focus_folds_that_tag_s_recall(settings, root, monkeypatch):
+    api.create_project(body={'phrase': 'hey focus'}, settings=settings)
+    monkeypatch.setattr(api, '_python_for', lambda kind: (sys.executable, None))
+    monkeypatch.setattr(api.jobs, 'enqueue', lambda root, kind, args, py, pdir, project=None, publish=None: {'id': f"j{time.time_ns()}"})
+    r = api.grid_start('hey_focus', body={'trainers': ['oww'], 'sources': ['all'], 'seeds': 2, 'focus': {'axis': 'where', 'value': 'next room'}}, settings=settings)
+    assert r['grid']['focus'] == {'axis': 'where', 'value': 'next room'} and r['grid']['of'] == 2
+    assert 'focus' not in api.grid_start('hey_focus', body={'trainers': ['oww'], 'focus': {'axis': 'colour', 'value': 'x'}}, settings=settings)['grid']
+    cells = [{'sources': 'all', 'seed': 1, 'recall': 1.0, 'focus': 1.0, 'focus_stress': 0.5},
+             {'sources': 'without next room', 'seed': 1, 'recall': 1.0, 'focus': 0.33, 'focus_stress': None},
+             {'sources': 'without next room', 'seed': 2, 'recall': 0.9, 'focus': 0.67, 'focus_stress': 0.25}]
+    pv = api._pivot(cells)
+    assert pv['sources']['all']['focus'] == 1.0 and pv['sources']['all']['focus_stress'] == 0.5
+    assert pv['sources']['without next room']['focus'] == 0.5 and pv['sources']['without next room']['focus_stress'] == 0.25
+    assert 'focus' not in api._pivot([{'sources': 'a', 'recall': 1.0}, {'sources': 'b', 'recall': 0.5}])['sources']['a']
+
+
+def test_an_old_verdict_gets_its_recall_by_tag_filled_once(settings, root):
+    api.create_project(body={'phrase': 'hey old'}, settings=settings)
+    pdir = paths.project_dir(root, 'hey_old')
+    rdir = pdir / 'runs' / '20260101-000000-oww'
+    rdir.mkdir(parents=True)
+    (rdir / 'model.onnx').write_bytes(b'x')
+    paths.write_json(rdir / 'run.json', {'id': rdir.name, 'state': 'done', 'trainer': 'oww', 'heldout': {'threshold': 0.5, 'recall': 0.5}})
+    rows = [{'kind': 'positive', 'device': 'pi', 'style': 'far away', 'score': 0.9}, {'kind': 'positive', 'device': 'pi', 'style': 'normal', 'score': 0.1}]
+    paths.write_json(rdir / 'judge.json', {'rows': rows, 'holdout_when': None, 'stress_key': api._judge.STRESS_KEY})
+    r = api.list_runs('hey_old', settings=settings)['runs'][0]
+    assert r['heldout']['by_tag']['where'] == {'across the room': {'n': 1, 'hit': 1, 'stress_n': 0, 'stress_hit': 0, 'recall': 1.0, 'stress': None},
+                                               'close': {'n': 1, 'hit': 0, 'stress_n': 0, 'stress_hit': 0, 'recall': 0.0, 'stress': None}}
+    assert 'by_tag' in json.loads((rdir / 'run.json').read_text())['heldout']        # written once, not recomputed per list

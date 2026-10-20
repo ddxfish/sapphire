@@ -10,14 +10,15 @@ const MODES = {
         say: 'the wake word, the way you really call her', avoid: 'saying it the same way every time',
         help: ['Says it', `These teach her your voice saying the phrase. The whole list, so you only do this once (about 240 takes is the floor; 440 is the target: twice what made the first clean models, so a quarter can be held back to judge):
 • every mic she will hear you through, about 80 takes each: the satellites, your headset, the webcam, a phone
-• per mic: 30 normal, 10 fast, 10 far away, 10 soft or whispered, 10 loud or excited, 10 with the TV or music on
+• per mic: 30 normal, 10 fast, 10 from across the room or the next room, 10 soft or whispered, 10 loud or excited, 10 with the TV or music on
+• tag every take: how you said it, where from, what was on, who. The judge reports by each tag, and a grid can leave one out to see if it helps
 • move while you do the 30 normal ones: face the mic, then face a little left, a little right, look up at the ceiling, look down at your hands, from the doorway, from the couch
 • anyone else in the house: 20 each, any way they like
-• a slice (25% unless you change it) is held back to judge the model, so a thin style gets a thin judge
+• a slice (25% unless you change it) is held back to judge the model, so a thin tag gets a thin judge: tick "for the judge" and ten takes from the next room become a judge instead of a tenth of one
 Do:
 • say it like you mean it, as if she were across the room
 • change speed, distance, mood and where you face between takes; the real you is never square to the mic
-• "TV on" takes through a satellite record a fixed 4 seconds: press, say it, done
+• with the TV or music on, a satellite records a fixed 4 seconds: press, say it, done
 Don't:
 • don't say it the same flat way thirty times, sitting still
 • don't add words before or after it
@@ -57,7 +58,17 @@ Don't:
 • don't make the room louder than it really is`] },
 };
 
-const STYLES = ['normal', 'fast', 'slow', 'soft', 'loud', 'far away', 'whisper', 'tired', 'excited', 'TV on'];
+// the four tags on a take: how it was said, where from, what was on, who. Old clips carry one `style`; it maps on read.
+const TAGS = { how: ['normal', 'fast', 'slow', 'soft', 'loud', 'whisper', 'excited', 'tired'], where: ['close', 'across the room', 'next room'], noise: ['quiet', 'TV or music', 'busy'] };
+const TAG_DEFAULT = { how: 'normal', where: 'close', noise: 'quiet', who: '' };
+const TAG_WORD = { how: 'How', where: 'From', noise: 'Noise', who: 'Who' };
+export function tagsOf(c) {
+    const t = { ...TAG_DEFAULT };
+    if (c.style === 'far away') t.where = 'across the room'; else if (c.style === 'TV on') t.noise = 'TV or music'; else if (TAGS.how.includes(c.style)) t.how = c.style;
+    for (const k in t) if (c[k]) t[k] = c[k];
+    return t;
+}
+export const tagLabel = (c) => { const t = tagsOf(c); return Object.keys(TAG_DEFAULT).filter(k => t[k] && t[k] !== TAG_DEFAULT[k]).map(k => t[k]).join(' · '); };
 const WHAT = [['positive/recorded', 'Says it'], ['near', 'Near miss'], ['negative/recorded', "Doesn't say it"], ['ambient/recorded', 'Room sound']];
 let meter = null, keyHandler = null;
 
@@ -71,7 +82,7 @@ export function render(el, ctx) {
         <div class="wwm-row wwm-center"><div class="wwm-seg small" id="wwm-what">${WHAT.map(([v, l]) => `<button data-v="${v}">${l}</button>`).join('')}</div></div>
         <div class="wwm-row wwm-center wwm-recsel">
           <label>Speak through <select id="wwm-mic" title="microphone"><option value="">this browser's default mic</option></select><button class="wwm-x" id="wwm-mic-refresh" title="look for microphones again">↻</button></label>
-          <label>The way you will speak <select id="wwm-style">${STYLES.map(s => `<option>${s}</option>`).join('')}</select></label>
+          <span id="wwm-tags" class="wwm-row">${Object.entries(TAGS).map(([k, vals]) => `<label>${TAG_WORD[k]} <select id="wwm-tag-${k}" title="${k === 'how' ? 'how you say it this take' : k === 'where' ? 'where you are, relative to the mic' : 'what else is making sound'}">${vals.map(v => `<option ${(localStorage.getItem('wwm.' + k) || TAG_DEFAULT[k]) === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`).join('')}${qbtn('tags')}</span>
           <span id="wwm-satmic-row" style="display:none" class="wwm-row"><label>Mic gain <input type="number" id="wwm-satgain" min="0" max="37.5" step="0.5" style="width:70px"> dB</label><label><input type="checkbox" id="wwm-satagc"> AGC</label>${qbtn('satmic')}</span>
           <label id="wwm-satlen-row" style="display:none">Record for <select id="wwm-satlen"><option value="30">30 s</option><option value="60">1 min</option><option value="120">2 min</option><option value="300" selected>5 min</option></select></label>
         </div>
@@ -84,7 +95,9 @@ export function render(el, ctx) {
           <div class="wwm-muted" id="wwm-rec-note">Press, speak, press again. Space bar works too.</div>
           <div class="wwm-row wwm-center wwm-tagrow">
             <label class="wwm-muted">Mic tag <input type="text" id="wwm-devname" value="${esc(device)}" style="min-width:140px" title="how clips from this microphone are labelled"></label>
-            <label class="wwm-muted">Note on these takes <input type="text" id="wwm-takenote" value="${esc(localStorage.getItem('wwm.takenote') || '')}" placeholder="who, where… stays until you change it" style="min-width:220px"></label>
+            <label class="wwm-muted">Who <input type="text" id="wwm-tag-who" value="${esc(localStorage.getItem('wwm.who') || '')}" placeholder="you, or who is saying it" style="min-width:120px" title="whose voice; stays until you change it"></label>
+            <label class="wwm-muted">Note on these takes <input type="text" id="wwm-takenote" value="${esc(localStorage.getItem('wwm.takenote') || '')}" placeholder="anything for later; stays until you change it" style="min-width:200px"></label>
+            <label class="wwm-muted" id="wwm-judge-l" title="held out from the start and never trained on: the way to give a thin tag a real judge"><input type="checkbox" id="wwm-judge"> for the judge</label>${qbtn('judge_mark')}
           </div>
         </div>
       </div>
@@ -116,7 +129,13 @@ export function render(el, ctx) {
     </div>`;
     bindHelp(el);
 
-    const segWhat = el.querySelector('#wwm-what'), micSel = el.querySelector('#wwm-mic'), styleSel = el.querySelector('#wwm-style');
+    const segWhat = el.querySelector('#wwm-what'), micSel = el.querySelector('#wwm-mic');
+    const tagSel = Object.fromEntries(Object.keys(TAG_DEFAULT).map(k => [k, el.querySelector(`#wwm-tag-${k}`)]));
+    Object.entries(tagSel).forEach(([k, i]) => i.addEventListener('change', () => localStorage.setItem('wwm.' + k, i.value.trim())));
+    const tagVals = () => Object.fromEntries(Object.entries(tagSel).map(([k, i]) => [k, i.value.trim()]));
+    const judgeBox = el.querySelector('#wwm-judge');
+    const recBox = el.querySelector('.wwm-rec');
+    judgeBox.addEventListener('change', () => { recBox.classList.toggle('judge', judgeBox.checked); el.querySelector('#wwm-rec-note').textContent = judgeBox.checked ? 'For the judge: these takes are held out from the start and never trained on.' : 'Press, speak, press again. Space bar works too.'; });
     const btn = el.querySelector('#wwm-recbtn'), note = el.querySelector('#wwm-rec-note'), say = el.querySelector('#wwm-say');
     const devName = el.querySelector('#wwm-devname');
     devName.addEventListener('change', () => localStorage.setItem('wwm.device', devName.value.trim()));
@@ -139,7 +158,8 @@ export function render(el, ctx) {
         else say.textContent = v.startsWith('positive') ? p.phrase : v.startsWith('negative') ? 'Talk normally' : 'Let the room be the room';
         el.querySelector('#wwm-say-line').textContent = MODES[v].say;
         el.querySelector('#wwm-avoid-line').textContent = MODES[v].avoid;
-        styleSel.style.visibility = v.startsWith('ambient') ? 'hidden' : '';
+        el.querySelector('#wwm-tags').style.visibility = v.startsWith('ambient') ? 'hidden' : '';
+        el.querySelector('#wwm-judge-l').style.visibility = v.startsWith('ambient') ? 'hidden' : '';
         el.querySelector('#wwm-satlen-row').style.display = v.startsWith('ambient') && micSel.value.startsWith('sat:') ? '' : 'none';
     };
     segWhat.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setWhat(b.dataset.v)));
@@ -221,7 +241,7 @@ export function render(el, ctx) {
     const flush = async () => {
         if (sending || !queue.length) return;
         const first = queue[0];
-        const run = queue.findIndex(t => t.what !== first.what || t.near !== first.near);
+        const run = queue.findIndex(t => t.what !== first.what || t.near !== first.near || t.key !== first.key);
         const limit = run === -1 ? 8 : Math.min(8, run);
         const wait = 1800 - (Date.now() - lastSent);
         if (wait > 0 && queue.length < 4) { clearTimeout(sendTimer); sendTimer = setTimeout(flush, wait); return; }
@@ -231,7 +251,8 @@ export function render(el, ctx) {
         batch.forEach((t, i) => form.append('audio', t.blob, `take${i}.wav`));
         form.append('collection', batch[0].what);
         form.append('device', batch[0].device);
-        form.append('style', batch[0].style);
+        for (const k in TAG_DEFAULT) if (batch[0].tags[k]) form.append(k, batch[0].tags[k]);
+        if (batch[0].judge) form.append('judge', '1');
         if (batch[0].near) form.append('near', '1');
         if (batch[0].note) form.append('note', batch[0].note);
         form.append('texts', batch.map(t => t.text || '').join('\n'));
@@ -277,7 +298,7 @@ export function render(el, ctx) {
         if (!out) return;
         const micName = micSel.selectedOptions[0]?.value ? micSel.selectedOptions[0].textContent.trim() : '';
         queue.push({ blob: out.blob, what: collectionOf(what), near: what === 'near', text: what === 'near' ? nearText() : (what.startsWith('positive') ? p.phrase : ''),
-            device: devName.value.trim() || micName || defaultDevice(), style: styleSel.value, note: takeNote.value.trim(),
+            device: devName.value.trim() || micName || defaultDevice(), tags: tagVals(), judge: judgeBox.checked, key: JSON.stringify([tagVals(), judgeBox.checked]), note: takeNote.value.trim(),
             head: startedBy === 'key' ? 250 : 80, tail: how === 'key' ? 200 : 80 });
         note.textContent = queue.length > 1 ? `${queue.length} takes sending…` : 'Sending…';
         flush();
@@ -296,7 +317,7 @@ export function render(el, ctx) {
         note.textContent = what.startsWith('ambient') ? `${id} is recording the room for ${secs >= 60 ? secs / 60 + ' min' : secs + ' s'}. Let it be the room; never say the phrase.` : `${id}: say it when its ring turns yellow.`;
         let left = secs; const tick = what.startsWith('ambient') ? setInterval(() => { left -= 1; if (left > 0) note.textContent = `${id} is recording the room: ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left. Never say the phrase.`; }, 1000) : null;
         try {
-            const r = await api(`/projects/${p.slug}/record-satellite`, { method: 'POST', body: { device: id, collection: collectionOf(what), style: styleSel.value, seconds: secs, text: what === 'near' ? nearText() : (what.startsWith('positive') ? p.phrase : ''), near: what === 'near', note: takeNote.value.trim() } });
+            const r = await api(`/projects/${p.slug}/record-satellite`, { method: 'POST', body: { device: id, collection: collectionOf(what), ...tagVals(), judge: judgeBox.checked, seconds: secs, text: what === 'near' ? nearText() : (what.startsWith('positive') ? p.phrase : ''), near: what === 'near', note: takeNote.value.trim() } });
                 note.textContent = `Kept from ${id}: ${r.clip.seconds}s. Again?`;
             p.counts = r.counts; drawCounts(); prependClips([r.clip], collectionOf(what));
         } catch (e) { note.textContent = `Not kept: ${e.message}`; }
@@ -348,28 +369,32 @@ export function render(el, ctx) {
         const flags = (c.flags || []).map(f => FLAG[f] ? `<span class="wwm-flag ${f}" title="${FLAG[f][1]}">${FLAG[f][0]}</span>` : '').join('');
         return `<div class="wwm-clip ${c.flags?.length ? 'flagged' : ''} ${c.verdict === 'drop' ? 'bad' : ''}" data-id="${esc(c.id)}">
                 <button class="play" data-play="${audioUrl(p.slug, col, c.id)}" title="play">▶</button>
-                <span class="tags">${flags}${c.near ? '<span class="wwm-flag near" title="a near miss: sounds like the phrase, is not">near</span>' : ''}${c.seconds}s · ${[c.near && c.text ? '"' + c.text + '"' : '', c.device, c.style, c.voice, c.original_name, c.boost_db ? '+' + c.boost_db + ' dB' : '', c.qa?.score != null ? 'score ' + c.qa.score : ''].filter(Boolean).map(esc).join(' · ')}${c.note ? ` · <i class="wwm-note">${esc(c.note)}</i>` : ''}</span>
+                <span class="tags">${flags}${c.near ? '<span class="wwm-flag near" title="a near miss: sounds like the phrase, is not">near</span>' : ''}${c.judge ? '<span class="wwm-flag judge" title="for the judge: held out, never trained on">judge</span>' : ''}${c.seconds}s · ${[c.near && c.text ? '"' + c.text + '"' : '', c.device, c.source !== 'synth' ? tagLabel(c) : '', c.voice, c.original_name, c.boost_db ? '+' + c.boost_db + ' dB' : '', c.qa?.score != null ? 'score ' + c.qa.score : ''].filter(Boolean).map(esc).join(' · ')}${c.note ? ` · <i class="wwm-note">${esc(c.note)}</i>` : ''}</span>
                 <button class="wwm-x" title="${c.note ? 'edit the note' : 'add a note (who, where, which mic, anything for later)'}" data-note="${esc(c.id)}">✎</button>
                 <button class="wwm-x" title="delete" data-del="${esc(c.id)}">✕</button></div>`;
     }
     // the browser: a tab per kind, pills to filter, near misses grouped by phrase, pages of 24
-    const B = { kind: localStorage.getItem('wwm.bkind') || 'positive', device: '', source: '', style: '', text: '', offset: 0, limit: 24 };
+    const FACETS = ['device', 'source', 'how', 'where', 'noise', 'who', 'judge', 'text'];
+    const B = { kind: localStorage.getItem('wwm.bkind') || 'positive', ...Object.fromEntries(FACETS.map(k => [k, ''])), offset: 0, limit: 24 };
     const kindOf = (collection, near) => collection.startsWith('positive/') ? 'positive' : collection.startsWith('ambient/') ? 'ambient' : near ? 'near' : 'negative';
     const prependClips = (clips, col) => { if (kindOf(col, clips[0]?.near) === B.kind) loadClips(); };
     const btabs = el.querySelector('#wwm-btabs');
-    btabs.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { B.kind = b.dataset.k; B.device = B.source = B.style = B.text = ''; B.offset = 0; localStorage.setItem('wwm.bkind', B.kind); loadClips(); }));
+    btabs.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { B.kind = b.dataset.k; FACETS.forEach(k => { B[k] = ''; }); B.offset = 0; localStorage.setItem('wwm.bkind', B.kind); loadClips(); }));
     async function loadClips() {
         btabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === B.kind));
         const box = el.querySelector('#wwm-clips'), pills = el.querySelector('#wwm-pills'), groups = el.querySelector('#wwm-groups'), pager = el.querySelector('#wwm-pager');
         let r;
         try {
             const qs = new URLSearchParams({ kind: B.kind, offset: B.offset, limit: B.limit });
-            for (const k of ['device', 'source', 'style', 'text']) if (B[k]) qs.set(k, B[k]);
+            for (const k of FACETS) if (B[k]) qs.set(k, B[k]);
             r = await api(`/projects/${p.slug}/browse?${qs}`);
         } catch (e) { box.innerHTML = `<div class="wwm-error">${esc(e.message)}</div>`; return; }
         const pill = (k, v, label, n) => `<button class="wwm-pill ${B[k] === v ? 'on' : ''}" data-f="${k}" data-v="${esc(v)}">${esc(label)}${n != null ? ` <small>${n}</small>` : ''}</button>`;
         const facet = (k, title, f) => Object.keys(f).length ? `<span class="wwm-facet"><span class="wwm-muted">${title}</span>${pill(k, '', 'all')}${Object.entries(f).map(([v, n]) => pill(k, v, v, n)).join('')}</span>` : '';
-        pills.innerHTML = facet('source', 'from', r.facets.source) + (facet('device', 'mic', r.facets.device) ? `<span class="wwm-break"></span>` + facet('device', 'mic', r.facets.device) : '');
+        const tagFacets = ['how', 'where', 'noise', 'who'].map(k => (r.facets[k] && Object.keys(r.facets[k]).length > 1) ? facet(k, TAG_WORD[k].toLowerCase(), r.facets[k]) : '').filter(Boolean);
+        pills.innerHTML = facet('source', 'from', r.facets.source) + (facet('device', 'mic', r.facets.device) ? `<span class="wwm-break"></span>` + facet('device', 'mic', r.facets.device) : '')
+            + (tagFacets.length ? `<span class="wwm-break"></span>` + tagFacets.join('') : '')
+            + (r.judge ? `<span class="wwm-facet">${pill('judge', B.judge ? '' : '1', 'for the judge', r.judge)}</span>` : '');
         pills.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', () => { B[b.dataset.f] = b.dataset.v; B.offset = 0; loadClips(); }));
         if (r.groups) {
             groups.innerHTML = `<div class="wwm-groups">${r.groups.map(g => `<button class="wwm-group ${B.text === g.text ? 'on' : ''}" data-t="${esc(g.text)}">${esc(g.text)} <small>${g.n}</small></button>`).join('')}</div>

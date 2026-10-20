@@ -28,8 +28,10 @@ One afternoon, start to finish. Each step is a tab on the page, left to right.
 6. **Train.** Leave the preset on Standard, tick both model families, set Repeats to 3 and press Train.
    Then open *Advanced*, choose model `rnn`, preset Thorough, Repeats 3, Train again. Go do something else.
    Or press *Grid…*: tick the models, variation stops, source blocks (Piper only, synthetic only, without one
-   microphone...), presets and knobs you want compared, set seeds, and every combination is queued at once. A
-   Grids card folds the finished cells by each axis, so which source block or stop helps is one row each.
+   microphone, without one tag value...), presets and knobs you want compared, set seeds, and every combination is
+   queued at once. A Grids card folds the finished cells by each axis, so which source block or stop helps is one
+   row each. *Does this data help?…* is the one-question grid: pick a microphone or a tag value, it trains with
+   and without, three seeds each, and the Grids card adds two columns for recall on that tag's own held-out takes.
 7. **Train, the scoreboard.** Every finished run is judged on the held-out slice of your own recordings.
    Read *Hears you* (of your held-out takes, how many it caught), *Sound-alikes* (how many near misses
    fooled it), *Stressed* (the same takes under four rough draws each, with the held-out room behind them:
@@ -47,8 +49,14 @@ The models learn your voice from these takes, so the takes have to be the real y
 - **Every microphone she will hear you through.** The satellites in the rooms where you talk to her, your
   headset, the webcam, a phone. About eighty takes each. Three or more microphones teach the phrase, not the
   microphone.
-- **Per microphone:** thirty normal, ten fast, ten from far away, ten soft or whispered, ten loud or
-  excited, ten with the TV or music on.
+- **Per microphone:** thirty normal, ten fast, ten from across the room or the next room, ten soft or
+  whispered, ten loud or excited, ten with the TV or music on.
+- **Tag every take** with the four selects above the button: *How* it was said, *From* where, what *Noise* was
+  on, *Who* is speaking. They stay until you change them, so set them before a batch. The held-out slice is drawn
+  evenly across them, the judge reports recall by each, and Train can leave one out to ask whether it helped.
+- **For the judge.** Takes recorded with that switch on are held out from the moment they land and never train.
+  Three held-out takes from the next room can only say 0, 33, 67 or 100 percent; ten for the judge through each
+  microphone make "does she hear me from the next room" a question with an answer.
 - **Move while you do the normal ones.** Face the microphone, then a little left, a little right. Look up at
   the ceiling, then down at your hands. Say it from the doorway and from the couch. You are never square to a
   microphone when you really call her.
@@ -68,8 +76,9 @@ The models learn your voice from these takes, so the takes have to be the real y
   is noisy, quiet, or clipping.
 
 A slice of your takes (25% unless you change it on Train) is held back and never trained on. Every model is
-judged on that slice, so *Hears you* is honest. A thin style gets a thin judge: if you only whispered twice,
-the judge knows nothing about whispers.
+judged on that slice, so *Hears you* is honest, and every verdict carries recall by microphone and by each tag
+(the Test breakdown, and the weakest tag under *Hears you* on the scoreboard). A thin tag gets a thin judge: if
+you only whispered twice, the judge knows nothing about whispers; record some for the judge.
 
 ## The data folder, the environment, the datasets
 

@@ -2659,9 +2659,6 @@ div.hb-response-summary {
     grid-template-columns: repeat(2, 1fr);
     gap: 12px 20px;
 }
-/* Author display:grid beats the [hidden] UA style — make hidden win
-   (plugin settings tabs CSS-hide inactive panes, never remove them). */
-.settings-grid[hidden] { display: none; }
 
 /* Plugin settings tab strip (per-field "tab" in manifest schema).
    Cloned from .mind-tabs — kept separate, those classes carry ancestor

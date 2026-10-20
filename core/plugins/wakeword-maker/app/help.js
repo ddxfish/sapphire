@@ -16,9 +16,16 @@ Press ▶ to hear one.`],
     other_packs: ['Other-language packs', `Voices made for other languages, speaking English with an accent.
 Some are good variety, some mangle the word. Listen before you keep them.`],
     record: ['Recording yourself', `Press, say it, press again. That's one sample.
-The floor is about 240 takes of the phrase (three mics, eighty each); 440 across ten ways of speaking is the target: twice what made the first clean models, so a quarter can be held back to judge. The way you really talk to her: fast, soft, from the next room, facing away.
+The floor is about 240 takes of the phrase (three mics, eighty each); 440 across the ways you really say it is the target: twice what made the first clean models, so a quarter can be held back to judge. The way you really talk to her: fast, soft, from the next room, facing away.
+Tag every take: how you said it, where from, what was on, who. The judge reports by each tag.
 Your own voice counts for more than a thousand computer clips.
 Use several microphones: the satellites that will listen for it, a webcam, a headset. The list behind the Says it ? button has the whole shopping list.`],
+    tags: ['The tags', `Four tags on every take, remembered until you change them: How you said it (normal, fast, soft, loud, whisper...), From where (close, across the room, the next room), Noise (quiet, the TV or music on, a busy room), Who (whose voice).
+Set them before a batch, not after. The held-out slice is drawn evenly across them, the judge reports recall by each one, and "Does this data help?" on Train can leave one out to see what it was worth.
+A take with the TV or music on through a satellite records a fixed 4 seconds: press, say it, done.`],
+    judge_mark: ['For the judge', `Takes recorded with this on are held out from the moment they land: they judge every model and never train one.
+A thin tag gets a thin judge: three held-out takes from the next room can only say 0, 33, 67 or 100 percent. Ten takes for the judge from the next room, through each mic, and the question "does it hear me from the next room" has an answer.
+Switch it off for the takes that should teach her. Both kinds are yours; the judge takes just never cross over.`],
     upload: ['Uploading files', `wav, mp3, flac, ogg, or a zip of them.
 They stay marked as yours.`],
     guide: ['The guide', `Targets, floor and good: 240 and 440 of your phrase, 120 and 400 near misses, 80 and 320 other words, 30 and 90 minutes of room. The good column is twice what made the first clean models: a quarter of it is held back to judge.
@@ -44,9 +51,9 @@ Nothing is written to disk; change it and train again anytime. A saved "harsh" f
     dryrun: ['The dry run', `Tries the recipe on 300 of your clips and asks the speech recognizer if it still hears the phrase.
 A high number means the clips stay understandable. A low number means they're being buried.
 Listen to the five harshest ones: if you can still hear the word, it's fine.`],
-    holdout: ['Held out for testing', `A slice of your recordings and room sound (25% unless you set another share on Reshuffle) is set aside and never trained on.
-After training, every model is judged on these, so Hears you and Sound-alikes are honest.
-Reshuffle draws a different slice; the verdicts of older runs are then marked stale until you Re-judge.`],
+    holdout: ['Held out for testing', `A slice of your recordings and room sound (25% unless you set another share on Reshuffle) is set aside and never trained on, drawn evenly across your mics and tags.
+After training, every model is judged on these, so Hears you and Sound-alikes are honest, and the verdict carries recall by mic and by every tag.
+Takes recorded "for the judge" are always in the slice, on top of the draw. Reshuffle draws a different slice; the verdicts of older runs are then marked stale until you Re-judge.`],
     v_room: ['Rooms', `Plays the clip through a real room's echo.`],
     v_background: ['Background sound', `Mixes in your room recordings, music or static. From/to: how loud the voice is over it, in dB. 15 is quiet, 0 is as loud as the TV.`],
     v_far: ['Next room', `Muffled, quiet, echoing: said from another room.`],
@@ -80,15 +87,19 @@ Each kind of device wants its own kind of model: openWakeWord for desktop and Pi
 Pi and ESP32 bodies older than that door answer "no door": copy the files instead.`],
     sources: ['Sources', `What this run trains on. Synthetic voices: all, one engine, or none. Your takes: all, or none (then the model learns the phrase from made voices alone and is judged on you). Own weight: how many extra times each of your takes is varied into training, 8 by default against thousands of synthetic clips.
 The held-out slice is never touched by any of this: every run is judged on every microphone. Your own near misses always train.`],
-    grid: ['The grid', `Many runs from one click. Tick what you want compared: models, variation stops, source blocks (without one microphone, synthetic only, Piper only...), how hard, named knobs; set seeds. Every combination is queued as an ordinary run, seed 1 of everything first, one at a time.
+    grid: ['The grid', `Many runs from one click. Tick what you want compared: models, variation stops, source blocks (without one microphone, without one tag value, synthetic only, Piper only...), how hard, named knobs; set seeds. Every combination is queued as an ordinary run, seed 1 of everything first, one at a time.
 The pivot folds the finished cells by each axis: the mean of Hears you, Stressed, Sound-alikes and Gap over everything else. One row per value, so "does leaving the ESP32 takes out hurt it on the ESP32" is a glance, not a scroll. Seeds matter: the same cell three times tells noise from signal. Forgetting a grid cancels what is still queued; finished runs stay.`],
     roomday: ['Room day', `Every microphone at once, for the hours you set, everything kept. The pieces go to the shared room library at the data folder's root, tagged by microphone, and every wake word trains on them and judges false alarms with them: room sound belongs to no phrase.
 If a phrase is said in the room, the models on watch flag it; "That was me" drops that piece for that wake word only. More positions beat more mics in one spot: a second ESP32 by the TV, the other Pi in another room.
 PC microphones record from this tab, one stream each; keep the tab open. Satellites run on their own and survive a restart.`],
     repeats: ['Repeats', `Queue the same run two to five times, differing only by seed.
 Two runs of one recipe can land a few clips apart by luck alone; three repeats and the middle one is what the recipe really does.`],
-    breakdown: ['By microphone and way of speaking', `The held-out clips, scored by this model, grouped by which mic and how you said it.
-A red bar says where the model is weak: record more of that, or lower the threshold a little.`],
+    breakdown: ['By microphone and tag', `The held-out clips, scored by this model, grouped by which mic, how you said it, where from, what was on and who.
+A red bar says where the model is weak: record more of that (for the judge too, so the bar means something), or lower the threshold a little.
+A table with one row is left out; a tag with two or three takes behind it is a hint, not a verdict.`],
+    ablate: ['Does this data help?', `Pick a mic or a tag value. Two source blocks are queued, everything and everything without it, the ticked models, several seeds each, as one grid.
+The Grids card then shows two extra columns: recall and stress recall on the held-out takes that carry that tag. If "all" beats "without" there by more than the seeds spread, the data earns its keep; if not, it was weight, not signal.
+The judge needs takes of that tag to say anything: record ten for the judge first.`],
     try: ['Try it', `Say the phrase into a mic, and every ticked model tells you what score it gave and whether it would have answered.
 Try near misses and other words too. Pick a satellite to test through its own microphone.`],
     watch: ['Room watch', `Your room, for as long as you like, through a mic or a satellite. Every time a ticked model would have answered, that moment is kept with its sound.

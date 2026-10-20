@@ -25,7 +25,7 @@ if str(PLUGIN_DIR) not in sys.path:
 from wakeword_maker import watch as _watch
 from wakeword_maker.paths import read_json, write_json
 from wakeword_maker import judge as _judge
-from wakeword_maker import augment, catalog, holdout, jobs, paths, sampler_client, store, voices   # noqa: E402
+from wakeword_maker import augment, catalog, holdout, jobs, paths, sampler_client, store, tags, voices   # noqa: E402
 
 logger = logging.getLogger(__name__)
 NAME = 'wakeword-maker'
@@ -446,16 +446,25 @@ def tag_clip(slug, kind, src, cid, body=None, settings=None, **_):
     if not c:
         return {'error': 'no such collection'}, 404
     body = body or {}
-    fields = {k: body[k] for k in ('verdict', 'note', 'style', 'device', 'text', 'near') if k in body}
+    fields = {k: body[k] for k in ('verdict', 'note', 'device', 'text', 'near') if k in body}
+    fields.update(tags.clean(body))
     if 'note' in fields:
         fields['note'] = str(fields['note'] or '')[:200]
     if 'verdict' in fields:
         fields['verdict_by'] = 'user'
+    if 'judge' in body:
+        fields['judge'] = body['judge'] not in (False, 'false', 0, '0', '', None)
+    pdir = paths.project_dir(root, slug)
     try:
-        _forget(paths.project_dir(root, slug) / c)
-        return {'clip': store.update_side(paths.project_dir(root, slug), c, cid, **fields)}
+        _forget(pdir / c)
+        side = store.update_side(pdir, c, cid, **fields)
     except ValueError:
         return {'error': 'bad clip id'}, 400
+    if 'judge' in fields:                                       # for the judge: in the slice now, out of training
+        part = holdout.part_of(c, bool(side.get('near')))
+        if part:
+            holdout.earmark(pdir, part, cid, on=fields['judge'])
+    return {'clip': side}
 
 
 def _dropped(pdir):
@@ -537,10 +546,13 @@ def _record(root, slug, form, takes, settings):
     c = str(form.get('collection') or 'positive/recorded')
     if c not in paths.COLLECTIONS or c.split('/')[1] != 'recorded':
         return {'error': 'recordings go to a recorded collection'}, 400
-    meta = {k: str(form.get(k))[:200] for k in ('device', 'style', 'text', 'note') if form.get(k)}
+    meta = {k: str(form.get(k))[:200] for k in ('device', 'text', 'note') if form.get(k)}
+    meta.update({k: v for k, v in tags.clean(form).items() if v})
     meta['via'] = 'browser'
     if form.get('near'):
         meta['near'] = True                       # a sound-alike in the user's own voice: the hardest negative
+    if form.get('judge') and form.get('judge') not in ('0', 'false'):
+        meta['judge'] = True                      # recorded for the judge: held out from the start, never trained on
     texts = str(form.get('texts') or '').split('\n') if form.get('texts') else []
     heads = str(form.get('drop_head_ms') or '0').split(',')
     tails = str(form.get('drop_tail_ms') or '0').split(',')
@@ -564,6 +576,8 @@ def _record(root, slug, form, takes, settings):
             refused.append(f"could not read that audio: {e}")
     for cl in clips:
         cl['flags'] = store.clip_flags(cl)
+        if cl.get('judge'):
+            holdout.earmark(pdir, holdout.part_of(c, bool(cl.get('near'))), cl['id'])
     out = {'clips': clips, 'refused': refused, 'counts': store.counts(pdir)}
     if clips:
         out['clip'] = clips[-1]
@@ -700,23 +714,30 @@ def guide(slug, settings=None, **_):
     if pos:
         mics = len(set(c.get('device') or '?' for c in pos))
         add('ok' if mics >= 3 else 'info', f"{mics} microphone(s) for the phrase." + ('' if mics >= 3 else ' Three or more teach the phrase, not the mic: a satellite counts, so does a phone or a webcam.'))
-        styles = sorted(set(c.get('style') or 'normal' for c in pos))
-        missing = [x for x in ('fast', 'soft', 'far away', 'loud', 'whisper') if x not in styles]
-        add('ok' if len(styles) >= 4 else 'info', f"{len(styles)} way(s) of speaking." + (f" Try: {', '.join(missing[:3])}." if missing else ''))
-        noisy = sum(1 for c in pos if c.get('style') == 'TV on')
+        tg = [tags.of(c) for c in pos]
+        hows = sorted({t['how'] for t in tg})
+        missing = [x for x in ('fast', 'soft', 'loud', 'whisper') if x not in hows]
+        add('ok' if len(hows) >= 4 else 'info', f"{len(hows)} way(s) of speaking." + (f" Try: {', '.join(missing[:3])}." if missing else ''))
+        far = sum(1 for t in tg if t['where'] != 'close')
+        add('ok' if far >= 10 else 'info', f"{far} take(s) from across the room or the next room." + ('' if far >= 10 else ' Ten or more per mic: that is how you really call her.'))
+        noisy = sum(1 for t in tg if t['noise'] != 'quiet')
         add('ok' if noisy >= 10 else 'warn', f"{noisy} take(s) with the TV or music on." + ('' if noisy >= 10 else ' Ten or more: they are the only judges of a loud room, and the ones the first model fails.'))
+        judge_n = sum(1 for c in pos if c.get('judge'))
+        if judge_n:
+            add('ok', f"{judge_n} take(s) recorded for the judge: held out from the start, never trained on.")
         odd = sum(1 for c in pos if set(store.clip_flags(c)) & {'short', 'long'})
         if odd:
             add('warn', f"{odd} phrase clip(s) under half a second or over 2.5 s, marked in the list: listen and delete the broken ones.")
-        people = pr.get('settings', {}).get('people')
-        add('ok' if people else 'info', 'Someone else saying it is worth more than fifty more of yours.' if not people else f"{people} people recorded.")
+        people = sorted({t['who'] for t in tg if t['who']}) or pr.get('settings', {}).get('people')
+        add('ok' if people else 'info', 'Someone else saying it is worth more than fifty more of yours: tag them under Who.' if not people
+            else (f"{len(people)} people recorded: {', '.join(people[:6])}." if isinstance(people, list) else f"{people} people recorded."))
     if not near:
         add('warn', 'No near misses yet: words that sound like the phrase, in your voice, are the hardest negatives. Pick Near miss and read the prompts.')
     plain = len(neg) - len(near)
     if plain == 0:
         add('warn', 'No ordinary negatives yet: other things you say near her, in your voice.')
     else:
-        nstyles = sorted(set(c.get('style') or 'normal' for c in neg))
+        nstyles = {tags.of(c)['how'] for c in neg}
         if 'whisper' not in nstyles or 'loud' not in nstyles:
             add('info', 'Negatives in a whisper and at a shout too: she should ignore you at every volume.')
     if amb_min < TARGETS['ambient_minutes'][0]:
@@ -819,11 +840,21 @@ def browse(slug, query=None, settings=None, **_):
         rows += [{**r, 'collection': 'ambient/library', 'library': True, 'flags': store.clip_flags(r), **({'held': True} if r['id'] in held else {})}
                  for r in store.list_room(root, slug=slug)]
         rows.sort(key=lambda r: r.get('id', ''), reverse=True)
-    facets = {'device': Counter(r.get('device') or 'unknown' for r in rows), 'source': Counter(r.get('source') or '?' for r in rows),
-              'style': Counter(r.get('style') or 'normal' for r in rows)}
-    for k, v in (('device', q.get('device')), ('source', q.get('source')), ('style', q.get('style'))):
+    facets = {'device': Counter(r.get('device') or 'unknown' for r in rows), 'source': Counter(r.get('source') or '?' for r in rows)}
+    for k, v in (('device', q.get('device')), ('source', q.get('source'))):
         if v:
-            rows = [r for r in rows if (r.get(k) or ('unknown' if k == 'device' else '?' if k == 'source' else 'normal')) == v]
+            rows = [r for r in rows if (r.get(k) or ('unknown' if k == 'device' else '?')) == v]
+    judge_n = 0
+    if kind != 'ambient':
+        own = [r for r in rows if r.get('source') != 'synth']
+        for ax in tags.DEFAULT:
+            facets[ax] = Counter(tags.of(r)[ax] or '(nobody tagged)' for r in own)
+        judge_n = sum(1 for r in own if r.get('judge'))
+        if q.get('judge'):
+            rows = [r for r in rows if r.get('judge')]
+        for ax in tags.DEFAULT:
+            if q.get(ax):
+                rows = [r for r in rows if (tags.of(r)[ax] or '(nobody tagged)') == q[ax]]
     if q.get('flag'):
         rows = [r for r in rows if q['flag'] in (r.get('flags') or [])]
     groups = None
@@ -837,7 +868,7 @@ def browse(slug, query=None, settings=None, **_):
     except ValueError:
         offset, limit = 0, 24
     page = rows[offset: offset + limit]
-    return {'kind': kind, 'total': len(rows), 'offset': offset, 'limit': limit, 'clips': page,
+    return {'kind': kind, 'total': len(rows), 'offset': offset, 'limit': limit, 'clips': page, 'judge': judge_n,
             'facets': {k: dict(v.most_common(30)) for k, v in facets.items()}, 'groups': groups}
 
 
@@ -962,24 +993,30 @@ def record_satellite(slug, body=None, settings=None, **_):
         seconds = 6
     if not c.startswith('ambient/'):
         seconds = min(seconds, 60)
-    loud = str(body.get('style') or '') == 'TV on'        # VAD never finds the end of speech over a TV: fixed window instead
-    if loud:
+    tg = tags.clean(body)
+    loud = tg.get('noise', 'quiet') != 'quiet'            # VAD never finds the end of speech over a TV: fixed window instead
+    if loud and not c.startswith('ambient/'):
         seconds = 4
     try:
         data, dev_id = _listen(device, seconds, vad=not c.startswith('ambient/') and not loud)
     except Exception as e:
         return {'error': f"{device}: {getattr(e, 'args', [e])[0]}"}, 502
-    meta = {'device': dev_id, 'via': 'satellite'}
-    for k in ('style', 'text', 'note'):
+    meta = {'device': dev_id, 'via': 'satellite', **{k: v for k, v in tg.items() if v}}
+    for k in ('text', 'note'):
         if body.get(k):
             meta[k] = str(body[k])[:200]
     if body.get('near'):
         meta['near'] = True
+    if body.get('judge') not in (None, False, 'false', 0, '0', ''):
+        meta['judge'] = True
+    pdir = paths.project_dir(root, slug)
     try:
-        side = store.take_recording(paths.project_dir(root, slug), c, data, meta, do_trim=body.get('trim', True) not in (False, 'false', 0))
+        side = store.take_recording(pdir, c, data, meta, do_trim=body.get('trim', True) not in (False, 'false', 0))
     except ValueError as e:
         return {'error': str(e)}, 422
-    return {'clip': side, 'counts': store.counts(paths.project_dir(root, slug))}
+    if side.get('judge'):
+        holdout.earmark(pdir, holdout.part_of(c, bool(side.get('near'))), side['id'])
+    return {'clip': side, 'counts': store.counts(pdir)}
 
 
 def qa_report(slug, settings=None, **_):
@@ -1069,7 +1106,8 @@ def check_report(slug, settings=None, **_):
         return sorted(rows_, key=lambda x: (x['score'] if x['score'] is not None else 101, -x['n']))
     mics = agg(own_pos + own_neg, 'device')
     voices_ = agg([r for r in pos if r.get('source') == 'synth'], 'voice')
-    styles = Counter(r.get('style') or 'normal' for r in own_pos)
+    tg = [tags.of(r) for r in own_pos]
+    tag_counts = {ax: dict(Counter(t[ax] or '(nobody tagged)' for t in tg).most_common()) for ax in tags.DEFAULT}
     flag_counts = Counter(f for r in pos + neg for f in (r.get('flags') or []))
 
     advice = []
@@ -1101,12 +1139,12 @@ def check_report(slug, settings=None, **_):
         add('warn', f"Room sound: {counts['ambient']['minutes']} min. False alarms cannot be counted without it.")
     if len(mics) < 2:
         add('info', 'One microphone so far. A second one teaches the phrase, not the mic.')
-    missing_styles = [x for x in ('fast', 'soft', 'far away', 'loud') if x not in styles]
+    missing_styles = [x for x in ('fast', 'soft', 'loud') if x not in tag_counts['how']] + (['across the room'] if len(tag_counts['where']) < 2 else [])
     if missing_styles and own_pos:
-        add('info', f"Ways of speaking not recorded yet: {', '.join(missing_styles)}.")
+        add('info', f"Not recorded yet: {', '.join(missing_styles)}.")
     if rated and dropped:
         add('ok', f"{len(dropped)} of {len(rated)} rated clips are out ({100 * len(dropped) / len(rated):.0f}%). Under 10% is normal for a clean set.")
-    return {'counts': counts, 'charts': charts, 'mics': mics, 'voices': voices_[:40], 'styles': dict(styles.most_common()),
+    return {'counts': counts, 'charts': charts, 'mics': mics, 'voices': voices_[:40], 'tags': tag_counts, 'judge': sum(1 for r in own_pos if r.get('judge')),
             'flags': dict(flag_counts), 'advice': advice}
 
 
@@ -1136,7 +1174,7 @@ def _run_rows(pdir, root=None):
             if r['judged'] and r.get('state') == 'done':
                 try:
                     cached = json.loads((sub / 'judge.json').read_text(encoding='utf-8'))
-                    if 'heldout' not in r:
+                    if 'heldout' not in r or 'by_tag' not in r['heldout']:        # a verdict from before recall-by-tag: filled once from the cached rows
                         r['heldout'] = _judge.summary(cached['rows'], r.get('rows'), r.get('trainer') or 'oww')
                         r.setdefault('threshold', r['heldout'].get('threshold'))
                         write_json(rj, r, indent=1)
@@ -1228,7 +1266,7 @@ def judge_run(slug, rid, query=None, settings=None, **_):
     held_when = (holdout.read(pdir) or {}).get('when')
     cached = read_json(rdir / 'judge.json') if not (query or {}).get('force') else None
     if cached and cached.get('holdout_when') == held_when and cached.get('held_key', holdout.key(pdir)) == holdout.key(pdir):
-        return cached                                         # a re-drawn or re-rated held-out slice makes the old verdict stale
+        return {**cached, 'rows': [{**r, **tags.of(r)} for r in cached.get('rows') or []]}    # a re-drawn or re-rated held-out slice makes the old verdict stale
     py, err = _python_for('synth')
     if err:
         return err
@@ -1247,6 +1285,7 @@ def judge_run(slug, rid, query=None, settings=None, **_):
         write_json(rj, run, indent=1)
     except Exception:
         pass
+    out['rows'] = [{**r, **tags.of(r)} for r in out.get('rows') or []]
     return out
 
 
@@ -2033,12 +2072,17 @@ def _grid_sources(pdir, root=None):
     if root is not None:
         _grid_root = root
     out = dict(GRID_SOURCES)
-    devices = sorted({r.get('device') or 'unknown' for r in _own_rows(pdir)})
+    rows = _own_rows(pdir)
+    devices = sorted({r.get('device') or 'unknown' for r in rows})
     if len(devices) > 1:
         for d in devices:
             out[f"without {d}"] = {'devices': [x for x in devices if x != d]}
         for d in devices:
             out[f"only {d}"] = {'devices': [d]}
+    for ax, values in _tag_values(rows).items():              # 'does this data help': the same takes minus one tag value
+        if len(values) > 1:
+            for v in values:
+                out[f"without {v}"] = {ax: [x for x in values if x != v]}
     room = sorted({r.get('device') or 'unknown' for r in store.list_room(_grid_root or '', dropped=False)} if _grid_root else set())
     if len(room) > 1:
         for d in room:
@@ -2047,8 +2091,14 @@ def _grid_sources(pdir, root=None):
     return out
 
 
+def _tag_values(rows):
+    """The tag values present in your takes, per axis, skipping an empty who."""
+    tg = [tags.of(r) for r in rows]
+    return {ax: sorted({t[ax] for t in tg if t[ax]}) for ax in tags.DEFAULT}
+
+
 def sources_options(slug, settings=None, **_):
-    """What a run may train on: the mics and styles in your takes, and the named source blocks a grid offers."""
+    """What a run may train on: the mics and tags in your takes, and the named source blocks a grid offers."""
     root, err = _root(settings)
     if err:
         return err
@@ -2058,7 +2108,7 @@ def sources_options(slug, settings=None, **_):
     from wakeword_maker import features as _f
     pdir = paths.project_dir(root, slug)
     rows = _own_rows(pdir)
-    return {'devices': sorted({r.get('device') or 'unknown' for r in rows}), 'styles': sorted({r.get('style') or 'normal' for r in rows}),
+    return {'devices': sorted({r.get('device') or 'unknown' for r in rows}), 'tags': _tag_values(rows),
             'presets': [{'name': k, 'sources': v, 'label': _f.sources_label(_f.sources_of({'sources': v}))} for k, v in _grid_sources(pdir, root).items()]}
 
 
@@ -2080,6 +2130,9 @@ def _pivot(cells):
             mean = lambda k: round(sum(float(c[k]) for c in mine if c.get(k) is not None) / max(1, len([c for c in mine if c.get(k) is not None])), 3) if any(c.get(k) is not None for c in mine) else None
             table[v] = {'n': len(mine), 'of': len([c for c in cells if str(c.get(axis)) == v]), 'recall': mean('recall'), 'recall_min': min((c['recall'] for c in mine), default=None),
                         'stress': mean('stress'), 'near': mean('near'), 'gap': mean('gap'), 'fp': mean('fp')}
+            if any(c.get('focus') is not None for c in cells):
+                table[v]['focus'] = mean('focus')
+                table[v]['focus_stress'] = mean('focus_stress')
         out[axis] = table
     return out
 
@@ -2089,14 +2142,19 @@ def _grid_view(root, pdir, grid):
     runs = {r['id']: r for r in _run_rows(pdir, root)}
     by_job = {j['id']: j for j in jobs.list_all(root, project=grid.get('project'), limit=10 ** 6)}
     cells = []
+    focus = grid.get('focus') or {}
     for c in grid.get('cells') or []:
         j = by_job.get(c.get('job'))
         rid = ((j or {}).get('result') or {}).get('run')
         r = runs.get(rid) or {}
         h = r.get('heldout') or {}
-        cells.append({**c, 'state': (j or {}).get('state') or 'gone', 'run': rid, 'recall': h.get('recall'), 'stress': h.get('stress_recall'),
-                      'near': h.get('near_fires'), 'gap': (h.get('margin') or {}).get('gap'), 'fp': h.get('fp_per_hour'), 'threshold': h.get('threshold'),
-                      'stale': bool(h.get('stale')), 'error': (j or {}).get('error')})
+        cell = {**c, 'state': (j or {}).get('state') or 'gone', 'run': rid, 'recall': h.get('recall'), 'stress': h.get('stress_recall'),
+                'near': h.get('near_fires'), 'gap': (h.get('margin') or {}).get('gap'), 'fp': h.get('fp_per_hour'), 'threshold': h.get('threshold'),
+                'stale': bool(h.get('stale')), 'error': (j or {}).get('error')}
+        if focus:                                             # the held-out takes of one tag value: the data the grid asks about
+            f = ((h.get('by_tag') or {}).get(focus.get('axis')) or {}).get(focus.get('value')) or {}
+            cell['focus'], cell['focus_stress'], cell['focus_n'] = f.get('recall'), f.get('stress'), f.get('n')
+        cells.append(cell)
     counts = Counter(c['state'] for c in cells)
     return {**grid, 'cells': cells, 'counts': dict(counts), 'done': counts.get('done', 0), 'of': len(cells), 'pivot': _pivot(cells)}
 
@@ -2153,9 +2211,12 @@ def grid_start(slug, body=None, settings=None, **_):
                 'label': c['label'], 'grid': gid, 'device': (settings or {}).get('device', 'auto'), 'whisper': (settings or {}).get('qa_whisper_model', 'base.en')}
         j = jobs.enqueue(root, 'train' if c['trainer'] == 'oww' else 'train_mww', args, py, PLUGIN_DIR, project=slug, publish=_publish)
         c['job'] = j['id']
+    focus = body.get('focus') if isinstance(body.get('focus'), dict) else None
+    if focus and (focus.get('axis') not in ('device',) + tuple(tags.DEFAULT) or not focus.get('value')):
+        focus = None
     grid = {'id': gid, 'project': slug, 'label': label, 'when': time.time(), 'seeds': seeds, 'rounds': rounds, 'holdout': holdout_on,
             'axes': {'trainers': trainers, 'recipes': recipes, 'sources': srcs, 'presets': presets, 'knobs': {t: [k for k in (knobs.get(t) or ['default'])] for t in trainers}},
-            'cells': cells}
+            'cells': cells, **({'focus': {'axis': str(focus['axis']), 'value': str(focus['value'])[:60]}} if focus else {})}
     _grids_dir(pdir).mkdir(parents=True, exist_ok=True)
     write_json(_grids_dir(pdir) / f"{gid}.json", grid, indent=1)
     return {'grid': _grid_view(root, pdir, grid)}
