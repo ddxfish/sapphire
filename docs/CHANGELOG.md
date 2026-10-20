@@ -1,3 +1,8 @@
+# 2.15.4 - Notification Center
+- New System > Notification center
+- Routed all toasts through this
+- Notifications show under the chat dropdown in sidebar
+- Allows progress bars for downloads
 # 2.15.3 - Kokoro and TLS
 - Added TLS support to kokoro endpoints
 - Plugins enabled have an optional modal popup

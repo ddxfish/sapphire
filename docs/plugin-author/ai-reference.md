@@ -42,7 +42,7 @@ When creating or modifying plugins:
 - Settings stored at `user/webui/plugins/{name}.json`, read via `GET /api/webui/plugins/{name}/settings`
 - Settings files are in `user/` (gitignored) — never tracked
 - Multi-account tools use ContextVar scopes: `scope_email`, `scope_bitcoin`, `scope_knowledge`, etc.
-- Web UI modules available: `plugin-registry.js`, `plugins-api.js`, `toast.js`, `modal.js`, `danger-confirm.js`, `fetch.js`
+- Web UI modules available: `plugin-registry.js`, `plugins-api.js`, `notify.js` (rows + toasts), `toast.js` (legacy), `modal.js`, `danger-confirm.js`, `fetch.js`
 - CSS variables for theming: `--bg`, `--text`, `--border`, `--trim`, `--success`, `--error`, etc.
 - Always guard system access with `hasattr()` checks — subsystems may be None if disabled
 

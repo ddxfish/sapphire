@@ -398,7 +398,20 @@ Real-time UI updates via Server-Sent Events.
 - 50-event replay buffer for late subscribers
 - 15-second keepalive pings
 
-**Event types:** AI typing, messages, TTS/STT state, chat switches, settings/prompt/toolset changes, continuity tasks, wakeword detection, errors.
+**Event types:** AI typing, messages, TTS/STT state, chat switches, settings/prompt/toolset changes, continuity tasks, wakeword detection, errors, notifications.
+
+---
+
+## Notification Center
+
+What happened to the person, as rows: server-side truth, one toast renderer, every tab the same.
+
+- Engine: `core/notify.py` — rows in `user/notifications.json` (ring of 500; active rows never pruned, the log pruned first), dedupe keys, progress rows (`begin`/`tick`/`finish`, the `progress()` context manager, `tqdm_for()` for libraries that take `tqdm_class=`), a boot sweep (active rows from a dead process become "interrupted"), and the routing table that turns `plugin_notice`, `plugin_load_error`, `plugin_reloaded`, `continuity_task_*`, `webhook_fired`, `sapphire_health_alert` and `stt_error` into rows with no change to their publishers.
+- Door: `core/routes/notifications.py` — list, post, read one, read all, dismiss, clear ([API.md](API.md)).
+- Browser: `shared/notify.js` (THE toast renderer + the mirror; `ui.js` and `shared/toast.js` `showToast` are re-exports), `views/notifications.js` (System > Notifications: filters, active first, opening marks all read), `features/notify-sidebar.js` (the chat sidebar row and the count on the collapsed sidebar's expand tab).
+- Levels: `info` is the log (never toasts, never counts), `success` toasts, `warning` counts yellow, `error`/`critical` count red, `critical` sticks. `flash()` is a toast with no row. Settings: `NOTIFY_TOAST_SECONDS`, `NOTIFY_TOAST_MIN_LEVEL`.
+- Bus events, all ephemeral (tabs fetch the list on connect): `notification`, `notification_progress`, `notification_flash`, `notification_read`, `notifications_read`, `notification_gone`, `notifications_cleared`.
+- Never a private chat name, never message content, in a row.
 
 ---
 
@@ -445,6 +458,7 @@ Each chat carries per-chat settings (prompt, voice, toolset, LLM, spice, scopes)
 | `core/credentials_manager.py` | API keys, secrets, Fernet encryption |
 | `core/setup.py` | Bootstrap, auth, first-run |
 | `core/event_bus.py` | Real-time event pub/sub for SSE |
+| `core/notify.py` | Notification center: rows, progress, the routing of old events |
 | `core/chat/chat.py` | LLM orchestration |
 | `core/chat/chat_streaming.py` | SSE response streaming |
 | `core/chat/llm_providers/` | Claude, OpenAI, Gemini (core) + custom + plugin providers |

@@ -25,9 +25,36 @@ def _load_whisper(cls, *args, **kwargs):
         if (type(e).__name__ in ('LocalEntryNotFoundError', 'FileNotFoundError')
                 or 'local_files_only' in str(e)
                 or 'no such file' in str(e).lower()):
-            logger.info("[STT] Whisper model not in local cache — downloading from HF")
+            logger.info("[STT] Whisper model not in local cache, downloading from HF")
+            path = _download_with_progress(args[0] if args else kwargs.get('model_size_or_path'))
+            if path:
+                return cls(path, *args[1:], **kwargs)
             return cls(*args, **kwargs)
         raise
+
+
+def _download_with_progress(size_or_id):
+    """faster_whisper hardcodes a silent tqdm in its download_model. Fetch the
+    same files ourselves through huggingface_hub with a progress row in the
+    notification center (core/notify.py) and hand WhisperModel the directory,
+    which skips its download. None = let faster_whisper fetch it."""
+    try:
+        from huggingface_hub import snapshot_download
+        from faster_whisper import utils as fw_utils
+        from core.notify import progress, tqdm_for
+        repo_id = size_or_id if '/' in str(size_or_id) else fw_utils._MODELS.get(size_or_id)
+        if not repo_id:
+            return None
+        with progress(f"Downloading the Whisper model ({size_or_id})", source='core',
+                      go={'view': 'settings', 'tab': 'stt'}, key='whisper-model',
+                      done_title=f"Whisper model ready ({size_or_id})") as p:
+            rep = tqdm_for(p)
+            return snapshot_download(repo_id, allow_patterns=["config.json", "preprocessor_config.json",
+                                                              "model.bin", "tokenizer.json", "vocabulary.*"],
+                                     **({'tqdm_class': rep} if rep else {}))
+    except Exception as e:
+        logger.warning(f"[STT] progress download failed ({e}); letting faster_whisper fetch it")
+        return None
 
 
 def _safe_unlink(path, retries=3, delay=0.2):

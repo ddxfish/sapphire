@@ -302,16 +302,34 @@ def ensure_wakeword_models() -> bool:
         # On Windows, tqdm progress bars crash with [WinError 1] when running
         # in a non-console thread (e.g. from asyncio.to_thread via API endpoint).
         # Suppress stderr during download to avoid this.
+        def _download():
+            # A lazy progress row in the notification center (core/notify.py):
+            # born on the first byte, so a boot with every model cached makes
+            # no row. The bound tqdm is disabled and never writes to stderr.
+            from core.notify import progress, tqdm_for
+            from openwakeword import utils as oww_utils
+            with progress("Downloading wake word models", source='core', lazy=True,
+                          go={'view': 'settings', 'tab': 'wakeword'}, key='wakeword-models',
+                          done_title='Wake word models ready') as p:
+                rep = tqdm_for(p)
+                real = oww_utils.tqdm
+                if rep:
+                    oww_utils.tqdm = rep
+                try:
+                    download_models()
+                finally:
+                    oww_utils.tqdm = real
+
         if sys.platform == 'win32':
             import io
             _real_stderr = sys.stderr
             try:
                 sys.stderr = io.StringIO()
-                download_models()
+                _download()
             finally:
                 sys.stderr = _real_stderr
         else:
-            download_models()
+            _download()
 
         logger.info("OpenWakeWord models ready")
         return True

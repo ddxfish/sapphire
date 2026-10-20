@@ -97,7 +97,7 @@ class PiperTTSProvider(BaseTTSProvider):
                 self._dl_locks[name] = lk
             return lk
 
-    def _download_voice(self, name: str, tries: int = 4):
+    def _download_voice(self, name: str, tries: int = 4, handle=None):
         """piper.download_voices.download_voice has NO retry AND writes straight to
         the final path (non-atomic). We download into a temp dir on the SAME
         filesystem, then os.replace into place — CONFIG FIRST, MODEL LAST — so the
@@ -107,7 +107,6 @@ class PiperTTSProvider(BaseTTSProvider):
         downloads across plugin reloads safe (last complete writer wins), so the
         instance-scoped dl lock no longer has to be the only guard."""
         import time, tempfile, shutil, os
-        from piper.download_voices import download_voice
         VOICES_DIR.mkdir(parents=True, exist_ok=True)
         model_dst = self._model_path(name)
         cfg_dst = Path(str(model_dst) + ".json")
@@ -118,7 +117,7 @@ class PiperTTSProvider(BaseTTSProvider):
             for i in range(tries):
                 tmp = Path(tempfile.mkdtemp(dir=str(VOICES_DIR), prefix=f".dl-{name}-"))
                 try:
-                    download_voice(name, tmp)
+                    _fetch_voice(name, tmp, handle)
                     model_tmp = tmp / f"{name}.onnx"
                     cfg_tmp = tmp / f"{name}.onnx.json"
                     if not model_tmp.exists():
@@ -280,18 +279,18 @@ class PiperTTSProvider(BaseTTSProvider):
         self._ensure_voice_async(name)
 
     def _warm_download(self, name: str):
-        from core.event_bus import publish, Events
+        # One progress row in the notification center (core/notify.py): the
+        # bytes as they land, "Voice ready" at the end, the error if not. Lazy,
+        # so a voice already on disk makes no row.
+        from core.notify import progress
         label = name.replace("en_US-", "").replace("-", " ")
         try:
-            publish(Events.PLUGIN_NOTICE, {"plugin": "piper",
-                    "message": f"Downloading voice: {label}…", "severity": "info"})
-            self._download_voice(name)
-            publish(Events.PLUGIN_NOTICE, {"plugin": "piper",
-                    "message": f"Voice ready: {label}", "severity": "success"})
+            with progress(f"Downloading voice: {label}", source="piper", lazy=True,
+                          go={"view": "settings", "tab": "plugins"}, key=f"piper-voice:{name}",
+                          done_title=f"Voice ready: {label}", failed_title=f"Voice download failed: {label}") as p:
+                self._download_voice(name, handle=p)
         except Exception as e:
             logger.error(f"[piper] warm download failed for '{name}': {e!r}")
-            publish(Events.PLUGIN_NOTICE, {"plugin": "piper",
-                    "message": f"Voice download failed: {label}", "severity": "error"})
 
     def list_voices(self) -> List[dict]:
         """Curated voices (the manifest dropdown). Marks which are downloaded."""
@@ -307,3 +306,31 @@ class PiperTTSProvider(BaseTTSProvider):
         ]
         return [{"voice_id": vid, "name": nm, "category": cat,
                  "downloaded": self._model_path(vid).exists()} for vid, nm, cat in curated]
+
+
+def _fetch_voice(name, into, handle=None):
+    """piper.download_voices.download_voice, with the bytes reported to a
+    progress handle (core/notify.py): the library streams through urlopen +
+    copyfileobj and offers no callback. Same two URLs, same two files, into
+    `into`. The model is the only big file; the config is tiny."""
+    from urllib.request import urlopen
+    from piper.download_voices import URL_FORMAT, VOICE_PATTERN
+    m = VOICE_PATTERN.match(name)
+    if not m:
+        raise ValueError(f"not a voice name: {name}")
+    args = {"lang_family": m.group("lang_family"),
+            "lang_code": m.group("lang_family") + "_" + m.group("lang_region"),
+            "voice_name": m.group("voice_name"), "voice_quality": m.group("voice_quality")}
+    for ext in (".onnx", ".onnx.json"):
+        url = URL_FORMAT.format(extension=ext, **args)
+        with urlopen(url, timeout=60) as resp, open(Path(into) / f"{name}{ext}", "wb") as f:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if handle is not None and total and ext == ".onnx":
+                    handle.update(done, total)

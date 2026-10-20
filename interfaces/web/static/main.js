@@ -1,6 +1,8 @@
 // main.js - Application orchestrator
 import * as audio from './audio.js';
 import * as ui from './ui.js';
+import * as notify from './shared/notify.js';
+import { initNotifySidebar } from './features/notify-sidebar.js';
 import { initElements, refresh, setHistLen, getElements, getIsProc, setProc, getAbortController, setSendLabel } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
@@ -58,6 +60,7 @@ const VIEW_MODULES = {
     help:     `./views/help.js${_v}`,
     apps:     `./views/apps.js${_v}`,
     store:    `./views/store.js${_v}`,
+    notifications: `./views/notifications.js${_v}`,
     'video-guide': `./views/video-guide.js${_v}`,
 };
 
@@ -206,6 +209,7 @@ async function init() {
         try {
             initData = await bootBounded(getInitData(), 20000, '/api/init');
             ui.initFromInitData(initData);
+            notify.init(initData);
             setInstanceColor(initData?.settings?.ICON_COLOR || '');
             setDefaultBackground(initData?.settings?.DEFAULT_BACKGROUND || '');
             // One-time notice: global privacy mode was removed in v2.8.4 —
@@ -216,24 +220,8 @@ async function init() {
                 ui.showToast('Heads up: global privacy mode was removed and your old setting no longer applies. '
                     + 'Mark individual chats private with the eye icon in the sidebar.', 'warning', 0);
             }
-            // Show any plugin load errors from startup (before SSE was connected)
-            if (initData?.load_errors?.length) {
-                // load_errors is non-destructive now — a background tab's
-                // /api/init used to DRAIN it, swallowing the only report of a
-                // failed plugin (negspace N7, 2026-08-31). Dedupe per browser
-                // session so reloads don't re-toast the same boot errors.
-                let seen = [];
-                try { seen = JSON.parse(sessionStorage.getItem('loadErrorsToasted') || '[]'); } catch {}
-                for (const err of initData.load_errors) {
-                    const key = `${err.plugin}:${err.error}`;
-                    if (seen.includes(key)) continue;
-                    seen.push(key);
-                    const hint = err.hint ? ` — ${err.hint}` : '';
-                    const isDeps = err.missing_deps?.length > 0;
-                    ui.showToast(`Plugin '${err.plugin}': ${err.error}${hint}`, isDeps ? 'warning' : 'error', isDeps ? 0 : 10000);
-                }
-                try { sessionStorage.setItem('loadErrorsToasted', JSON.stringify(seen.slice(-100))); } catch {}
-            }
+            // Plugin load errors are rows in the notification center: core/notify.py
+            // hooks the bus before the plugin scan, so boot errors land there too.
             // Core integrity: yell once per browser session if the install doesn't
             // match its manifest. Check-and-toast ONLY — repair is a human-only
             // button on Settings > System, never automatic.
@@ -243,9 +231,11 @@ async function init() {
                     .then(rep => {
                         if (rep?.available && rep.ok === false) {
                             sessionStorage.setItem('integrity-warned', '1');
-                            ui.showToast(
-                                `Core files don't match v${rep.version}: ${rep.mismatched.length} modified, ${rep.missing.length} missing. See Settings → System.`,
-                                'warning', 12000);
+                            notify.notify({
+                                title: `Core files don't match v${rep.version}`,
+                                body: `${rep.mismatched.length} modified, ${rep.missing.length} missing. Repair is a button on Settings > System.`,
+                                level: 'warning', key: 'integrity', go: { view: 'settings', tab: 'system' }, seconds: 12,
+                            });
                         }
                     })
                     .catch(() => {});
@@ -452,6 +442,7 @@ async function init() {
         setupImageHandlers();
         setupImageModal();
         initUserProfile();
+        initNotifySidebar();
 
         initEventBus();
 
@@ -515,6 +506,7 @@ async function init() {
             setupImageHandlers();
             setupImageModal();
             initUserProfile();
+            initNotifySidebar();
             initEventBus();
         } catch (e2) {
             console.error('UI wiring failed:', e2);
@@ -703,12 +695,7 @@ function initEventBus() {
         }, 50);
     });
 
-    // Generic plugin toasts — any plugin can publish PLUGIN_NOTICE to surface one
-    eventBus.on(eventBus.Events.PLUGIN_NOTICE, (data) => {
-        if (!data?.message) return;
-        const sev = ['info', 'success', 'warning', 'error'].includes(data.severity) ? data.severity : 'info';
-        ui.showToast(data.message, sev);
-    });
+    // plugin_notice is routed server-side into the notification center (core/notify.py).
 
     // Voice-turn live streaming: render the local-mic reply into the chat AS it streams,
     // instead of letting the saved message blob in at the end. While a voice turn is live we
@@ -935,7 +922,6 @@ function initEventBus() {
 
     // Plugin reload/toggle — load new scripts
     eventBus.on(eventBus.Events.PLUGIN_RELOADED, (data) => {
-        ui.showToast(`Plugin '${data?.plugin || 'unknown'}' reloaded`, 'success');
         reloadPluginScripts();
     });
     document.addEventListener('sapphire:plugin_toggled', () => { refreshInitData(); reloadPluginScripts(); });
@@ -951,38 +937,8 @@ function initEventBus() {
         reloadPluginScripts();
     });
 
-    // Plugin load errors — sticky toast for missing deps, timed for other errors
-    eventBus.on(eventBus.Events.PLUGIN_LOAD_ERROR, (data) => {
-        const hint = data?.hint ? ` — ${data.hint}` : '';
-        const isDeps = data?.missing_deps?.length > 0;
-        ui.showToast(
-            `Plugin '${data?.plugin}': ${data?.error}${hint}`,
-            isDeps ? 'warning' : 'error',
-            isDeps ? 0 : 10000
-        );
-    });
-
-    // Continuity task errors — toast so user knows a scheduled task failed
-    eventBus.on(eventBus.Events.CONTINUITY_TASK_ERROR, (data) => {
-        ui.showToast(`Task "${data?.task || 'Unknown'}": ${data?.error || 'failed'}`, 'error', 10000);
-    });
-
-    // DB corruption sentinel (backup housekeeping) — halts ALL backups until
-    // cleared. Was journalctl-only; this event had zero subscribers before the
-    // 2026-07-06 herring hunt (#14).
-    // Every backup alert rides this one event; switch on type (2026-10-06:
-    // the password / ship alerts used to wear the DB-corruption words).
-    eventBus.on('sapphire_health_alert', (data) => {
-        const dbs = (data?.dbs || []).join(', ');
-        const words = {
-            backup_password_missing: 'Backup NOT made: encryption is on but no backup password is set. Settings > Backup.',
-            backup_ship_refused: `Backup not sent to devices: ${data?.reason || 'refused'}`,
-            backup_ship_failed: `Backup to ${data?.target || 'a device'} FAILED: ${data?.reason || 'see the log'}`,
-        }[data?.type] ||
-            `Database integrity check FAILED${dbs ? ` (${dbs})` : ''} — ` +
-            `backups are halted until the sentinel is cleared in Settings > Backup`;
-        ui.showToast(words, 'error', 15000);
-    });
+    // Plugin load errors, task errors and backup alerts (sapphire_health_alert) are
+    // rows in the notification center now, routed server-side in core/notify.py.
 
     // Re-fetch conversation-mode state and route it through the same event the
     // toggle buttons already listen on (chat.js). SSE reconnects use replay=false,
@@ -1046,7 +1002,6 @@ function initEventBus() {
 
     eventBus.on(eventBus.Events.STT_ERROR, (data) => {
         console.warn('[EventBus] STT error:', data);
-        if (data?.message) ui.showToast(data.message, 'error');
     });
 
     // Connect to server

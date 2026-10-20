@@ -67,16 +67,17 @@ class FakePip:
 def _run(lines, code, after_install):
     seen = {}
 
+    found = [False]
+
     def popen(cmd, **kw):
         seen['cmd'] = cmd
         seen['env'] = kw['env']
-        return FakePip(lines, code)
-    found = [False]
+        found[0] = after_install      # pip "installs" as it runs: flipping this after start()
+        return FakePip(lines, code)   # returned raced the install thread (flaky in a batch)
     spec = lambda m, *a, **k: object() if found[0] and m in ('esptool', 'serial') else None
     with patch.object(extras.subprocess, 'Popen', popen), patch.object(importlib.util, 'find_spec', spec):
         job = extras.start('flash')
         assert job['state'] == 'running'
-        found[0] = after_install
         for _ in range(200):
             if extras.state('flash')['state'] != 'running':
                 break

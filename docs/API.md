@@ -393,6 +393,17 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/events/sources` | List daemon event sources from loaded plugins |
 | POST | `/api/events/emit/{source}` | Emit a daemon event to trigger matching tasks |
 
+### Notifications
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/notifications` | Rows (active first, newest first) + counts; `?level=error,warning&source=piper&unread=true&limit=200` |
+| POST | `/api/notifications` | A row from the browser `{title, body?, level?, source?, go?, key?}` (that tab painted its toast already) |
+| POST | `/api/notifications/read` | Mark everything read (opening the page does this) |
+| POST | `/api/notifications/{id}/read` | Mark one row read |
+| DELETE | `/api/notifications/{id}` | Remove one row; 409 while it is active |
+| DELETE | `/api/notifications` | Remove every row that is not active |
+
 ### Backup
 
 | Method | Endpoint | Purpose |

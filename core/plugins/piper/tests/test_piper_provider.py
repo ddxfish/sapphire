@@ -3,7 +3,7 @@
 Covers the provider's own logic: voice resolution (ignore Kokoro voices),
 OGG/Opus encode + 22050->24000 resample, speed->length_scale, generate /
 generate_stream over a fake voice, and on_settings_saved gating + the
-background warm-download that publishes PLUGIN_NOTICE.
+background warm-download that writes a progress row to the notification center.
 
 Heavy bits (real model load / network download) are mocked — hermetic, no GPU,
 no network, no voice files needed. The generic core save-hook itself is tested
@@ -157,22 +157,44 @@ def test_on_settings_saved_triggers_background_download(provider, monkeypatch):
 
 # ─── PLUGIN_NOTICE publishing ───────────────────────────────────────────────
 
-def test_warm_download_publishes_info_then_success(provider, monkeypatch, captured_notices):
-    monkeypatch.setattr(provider, "_download_voice", lambda name: None)
+@pytest.fixture
+def notify_store(tmp_path, monkeypatch):
+    """The notification center's store, in tmp: _warm_download writes its
+    progress row there (core/notify.py)."""
+    from core import notify
+    monkeypatch.setattr(notify, 'STORE', tmp_path / 'notifications.json')
+    monkeypatch.setattr(notify, '_rows', {})
+    monkeypatch.setattr(notify, '_last_tick', {})
+    monkeypatch.setattr(notify, '_loaded', False)
+    return notify
+
+
+def test_warm_download_makes_a_progress_row_that_ends_ready(provider, monkeypatch, notify_store):
+    def fake(name, handle=None):
+        handle.update(50, 100)                 # bytes landing: the lazy row is born here
+    monkeypatch.setattr(provider, "_download_voice", fake)
     provider._warm_download("en_US-kristin-medium")
-    notices = [d for t, d in captured_notices if t == "plugin_notice"]
-    sevs = [d.get("severity") for d in notices]
-    assert "info" in sevs and "success" in sevs
-    assert all(d.get("plugin") == "piper" for d in notices)
+    rows = notify_store.rows()
+    assert len(rows) == 1 and rows[0]['state'] == 'done' and rows[0]['source'] == 'piper'
+    assert rows[0]['title'] == 'Voice ready: kristin medium'
+    assert rows[0]['key'] == 'piper-voice:en_US-kristin-medium' and rows[0]['progress']['percent'] == 100
 
 
-def test_warm_download_publishes_error_on_failure(provider, monkeypatch, captured_notices):
-    def boom(name):
+def test_warm_download_of_a_voice_already_there_makes_no_row(provider, monkeypatch, notify_store):
+    monkeypatch.setattr(provider, "_download_voice", lambda name, handle=None: None)
+    provider._warm_download("en_US-kristin-medium")
+    assert notify_store.rows() == []
+
+
+def test_warm_download_failure_is_a_failed_row(provider, monkeypatch, notify_store):
+    def boom(name, handle=None):
+        handle.update(1, 100)
         raise RuntimeError("network down")
     monkeypatch.setattr(provider, "_download_voice", boom)
     provider._warm_download("en_US-kristin-medium")
-    sevs = [d.get("severity") for t, d in captured_notices if t == "plugin_notice"]
-    assert "error" in sevs
+    row = notify_store.rows()[0]
+    assert row['state'] == 'failed' and row['level'] == 'error'
+    assert row['title'] == 'Voice download failed: kristin medium' and row['body'] == 'network down'
 
 
 # ─── on_voice_selected (the real chokepoint: chat voice dropdown / chat load) ─

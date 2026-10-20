@@ -92,6 +92,10 @@ export const chatMode = {
                             </div>
                         </div>
 
+                        <!-- Notification row (features/notify-sidebar.js): hidden until something
+                             is unread or active; success and info never land here. -->
+                        <div id="sb-notify" class="sb-notify hidden"></div>
+
                         <!-- Faces strip: click = load that persona's bundle onto this chat.
                              The fields below are the live values (2026-08-29: the old
                              Persona/Settings tabs were two views of one form). -->

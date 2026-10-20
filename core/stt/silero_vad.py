@@ -334,11 +334,19 @@ def _ensure_model_downloaded() -> Path:
         # support — under a proxy this download just died), and proxy users
         # want model pulls routed too. SOCKS-for-all conversion, 2026-08-31.
         from core.socks_proxy import get_session
+        from core.notify import progress
         resp = get_session().get(SILERO_VAD_URL, timeout=_DOWNLOAD_READ_TIMEOUT_S, stream=True)
         resp.raise_for_status()
-        with open(tmp_path, 'wb') as f:
+        total = int(resp.headers.get('Content-Length') or 0)
+        with progress("Downloading the Silero voice detector", source='core', key='silero-vad',
+                      go={'view': 'settings', 'tab': 'stt'}, done_title='Silero voice detector ready') as p, \
+                open(tmp_path, 'wb') as f:
+            done = 0
             for chunk in resp.iter_content(65536):
                 f.write(chunk)
+                done += len(chunk)
+                if total:
+                    p.update(done, total)
         if tmp_path.stat().st_size < 1_000_000:
             raise RuntimeError(f"Downloaded file too small ({tmp_path.stat().st_size} bytes) — likely a redirect/error page")
         if SILERO_VAD_SHA256:

@@ -199,11 +199,17 @@ def start(name):
         _job = {'name': name, 'state': 'running', 'lines': [], 'error': '', 'started': time.time(),
                 'installed': False}
         job = _job
+    from core.notify import begin
+    job['nid'] = begin(f"Installing {spec['label']}", source=spec.get('plugin') or 'core',
+                       go={'view': 'settings', 'tab': 'plugins' if spec.get('plugin') else 'devices'},
+                       key=f"extras:{name}")
+    out = dict(job)             # the state at the start: the thread may finish before we return
     threading.Thread(target=_install, args=(job, spec), name=f'extras-{name}', daemon=True).start()
-    return dict(job)
+    return out
 
 
 def _install(job, spec):
+    from core import notify
     env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONUNBUFFERED='1')
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"extras-{job['name'].replace(':', '-')}.log"
@@ -228,6 +234,8 @@ def _install(job, spec):
                     with _lock:
                         job['lines'].append(line[:200])
                         del job['lines'][:-40]
+                    if job.get('nid'):
+                        notify.tick(job['nid'], text=line[:200])
                 if time.time() > deadline:
                     proc.kill()
                     raise ExtraError("pip took too long and was stopped.")
@@ -239,6 +247,8 @@ def _install(job, spec):
         with _lock:
             job.update(state='done', installed=True)
         logger.info(f"[EXTRAS] installed '{job['name']}'")
+        if job.get('nid'):
+            notify.finish(job['nid'], title=f"{spec['label']}: installed")
         if spec.get('plugin'):
             # a plugin whose hard dependencies were missing sat enabled-but-
             # unloaded; it loads now (the optional case reloads harmlessly)
@@ -251,3 +261,5 @@ def _install(job, spec):
         with _lock:
             job.update(state='failed', error=str(e))
         logger.error(f"[EXTRAS] install of '{job['name']}' failed: {e}")
+        if job.get('nid'):
+            notify.finish(job['nid'], failed=True, body=str(e))

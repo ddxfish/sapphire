@@ -109,6 +109,10 @@ def _no_real_vault_seal(monkeypatch):
         pass
 
 
+# _hermetic_notify (the notification center's tmp store) lives in the REPO ROOT
+# conftest.py so core/plugins/*/tests get it too.
+
+
 @pytest.fixture(autouse=True)
 def _fresh_inbox(monkeypatch):
     """The per-chat inbox (core/chat/inbox.py, 2026-10-06) is module state

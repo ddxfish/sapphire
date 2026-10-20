@@ -461,6 +461,15 @@ class Updater:
                 if self.update_available:
                     self._target_sha = self._fetch_remote_sha(br)
                     logger.info(f"Update available: {self.current_version} -> {self.latest_version}")
+                    if self.latest_version != getattr(self, '_told_version', None):
+                        self._told_version = self.latest_version
+                        try:
+                            from core.notify import notify as _notify
+                            _notify(f"Update available: v{self.latest_version}", 'success',
+                                    f"This is v{self.current_version}. Settings > Dashboard installs it.",
+                                    key='update', go={'view': 'settings', 'tab': 'dashboard'})
+                        except Exception:
+                            pass
                 else:
                     self._target_sha = None
                 break

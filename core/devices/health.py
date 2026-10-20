@@ -118,7 +118,22 @@ def told(device_id, result):
     if flipped:
         logger.info(f"[DEVICES] {device_id}: {'online' if out['online'] else 'offline'}")
         _engine().retell()                   # the tool descriptions say who is online
+        _tell(device_id, out['online'])
     return out
+
+
+def _tell(device_id, online):
+    """A flip as a row in the notification center (core/notify.py): offline is
+    a warning (a yellow count); back online is info, the log, so a boot where
+    every device answers stays quiet. One row per device, re-fired in place."""
+    try:
+        from core import notify
+        row = _engine().get(device_id) or {}
+        name = row.get('name') or device_id
+        notify.notify(f"{name} is {'online' if online else 'offline'}", 'info' if online else 'warning',
+                      key=f"device:{device_id}", go={'view': 'settings', 'tab': 'devices'})
+    except Exception as e:
+        logger.debug(f"[DEVICES] notify for {device_id} failed: {e}")
 
 
 def check(row):

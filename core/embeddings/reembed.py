@@ -63,12 +63,39 @@ def get_status():
     return _snapshot()
 
 
+_nid = None      # the run's row in the notification center
+
+
+def _tell(s):
+    """The run as one progress row (core/notify.py): born on the first
+    running snapshot, moved by each, ended by the one that says running=False."""
+    global _nid
+    from core import notify
+    if s['running']:
+        if _nid is None:
+            _nid = notify.begin("Re-embedding memories, knowledge and people", source='core',
+                                go={'view': 'settings', 'tab': 'embedding'}, key='reembed')
+        notify.tick(_nid, done=s['done'], total=s['total'],
+                    text=f"{s['current_table'] or 'starting'}: {s['done']}/{s['total']}" if s['total'] else 'Counting...')
+    elif _nid is not None:
+        nid, _nid = _nid, None
+        if s['current_table'] == 'cancelled':
+            notify.finish(nid, title=f"Re-embed cancelled at {s['done']}/{s['total']}")
+        elif s['last_error']:
+            notify.finish(nid, failed=True, body=s['last_error'])
+        else:
+            notify.finish(nid, title=f"Re-embedded {s['done']} entries"
+                          + (f", {s['errors']} errors" if s['errors'] else ''))
+
+
 def _publish():
     """Fire a progress event. Swallows exceptions so the worker never dies
     because the event bus has an issue."""
     try:
+        snap = _snapshot()
         from core.event_bus import publish
-        publish('reembed_progress', _snapshot())
+        publish('reembed_progress', snap)
+        _tell(snap)
     except Exception as e:
         logger.debug(f"reembed progress publish failed: {e}")
 

@@ -14,6 +14,11 @@
     "INSTANCE_NAME": ""
   },
   
+  "notifications": {
+    "NOTIFY_TOAST_SECONDS": 4,
+    "NOTIFY_TOAST_MIN_LEVEL": "success"
+  },
+
   "network": {
     "SOCKS_ENABLED": false,
     "SOCKS_HOST": "",

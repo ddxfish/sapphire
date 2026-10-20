@@ -102,6 +102,7 @@ def _JobLog(job):
             if total_iters:
                 job['percent'] = min(100, int(100 * cur_iter / total_iters))
                 job['text'] = f"Writing, {job['percent']}%"
+                _tell(job)
 
         def _take(self, *args):
             super()._take(*args)
@@ -177,6 +178,9 @@ def start(port, board_id):
         _job = {'state': 'getting', 'percent': 0, 'text': 'Getting the firmware...', 'error': '',
                 'port': port, 'board': b['id'], 'version': b['version'], 'verified': False, 'started': time.time()}
         job = _job
+    from core.notify import begin
+    job['nid'] = begin(f"Writing {b['id']} {b['version']} to {port}", source='core',
+                       go={'view': 'settings', 'tab': 'devices'}, key=f"flash:{port}")
     _drop_console(port)
     threading.Thread(target=_write, args=(job, b), name='flash-write', daemon=True).start()
     return status()
@@ -189,6 +193,7 @@ def _write(job, b):
     try:
         parts = [(p['offset'], str(firmware.part(b['id'], p['path']))) for p in b['parts']]
         job.update(state='writing', text='Connecting to the board...')
+        _tell(job)
         EspLog.set_logger(_JobLog(job))
         flash = b['flash']
         esp = cmds.detect_chip(job['port'], baud=CONSOLE_BAUD)
@@ -196,20 +201,37 @@ def _write(job, b):
         esp.change_baud(BAUD)
         cmds.attach_flash(esp)
         job['text'] = 'Erasing and writing...'
+        _tell(job)
         cmds.write_flash(esp, parts, flash_freq=flash['freq'], flash_mode=flash['mode'], flash_size=flash['size'],
                          erase_all=True, compress=True)
         if not job['verified']:
             raise FlashError("The write finished but esptool did not verify its hash.")
         cmds.reset_chip(esp, 'hard-reset')
         job.update(state='done', percent=100, text='Written and verified.')
+        _tell(job, done=True)
         logger.info(f"[DEVICES] flashed {b['id']} {b['version']} on {job['port']}")
     except Exception as e:
         job.update(state='failed', error=_plain(e) if not isinstance(e, (FlashError, firmware.FirmwareError)) else str(e), text='')
+        _tell(job, failed=True)
         logger.error(f"[DEVICES] flash of {b['id']} on {job['port']} failed: {e}")
     finally:
         EspLog.instance = None
         if esp is not None:
             _close_port(esp)
+
+
+def _tell(job, done=False, failed=False):
+    """The job's state into its row in the notification center (core/notify.py)."""
+    nid = job.get('nid')
+    if not nid:
+        return
+    from core import notify
+    if done:
+        notify.finish(nid, title=f"{job['board']} {job['version']} written and verified on {job['port']}")
+    elif failed:
+        notify.finish(nid, failed=True, body=job.get('error') or 'failed')
+    else:
+        notify.tick(nid, percent=job['percent'] if job.get('percent') else None, text=job.get('text'))
 
 
 def status():

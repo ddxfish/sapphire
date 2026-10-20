@@ -2523,6 +2523,15 @@ class PluginLoader:
             # posted nothing (Discord hunt 2.13.0, rows 3 + 52).
             if result.get("success", False):
                 any_accepted = True
+        # The log row in the notification center (core/notify.py): the source
+        # and the count, never the payload (a daemon's payload is a message).
+        try:
+            from core.notify import notify as _notify
+            _notify(f"Daemon event: {source_name}", 'info',
+                    f"{len(tasks)} task(s) listening, {'accepted' if any_accepted else 'not accepted'}",
+                    source=source_name)
+        except Exception:
+            pass
         return any_accepted
 
     def active_daemon_accounts(self, source_name: str) -> set:

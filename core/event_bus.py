@@ -375,3 +375,14 @@ class Events:
     AGENT_WAITING = "agent_waiting"        # an agent asked the director something (ids only)
     AGENT_EVENT = "agent_event"            # a transcript line landed (ids and counts only; ephemeral)
     WORKSPACE_READY = "workspace_ready"
+
+    # Notification center (core/notify.py). A row is born or changes state:
+    # NOTIFICATION; a progress tick: NOTIFICATION_PROGRESS; a toast with no
+    # row: NOTIFICATION_FLASH. All ephemeral: tabs fetch the list on connect.
+    NOTIFICATION = "notification"
+    NOTIFICATION_PROGRESS = "notification_progress"
+    NOTIFICATION_FLASH = "notification_flash"
+    NOTIFICATION_READ = "notification_read"
+    NOTIFICATIONS_READ = "notifications_read"
+    NOTIFICATION_GONE = "notification_gone"
+    NOTIFICATIONS_CLEARED = "notifications_cleared"

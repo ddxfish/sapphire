@@ -353,27 +353,41 @@ def on_settings_saved(self, plugin_name: str, settings: dict):
   can never lose the just-saved settings.
 - `settings` is a **copy** - mutating it has no effect on the persisted file or the response.
 
-## Progress Toasts (`PLUGIN_NOTICE`)
+## Notifications and progress (`core.notify`)
 
-Any plugin or provider can surface a transient UI toast by publishing `PLUGIN_NOTICE`:
+The notification center (System > Notifications) is where a plugin tells the person
+something happened: a row they can click, a toast if the level earns one, a progress
+bar while work runs. Rows persist (`user/notifications.json`), reach every open tab,
+and never carry chat content.
 
 ```python
-from core.event_bus import publish, Events
+from core.notify import notify, flash, progress, tqdm_for
 
-publish(Events.PLUGIN_NOTICE, {
-    "plugin": "my-tts",
-    "message": "Downloading model...",
-    "severity": "info",          # info | success | warning | error
-})
+notify("Voice download failed: Amy", level="error", body=str(e), source="my-tts",
+       go={"view": "settings", "tab": "plugins"}, key="my-tts:amy")   # key: re-fire ONE row, not a pile
+
+flash("Cache cleared", level="success")        # a toast with no row: click feedback
+
+with progress("Downloading voice Amy", source="my-tts", key="my-tts:amy",
+              go={"view": "settings", "tab": "plugins"}, done_title="Voice Amy ready",
+              failed_title="Voice download failed: Amy", lazy=True) as p:
+    p.update(done_bytes, total_bytes)          # or p.set(percent) / p.text("step 2 of 3")
+    # leaves done; an exception leaves failed with its words and is re-raised
 ```
 
-- The frontend renders it as a toast; the message is HTML-escaped, so keep it plain text.
-- **Ephemeral** - it is NOT replayed to tabs opened *after* it fired, so a freshly-opened tab
-  won't surface a stale "done" toast.
-
-Piper combines both: `on_settings_saved` kicks off a background voice download that publishes
-`PLUGIN_NOTICE` ("Downloading... / Voice ready / failed") as it progresses. See
-`core/plugins/piper/provider.py` for the reference implementation.
+- Levels: `info` is the log (never toasts, never counts), `success` toasts, `warning`
+  counts yellow in the chat sidebar, `error` and `critical` count red, `critical` sticks
+  until clicked. The person's toast threshold applies to rows; a `flash` always shows.
+- `go` is where a click lands: `{"view", "tab"?, "key"?}` (`tab` is your plugin's name
+  when it has a settings tab, else `"plugins"`; `key` scrolls to a `data-key` row) or
+  `{"hash": "#store/plugins/x"}`.
+- `lazy=True` makes no row until the first tick, so work that finds everything cached
+  stays silent. `tqdm_for(p)` is a tqdm class bound to the handle, for libraries that
+  take `tqdm_class=` (huggingface_hub) or read a module-level `tqdm` (openwakeword).
+- A row never names a private chat. In a private context pass `private=True`: the row
+  becomes a flash. Never put message content in a row.
+- `PLUGIN_NOTICE` still works and is routed here: `info`/`success` flash, `warning`/`error`
+  become rows. New code calls `core.notify` directly.
 
 ## Lifecycle
 
@@ -390,7 +404,7 @@ If a provider plugin is the configured provider (e.g., `TTS_PROVIDER=elevenlabs`
 ## Examples
 
 - `core/plugins/elevenlabs/` — TTS provider with API key, model selection, voice picker
-- `core/plugins/piper/` — local TTS provider with `on_settings_saved` + `PLUGIN_NOTICE` download progress
+- `core/plugins/piper/` — local TTS provider with `on_settings_saved` + a `core.notify` progress row for voice downloads
 - `core/embeddings/__init__.py` — the built-in embedding providers (`LocalEmbedder`, `RemoteEmbedder`, etc.); study these for the swap + re-embed + provenance path.
 
 ## Reference for AI
@@ -403,5 +417,5 @@ PROVIDER PLUGINS (TTS / STT / embedding / LLM):
 - LLM: subclass `core.chat.llm_providers.base.BaseProvider`: `health_check() -> bool`, `chat_completion(messages, tools=None, generation_params=None) -> LLMResponse`, `chat_completion_stream(...)`, `format_tool_result(tool_call_id, function_name, result) -> dict`.
 - Settings: `capabilities.settings` renders inline on the system settings page when the provider is selected; `"settingsUI": null` suppresses the separate plugin settings page. Read via `plugin_loader.get_plugin_settings(name)`.
 - Optional `on_settings_saved(plugin_name, settings)` on the active TTS/STT/embedder provider — fires after ANY plugin's settings save (filter by plugin_name), runs on the save path (do heavy work in a daemon thread), fully isolated, `settings` is a copy.
-- Toasts: `publish(Events.PLUGIN_NOTICE, {plugin, message, severity: info|success|warning|error})` — ephemeral, HTML-escaped, not replayed to new tabs.
+- Notifications: `from core.notify import notify, flash, progress, tqdm_for`. notify(title, level=info|success|warning|error|critical, body='', source='<plugin>', go={view, tab?, key?}|{hash}, key=dedupe) -> row id (persists, every tab, toast by level); flash(msg, level) = toast only; `with progress(title, source, go, key, done_title, failed_title, lazy) as p: p.update(done, total) | p.set(percent) | p.text(s)`; tqdm_for(p) for tqdm_class=. Never chat content in a row; private=True turns a row into a flash. Legacy `publish(Events.PLUGIN_NOTICE, {plugin, message, severity})` still works (routed: warning/error -> rows, else flash).
 - Boot ordering: a configured provider from a not-yet-loaded plugin is re-checked and activated after all plugins load — no plugin code needed.

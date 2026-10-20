@@ -226,6 +226,21 @@ def _set_build(plugin_name: str, **fields):
         entry.update(fields)
 
 
+def _tell(plugin_name, text=None, done=False, failed=False, error=''):
+    """The build's row in the notification center (core/notify.py)."""
+    with _builds_lock:
+        nid = (_builds.get(plugin_name) or {}).get('nid')
+    if not nid:
+        return
+    from core import notify
+    if done:
+        notify.finish(nid, title=f"Environment ready for {plugin_name}")
+    elif failed:
+        notify.finish(nid, failed=True, body=error or 'build failed')
+    else:
+        notify.tick(nid, text=text)
+
+
 def start_build(plugin_name: str, env_spec: dict, on_done=None) -> bool:
     """Kick off a background env build. Returns False if one is already running.
 
@@ -241,6 +256,9 @@ def start_build(plugin_name: str, env_spec: dict, on_done=None) -> bool:
             return False
         _builds[plugin_name] = {"state": "building", "step": "starting",
                                 "error": None, "started": time.time()}
+    from core.notify import begin
+    _set_build(plugin_name, nid=begin(f"Building the environment for {plugin_name}", source=plugin_name,
+                                      go={'view': 'settings', 'tab': 'plugins'}, key=f"env-build:{plugin_name}"))
 
     thread = threading.Thread(
         target=_build_worker, args=(plugin_name, env_spec, conda, on_done),
@@ -258,6 +276,7 @@ def _build_worker(plugin_name: str, env_spec: dict, conda: str, on_done):
 
     def _run_step(step_label, cmd, timeout, log_fh):
         _set_build(plugin_name, step=step_label)
+        _tell(plugin_name, text=step_label)
         log_fh.write(f"\n=== {step_label}: {' '.join(cmd)} ===\n")
         log_fh.flush()
         run_kwargs = {}
@@ -305,10 +324,12 @@ def _build_worker(plugin_name: str, env_spec: dict, conda: str, on_done):
             log_fh.write("\n=== build complete ===\n")
 
         _set_build(plugin_name, state="done", step="complete")
+        _tell(plugin_name, done=True)
         logger.info(f"[PLUGIN-ENVS] Built env {name} for {plugin_name}")
         ok = True
     except Exception as e:
         _set_build(plugin_name, state="error", step="failed", error=str(e))
+        _tell(plugin_name, failed=True, error=str(e))
         logger.error(f"[PLUGIN-ENVS] Build failed for {plugin_name}: {e}")
         try:
             with open(log_path, "a", encoding='utf-8', errors='replace') as log_fh:

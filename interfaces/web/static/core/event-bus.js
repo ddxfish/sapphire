@@ -267,6 +267,12 @@ export const Events = {
     USER_SENT: 'user_sent',           // User sent a message — data: {text}
     CHAT_CHUNK: 'chat_chunk',         // AI streaming text chunk — data: {text}
 
+    // Notification center (shared/notify.js owns these; listed for discovery)
+    NOTIFICATION: 'notification',             // a row born or changed state
+    NOTIFICATION_PROGRESS: 'notification_progress',
+    NOTIFICATION_FLASH: 'notification_flash', // a toast with no row
+    NOTIFICATIONS_READ: 'notifications_read',
+
     // Connection events
     CONNECTED: 'connected',           // Server confirms SSE subscription
     BUS_CONNECTED: 'bus_connected',   // Client-side: EventSource opened

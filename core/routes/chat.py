@@ -1015,7 +1015,9 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "DEFAULT_BACKGROUND": getattr(config, 'DEFAULT_BACKGROUND', '') or '',
                 "DEFAULT_USERNAME": getattr(config, 'DEFAULT_USERNAME', 'Human Protagonist'),
                 "PERSONA_FAVORITES": list(getattr(config, 'PERSONA_FAVORITES', []) or []),
-                "USER_TIMEZONE": getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
+                "USER_TIMEZONE": getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC',
+                "NOTIFY_TOAST_SECONDS": getattr(config, 'NOTIFY_TOAST_SECONDS', 4),
+                "NOTIFY_TOAST_MIN_LEVEL": getattr(config, 'NOTIFY_TOAST_MIN_LEVEL', 'success') or 'success'
             },
             "wizard_step": wizard_step,
             "avatars": avatars,

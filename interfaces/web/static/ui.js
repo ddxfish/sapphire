@@ -4,7 +4,6 @@ import * as Images from './ui-images.js';
 import * as Parsing from './ui-parsing.js';
 import * as Streaming from './ui-streaming.js';
 import * as api from './api.js';
-import { dismissLater } from './shared/toast.js';
 import { lockAnsweredAskCards } from './shared/ask-marker.js';
 
 // DOM references. The chat surface is JS-rendered at boot (surface/surface.js)
@@ -998,33 +997,6 @@ export const replaceMessage = (msgEl, msg, idx, total) => {
 // TOAST NOTIFICATIONS
 // =============================================================================
 
-export const showToast = (msg, type = 'error', duration = 4000) => {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    // Full HTML-escape (& first) + length clamp + String() coercion \u2014 toasts are
-    // plain text, and PLUGIN_NOTICE lets any plugin supply the message.
-    const safe = String(msg).slice(0, 500)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    toast.innerHTML = `<span class="toast-text">${safe}</span><button class="toast-close">\u00d7</button>`;
-    toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
-    container.appendChild(toast);
-
-    // Shake chat area on error
-    if (type === 'error') {
-        const chatbg = document.getElementById('chatbg');
-        if (chatbg) {
-            chatbg.classList.add('shake');
-            setTimeout(() => chatbg.classList.remove('shake'), 500);
-        }
-    }
-
-    // duration <= 0 = persistent (close-button only). Previously the timer
-    // ran unconditionally, so duration 0 removed the toast on the next tick —
-    // the privacy-mode-removal notice was never seen by anyone (scout find,
-    // 2026-07-19; same bug killed the 1h env-build-cap message).
-    dismissLater(toast, duration);
-};
+// Toasts live in shared/notify.js (the notification center, 2026-10-20).
+// showToast is the legacy name: warning/error become rows, success/info flash.
+export { showToast } from './shared/notify.js';

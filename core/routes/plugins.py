@@ -1274,6 +1274,17 @@ def install_plugin(
         # ── Sync active toolset so new tools are immediately available ──
         _sync_toolset_after_change("plugin_install")
 
+        # A row in the notification center. The installing tab already flashed
+        # its own words, so it skips this echo (origin); every other tab hears.
+        try:
+            from core.notify import notify as _notify
+            from core.request_context import session_origin
+            _notify(f"Plugin '{name}' {'updated' if is_update else 'installed'} (v{version})", 'success',
+                    source=name, key=f"plugin-install:{name}", go={'view': 'settings', 'tab': 'plugins'},
+                    origin=session_origin.get())
+        except Exception:
+            pass
+
         return {
             "status": "ok",
             "plugin_name": name,

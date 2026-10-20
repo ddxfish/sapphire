@@ -8,6 +8,14 @@
     "short": "Show avatar images in chat messages",
     "long": "When enabled, user and assistant avatar images appear next to each message in the chat. Disable to hide avatars for a cleaner, text-focused interface. Changes take effect on page refresh."
   },
+  "NOTIFY_TOAST_SECONDS": {
+    "short": "How long a toast stays on screen, in seconds",
+    "long": "Every toast fades after this many seconds, whether it is a notification arriving or a quick confirmation. Critical notifications ignore it and stay until clicked. The rows themselves live in System > Notifications regardless."
+  },
+  "NOTIFY_TOAST_MIN_LEVEL": {
+    "short": "Lowest notification level that shows a toast",
+    "long": "Notifications at this level and above pop a toast; the rest go quietly to System > Notifications. success shows everything, warning hides the green ones, error only interrupts for failures. Info never toasts: it is the log. Quick confirmations like Copied or Saved are not notifications and always show."
+  },
   "DEFAULT_BACKGROUND": {
     "short": "Global underlay scene shown when a chat has no scene of its own",
     "long": "Name of a scene from the background library used as the app-wide default background. A chat with its own scene (set from the chat sidebar) overrides it, and the underlay image is only fetched when it is actually shown. Empty means no default background."

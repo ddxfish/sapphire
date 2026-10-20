@@ -109,12 +109,20 @@ class LocalEmbedder:
                     f"Downloading embedding model: {EMBEDDING_MODEL}"
                     + (f" @ revision {rev}" if rev else "")
                 )
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    EMBEDDING_MODEL, trust_remote_code=True, revision=rev,
-                )
-                model_path = hf_hub_download(
-                    EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, revision=rev,
-                )
+                # One progress row in the notification center (core/notify.py);
+                # the tokenizer is small and rides transformers' own fetch.
+                from core.notify import progress, tqdm_for
+                with progress(f"Downloading the embedding model ({EMBEDDING_MODEL})", source='core',
+                              go={'view': 'settings', 'tab': 'embedding'}, key='embedding-model',
+                              done_title='Embedding model ready') as p:
+                    rep = tqdm_for(p)
+                    self.tokenizer = AutoTokenizer.from_pretrained(
+                        EMBEDDING_MODEL, trust_remote_code=True, revision=rev,
+                    )
+                    model_path = hf_hub_download(
+                        EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, revision=rev,
+                        **({'tqdm_class': rep} if rep else {}),
+                    )
 
             self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
             self.input_names = [i.name for i in self.session.get_inputs()]

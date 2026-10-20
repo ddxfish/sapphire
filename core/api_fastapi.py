@@ -124,6 +124,15 @@ CORE_WIDGETS_DIR = PROJECT_ROOT / "core" / "dashboard_builtins" / "web"
 CORE_WIDGETS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/core-widgets", StaticFiles(directory=str(CORE_WIDGETS_DIR)), name="core-widgets")
 
+# Notification center — load the store and hook the bus NOW, before sapphire.py
+# runs the plugin scan, so boot-time load errors become rows (core/notify.py).
+try:
+    from core import notify as _notify
+    _notify.init()
+except Exception as _n_e:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(f"notification center init failed: {_n_e}")
+
 # Plugin web assets — serves <plugin dir>/web/ from either band
 from core.paths import SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR as USER_PLUGINS_DIR_WEB
 
@@ -994,8 +1003,10 @@ from core.routes.wakeword import router as wakeword_router
 from core.routes.mcp import router as mcp_router
 from core.routes.rooms import router as rooms_router
 from core.routes.worker_door import router as worker_door_router
+from core.routes.notifications import router as notifications_router
 
 app.include_router(chat_router)
+app.include_router(notifications_router)
 app.include_router(tts_router)
 app.include_router(settings_router)
 app.include_router(content_router)

@@ -109,6 +109,7 @@ Scenes motions
 Dashboard widgets
 Mind view
 Chat manager
+Notification center
 ### System
 Settings hot reload
 Auto-updater
