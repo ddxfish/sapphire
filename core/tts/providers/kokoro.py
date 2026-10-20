@@ -1,10 +1,12 @@
-"""Kokoro TTS provider — local HTTP server on port 5012."""
+"""Kokoro TTS provider — local HTTP server on port 5012, or another
+computer's Kokoro through its shared door: a server setting that holds a
+pairing string (core/worker_door.py) is reached over pinned TLS with its key."""
 import logging
 import time
 from typing import Iterator, List, Optional, Tuple
 
 import requests
-from core import net
+from core import net, worker_door
 import config
 
 from .base import BaseTTSProvider
@@ -75,7 +77,24 @@ class KokoroTTSProvider(BaseTTSProvider):
         self.primary_server = config.TTS_PRIMARY_SERVER
         self.fallback_server = config.TTS_FALLBACK_SERVER
         self.fallback_timeout = config.TTS_FALLBACK_TIMEOUT
-        logger.info(f"Kokoro TTS provider: {self.primary_server}")
+        self._doors = {}            # pairing string -> (session, base)
+        logger.info(f"Kokoro TTS provider: {_shown(self.primary_server)}")
+
+    def _call(self, method, server, path, timeout=None, **kw):
+        """One request to a server setting: a plain URL through the net facade,
+        a pairing string through its pinned door (the key rides the session)."""
+        if not worker_door.is_pairing(server):
+            return getattr(net, method)(f"{server}{path}", timeout=timeout, **kw)
+        door = self._doors.get(server)
+        try:
+            if not door:
+                door = self._doors[server] = worker_door.session(server, timeout=timeout or 5)
+            s, base = door
+            return s.request(method.upper(), f"{base}{path}", timeout=timeout, **kw)
+        except requests.exceptions.SSLError:
+            self._doors.pop(server, None)               # a new cert on the worker: checked afresh next time, and refused
+            worker_door.forget(*worker_door.parse(server)[::2])
+            raise
 
     def generate(self, text: str, voice: str, speed: float, **kwargs) -> Optional[bytes]:
         """POST to Kokoro server, return OGG bytes. Retries on transient failures."""
@@ -89,7 +108,7 @@ class KokoroTTSProvider(BaseTTSProvider):
         for attempt in range(1 + len(delays)):
             try:
                 server_url = self._get_server_url()
-                response = net.post(f"{server_url}/tts", json={
+                response = self._call('post', server_url, '/tts', json={
                     'text': text.replace("*", ""),
                     'voice': voice,
                     'speed': clamped_speed,
@@ -103,7 +122,7 @@ class KokoroTTSProvider(BaseTTSProvider):
                 except Exception:
                     detail = ''
                 last_error = f"HTTP {response.status_code} {detail}".rstrip()
-                logger.error(f"Kokoro server error: {last_error}")
+                logger.error(f"Kokoro server error: HTTP {response.status_code}")   # the detail can quote her words: Test button only
                 if 400 <= response.status_code < 500:
                     break  # client error — retrying won't help
             except Exception as e:
@@ -113,7 +132,8 @@ class KokoroTTSProvider(BaseTTSProvider):
                 logger.warning(f"Kokoro TTS attempt {attempt + 1} failed, retrying in {delays[attempt]}s...")
                 time.sleep(delays[attempt])
 
-        logger.error(f"Kokoro generate failed after {attempt + 1} attempt(s): {last_error}")
+        logger.error(f"Kokoro generate failed after {attempt + 1} attempt(s)"
+                     + ("" if isinstance(last_error, str) else f": {last_error!r}"))
         self._last_error = str(last_error)   # the Test button shows it
         return None
 
@@ -134,8 +154,8 @@ class KokoroTTSProvider(BaseTTSProvider):
 
         try:
             server_url = self._get_server_url()
-            response = net.post(
-                f"{server_url}/tts/stream",
+            response = self._call(
+                'post', server_url, '/tts/stream',
                 json={
                     'text': text.replace("*", ""),
                     'voice': voice,
@@ -146,17 +166,13 @@ class KokoroTTSProvider(BaseTTSProvider):
                 timeout=60,
             )
             if response.status_code != 200:
-                try:
-                    detail = response.json().get('error') or ''
-                except Exception:
-                    detail = ''
                 if 400 <= response.status_code < 500:
                     # The caller's mistake (unknown voice, bad text): the
                     # whole-blob route would answer the same, so don't ask it.
-                    logger.error(f"Kokoro /tts/stream returned {response.status_code} {detail}".rstrip())
+                    logger.error(f"Kokoro /tts/stream returned {response.status_code}")
                     return
                 logger.warning(
-                    f"Kokoro /tts/stream returned {response.status_code} {detail} — "
+                    f"Kokoro /tts/stream returned {response.status_code} — "
                     f"falling back to non-streaming generate()"
                 )
                 audio = self.generate(text, voice, speed, **kwargs)
@@ -211,7 +227,7 @@ class KokoroTTSProvider(BaseTTSProvider):
         """Get available server URL with fallback."""
         if self._check_health(self.primary_server, timeout=self.fallback_timeout):
             return self.primary_server
-        logger.info(f"Kokoro primary unavailable, using fallback: {self.fallback_server}")
+        logger.info(f"Kokoro primary unavailable, using fallback: {_shown(self.fallback_server)}")
         return self.fallback_server
 
     def list_voices(self) -> list:
@@ -220,10 +236,15 @@ class KokoroTTSProvider(BaseTTSProvider):
 
     def _check_health(self, server_url: str, timeout: float = None) -> bool:
         try:
-            response = net.get(f"{server_url}/health", timeout=timeout)
+            response = self._call('get', server_url, '/health', timeout=timeout)
             return response.status_code == 200
         except Exception:
             return False
+
+
+def _shown(server):
+    """A server setting fit for a log: a pairing string's key and pin stay out."""
+    return str(server).split("#", 1)[0] if worker_door.is_pairing(server) else server
 
 
 KOKORO_VOICES = [

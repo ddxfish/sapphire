@@ -314,7 +314,7 @@ Default is `false` — only `official` and `verified_author` plugins load; unsig
 | Service | Port | Binding |
 |---------|------|---------|
 | FastAPI Server | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
-| TTS Server | 5012 | `0.0.0.0` (configurable) |
+| TTS Server | 5012 | `127.0.0.1` (configurable) |
 | LM Studio (default) | 1234 | External |
 
 ---

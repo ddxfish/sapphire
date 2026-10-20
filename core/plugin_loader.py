@@ -1970,6 +1970,10 @@ class PluginLoader:
             info["services_blocked"] = "unsupported"
             logger.info(f"[PLUGINS] {name}: services not started — {plugin_envs.platform_refusal(manifest)}")
             return
+        if plugin_envs.client_mode(manifest, self.get_plugin_settings(name)):
+            info["services_blocked"] = "client"
+            logger.info(f"[PLUGINS] {name}: client only — its services run on another computer")
+            return
         if env_spec:
             status = plugin_envs.env_status(name, env_spec)
             if status != "ready":
@@ -2072,6 +2076,22 @@ class PluginLoader:
         self._stop_services(name)
         self._start_services(name)
 
+    def sync_client_mode(self, name: str):
+        """A settings save may have flipped client mode: stop the services it
+        turned off, start the ones it turned back on. Blocks while they stop."""
+        info = self._plugins.get(name)
+        if not info or not info.get("loaded") or not self._scheduler:
+            return
+        from core import plugin_envs
+        client = plugin_envs.client_mode(info["manifest"], self.get_plugin_settings(name))
+        if client and info.get("service_managers"):
+            self._stop_services(name)
+            info["services_blocked"] = "client"
+            logger.info(f"[PLUGINS] {name}: client only — services stopped")
+        elif not client and info.get("services_blocked") == "client":
+            info.pop("services_blocked", None)
+            self._start_services(name)
+
     def _start_pending_services(self):
         """Start services for plugins loaded before boot completed (mirrors daemons)."""
         with self._lock:
@@ -2107,9 +2127,16 @@ class PluginLoader:
         if env_spec:
             from core import plugin_envs
             why = plugin_envs.platform_refusal(manifest)
-            result["state"] = "unsupported" if why else plugin_envs.env_status(name, env_spec)
             if why:
+                result["state"] = "unsupported"
                 result["why"] = why
+            elif plugin_envs.client_mode(manifest, self.get_plugin_settings(name)):
+                result["state"] = "client"
+            else:
+                result["state"] = plugin_envs.env_status(name, env_spec)
+            client = env_spec.get("client")
+            if isinstance(client, dict) and client.get("setting"):
+                result["client"] = {k: str(client.get(k) or "") for k in ("setting", "label", "help")}
             result["env_name"] = plugin_envs.env_name(name)
             b = plugin_envs.build_state(name)
             if b:

@@ -290,14 +290,22 @@
   },
   "TTS_SERVER_HOST": {
     "short": "TTS server bind address",
-    "long": "Network interface for the Kokoro TTS server to bind to. Use '0.0.0.0' to accept connections from any interface (required for remote access), or '127.0.0.1' for local-only. Requires restart."
+    "long": "Network interface for the Kokoro TTS server to bind to. Default '127.0.0.1': this computer only. '0.0.0.0' lets other computers on your network use this Kokoro (no password, plain HTTP: anyone on the network can make it speak and read what it says on the wire). Requires restart."
+  },
+  "TTS_SHARE_ENABLED": {
+    "short": "Share this Kokoro with other computers",
+    "long": "Opens a second, encrypted door (TLS) on the share port that other Sapphires reach with a key you give each of them (Shared with other computers, below). Paste a client's pairing string into its Primary TTS Server. Her words are never logged, from here or from them. Requires restart."
+  },
+  "TTS_SHARE_PORT": {
+    "short": "Share port",
+    "long": "Port for the encrypted shared door (default 5013). Requires restart."
   },
   "TTS_SERVER_PORT": {
     "short": "TTS server port number",
     "long": "Port number for the Kokoro TTS server. Default is 5012. Must match TTS_PRIMARY_SERVER URL. Requires restart to take effect."
   },
   "TTS_PRIMARY_SERVER": {
-    "short": "Primary TTS server endpoint URL",
+    "short": "Primary TTS server: a URL, or a pairing string from another computer's Kokoro",
     "long": "URL of the main text-to-speech server. Format: http://hostname:port. System will try this server first for all TTS requests. If it fails, falls back to TTS_FALLBACK_SERVER if configured."
   },
   "TTS_FALLBACK_SERVER": {

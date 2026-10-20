@@ -128,8 +128,10 @@
   "tts": {
     "TTS_PROVIDER": "none",
     "TTS_LOCAL_PLAYBACK": true,
-    "TTS_SERVER_HOST": "0.0.0.0",
+    "TTS_SERVER_HOST": "127.0.0.1",
     "TTS_SERVER_PORT": 5012,
+    "TTS_SHARE_ENABLED": false,
+    "TTS_SHARE_PORT": 5013,
     "TTS_PRIMARY_SERVER": "http://localhost:5012",
     "TTS_FALLBACK_SERVER": "http://127.0.0.1:5012",
     "TTS_FALLBACK_TIMEOUT": 0.2,

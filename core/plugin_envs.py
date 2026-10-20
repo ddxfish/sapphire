@@ -127,9 +127,13 @@ def env_python(plugin_name: str):
     return python if python.exists() else None
 
 
+_BUILD_KEYS = ("python", "pip", "conda", "channels")      # what the env is made of; `client` is not
+
+
 def spec_hash(env_spec: dict) -> str:
+    spec = {k: v for k, v in (env_spec or {}).items() if k in _BUILD_KEYS}
     return hashlib.sha256(
-        json.dumps(env_spec or {}, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        json.dumps(spec, sort_keys=True, separators=(',', ':')).encode('utf-8')
     ).hexdigest()
 
 
@@ -167,6 +171,18 @@ def platform_refusal(manifest: dict) -> str:
         return ""
     names = ", ".join(_PLATFORMS.get(str(a), str(a)) for a in allowed)
     return f"Not available on {_PLATFORMS.get(sys.platform, sys.platform)}: runs on {names}"
+
+
+def client_mode(manifest: dict, settings: dict) -> bool:
+    """True when the plugin is set to use its server on another computer. A
+    manifest's `environment.client.setting` names a boolean plugin setting;
+    while it is on, the env is never needed and the services never start here.
+    The setting is the one source of truth: the enable prompt and the plugin's
+    own settings page both flip it."""
+    env = manifest.get("environment") if isinstance(manifest, dict) else None
+    client = env.get("client") if isinstance(env, dict) else None
+    key = client.get("setting") if isinstance(client, dict) else None
+    return bool(key and (settings or {}).get(key) is True)
 
 
 def build_state(plugin_name: str) -> dict:

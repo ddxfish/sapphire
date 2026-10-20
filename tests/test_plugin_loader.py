@@ -1230,3 +1230,41 @@ class TestMinCoreVersion:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# =============================================================================
+# Client mode (manifest environment.client)
+# =============================================================================
+
+def _client_loader(settings):
+    loader = PluginLoader.__new__(PluginLoader)
+    manifest = {"name": "face", "environment": {"python": "3.10", "client": {"setting": "client", "label": "Client only"}},
+                "capabilities": {"services": [{"name": "server", "entry": "server.py"}]}}
+    loader._plugins = {"face": {"manifest": manifest, "path": Path("/nonexistent"), "loaded": True}}
+    loader._scheduler = object()
+    loader.get_plugin_settings = lambda name: settings
+    return loader
+
+
+def test_client_mode_keeps_services_off_and_says_so():
+    loader = _client_loader({"client": True})
+    loader._start_services("face")
+    info = loader._plugins["face"]
+    assert info["services_blocked"] == "client" and not info.get("service_managers")
+    status = loader.get_env_status("face")
+    assert status["state"] == "client"
+    assert status["client"]["setting"] == "client" and status["client"]["label"] == "Client only"
+
+
+def test_client_mode_flip_stops_and_starts_services():
+    settings = {"client": True}
+    loader = _client_loader(settings)
+    calls = []
+    loader._stop_services = lambda name: (calls.append("stop"), loader._plugins[name].pop("service_managers", None))
+    loader._plugins["face"]["service_managers"] = {"server": object()}
+    loader.sync_client_mode("face")
+    assert calls == ["stop"] and loader._plugins["face"]["services_blocked"] == "client"
+    settings["client"] = False
+    loader._start_services = lambda name: calls.append("start")
+    loader.sync_client_mode("face")
+    assert calls == ["stop", "start"] and "services_blocked" not in loader._plugins["face"]

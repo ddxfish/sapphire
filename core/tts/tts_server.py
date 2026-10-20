@@ -13,7 +13,13 @@ import numpy as np
 import re
 import threading
 import tempfile
+import traceback
 import psutil
+
+# Her words never reach a log. Ours goes to stderr; stdout belongs to the
+# libraries, and misaki prints a word it can't read (en.py 'TODO:NUM'), so
+# stdout goes nowhere. kokoro's own loguru logger is off (kokoro/__init__).
+sys.stdout = open(os.devnull, 'w')
 os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')  # pure phone-home UA
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 from kokoro import KModel, KPipeline
@@ -42,7 +48,7 @@ try:
     logger.info(f"Loaded TTS server config: {HOST}:{PORT}")
 except Exception as e:
     logger.warning(f"Could not load config, using defaults: {e}")
-    HOST = '0.0.0.0'
+    HOST = '127.0.0.1'
     PORT = 5012
 
 
@@ -54,6 +60,13 @@ def get_temp_dir():
         if os.path.exists(shm) and os.access(shm, os.W_OK):
             return shm
     return tempfile.gettempdir()
+
+
+def _private_error(what, e):
+    """Log a failure by its type and frames only: a synthesizer's message can
+    quote the text it failed on, and this log may hold a stranger's words too."""
+    frames = ''.join(traceback.format_tb(e.__traceback__))
+    logger.error(f"{what}: {type(e).__name__} (message withheld: it may quote the text)\n{frames}")
 
 
 # --- Constants ---
@@ -348,15 +361,10 @@ class TTSHandler(BaseHTTPRequestHandler):
         except Exception:
             mem_gb = -1
 
-        _json_response(self, {
-            'status': 'ok',
-            'model': 'loaded',
-            'device': _kokoro_device,
-            'requests': request_count,
-            'memory_gb': round(mem_gb, 2),
-            'memory_limit_gb': MAX_MEMORY_GB,
-            'temp_dir': TEMP_DIR
-        })
+        # Status only: this door may face the network, and a request counter
+        # there tells a stranger when she talks. The rest goes to the log.
+        logger.debug(f"health: device={_kokoro_device} requests={request_count} memory={mem_gb:.2f}/{MAX_MEMORY_GB} GB")
+        _json_response(self, {'status': 'ok'})
 
     def _handle_tts(self):
         global request_count
@@ -421,7 +429,9 @@ class TTSHandler(BaseHTTPRequestHandler):
                 audio_segments = [np.copy(seg) for _, _, seg in generator]
                 del generator
         except Exception as e:
-            logger.error(f"Synthesis failed (voice={voice}): {e}", exc_info=True)
+            _private_error(f"Synthesis failed (voice={voice})", e)
+            # The caller sent the text, so the reply may say what broke (a CUDA
+            # error is the Test button's whole use); only the log holds it back.
             _json_response(self, {'error': f'Synthesis failed: {e}'}, 500)
             return
 
@@ -645,10 +655,7 @@ class TTSHandler(BaseHTTPRequestHandler):
                 f"Client disconnected mid-stream after {segments_emitted} segments: {e}"
             )
         except Exception as e:
-            logger.error(
-                f"Stream error after {segments_emitted} segments: {e}",
-                exc_info=True,
-            )
+            _private_error(f"Stream error after {segments_emitted} segments", e)
             # Best-effort terminating chunk so client doesn't hang
             try:
                 self.wfile.write(b"0\r\n\r\n")
@@ -670,6 +677,37 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         super().server_bind()
 
 
+def _open_shared_door():
+    """Other computers reach this Kokoro here: TLS, a key per client
+    (core/worker_door.py). The plain door above stays as it was."""
+    from core import worker_door
+    folder = os.path.join(project_root, 'user', 'worker_door', 'kokoro')
+    port = int(getattr(config, 'TTS_SHARE_PORT', 5013) or 5013)
+
+    class Shared(TTSHandler):
+        def _let_in(self):
+            if worker_door.client_of(self.server.door, self.headers.get('Authorization')):
+                return True
+            _json_response(self, {'error': 'unauthorized'}, 401)
+            return False
+
+        def do_GET(self):
+            if self._let_in():
+                super().do_GET()
+
+        def do_POST(self):
+            if self._let_in():
+                super().do_POST()
+
+    try:
+        srv = worker_door.serve(ThreadedHTTPServer, Shared, '0.0.0.0', port, folder)
+    except Exception as e:
+        logger.error(f"Shared door not opened on port {port}: {e}")
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True, name='kokoro-door').start()
+    logger.info(f"Shared with other computers on port {port} (TLS, {len(worker_door.clients(folder))} clients)")
+
+
 def main():
     """Main server function."""
     logger.info(f"Starting Kokoro TTS server on {HOST}:{PORT}")
@@ -677,6 +715,12 @@ def main():
     logger.info(f"Temp directory: {TEMP_DIR}")
 
     server = ThreadedHTTPServer((HOST, PORT), TTSHandler)
+    try:
+        import config as _cfg
+        if getattr(_cfg, 'TTS_SHARE_ENABLED', False):
+            _open_shared_door()
+    except ImportError:
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

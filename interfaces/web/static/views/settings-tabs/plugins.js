@@ -489,6 +489,8 @@ function _envStripHTML(p) {
         btn = 'Retry';
     } else if (env.state === 'unsupported') {
         text = env.why || 'Not available on this system';
+    } else if (env.state === 'client') {
+        text = `${env.client?.label || 'Client only'}: ${env.client?.help || 'uses its server on another computer'}`;
     } else if (env.state === 'no-conda') {
         text = 'Conda not found — needed for this plugin';
     } else {
@@ -518,6 +520,9 @@ function _syncEnvStrip(el, p) {
 
 // Simple Yes/No — deliberately lighter than the typed I-UNDERSTAND gate,
 // which the user has already cleared by this point if the plugin needed it.
+// A plugin that can use its server on another computer (manifest
+// environment.client) gets a third answer: 'client'. Resolves 'build',
+// 'client' or false.
 function _confirmEnvBuild(title, env) {
     return new Promise(resolve => {
         const overlay = document.createElement('div');
@@ -535,9 +540,13 @@ function _confirmEnvBuild(title, env) {
                         Building can download packages — possibly gigabytes — and take a while.
                         You can also build later from the plugin card.
                     </p>
+                    ${env.client ? `<p style="margin:10px 0 0;color:var(--text-secondary);line-height:1.5">
+                        <b>${_esc(env.client.label || 'Client only')}</b>: ${_esc(env.client.help || 'use its server on another computer, nothing downloaded here')}.
+                    </p>` : ''}
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary env-no">Not now</button>
+                    ${env.client ? `<button class="btn btn-secondary env-client">${_esc(env.client.label || 'Client only')}</button>` : ''}
                     <button class="btn btn-primary env-yes">Build now</button>
                 </div>
             </div>`;
@@ -554,8 +563,23 @@ function _confirmEnvBuild(title, env) {
         setupModalClose(overlay, () => close(false));
         overlay.querySelector('.modal-x').addEventListener('click', () => close(false));
         overlay.querySelector('.env-no').addEventListener('click', () => close(false));
-        overlay.querySelector('.env-yes').addEventListener('click', () => close(true));
+        overlay.querySelector('.env-client')?.addEventListener('click', () => close('client'));
+        overlay.querySelector('.env-yes').addEventListener('click', () => close('build'));
     });
+}
+
+// Client only: the plugin's own setting carries it (core reads it to keep
+// the services off), then its settings page opens for where the server is.
+async function _chooseClient(el, cached, name, client) {
+    try {
+        await pluginsAPI.saveSettings(name, { [client.setting]: true });
+        if (cached?.env) cached.env.state = 'client';
+        _syncEnvStrip(el, cached);
+        el.closest('.settings-view, [data-view="settings"]')
+            ?.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: name }, bubbles: true }));
+    } catch (err) {
+        ui.showToast(`Could not set client mode: ${err.message}`, 'error', 5000);
+    }
 }
 
 async function _startEnvBuild(el, ctx, name) {
@@ -1348,8 +1372,9 @@ export default {
                     && ['missing', 'stale', 'error'].includes(data.env.state)) {
                     if (cached) cached.env = data.env;
                     _syncEnvStrip(el, cached);
-                    const wantBuild = await _confirmEnvBuild(cached?.title || name, data.env);
-                    if (wantBuild) await _startEnvBuild(el, ctx, name);
+                    const choice = await _confirmEnvBuild(cached?.title || name, data.env);
+                    if (choice === 'build') await _startEnvBuild(el, ctx, name);
+                    if (choice === 'client') await _chooseClient(el, cached, name, data.env.client);
                 }
             } catch (err) {
                 e.target.checked = !e.target.checked;

@@ -993,6 +993,7 @@ from core.routes.devices import router as devices_router
 from core.routes.wakeword import router as wakeword_router
 from core.routes.mcp import router as mcp_router
 from core.routes.rooms import router as rooms_router
+from core.routes.worker_door import router as worker_door_router
 
 app.include_router(chat_router)
 app.include_router(tts_router)
@@ -1016,4 +1017,5 @@ app.include_router(devices_router)
 app.include_router(wakeword_router)
 app.include_router(mcp_router)
 app.include_router(rooms_router)
+app.include_router(worker_door_router)
 

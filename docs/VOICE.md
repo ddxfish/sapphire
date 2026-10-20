@@ -190,8 +190,9 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 | `TTS_PROVIDER` | `none` | Voice-output engine (none / kokoro / sapphire_router / plugin providers) | TTS tab, provider dropdown |
 | `KOKORO_DEVICE` | `cuda` | Kokoro synthesis on GPU or CPU | TTS tab (Kokoro) |
 | `KOKORO_CUDA_DEVICE` | *(empty)* | GPU index for multi-GPU setups | TTS tab, advanced |
-| `TTS_SERVER_HOST` / `TTS_SERVER_PORT` | `0.0.0.0` / `5012` | The local Kokoro server subprocess bind | TTS tab, advanced |
-| `TTS_PRIMARY_SERVER` / `TTS_FALLBACK_SERVER` | localhost URLs | Where the app reaches the TTS server | TTS tab, advanced |
+| `TTS_SERVER_HOST` / `TTS_SERVER_PORT` | `127.0.0.1` / `5012` | The local Kokoro server subprocess bind | TTS tab, advanced |
+| `TTS_PRIMARY_SERVER` / `TTS_FALLBACK_SERVER` | localhost URLs | Where the app reaches the TTS server; the primary may be a pairing string from another computer's shared Kokoro (falls back per request) | TTS tab, advanced |
+| `TTS_SHARE_ENABLED` / `TTS_SHARE_PORT` | `false` / `5013` | Share this Kokoro: a second door, TLS with a pinned self-signed cert and a key per computer (`core/worker_door.py`, keys in `user/worker_door/kokoro/`); add computers in the panel under the Test button, paste each one's pairing string as its primary. Her words are never logged | TTS tab, advanced |
 | `TTS_STREAMING_ENABLED` | `true` | Speak sentence-sized chunks as the LLM writes; required for Conversation-mode audio | TTS tab, Streaming |
 | `TTS_STREAMING_SPLIT_MODE` | `paragraph` | Chunk on paragraphs (natural) or sentences (faster first audio) | TTS tab, Streaming |
 | `TTS_STREAMING_MIN_CHARS` | `15` | Smallest chunk emitted at a boundary | TTS tab, Streaming |

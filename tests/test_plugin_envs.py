@@ -143,3 +143,22 @@ def test_platform_refusal(monkeypatch):
     why = plugin_envs.platform_refusal({"platforms": ["linux", "win32"]})
     assert why == "Not available on macOS: runs on Linux, Windows"
     assert plugin_envs.platform_refusal({"platforms": "linux"}) == ""      # not a list: ignored, never a lockout
+
+
+def test_client_mode_reads_the_named_setting():
+    from core import plugin_envs
+    m = {"environment": {"python": "3.10", "client": {"setting": "client", "label": "Client only"}}}
+    assert plugin_envs.client_mode(m, {"client": True}) is True
+    assert plugin_envs.client_mode(m, {"client": False}) is False
+    assert plugin_envs.client_mode(m, {"client": "yes"}) is False      # only a real true turns the services off
+    assert plugin_envs.client_mode(m, {}) is False
+    assert plugin_envs.client_mode({"environment": {"python": "3.10"}}, {"client": True}) is False
+    assert plugin_envs.client_mode({}, None) is False
+
+
+def test_spec_hash_ignores_what_the_env_is_not_made_of():
+    """Adding `client` to a manifest must never mark a built env stale (a multi-GB rebuild)."""
+    from core import plugin_envs
+    spec = {"python": "3.10", "pip": ["six"]}
+    assert plugin_envs.spec_hash({**spec, "client": {"setting": "client"}}) == plugin_envs.spec_hash(spec)
+    assert plugin_envs.spec_hash({**spec, "pip": ["seven"]}) != plugin_envs.spec_hash(spec)

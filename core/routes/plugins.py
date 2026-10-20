@@ -1761,6 +1761,18 @@ def _propagate_settings_change(plugin_name: str, effective: dict):
     except Exception as e:
         logger.debug(f"settings-saved provider notify skipped: {e}")
 
+    # Client mode (manifest environment.client) is a setting: a save that
+    # flips it stops or starts the plugin's services. Off the request: a
+    # stop can take seconds.
+    try:
+        from core.plugin_loader import plugin_loader as _pl
+        if ((_pl.get_plugin_info(plugin_name) or {}).get("manifest", {})
+                .get("environment", {}) or {}).get("client"):
+            threading.Thread(target=_pl.sync_client_mode, args=(plugin_name,),
+                             daemon=True, name=f"client-mode-{plugin_name}").start()
+    except Exception as e:
+        logger.warning(f"[{plugin_name}] client mode sync failed: {e}")
+
     # Daemon plugins were never told their settings changed — a value read at
     # construct time stayed frozen until restart (Discord hunt 2.13.0, row 80).
     # Opt-in, same shape as the provider hook: daemon.on_settings_saved(settings).

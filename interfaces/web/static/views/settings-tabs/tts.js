@@ -2,6 +2,7 @@
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
+import { mountWorkerDoor } from '../../shared/worker-door.js';
 
 let _mergedConfig = null;
 
@@ -21,7 +22,7 @@ const tabConfig = {
             essentialKeys: ['KOKORO_DEVICE'],
             advancedKeys: [
                 'KOKORO_CUDA_DEVICE',
-                'TTS_SERVER_HOST', 'TTS_SERVER_PORT',
+                'TTS_SERVER_HOST', 'TTS_SERVER_PORT', 'TTS_SHARE_ENABLED', 'TTS_SHARE_PORT',
                 'TTS_PRIMARY_SERVER', 'TTS_FALLBACK_SERVER', 'TTS_FALLBACK_TIMEOUT'
             ]
         }
@@ -79,6 +80,11 @@ export default {
                 </div>
             </div>
             <div id="tts-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>`;
+
+        // Shared Kokoro (core/worker_door.py): which computers may use it.
+        if (ctx.settings.TTS_PROVIDER === 'kokoro' && ctx.settings.TTS_SHARE_ENABLED) {
+            html += `<div id="tts-door" style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);"></div>`;
+        }
         return html;
     },
 
@@ -104,6 +110,8 @@ export default {
         const cfg = _mergedConfig || tabConfig;
         attachProviderListeners(cfg, ctx, el, this);
         gpuNotice(el, '#tts-gpu-notice');
+        const doorEl = el.querySelector('#tts-door');
+        if (doorEl) mountWorkerDoor(doorEl, 'kokoro', { title: 'Computers that may use this Kokoro' });
 
         const btn = el.querySelector('#tts-test-btn');
         const result = el.querySelector('#tts-test-result');
