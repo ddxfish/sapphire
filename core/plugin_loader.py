@@ -792,8 +792,9 @@ class PluginLoader:
         # state `surfaces`, Plugins page) wins. Absent = everywhere.
         hook_runner.set_surfaces(name, self.effective_surfaces(name, manifest))
         hooks = capabilities.get("hooks", {})
+        hook_ns = {}            # one module per file: tts_stream_start's state is tts_chunk_audio's (2026-10-19)
         for hook_name, handler_path in hooks.items():
-            handler_func = self._load_handler(plugin_dir, handler_path, hook_name)
+            handler_func = self._load_handler(plugin_dir, handler_path, hook_name, ns_cache=hook_ns)
             if handler_func:
                 hook_runner.register(
                     hook_name, handler_func,
@@ -805,7 +806,7 @@ class PluginLoader:
         voice_commands = capabilities.get("voice_commands", [])
         for vc in voice_commands:
             handler_path = vc.get("handler")
-            handler_func = self._load_handler(plugin_dir, handler_path, "pre_chat")
+            handler_func = self._load_handler(plugin_dir, handler_path, "pre_chat", ns_cache=hook_ns)
             if handler_func:
                 voice_match = {
                     "triggers": vc.get("triggers", []),
@@ -1197,13 +1198,14 @@ class PluginLoader:
             return None
 
         try:
-            source = full_path.read_text(encoding="utf-8-sig")
-            namespace = {"__file__": str(full_path), "__name__": f"plugin_{plugin_dir.name}_{full_path.stem}"}
-            exec(compile(source, str(full_path), "exec"), namespace)
-
-            # Cache namespace so other handlers from the same file share module-level state
-            if ns_cache is not None:
-                ns_cache[handler_path] = namespace
+            # One namespace per file: handlers from the same file share module-level state
+            namespace = ns_cache.get(handler_path) if ns_cache is not None else None
+            if namespace is None:
+                source = full_path.read_text(encoding="utf-8-sig")
+                namespace = {"__file__": str(full_path), "__name__": f"plugin_{plugin_dir.name}_{full_path.stem}"}
+                exec(compile(source, str(full_path), "exec"), namespace)
+                if ns_cache is not None:
+                    ns_cache[handler_path] = namespace
 
             # Look for a function matching the hook name (e.g., pre_chat, prompt_inject)
             handler = namespace.get(hook_name)
@@ -1963,8 +1965,12 @@ class PluginLoader:
 
         from core.process_manager import ProcessManager, kill_process_on_port
         python = sys.executable
+        from core import plugin_envs
+        if plugin_envs.platform_refusal(manifest):
+            info["services_blocked"] = "unsupported"
+            logger.info(f"[PLUGINS] {name}: services not started — {plugin_envs.platform_refusal(manifest)}")
+            return
         if env_spec:
-            from core import plugin_envs
             status = plugin_envs.env_status(name, env_spec)
             if status != "ready":
                 info["services_blocked"] = status
@@ -2059,6 +2065,13 @@ class PluginLoader:
             except Exception as e:
                 logger.warning(f"[PLUGINS] Failed to stop service '{svc_name}' for {name}: {e}")
 
+    def restart_services(self, name: str):
+        """Stop then start a plugin's subprocess services: the door a plugin
+        uses for its own (a fetch retried, a model changed). Blocks while they
+        stop, so call it off the event loop."""
+        self._stop_services(name)
+        self._start_services(name)
+
     def _start_pending_services(self):
         """Start services for plugins loaded before boot completed (mirrors daemons)."""
         with self._lock:
@@ -2093,7 +2106,10 @@ class PluginLoader:
         result = {"required": bool(env_spec), "has_services": bool(services)}
         if env_spec:
             from core import plugin_envs
-            result["state"] = plugin_envs.env_status(name, env_spec)
+            why = plugin_envs.platform_refusal(manifest)
+            result["state"] = "unsupported" if why else plugin_envs.env_status(name, env_spec)
+            if why:
+                result["why"] = why
             result["env_name"] = plugin_envs.env_name(name)
             b = plugin_envs.build_state(name)
             if b:

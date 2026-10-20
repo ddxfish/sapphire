@@ -487,6 +487,8 @@ function _envStripHTML(p) {
     } else if (env.state === 'error') {
         text = 'Environment build failed';
         btn = 'Retry';
+    } else if (env.state === 'unsupported') {
+        text = env.why || 'Not available on this system';
     } else if (env.state === 'no-conda') {
         text = 'Conda not found — needed for this plugin';
     } else {

@@ -235,6 +235,37 @@ class TestHookLoading:
             runner.fire("pre_chat", event)
             assert event.metadata.get("reached") is True
 
+    def test_hooks_from_one_file_share_its_state(self, temp_dirs, runner):
+        """tts_stream_start's state is tts_chunk_audio's: one module per file (2026-10-19,
+        FlashHead's ready flag never reached its chunk hook)."""
+        _make_plugin(temp_dirs["plugins"], "shared-hooks", {
+            "name": "shared-hooks",
+            "version": "1.0.0",
+            "capabilities": {
+                "hooks": {
+                    "tts_stream_start": "hooks/voice.py",
+                    "tts_chunk_audio": "hooks/voice.py",
+                }
+            }
+        }, hooks_code={
+            "voice.py": "seen = {'ok': False}\n"
+                        "def tts_stream_start(event): seen['ok'] = True\n"
+                        "def tts_chunk_audio(event): event.metadata['saw'] = seen['ok']\n"
+        })
+        temp_dirs["plugins_json"].write_text(
+            json.dumps({"enabled": ["shared-hooks"]}), encoding="utf-8"
+        )
+        loader = PluginLoader()
+        with patch("core.plugin_loader.SYSTEM_PLUGINS_DIR", temp_dirs["plugins"]), \
+             patch("core.plugin_loader.USER_PLUGINS_DIR", temp_dirs["user_plugins"]), \
+             patch("core.plugin_loader.USER_PLUGINS_JSON", temp_dirs["plugins_json"]), \
+             patch("core.plugin_loader.hook_runner", runner):
+            loader.scan()
+            runner.fire("tts_stream_start", HookEvent())
+            event = HookEvent()
+            runner.fire("tts_chunk_audio", event)
+            assert event.metadata.get("saw") is True
+
     def test_voice_command_registers_as_pre_chat(self, temp_dirs, runner):
         _make_plugin(temp_dirs["plugins"], "stop", {
             "name": "stop",

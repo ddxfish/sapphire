@@ -71,7 +71,8 @@ class StreamingTTSPump:
             `skip_tts` to take the chunk (sent elsewhere): not emitted
             here, counted as voiced, no drop notice. metadata
             also has: `chunk_index`, `chunk_text`, `boundary`,
-            `pause_after_ms`, `stream_id`.
+            `pause_after_ms`, `stream_id`, `plays_here` (False on a
+            device or phone lane: the audio is already going elsewhere).
         tts_stream_end:   once per turn. metadata: `chunk_count`,
             `total_chars`, `interrupted`, `stream_id`. Observational.
     """
@@ -222,6 +223,7 @@ class StreamingTTSPump:
                     "voice": getattr(self.tts, "voice_name", None),
                     "speed": getattr(self.tts, "speed", None),
                     "stream_id": self._stream_id,
+                    "plays_here": self._plays_here,
                     "system": self.system,
                 },
             )
@@ -669,6 +671,7 @@ class StreamingTTSPump:
                 "boundary": meta["boundary"],
                 "pause_after_ms": meta["pause_after_ms"],
                 "audio": carrier,
+                "plays_here": self._plays_here,
                 "system": self.system,
             },
         )

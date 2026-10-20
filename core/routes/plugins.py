@@ -1558,6 +1558,9 @@ async def build_plugin_env(plugin_name: str, _=Depends(require_login)):
     env_spec = info.get("manifest", {}).get("environment")
     if not env_spec:
         raise HTTPException(status_code=400, detail=f"{plugin_name} declares no environment")
+    why = plugin_envs.platform_refusal(info.get("manifest", {}))
+    if why:
+        raise HTTPException(status_code=400, detail=why)
     if not plugin_envs.find_conda():
         raise HTTPException(status_code=400, detail=(
             "conda not found — install Miniconda to build plugin environments"))

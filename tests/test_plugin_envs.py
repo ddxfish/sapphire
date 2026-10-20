@@ -132,3 +132,14 @@ def test_real_env_build_and_reuse():
     # touching the env on disk.
     assert plugin_envs.env_status(TEST_PLUGIN, {"python": "3.12", "pip": ["six"]}) == "stale"
     assert plugin_envs.env_status(TEST_PLUGIN, TEST_SPEC) == "ready"
+
+
+def test_platform_refusal(monkeypatch):
+    from core import plugin_envs
+    monkeypatch.setattr(plugin_envs.sys, "platform", "darwin")
+    assert plugin_envs.platform_refusal({}) == ""
+    assert plugin_envs.platform_refusal({"platforms": []}) == ""
+    assert plugin_envs.platform_refusal({"platforms": ["darwin", "linux"]}) == ""
+    why = plugin_envs.platform_refusal({"platforms": ["linux", "win32"]})
+    assert why == "Not available on macOS: runs on Linux, Windows"
+    assert plugin_envs.platform_refusal({"platforms": "linux"}) == ""      # not a list: ignored, never a lockout

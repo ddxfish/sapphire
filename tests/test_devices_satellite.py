@@ -163,15 +163,27 @@ def test_listen_transcribes_what_the_room_said(pi):
          patch.object(voice, 'transcribe', return_value=('what time is it', '')) as stt:
         assert run('mic', 'listen', '10') == ('Heard: "what time is it"', True)
     stt.assert_called_once_with(b'RIFFfake-wav')
-    assert pi[0].path == '/audio/listen?vad=true&max_seconds=10' and pi[0].kw['timeout'] == 22
+    heard = [c for c in pi if c.path.startswith('/audio/listen')]
+    assert heard[0].path == '/audio/listen?vad=true&max_seconds=10' and heard[0].kw['timeout'] == 22
     with patch.object(voice, 'stt_refusal', return_value=''), \
          patch.object(voice, 'transcribe', return_value=('', '')):
         assert run('mic', 'listen') == ('Listened, and heard no speech.', True)
-    assert pi[1].path.endswith('max_seconds=15')
+    assert [c for c in pi if c.path.startswith('/audio/listen')][1].path.endswith('max_seconds=15')
     with patch.object(voice, 'stt_refusal', return_value=''), \
          patch.object(voice, 'transcribe', return_value=('', '')):
         run('mic', 'listen', '9999')
-    assert pi[2].path.endswith('max_seconds=60')
+    assert [c for c in pi if c.path.startswith('/audio/listen')][2].path.endswith('max_seconds=60')
+
+
+def test_listen_waits_out_what_the_board_still_has_to_say(pi):
+    REAL[('GET', '/health')] = {**REAL.get(('GET', '/health'), {}), 'sound': {'queued_kb': 625}}   # 20 s queued at 32 KB/s
+    try:
+        with patch.object(voice, 'stt_refusal', return_value=''), \
+             patch.object(voice, 'transcribe', return_value=('', '')):
+            run('mic', 'listen', '10')
+    finally:
+        REAL[('GET', '/health')].pop('sound')
+    assert [c for c in pi if c.path.startswith('/audio/listen')][0].kw['timeout'] == 42
 
 
 def test_a_private_chat_never_opens_the_mic(pi):

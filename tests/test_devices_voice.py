@@ -775,3 +775,21 @@ def test_the_zone_is_posix_for_a_small_board():
     with patch('builtins.open', side_effect=OSError):                  # no zone file: the plain offset
         plain = voice.local_tz()
     assert plain[:1].isalpha() and plain[-1].isdigit()
+
+
+def test_a_stop_asked_during_say_all_stops_every_device():
+    import time
+    from unittest.mock import patch
+    from core.devices import voice as v
+    v._announcing.clear()
+    v._announcing['board-a'] = time.monotonic() + 30
+    v._announcing['board-b'] = time.monotonic() + 30
+    with patch.object(v, 'stop_all') as everywhere, patch.object(v, 'interrupt', return_value=False):
+        assert v._ask_stop({'id': 'board-a'}) == (True, 'Stopped everywhere')
+        time.sleep(0.1)
+        everywhere.assert_called_once_with(but='board-a')
+        assert v._ask_stop({'id': 'board-b'}) == (True, 'Nothing to stop')     # one stop is enough: the rest were told
+    v._announcing['board-a'] = time.monotonic() - 1                            # its sound is long over
+    with patch.object(v, 'stop_all') as everywhere, patch.object(v, 'interrupt', return_value=True):
+        assert v._ask_stop({'id': 'board-a'}) == (True, 'Stopped')
+        everywhere.assert_not_called()

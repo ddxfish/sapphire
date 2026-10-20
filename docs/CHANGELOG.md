@@ -1,3 +1,5 @@
+# 2.15.2 - Avatar
+- Core reworks for flashhead on devices
 # 2.15.1 - Wakeword Expansions
 - Settings > Wakeword - new library
 - Device Manager can read wakeword library

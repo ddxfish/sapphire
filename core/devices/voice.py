@@ -85,6 +85,7 @@ _speaking_for = contextvars.ContextVar('device_voice_chat_settings', default=Non
 _voice_for = contextvars.ContextVar('device_voice_own', default=None)      # {voice, speed, pitch} inside say(): a chat-room seat's own
 _lane = contextvars.ContextVar('device_voice_reply_lane', default=False)   # inside say(): the reply lane, not her tool call
 _lock = threading.Lock()
+_announcing = {}           # device id -> until when a say_all plays there (monotonic)
 _waiting = {}              # device id -> questions waiting or running
 _showing = {}              # device id -> the cue its light should show right now
 _listeners = {}            # device id -> [(loop, queue)] of open light streams
@@ -744,6 +745,10 @@ def say_all(text):
             return
         if not (isinstance(out, dict) and out.get('stopped')):
             said[device['id']] = 'said'
+            seconds = out.get('seconds') if isinstance(out, dict) else None
+            if isinstance(seconds, (int, float)):      # a board that answers when it has taken the sound plays on: a stop there asks us (_ask_stop)
+                with _lock:
+                    _announcing[device['id']] = time.monotonic() + seconds + 2
             return
         with _lock:
             lead = not first
@@ -836,8 +841,17 @@ def _ask_backup(row):
 
 
 def _ask_stop(row):
-    """She was stopped at the device (a tap, a button) with nothing playing to
-    refuse: the turn she is making for it ends, and the ones waiting."""
+    """She was stopped at the device (a tap, a button): the turn she is making
+    for it ends, and the ones waiting. During a say_all there, every other
+    device stops too, as a stop answered `stopped` does."""
+    with _lock:
+        until = _announcing.pop(row['id'], 0)
+        if until > time.monotonic():
+            _announcing.clear()
+    if until > time.monotonic():
+        threading.Thread(target=stop_all, kwargs={'but': row['id']}, daemon=True, name='stop-all-asked').start()
+        interrupt(row['id'])
+        return True, 'Stopped everywhere'
     return True, ('Stopped' if interrupt(row['id']) else 'Nothing to stop')
 
 

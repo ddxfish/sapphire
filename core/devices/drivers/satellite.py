@@ -169,7 +169,7 @@ WAITING = ("Waiting for the satellite to call in: its address is learned from th
            "Or type its address in Settings > Devices.")
 QUICK = 8                     # seconds for a plain request
 ABOUT_FRESH = 60              # seconds what a satellite said about itself is taken as true
-SPEAK_WAIT = 150              # the satellite answers only when it has finished playing
+SPEAK_WAIT = 150              # older boards answer when the sentence has played; 0.7.7+ when it is taken in
 LOOK_WAIT = 25                # a picture: 2 s of warning light and sound, then the shot
 ROOM_SPARE = 16 * 2**20       # the board wants this much left over (its own check before a PUT)
 STORE_WAIT = 120              # one blocked send or the answer after a 70 MB backup onto a card
@@ -1027,8 +1027,9 @@ def status(device, config, secrets):
 
 
 def play(audio, kind, device, config, secrets):
-    """Sound on the satellite, answered when it has finished playing: what the
-    satellite said back ({'ok', 'stopped'?}). A board that states the format
+    """Sound on the satellite: what it said back ({'ok', 'stopped'?}). Older
+    boards answer when it has played; 0.7.7+ once it is taken into the board's
+    play queue. A board that states the format
     it plays gets the sound itself, fitted; one that does not gets the file
     as it was made. Raises Unfit when the sound cannot be made to fit, Problem
     when the satellite could not play it. Core's voice lane calls this once
@@ -1148,18 +1149,36 @@ def screen_scene(config, secrets, name, w=0, h=0, data=None):
           data=data, headers={'Content-Type': 'application/octet-stream'})
 
 
+_stops = {}           # device id -> stops so far: a say sent sentence by sentence ends at the next one
+
+
 def _say(text, device, config, secrets):
+    """Said sentence by sentence, as a reply is: the board holds one sentence
+    of sound at a time (~47 s at most), and the first is heard while the rest
+    are made. A stop there ends what is left."""
     from core.devices import voice
+    from core.tts.streaming import chunkify_for_speech
     text = str(text or '').strip()
     if not text:
         return "say: the value is what to say. Example: Dinner is ready", True
-    audio, kind = voice.render(text)             # first: a refused voice asks the satellite nothing
-    if audio is None:
-        return f"Nothing was said: {kind}", False
-    try:
-        play(audio, kind, device, config, secrets)
-    except Unfit as e:
-        return f"Nothing was said: {e}", False
+    stops = _stops.get(device['id'], 0)
+    said = 0
+    for piece in chunkify_for_speech([text], max_chars=300, split_mode='sentence'):
+        if _stops.get(device['id'], 0) != stops:
+            break
+        audio, kind = voice.render(piece['text'])     # a refused voice asks the satellite nothing
+        if audio is None:
+            if said:
+                break
+            return f"Nothing was said: {kind}", False
+        try:
+            if play(audio, kind, device, config, secrets).get('stopped'):
+                break
+        except Unfit as e:
+            if said:
+                break
+            return f"Nothing was said: {e}", False
+        said += 1
     short = text if len(text) <= 80 else text[:77] + '...'
     return f'Said there: "{short}"', True
 
@@ -1169,6 +1188,7 @@ def _stop(device, config, secrets):
     (voice.halt), the satellite cuts what is playing (POST /audio/stop). A
     program without that door is said so; its current sentence ends itself."""
     from core.devices import voice
+    _stops[device['id']] = _stops.get(device['id'], 0) + 1
     more = voice.halt(device['id'])
     try:
         out = _json(_call('POST', '/audio/stop', config, secrets))
@@ -1253,8 +1273,12 @@ def _listen(value, config, secrets):
     gate = voice.stt_refusal()
     if gate:
         return f"Not listening: {gate}", False
+    try:                                     # 0.7.7+ listens once she is done: what it still has to say counts
+        ahead = _json(_call('GET', '/health', config, secrets)).get('sound', {}).get('queued_kb', 0) * 1024 / 32000
+    except Exception:
+        ahead = 0
     r = _call('GET', f'/audio/listen?vad=true&max_seconds={seconds}', config, secrets,
-              timeout=seconds + 12)
+              timeout=seconds + 12 + min(ahead, 60))
     heard, problem = voice.transcribe(r.content)
     if problem:
         return problem, False

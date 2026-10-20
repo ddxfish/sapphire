@@ -40,7 +40,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `volume`, `temp_c` | Optional readings |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` with a card in; a board with a slot but no card may say `{"mounted": false}` (the page then reads "card: none") and leaves `storage` out of `has` |
 | `sensors` | With `sensors` in `has`: the board's own sensors as `{"name": number}` (a light sensor's raw value, a battery). Each shows as a reading on the device's page |
-| `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes; with `chat` and `background`, the chat name and scene it shows now |
+| `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes, plus `"jpeg": true` when it also takes one JPEG; with `chat` and `background`, the chat name and scene it shows now |
 | `firmware`, `model`, `slot` | The program's version (`"0.3.0"`), which program it is (`"pocket"`, `"satellite"`: the firmware source's board id, so Sapphire knows what to send it), and the slot running it (`"ota_0"`). With `firmware` in `has` the board takes a new program over the air (below). A board with one program slot (a builder who kept the whole flash for the program, a small chip) leaves `firmware` out of `has`: the device then reads "updates: over USB only" and gets no Firmware tab. The person can also turn updates off per device in Sapphire (the Status tab's switch) whatever the board says |
 | `mac` | The chip's own id, `"aa:bb:cc:dd:ee:01"`. The flasher reads the same over USB: a board is known by it whatever it is called |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now. A ring that can be turned off for good adds `"off"` (true = dark through every state until it is turned on) and `"level"`, its own brightness in percent |
@@ -86,7 +86,7 @@ A board answers only the addresses of what it has.
 | `speaker` | `POST /audio/effect?name=ping` | Plays one stored sound |
 | `speaker` | `GET /volume` | `{"volume": 85}`, 0 to 100 |
 | `speaker` | `POST /volume?level=80` | Sets it, kept across restarts. A board without it answers 404. A board with volume buttons states `volume_step` in `/health` and takes `step=10` here too (1 to 50): what one press adds or takes, set per device in Settings > Devices |
-| `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav. A body may also take `lead_in` (seconds before the mic opens, default its own cue) and `tone=false` (no ping): the Wakeword Maker asks for `lead_in=0&tone=false` because it tells the person itself when to speak |
+| `mic` | `GET /audio/listen?vad=true&max_seconds=10` | Records until the speaker stops talking. Answers the recording as a wav. A board still saying something (its queue, Waveshare 0.7.7) waits until it is done, up to 10 s, before the mic opens. A body may also take `lead_in` (seconds before the mic opens, default its own cue) and `tone=false` (no ping): the Wakeword Maker asks for `lead_in=0&tone=false` because it tells the person itself when to speak |
 | `mic` | `POST /capture?seconds=36000&chunk=30&test=false`, `GET /capture`, `DELETE /capture` | The room in pieces: for `seconds` (up to a day) the board posts every `chunk` seconds (5 to 60) of its clean microphone stream to Sapphire's room door (below), from its own task, so its other doors keep answering and it keeps hearing its wake word; the wake fires that fell in each piece ride along with their scores. With `test=true` a fire is only counted: nothing is recorded or sent, so a candidate model is judged on a day of the room without her answering the television. Answers `{"ok": true, "capture": {...}}` (the same block as `capture` in `/health`); 409 while one goes on. `DELETE` ends it: what was gathered of the last piece is sent. A board without the door answers 404; the room watch then pulls `GET /audio/listen?vad=false` a minute at a time |
 | `mic` | `GET /mic`, `POST /mic?gain=36`, `POST /mic?agc=on`, `POST /mic?max_s=30` | The microphones' gain in dB (`gain_db`, `gain_max_db`), the board's automatic gain control, and `max_s`: the seconds at which a question is cut off however long the talk (5 to 60, kept). A board that takes `max_s` states it in `/health` as `mic.max_s`, and only such a board is sent it, when the device is saved. Optional: a body without the door answers 404 and the driver says so |
 | `light` | `POST /led` | `{"color", "animation", "duration_s"}`, or `{"state": "off"}`, or `{"state": "idle"}` |
@@ -107,7 +107,7 @@ A board answers only the addresses of what it has.
 | `storage` | `POST /storage/cancel` | Only a board whose `storage.can` lists `cancel`: the backup arriving now is dropped (the PUT is answered 409 "cancelled on the board"); 409 when none is. The Backups page on a CYD reader has the same button |
 | `screen` | `POST /screen` | `{"text", "seconds"}`: a line across the top of its screen for that long (20 s if left out), or `{"clear": true}`. Answers `{"ok": true, "seconds"}`. Her `screen` / `show` action |
 | `screen` | `POST /screen/calibrate` | Only a board that states `screen.calibrate` in `/health` (a resistive glass: the CYD 2.8): three crosses come up on the glass for 60 s and the calibration is kept on the board. Answers `{"ok": true, "seconds": 60}`; 400 on a glass that needs none. A board with no calibration kept shows the crosses by itself when it starts |
-| `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action |
+| `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action. A board saying `screen.jpeg` also takes `?format=jpeg` with one JPEG as the body (`image/jpeg`; width and height multiples of 16, up to the glass), and answers `took_ms` (`recv`, `wait`, `decode`, `show`); the last picture stays up until the next is whole, so pictures sent in a row play as frames (a face plugin). A tap on a face while she talks hides it until her reply ends; meanwhile its frames are answered `{"ok": true, "hidden": true}` and not decoded |
 | `screen` | `POST /screen/background?w=&h=&name=` | The scene behind its clock: the body is `w` x `h` pixels of RGB565, big-endian, cropped by Sapphire to fill the glass; `name` is the scene's name and comes back in `/health` as `screen.background`. `{"clear": true}` as JSON takes it away. Sapphire sends it when the board links, and when its chat or that chat's scene changes (`core/devices/glass.py`). A board that states no `screen.background` in `/health` is sent no scene (a text-only glass). |
 | `screen` | `POST /screen` with `{"chat", "brain", "trim"}` | The chat the board talks in: its name, shown on the glass (`""` hides it), the name of the model that answers in it, and its trim color `"#rrggbb"` (`""` = none). They come back as `screen.chat`, `.brain`, `.trim`; only the ones a board states are compared. A board that states no `screen.chat` in `/health` is sent neither the name nor a scene. A private chat is never named or pictured. |
 | `screen` | `PUT /screen/settings` | `{"brightness", "dim", "dim_after_s", "off_after_min", "flip", "home"}`, any of them (`home` is the page a board with pages opens on: `chat`, `backups`, `status`, `board`, `actions`; it comes back as `screen.home`): the backlight in use and when left alone (percent), when it dims (seconds, 0 = never) and when it goes dark (minutes, 0 = never), and `flip` (true or false) to turn the picture and its touch 180 degrees, or `rotation` (0, 90, 180 or 270, on a board that states `screen.rotation`: the CYD readers) to turn them any way, `w` and `h` in `/health` following, and `invert` and `mirror` (true or false, on a board that states them: the CYD readers from 0.5.1) for a glass variant that draws in negative or scans the other way; those two take effect at once, no restart. A board with only `flip` (the backup stick) or `rotation` answers `{"flip" or "rotation", "restarting"}` and restarts to draw that way; it refuses with 409 while its card is being written. Kept on the board across a restart; `/health` states them in `screen`. Sent when the device is saved. |
@@ -118,7 +118,14 @@ A board answers only the addresses of what it has.
 
 **`/audio/speak`** carries the sound as the request body, with its
 `Content-Type`, when the board stated `plays`. The board can play it while it
-arrives.
+arrives, or take it whole first and play it from memory (Waveshare 0.7.7: its
+`/health` then says `sound: {"queued_kb", "late_count", "late_total_ms",
+"late_last_ms", "heals", "heal_last"}`, where late is playing longer than the
+sound is long, and a heal is a sound chip found reset and set up again before a
+sentence). Either way it answers once the sound is taken. A board that keeps a
+queue and has no room holds its answer until there is (Waveshare: while what is
+queued plays, plus 10 s), so a reply made faster than she speaks waits at the
+door; a stop meanwhile answers it `stopped`.
 
 **Her reply comes one sentence at a time.** While she is still writing, each
 finished sentence is rendered, trimmed to a breath of silence at each end
@@ -356,9 +363,11 @@ answered `{"ok": true, "accepted": true, "job": "stop", "said": "Stopped"}`.
 
 - `stop`: she was stopped at the board (a tap, a button) while her turn was
   going on. Sapphire ends that turn, spoken and written, and drops the
-  questions from that board still waiting behind it. A board that only cut
-  the sound playing has no need to ask: the next sentence it answers
-  `stopped` says the same. The wake word said over her needs no ask either:
+  questions from that board still waiting behind it. A board whose speak
+  answers once the sound is taken (a play queue) asks too when it cut sound
+  with no turn going on (an announcement): that sound was answered long ago,
+  so nothing else would tell Sapphire. A board that answers when the sound has
+  played needs no ask for that: the sentence it answers `stopped` says the same. The wake word said over her needs no ask either:
   claiming the wake ends her turn.
 - `backup`: a fresh backup, sealed, onto that board's own card.
 

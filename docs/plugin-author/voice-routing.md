@@ -14,7 +14,7 @@ No core change, no double voice.
 | The reply text, once | `post_llm` | after the LLM, before save | `response` |
 | The spoken text, cleaned the way she'd say it | `pre_tts` | before whole-blob speech: the speakers, satellites, the browser's non-streaming playback, Telegram voice notes | `tts_text` |
 | Sentence-sized text as it is made | `tts_chunk_text` | streaming TTS, per chunk, before synth | `tts_text` |
-| **Her audio**, sentence by sentence | `tts_chunk_audio` | streaming TTS, per chunk, after synth | `metadata['audio']['audio_bytes']`, `['content_type']`, `metadata['chunk_text']` |
+| **Her audio**, sentence by sentence | `tts_chunk_audio` | streaming TTS, per chunk, after synth | `metadata['audio']['audio_bytes']`, `['content_type']`, `metadata['chunk_text']`, `metadata['plays_here']` |
 | Turn boundaries | `tts_stream_start`, `tts_stream_end` | once per streaming turn | `metadata['stream_id']` |
 
 Audio exists only on the streaming lane (Kokoro or Piper, Settings > Voice > Streaming on). Say so in your plugin's README. If your avatar does its own TTS from text, `post_llm` alone is enough and you never touch the TTS hooks. Full hook reference: [Hooks](hooks.md#streaming-tts-hooks).
@@ -33,7 +33,7 @@ A plugin that wants local speech as the fallback when the avatar is down decides
 
 - `pre_tts`: `event.skip_tts = True` cancels whole-blob speech. Handlers that ran before yours still saw the text.
 - `tts_stream_start`: `skip_tts` cancels the whole streaming turn before any synth. It fires at her first token, so decide from the last webhook result or a health ping; `post_llm` has not fired yet.
-- `tts_chunk_audio`: `event.skip_tts = True` after you forwarded the bytes. The chunk is **consumed**: not played here, counted as voiced, no "couldn't be voiced" notice. Nulling `audio_bytes` instead means *dropped* and raises that notice.
+- `tts_chunk_audio`: `event.skip_tts = True` after you forwarded the bytes. Take only when `metadata['plays_here']` is true: false means the chunk is already on its way to a satellite or a phone, and taking it silences that device. You may still read the bytes there (an avatar can mouth along). The chunk is **consumed**: not played here, counted as voiced, no "couldn't be voiced" notice. Nulling `audio_bytes` instead means *dropped* and raises that notice.
 
 ## Example: an avatar plugin
 
@@ -68,7 +68,7 @@ def tts_chunk_audio(event):
         r = requests.post(f"{AVATAR}/say", data=audio["audio_bytes"],
                           params={"text": event.metadata["chunk_text"]},
                           headers={"Content-Type": audio["content_type"]}, timeout=2)
-        event.skip_tts = r.ok          # the avatar has it: not played here
+        event.skip_tts = r.ok and event.metadata.get("plays_here", True)   # took it, unless it is a device's voice
     except Exception:
         pass                           # avatar down: plays here as usual
 

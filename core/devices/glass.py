@@ -196,3 +196,49 @@ def start():
         _worker = threading.Thread(target=_work, daemon=True, name='device-glass')
         _worker.start()
         get_event_bus().on(_EVENTS, lambda event: _dirty.set())
+
+
+# --- a face on the glass ------------------------------------------------------
+# For a plugin that paints moving frames (FlashHead): in-process only, no door
+# of its own; each board is reached with its own secrets, as every call is.
+
+_faces = {}                   # device id -> (config, secrets): face_boards() keeps them for face_frame()
+
+
+def face_boards():
+    """Every enabled satellite whose glass is on and takes a JPEG frame
+    (firmware 0.7.7+): [(device id, side)], side the largest square it paints,
+    a multiple of 16. Each board's /health is asked at most once a minute."""
+    from core.devices import engine
+    from core.devices.drivers import satellite
+    out, keep = [], {}
+    for row in engine.rows().values():
+        part = engine._part(row, 'satellite')
+        if not part or not row.get('enabled', True):
+            continue
+        try:
+            config, secrets = part.get('config') or {}, engine._part_secrets(row['id'], 'satellite')
+            screen = satellite._health(row, config, secrets).get('screen') or {}
+        except Exception:
+            continue
+        side = min(int(screen.get('w') or 0), int(screen.get('h') or 0)) // 16 * 16
+        if screen.get('jpeg') and screen.get('on', True) and side >= 64:
+            out.append((row['id'], side))
+            keep[row['id']] = (config, secrets)
+    with _lock:
+        _faces.clear()
+        _faces.update(keep)
+    return out
+
+
+def face_frame(device_id, jpeg, seconds=3):
+    """One JPEG frame (the size face_boards() said) painted straight onto that
+    board's glass; the board's own page comes back `seconds` after the last.
+    Raises when the board did not take it."""
+    from core.devices.drivers import satellite
+    with _lock:
+        known = _faces.get(device_id)
+    if known is None:
+        raise LookupError(f"{device_id} is not a face board (face_boards() first)")
+    satellite._call('POST', f'/screen/picture?format=jpeg&seconds={int(seconds)}', *known,
+                    timeout=5, data=jpeg, headers={'Content-Type': 'image/jpeg'})

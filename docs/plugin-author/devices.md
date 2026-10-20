@@ -326,6 +326,21 @@ Anything outside those limits is dropped. Name the capability `camera` and the
 action `look` so every camera reads the same to her. Warn the room before you
 capture: a light, a sound, or both.
 
+## Moving pictures on a board's glass
+
+A plugin that paints frames on a satellite's screen (FlashHead puts her talking
+face there) uses two in-process calls in `core.devices.glass`, never the
+driver's private ones. There is no door for it: each board is reached with its
+own secrets, as every call is.
+
+- `face_boards()` returns `[(device_id, side)]`: every enabled satellite whose
+  glass is on and takes a JPEG frame (firmware 0.7.7+, `screen.jpeg` in its
+  `/health`). `side` is the largest square it paints, a multiple of 16.
+- `face_frame(device_id, jpeg, seconds=3)` paints one JPEG of that size straight
+  to the panel. The board's own page comes back `seconds` after the last frame.
+  It raises when the board did not take it. Send the newest frame only: a small
+  board paints about 8 a second.
+
 ## Voice: a device with a microphone or a speaker
 
 Core's voice pipeline uses devices through a few conventions. Follow them and

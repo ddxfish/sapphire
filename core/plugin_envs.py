@@ -154,6 +154,21 @@ def _write_receipt(plugin_name: str, env_spec: dict):
     (prefix / RECEIPT_NAME).write_text(json.dumps(receipt, indent=2), encoding='utf-8')
 
 
+_PLATFORMS = {"linux": "Linux", "win32": "Windows", "darwin": "macOS"}
+
+
+def platform_refusal(manifest: dict) -> str:
+    """'' when the plugin runs on this system, else why not, in words. A
+    manifest's top-level `platforms` lists the sys.platform names it runs on
+    (["linux", "win32"]); none listed = everywhere. Asked before any env build
+    or service start, so nothing is downloaded where it cannot run."""
+    allowed = manifest.get("platforms") if isinstance(manifest, dict) else None
+    if not isinstance(allowed, list) or not allowed or sys.platform in allowed:
+        return ""
+    names = ", ".join(_PLATFORMS.get(str(a), str(a)) for a in allowed)
+    return f"Not available on {_PLATFORMS.get(sys.platform, sys.platform)}: runs on {names}"
+
+
 def build_state(plugin_name: str) -> dict:
     """Current build registry entry for a plugin (empty dict if never built this boot)."""
     with _builds_lock:
