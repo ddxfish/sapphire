@@ -1,3 +1,7 @@
+# 2.15.3 - Kokoro and TLS
+- Added TLS support to kokoro endpoints
+- Plugins enabled have an optional modal popup
+- Plugins can handle skipping environment builds
 # 2.15.2 - Avatar
 - Core reworks for flashhead on devices
 # 2.15.1 - Wakeword Expansions
