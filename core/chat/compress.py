@@ -339,11 +339,21 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
                            f"(chat '{_job.get('chat')}')")
         _job = {"running": True, "done": False, "chat": chat_name,
                 "mode": mode, "started": datetime.now().isoformat()}
+    # One row in the notification center (core/notify.py). Never the chat's
+    # name: a private chat's name stays off every tab's wire, and a failure's
+    # words are kept generic for one.
+    from core import notify as _notify
+    try:
+        _priv = bool((session_manager.read_chat_settings(chat_name) or {}).get("private_chat"))
+    except Exception:
+        _priv = True
+    nid = _notify.begin(f"Compressing a chat ({mode})", key='compress', go={'view': 'chat-manage'})
 
     def _run():
         def on_progress(msg):
             with _job_lock:
                 _job["progress"] = msg
+            _notify.tick(nid, text=msg)
 
         try:
             report = _compress_chat(session_manager, chat_name, mode,
@@ -355,10 +365,14 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
                              "result": report,
                              "finished": datetime.now().isoformat()})
             logger.info(f"Compress '{chat_name}' done: {report}")
+            _notify.finish(nid, title=f"Chat compressed: {report.get('messages_before')} to "
+                                      f"{report.get('messages_after')} messages")
             publish(Events.CHAT_COMPRESSED, {"chat_name": chat_name,
                                              "report": report})
         except Exception as e:
             logger.exception(f"Compress '{chat_name}' failed")
+            _notify.finish(nid, failed=True, title='Chat compression failed',
+                           body='See the log.' if _priv else str(e))
             with _job_lock:
                 _job.update({"running": False, "done": True, "ok": False,
                              "error": str(e),

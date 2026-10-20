@@ -32,6 +32,7 @@ def n(tmp_path, monkeypatch, bus):
     monkeypatch.setattr(notify, '_last_tick', {})
     monkeypatch.setattr(notify, '_loaded', False)
     monkeypatch.setattr(notify, '_hooked', False)
+    monkeypatch.setattr(notify, '_boot_results', lambda: None)   # the dev box has real result files
     return notify
 
 
@@ -248,3 +249,47 @@ class TestLogRows:
         n.notify('i2', 'info')
         left = {r['id'] for r in n.rows()}
         assert {e1, w1, e2} <= left and len(left) == 4
+
+
+class TestWave5:
+    def test_once_posts_one_row_ever(self, n):
+        a = n.notify('Updated to v2', 'success', key='update-result:1', once=True)
+        n.mark_read(a)
+        assert n.notify('Updated to v2', 'success', key='update-result:1', once=True) == a
+        assert n.get(a)['read'] is True and len(n.rows()) == 1
+
+    def test_finish_carries_the_origin(self, n, seen):
+        rid = n.begin('install')
+        n.finish(rid, title='installed', origin='tab-1')
+        assert seen[-1]['data']['origin'] == 'tab-1' and seen[-1]['data']['title'] == 'installed'
+
+    def test_restart_row_becomes_restarted_at_boot(self, n):
+        n.restarting('applying the update')
+        dl = n.begin('a download')
+        n._loaded = False
+        n._rows.clear()
+        n._load()
+        rows = {r['key']: r for r in n.rows()}
+        assert rows['restart']['state'] == 'done' and rows['restart']['title'] == 'Restarted'
+        assert rows['restart']['body'] == 'Restarting: applying the update'
+        assert n.get(dl)['state'] == 'failed' and n.get(dl)['body'] == 'Interrupted by a restart.'
+
+    def test_boot_results_pass_errors_through_once(self, n, monkeypatch):
+        import core.updater as up, core.gpu_install as gi, core.restore as rs
+        monkeypatch.setattr(up, 'read_last_update_result', lambda clear=False: {'success': False, 'message': 'git fetch timed out', 'timestamp': 1700000000})
+        monkeypatch.setattr(gi, 'last_result', lambda: {'ok': True, 'index': 'cu124', 'message': 'installed', 'at': '2026-10-20 10:00:00'})
+        monkeypatch.setattr(rs, 'read_restore_result', lambda clear=False: {'ok': True, 'source': 'backup:sapphire_x.tar.gz', 'ts': '2026-10-20_100000'})
+        live = getattr(n, '_boot_results_live', n._boot_results)
+        live()
+        live()                                              # a second boot with the same files: nothing new
+        rows = sorted(n.rows(), key=lambda r: r['title'])
+        assert [r['title'] for r in rows] == ['GPU torch installed (cu124)', 'Restored from backup:sapphire_x.tar.gz', 'Update failed']
+        assert {r['level'] for r in rows} == {'success', 'error'}
+        assert n.get(rows[2]['id'])['body'] == 'git fetch timed out' and n.counts()['red'] == 1
+
+    def test_ship_failed_alert_is_not_a_second_row(self, n, bus):
+        n.init()
+        bus.publish('sapphire_health_alert', {'type': 'backup_ship_failed', 'target': 'pi', 'reason': 'no card'})
+        assert n.rows() == []
+        bus.publish('sapphire_health_alert', {'type': 'backup_ship_refused', 'reason': 'no targets'})
+        assert n.rows()[0]['level'] == 'error'

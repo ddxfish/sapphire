@@ -1,4 +1,5 @@
 // settings-tabs/plugins.js - Plugin Manager
+import { flash } from '../../shared/notify.js';
 import * as ui from '../../ui.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { setupModalClose } from '../../shared/modal.js';
@@ -976,7 +977,7 @@ export default {
                     urlInput.value = '';
                     await ctx.refreshTab();
                 } catch (err) {
-                    ui.showToast(`Install failed: ${err.message}`, 'error', 5000);
+                    flash(`Install failed: ${err.message}`, 'error', 5);   // the server's row is the record
                 } finally {
                     installUrlBtn.disabled = false;
                     installUrlBtn.textContent = 'Install';
@@ -1015,7 +1016,7 @@ export default {
                     fileInput.value = '';
                     await ctx.refreshTab();
                 } catch (err) {
-                    ui.showToast(`Install failed: ${err.message}`, 'error', 5000);
+                    flash(`Install failed: ${err.message}`, 'error', 5);   // the server's row is the record
                 } finally {
                     installFileBtn.disabled = false;
                     installFileBtn.textContent = 'Upload';

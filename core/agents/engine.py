@@ -565,6 +565,16 @@ class AgentManager:
                 self.report_out(agent, f"[{agent.name} finished without an answer: {_short(why, 300)}]")
             except Exception as e:
                 logger.debug(f"[AGENTS] empty-finish notice for {agent.name} not sent: {e}")
+        if status in ('failed', 'lost') and not self._hidden(agent.chat):
+            # a row in the notification center (core/notify.py); a sealed
+            # chat's agent stays off every wire, so no row at all for one
+            try:
+                from core.notify import notify as _notify
+                _notify(f"Agent {agent.name} {status}", 'error',
+                        _short(agent.error or ('its process vanished' if status == 'lost' else 'unknown error'), 300),
+                        source='agents', key=f"agent:{agent.id}", go={'view': 'chat'})
+            except Exception as e:
+                logger.debug(f"[AGENTS] notification for {agent.name} not posted: {e}")
         if not self._hidden(agent.chat):
             publish(Events.AGENT_COMPLETED, {
                 'id': agent.id, 'name': agent.name, 'status': status, 'elapsed': agent.elapsed,

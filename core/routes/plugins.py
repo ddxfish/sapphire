@@ -1008,6 +1008,14 @@ def install_plugin(
 
     tmp_zip = None
     tmp_dir = None
+    # One row in the notification center from the download to the rescan
+    # (core/notify.py). The installing tab flashes its own words and skips the
+    # end's echo (origin); every other tab hears it.
+    from core import notify as _notify
+    from core.request_context import session_origin
+    _origin = session_origin.get()
+    nid = _notify.begin(f"Installing a plugin from {'an upload' if file else (url or '').strip()[:80]}",
+                        go={'view': 'settings', 'tab': 'plugins'})
     try:
         # ── Download or receive zip ──
         url_install_method = None  # 'github_url' | 'gitlab_url' | 'zip_url' (set below)
@@ -1077,6 +1085,7 @@ def install_plugin(
                     if downloaded > MAX_ZIP_SIZE:
                         raise HTTPException(status_code=400, detail="Zip exceeds 50MB limit")
                     f.write(chunk)
+                    _notify.tick(nid, done=downloaded, total=content_length or None)
         else:
             # File upload — streamed in chunks with a running cap. The old
             # `await file.read()` pulled the ENTIRE upload into one bytes
@@ -1274,16 +1283,8 @@ def install_plugin(
         # ── Sync active toolset so new tools are immediately available ──
         _sync_toolset_after_change("plugin_install")
 
-        # A row in the notification center. The installing tab already flashed
-        # its own words, so it skips this echo (origin); every other tab hears.
-        try:
-            from core.notify import notify as _notify
-            from core.request_context import session_origin
-            _notify(f"Plugin '{name}' {'updated' if is_update else 'installed'} (v{version})", 'success',
-                    source=name, key=f"plugin-install:{name}", go={'view': 'settings', 'tab': 'plugins'},
-                    origin=session_origin.get())
-        except Exception:
-            pass
+        _notify.finish(nid, title=f"Plugin '{name}' {'updated' if is_update else 'installed'} (v{version})",
+                       origin=_origin)
 
         return {
             "status": "ok",
@@ -1295,10 +1296,12 @@ def install_plugin(
             "prev_kept": is_update,
         }
 
-    except HTTPException:
+    except HTTPException as e:
+        _notify.finish(nid, failed=True, title='Plugin install failed', body=str(e.detail), origin=_origin)
         raise
     except Exception as e:
         logger.error(f"[PLUGINS] Install failed: {e}", exc_info=True)
+        _notify.finish(nid, failed=True, title='Plugin install failed', body=str(e), origin=_origin)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Cleanup temp files

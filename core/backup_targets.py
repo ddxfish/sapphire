@@ -214,11 +214,16 @@ def _ship_locked(filename, plain, tl):
     if any(t.wants_encryption for t in tl):
         sealed, cleanup = backup_manager.sealed(filename)
     results, rlock = [], threading.Lock()
+    from core import notify as _notify
+    nid = _notify.begin(f"Sending backup {filename} to {len(tl)} device{'s' if len(tl) != 1 else ''}",
+                        key=f"ship:{filename}", go={'view': 'settings', 'tab': 'backup'})
 
     def _run(t):
         r = _ship_one(t, plain, sealed)
         with rlock:
             results.append(r)
+            n = len(results)
+        _notify.tick(nid, done=n, total=len(tl), text=f"{r.get('target', '')}: {r.get('msg', '')}"[:200])
 
     threads = [threading.Thread(target=_run, args=(t,), daemon=True,
                                 name=f"ship-{t.kind}") for t in tl]
@@ -235,6 +240,15 @@ def _ship_locked(filename, plain, tl):
     for r in results:                      # a failed target is loud, not a log line
         if not r.get("ok"):
             backup_manager._alert('backup_ship_failed', target=r.get("target", ""), reason=r.get("msg", ""))
+    bad = [r for r in results if not r.get("ok")]
+    late = [t.label for t, th in zip(tl, threads) if th.is_alive()]
+    if bad or late:
+        _notify.finish(nid, failed=True,
+                       title=f"Backup not sent to {', '.join([r.get('target', '?') for r in bad] + late)}",
+                       body='; '.join([f"{r.get('target', '')}: {r.get('msg', '')}" for r in bad]
+                                      + [f"{x}: still sending after {SHIP_WAIT}s" for x in late]))
+    else:
+        _notify.finish(nid, title=f"Backup sent to {', '.join(r.get('target', '?') for r in results)}")
     return results
 
 

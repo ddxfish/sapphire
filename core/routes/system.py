@@ -81,6 +81,8 @@ async def gpu_install_request(request: Request, _=Depends(require_login)):
     if not callback:
         raise HTTPException(status_code=503, detail="Restart is not available in this run mode.")
     gpu_install.request(p['index'])
+    from core import notify as _notify
+    _notify.restarting(f"installing GPU torch ({p['index']})")
     callback()
     return {"status": "restarting", "index": p['index']}
 
@@ -232,6 +234,8 @@ def _schedule_restart():
             cb()
         except Exception:
             pass
+    from core import notify as _notify
+    _notify.restarting("applying a restore")
     asyncio.create_task(_delayed())
 
 
@@ -818,6 +822,8 @@ async def request_system_restart(request: Request, _=Depends(require_login)):
     callback = get_restart_callback()
     if not callback:
         raise HTTPException(status_code=503, detail="Restart not available")
+    from core import notify as _notify
+    _notify.restarting("asked from Settings")
     callback()
     return {"status": "restarting", "message": "Restart initiated"}
 
@@ -897,6 +903,8 @@ async def do_update(request: Request, _=Depends(require_login)):
             callback()
         except Exception:
             pass
+    from core import notify as _notify
+    _notify.restarting("applying the update")
     asyncio.create_task(_delayed_restart())
 
     return {"status": "scheduled", "message": message}

@@ -324,6 +324,14 @@ class Backup:
         partial = out_dir / (filename + ".partial")
         staging_dir = None
         plain_done = None   # the finished plaintext tar, once renamed
+        # One row in the notification center (core/notify.py). The tab that
+        # clicked Create flashes its own words and skips the echo (origin);
+        # the 3am run has no tab, every tab hears it.
+        from core import notify as _notify
+        from core.request_context import session_origin
+        _origin = session_origin.get()
+        nid = _notify.begin(f"Making a {backup_type} backup", key=f"backup:{backup_type}",
+                            go={'view': 'settings', 'tab': 'backup'})
 
         try:
             # Checkpoint SQLite WAL files before backup. DBs whose checkpoint
@@ -398,6 +406,8 @@ class Backup:
                             logger.warning(f"Backup skipping unreadable file {ti.name}: {pe}")
                             return None
                     kept_files[0] += 1
+                    if kept_files[0] % 200 == 0:
+                        _notify.tick(nid, text=f"{kept_files[0]} files so far")
                 return ti
             user_root = self.user_dir.resolve()
             with tarfile.open(partial, "w:gz") as tar:
@@ -425,6 +435,8 @@ class Backup:
                 # would then keep while aging out the good ones. War-campaign fix A.
                 logger.error("Backup aborted: 0 files after exclusions — "
                              "check BACKUPS_EXCLUDE_PATTERNS")
+                _notify.finish(nid, failed=True, title='Backup failed',
+                               body='0 files after exclusions. Check the exclude patterns.', origin=_origin)
                 try:
                     partial.unlink()
                 except OSError:
@@ -453,12 +465,14 @@ class Backup:
 
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info(f"Created backup: {filename} ({size_mb:.2f} MB)")
+            _notify.finish(nid, title=f"Backup created: {filename} ({size_mb:.0f} MB)", origin=_origin)
             if dest_dir is None:
                 self.ensure_openers()
             return filename
         except Exception as e:
             logger.error(f"Backup failed: {e}")
             self.last_backup_error = str(e)
+            _notify.finish(nid, failed=True, title='Backup failed', body=str(e), origin=_origin)
             if staging_dir is not None:
                 shutil.rmtree(staging_dir, ignore_errors=True)
             if encrypt and plain_done is not None:

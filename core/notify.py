@@ -90,7 +90,11 @@ def _load():
         for r in (data if isinstance(data, list) else []):
             if not isinstance(r, dict) or not r.get('id'):
                 continue
-            if r.get('state') == 'active':           # work the last process never finished
+            if r.get('state') == 'active' and r.get('key') == 'restart':
+                # the restart row (restarting()): this boot IS its ending
+                r.update(state='done', level='success', body=r.get('title') or '', title='Restarted',
+                         updated=time.time(), read=False)
+            elif r.get('state') == 'active':         # work the last process never finished
                 r.update(state='failed', level='warning', body='Interrupted by a restart.',
                          updated=time.time(), read=False)
                 swept += 1
@@ -125,10 +129,12 @@ def _prune_locked():
 
 
 def notify(title, level='info', body='', source='core', go=None, key=None,
-           private=False, origin=None, state='open', progress=None):
+           private=False, origin=None, state='open', progress=None, once=False):
     """A row, and the toast its level earns. Returns the row id, or None for a
     flash (private=True). A key makes the row re-fire instead of piling up:
-    the row with that key is updated, marked unread and moved to the front."""
+    the row with that key is updated, marked unread and moved to the front.
+    once=True with a key: if that row already exists, nothing happens (a boot
+    result that must post one time ever)."""
     level = level if level in LEVELS else 'info'
     title = _text(title, TITLE_MAX).strip() or 'Notification'
     body = _text(body, BODY_MAX)
@@ -142,6 +148,8 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
         if key:
             key = _text(key, KEY_MAX)
             row = next((r for r in _rows.values() if r.get('key') == key), None)
+            if row is not None and once:
+                return row['id']
         if row is not None:
             _rows.pop(row['id'], None)
             row.update(title=title, body=body, level=level, updated=now, read=False,
@@ -207,9 +215,10 @@ def tick(rid, done=None, total=None, percent=None, text=None):
     _publish('notification_progress', out)
 
 
-def finish(rid, failed=False, body=None, title=None):
+def finish(rid, failed=False, body=None, title=None, origin=None):
     """End an active row: done (success) or failed (error). Unread again, so
-    the end toasts and a failure counts red."""
+    the end toasts and a failure counts red. origin: the tab whose click did
+    the work skips the echo (it flashed its own words)."""
     with _lock:
         row = _rows.get(rid)
         if not row or row['state'] != 'active':
@@ -228,7 +237,7 @@ def finish(rid, failed=False, body=None, title=None):
         _last_tick.pop(rid, None)
         _save_locked()
         out = dict(row)
-    _publish('notification', dict(out, origin=None))
+    _publish('notification', dict(out, origin=origin))
 
 
 class _Handle:
@@ -310,6 +319,14 @@ def tqdm_for(handle):
             pass
 
     return _Reporter
+
+
+def restarting(why):
+    """Say a deliberate restart is coming. The boot sweep turns this row into
+    'Restarted' instead of 'interrupted'; a download still in flight is
+    interrupted honestly. The runner's result (an update, a GPU install, a
+    restore) follows as its own row at boot (_boot_results)."""
+    return begin(f"Restarting: {why}", key='restart', go={'view': 'settings', 'tab': 'dashboard'})
 
 
 # ── reading and tending ────────────────────────────────────────────────────
@@ -451,6 +468,8 @@ def _on_task_error(event):
 def _on_health_alert(event):
     d = event.get('data') or {}
     kind = d.get('type') or 'db_integrity'
+    if kind == 'backup_ship_failed':
+        return                              # the ship's own row ends failed with the same words
     dbs = ', '.join(d.get('dbs') or [])
     title, body, level = {
         'backup_password_missing': ('Backup NOT made', 'Encryption is on but no backup password is set.', 'error'),
@@ -483,15 +502,63 @@ def _on_stt_error(event):
         notify(msg, 'error', key='stt', go={'view': 'settings', 'tab': 'stt'})
 
 
+def _boot_results():
+    """What the runner did between the last run and this one, as rows, once
+    each: a deferred update, a GPU torch install, a restore. An error or a
+    warning passes through at its level; the files stay for the pages that
+    read and clear them."""
+    try:
+        from core.updater import read_last_update_result
+        r = read_last_update_result(clear=False)
+        if r:
+            key = f"update-result:{int(r.get('timestamp') or 0)}"
+            go = {'view': 'settings', 'tab': 'dashboard'}
+            if r.get('success'):
+                notify(f"Updated to v{r.get('to_version') or '?'}", 'success', str(r.get('message') or ''),
+                       key=key, once=True, go=go)
+            else:
+                notify('Update failed', 'error', str(r.get('message') or ''), key=key, once=True, go=go)
+    except Exception as e:
+        logger.debug(f"[NOTIFY] update result not read: {e}")
+    try:
+        from core import gpu_install
+        r = gpu_install.last_result()
+        if r:
+            key = f"gpu-install:{r.get('at') or ''}"
+            go = {'view': 'settings', 'tab': 'stt'}
+            if r.get('ok'):
+                notify(f"GPU torch installed ({r.get('index') or ''})", 'success', str(r.get('message') or ''),
+                       key=key, once=True, go=go)
+            else:
+                notify('GPU torch install failed', 'error', str(r.get('message') or ''), key=key, once=True, go=go)
+    except Exception as e:
+        logger.debug(f"[NOTIFY] GPU install result not read: {e}")
+    try:
+        from core.restore import read_restore_result
+        r = read_restore_result(clear=False)
+        if r:
+            key = f"restore-result:{r.get('ts') or ''}"
+            go = {'view': 'settings', 'tab': 'backup'}
+            src = str(r.get('source') or '')          # backup:<file> / upload:<file>, never a chat
+            if r.get('ok'):
+                notify(f"Restored from {src or 'a backup'}", 'success', key=key, once=True, go=go)
+            else:
+                notify('Restore failed', 'error', str(r.get('error') or ''), key=key, once=True, go=go)
+    except Exception as e:
+        logger.debug(f"[NOTIFY] restore result not read: {e}")
+
+
 def init():
-    """Load the store, hook the bus, pick up load errors already on the
-    loader's list. Idempotent; api_fastapi calls it at import."""
+    """Load the store, hook the bus, post the runner's results, pick up load
+    errors already on the loader's list. Idempotent; api_fastapi calls it at
+    import."""
     global _hooked
     _load()
     with _lock:
         if _hooked:
             return
         _hooked = True
+    _boot_results()
     try:
         from core.event_bus import get_event_bus, Events
         bus = get_event_bus()

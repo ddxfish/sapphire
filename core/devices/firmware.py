@@ -165,9 +165,9 @@ def _safe_path(path):
 
 # --- reading from the source -------------------------------------------------
 
-def _fetch(url, limit):
+def _fetch(url, limit, on_bytes=None):
     """Bytes from a URL on the wan lane, at most `limit`. Redirects are followed HOPS deep, each one https and either on
-    the source's own host or to a GitHub asset host."""
+    the source's own host or to a GitHub asset host. on_bytes(got, total): the download as it lands (total 0 = unknown)."""
     r = net.get(url, stream=True, timeout=FETCH_WAIT, allow_redirects=False)
     mine = (urlsplit(url).hostname or '').lower()
     for _ in range(HOPS):
@@ -181,11 +181,17 @@ def _fetch(url, limit):
     if r.status_code != 200:
         raise FirmwareError(f"{url} answered HTTP {r.status_code}.")
     got, size = bytearray(), 0
+    try:
+        total = int((getattr(r, 'headers', None) or {}).get('Content-Length') or 0)
+    except (TypeError, ValueError):
+        total = 0
     for piece in r.iter_content(64 * 1024):
         size += len(piece)
         if size > limit:
             raise FirmwareError(f"{url} is larger than {limit // 1024} KB.")
         got.extend(piece)
+        if on_bytes:
+            on_bytes(size, total)
     return bytes(got)
 
 
@@ -200,9 +206,10 @@ def _local(base, rel):
     return where
 
 
-def _read(base, rel, limit):
+def _read(base, rel, limit, on_bytes=None):
     if _is_url(base):
-        return _fetch(urljoin(base, rel), limit)
+        # the callback only when there is one: test doubles of _fetch take two arguments
+        return _fetch(urljoin(base, rel), limit, on_bytes) if on_bytes else _fetch(urljoin(base, rel), limit)
     where = _local(base, rel)
     if where.stat().st_size > limit:
         raise FirmwareError(f"{where.name} is larger than {limit // 1024} KB.")
@@ -382,7 +389,7 @@ def known_version(board_id):
     return b['version'] if b else ''
 
 
-def part(board_id, path):
+def part(board_id, path, on_bytes=None):
     """The local file of one part, the board's file fetched and cut up when
     it is not in the cache yet. Raises FirmwareError."""
     board_id = str(board_id or '').strip().lower()
@@ -401,7 +408,7 @@ def part(board_id, path):
             return home / path
         if not b.get('source'):
             raise FirmwareError(f"The source {board_id} {b['version']} came from cannot be read now, and it is not whole in the cache.")
-        image = _read(b['source'], b['file'], FILE_MAX)
+        image = _read(b['source'], b['file'], FILE_MAX, on_bytes)
         if len(image) != b['size'] or hashlib.sha256(image).hexdigest() != b['sha256']:
             raise FirmwareError(f"{b['file']} is not the file the index describes (its sha256 differs). Nothing was written.")
         cut = {p['path']: image[p['offset']:p['offset'] + p['size']] for p in b['parts']}

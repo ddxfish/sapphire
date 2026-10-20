@@ -3,23 +3,26 @@
 # covers tests/; a plugin's own tests were writing real rows into the dev
 # box's user/notifications.json the first time the full suite ran after the
 # notification center landed (2026-10-20).
+import tempfile
+from pathlib import Path
+
 import pytest
 
-
-@pytest.fixture(autouse=True, scope='session')
-def _notify_store_for_the_session(tmp_path_factory):
-    """The store path for the WHOLE test process. A scheduler or daemon
-    thread that finishes after its test's teardown would otherwise find the
-    real path restored and write there (four task-complete rows did, on the
-    second full run). The per-test fixture below layers a fresh file over
-    this; teardown restores THIS path, never the real one."""
-    try:
-        from core import notify as _n
-    except Exception:
-        yield
-        return
-    _n.STORE = tmp_path_factory.mktemp('notify') / 'notifications.json'
-    yield
+# The store path for the WHOLE test process, pinned at IMPORT time: a test
+# module that imports core.api_fastapi at collection runs notify.init() before
+# any fixture exists, and that read the real store and wrote the dev box's
+# boot-result rows into it (2026-10-20). A scheduler or daemon thread that
+# finishes after its test's teardown finds this path too, never the real one.
+# The per-test fixture below layers a fresh file over it. The boot-result
+# reader is parked for the session (the dev box has real result files); the
+# unit test calls the live one by its other name.
+try:
+    from core import notify as _notify_mod
+    _notify_mod.STORE = Path(tempfile.mkdtemp(prefix='sapphire-test-notify-')) / 'notifications.json'
+    _notify_mod._boot_results_live = _notify_mod._boot_results
+    _notify_mod._boot_results = lambda: None
+except Exception:
+    pass
 
 
 @pytest.fixture(autouse=True)

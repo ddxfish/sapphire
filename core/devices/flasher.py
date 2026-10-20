@@ -191,7 +191,8 @@ def _write(job, b):
     cmds, EspLog, _ = _esptool()
     esp = None
     try:
-        parts = [(p['offset'], str(firmware.part(b['id'], p['path']))) for p in b['parts']]
+        parts = [(p['offset'], str(firmware.part(b['id'], p['path'], on_bytes=lambda d, t: _tell_bytes(job, d, t))))
+                 for p in b['parts']]
         job.update(state='writing', text='Connecting to the board...')
         _tell(job)
         EspLog.set_logger(_JobLog(job))
@@ -218,6 +219,14 @@ def _write(job, b):
         EspLog.instance = None
         if esp is not None:
             _close_port(esp)
+
+
+def _tell_bytes(job, done, total):
+    """The firmware download as it lands, into the job's row."""
+    nid = job.get('nid')
+    if nid:
+        from core import notify
+        notify.tick(nid, done=done, total=total or None, text='Getting the firmware...')
 
 
 def _tell(job, done=False, failed=False):

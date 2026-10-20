@@ -1028,6 +1028,17 @@ def _claim(scope, what, kind='sort', chat=None, batch=None):
         _state.update(running=True, scope=scope, what=what, kind=kind,
                       started=_now(), messages_done=0, messages_total=0,
                       last_message=None, chat=chat, batch_override=batch)
+    # One row in the notification center per pass (core/notify.py): _finish
+    # ends it with the after-action line. A drain re-arms without _claim and
+    # has no row.
+    try:
+        from core import notify as _notify
+        nid = _notify.begin(f"Librarian: {_PASS_LABELS.get(kind, kind)} on '{scope}'", source='mindpalace',
+                            key=f"librarian:{scope}:{kind}", go={'view': 'admin'})
+        with _state_lock:
+            _state['nid'] = nid
+    except Exception as e:
+        logger.debug(f"[LIBRARIAN] notification row not opened: {e}")
     _ensure_session_chat(chat)
     return '', True
 
@@ -1131,7 +1142,19 @@ def _finish(message, error=False):
         # WITHOUT _claim, so this is the only reliable clear point).
         _state.update(running=False, last_message=message,
                       batch_override=None)
+        nid, kind, scope = _state.pop('nid', None), _state.get('kind'), _state.get('scope')
     (logger.error if error else logger.info)(f"[LIBRARIAN] {message}")
+    if nid:
+        # a pass that reports its own failure in words ("...failed for 'x':
+        # the model produced no verbs") ends the row failed too
+        bad = bool(error) or any(w in (message or '').lower() for w in ('failed', 'crashed'))
+        try:
+            from core import notify as _notify
+            label = _PASS_LABELS.get(kind, kind or 'pass')
+            _notify.finish(nid, failed=bad, body=message,
+                           title=f"Librarian: {label} {'failed' if bad else 'done'} on '{scope}'")
+        except Exception as e:
+            logger.debug(f"[LIBRARIAN] notification row not closed: {e}")
 
 
 def _queue_depth(scope, kind):
