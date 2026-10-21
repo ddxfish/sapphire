@@ -105,7 +105,7 @@ Independent of the proxy, Sapphire holds a set of quiet-egress guarantees:
 | Surface | Guarantee |
 |---------|-----------|
 | STT (Whisper), image vibes (CLIP), embeddings | Cached models load with `local_files_only` — offline. Network is only touched once, to download a missing model. |
-| Kokoro TTS | Resolves model and voice files from the local Hugging Face cache (no network when cached); a file not yet cached is downloaded once, on first use. |
+| Kokoro TTS | Resolves model and voice files from the local Hugging Face cache (no network when cached); a file not yet cached is downloaded once, on first use. `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` in the environment are honored, never set or cleared: a download they block is named as such (notification center, kokoro.log, the Test button), not as the hub's "check your Internet connection". |
 | tiktoken | BPE file cached persistently under `user/cache/tiktoken` — no re-download per reboot. |
 | Hugging Face telemetry | Disabled unconditionally at boot. |
 | Silero VAD | Model pinned to an exact upstream commit URL — no floating "latest" fetch. |
@@ -183,6 +183,7 @@ DEPENDENCY: httpx[socks] (socksio) ships in BOTH requirements.txt and install/re
 EGRESS INVARIANTS (independent of proxy):
 - Cached models load offline: whisper/CLIP/embeddings local_files_only (retry online only if missing); kokoro resolves model/voice files from the local HF cache, downloads once if missing; silero VAD pinned to exact commit URL; tiktoken cache persistent at user/cache/tiktoken.
 - HF_HUB_DISABLE_TELEMETRY=1 unconditionally.
+- HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE honored, never set or cleared by Sapphire; a download they block is named as such (core/hf_words.py why() -> notify.progress words=, kokoro.log, TTS Test).
 - Plugin-key allowlist: disk cache authoritative 24h — warm-cache boot makes no GitHub call.
 - UPDATE_CHECK_ENABLED: daily GitHub release check = only unprompted core outbound call; toggle checked per-iteration (effective within a day, restart = immediate).
 - Cookies: API sessions block all Set-Cookie; browser-profile web-tools session keeps a capped jar.

@@ -267,18 +267,21 @@ class _Handle:
 
 
 @contextmanager
-def progress(title, source='core', go=None, key=None, body='', done_title=None, failed_title=None, lazy=False):
+def progress(title, source='core', go=None, key=None, body='', done_title=None, failed_title=None, lazy=False,
+             words=str):
     """with progress("Downloading voice Amy", source="piper") as p: p.update(done, total)
     Leaves done (done_title names the finished thing); an exception leaves
-    failed with its words (failed_title names that) and is re-raised. lazy:
-    no row until the first tick, for work that is often already done."""
+    failed with its words (failed_title names that) and is re-raised. words:
+    the exception to those words, when a library's own mislead (core/hf_words.py
+    for the Hugging Face hub). lazy: no row until the first tick, for work
+    that is often already done."""
     born = lambda: begin(title, source, go, key, body)
     h = _Handle(None if lazy else born(), born if lazy else None)
     try:
         yield h
     except BaseException as e:
         if h.id is not None:
-            finish(h.id, failed=True, body=str(e) or e.__class__.__name__, title=failed_title)
+            finish(h.id, failed=True, body=words(e) or e.__class__.__name__, title=failed_title)
         raise
     else:
         if h.id is not None:

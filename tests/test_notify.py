@@ -141,6 +141,13 @@ class TestProgress:
         assert row['state'] == 'failed' and row['level'] == 'error' and row['body'] == 'no route to host'
         assert n.counts()['red'] == 1
 
+    def test_failed_words_come_from_the_producer_when_asked(self, n):
+        with pytest.raises(RuntimeError):
+            with n.progress('dl', words=lambda e: 'offline mode is on') as p:
+                rid = p.id
+                raise RuntimeError('check your Internet connection')
+        assert n.get(rid)['body'] == 'offline mode is on'
+
     def test_tick_on_a_finished_row_is_ignored(self, n, seen):
         rid = n.begin('x')
         n.finish(rid)

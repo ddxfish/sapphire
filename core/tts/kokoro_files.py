@@ -12,6 +12,8 @@ a megabyte each, with no row.
 """
 import logging
 
+from core.hf_words import why
+
 logger = logging.getLogger(__name__)
 
 REPO_ID = 'hexgrad/Kokoro-82M'
@@ -40,8 +42,8 @@ def missing(voices=(DEFAULT_VOICE,)):
 
 def fetch(files):
     """Download `files` under one progress row in the notification center.
-    True when they all landed; False (logged, the row failed with the hub's
-    words) when they did not: the worker then tries itself."""
+    True when they all landed; False (logged, the row failed with the cause in
+    words, core/hf_words.py) when they did not: the worker then tries itself."""
     if not files:
         return True
     from huggingface_hub import hf_hub_download
@@ -50,12 +52,12 @@ def fetch(files):
         with progress("Downloading the Kokoro voice model", source='core',
                       go={'view': 'settings', 'tab': 'tts'}, key='kokoro-model',
                       done_title='Kokoro voice model ready',
-                      failed_title='Kokoro voice model download failed') as p:
+                      failed_title='Kokoro voice model download failed', words=why) as p:
             rep = tqdm_for(p)
             for f in files:
                 p.text(f)
                 hf_hub_download(REPO_ID, f, **({'tqdm_class': rep} if rep else {}))
         return True
     except Exception as e:
-        logger.warning(f"[TTS] Kokoro files not fetched ({type(e).__name__}: {e}); the worker will try itself")
+        logger.warning(f"[TTS] Kokoro files not fetched ({type(e).__name__}: {why(e)}); the worker will try itself")
         return False

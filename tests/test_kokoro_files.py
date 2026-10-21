@@ -52,6 +52,23 @@ def test_fetch_failure_is_a_failed_row_and_false(monkeypatch):
     assert r['title'] == 'Kokoro voice model download failed' and 'hub unreachable' in r['body']
 
 
+def test_fetch_in_offline_mode_names_the_variable(monkeypatch):
+    """The hub wraps its own offline mode in "check your Internet connection";
+    the row says what is actually on and what to do (user report 2026-10-21)."""
+    import huggingface_hub
+    from huggingface_hub.errors import LocalEntryNotFoundError, OfflineModeIsEnabled
+    monkeypatch.setenv('HF_HUB_OFFLINE', '1')
+
+    def boom(repo, fn, tqdm_class=None):
+        raise LocalEntryNotFoundError('... make sure your Internet connection is on.') from OfflineModeIsEnabled('Cannot reach')
+
+    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', boom)
+    assert kf.fetch([kf.voice_file('af_heart')]) is False
+    r = next(r for r in notify.rows() if r.get('key') == 'kokoro-model')
+    assert r['state'] == 'failed' and 'HF_HUB_OFFLINE' in r['body'] and 'offline mode is on' in r['body']
+    assert 'Internet connection' not in r['body']
+
+
 def test_nothing_to_fetch_makes_no_row():
     assert kf.fetch([]) is True
     assert not [r for r in notify.rows() if r.get('key') == 'kokoro-model']

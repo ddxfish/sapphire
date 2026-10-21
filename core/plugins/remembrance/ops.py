@@ -22,6 +22,7 @@ from plugins.remembrance import client
 logger = logging.getLogger(__name__)
 PLUGIN = "remembrance"
 CADENCES = ("daily", "weekly", "monthly", "manual")
+ROW_GO = {"view": "settings", "tab": "plugins"}      # the row's click target: this plugin's panel
 
 
 def _state():
@@ -91,13 +92,25 @@ def _err_from_http(e):
 
 
 def perform_offsite_backup(cadence="daily", comment=""):
-    """Sealed blob (core gate: page + offsite excludes, cap, verify) → upload.
+    """Sealed blob (core gate: page + offsite excludes, cap, verify) → upload,
+    under ONE row in the notification center: the build, then the upload
+    byte by byte, then uploaded / failed with the reason (2026-10-21: an
+    11:00 run crawled for an hour at 25 KB/s and nothing in the app said so).
     Returns {ok, id, size_bytes, usage_bytes, quota_bytes, ...} or {ok:False, error}."""
     if cadence not in CADENCES:
         return {"ok": False, "error": f"Invalid cadence '{cadence}'"}
     acct = _account()
     if not acct:
         return {"ok": False, "error": "Remembrance is not configured (set server URL, tenant ID, API key)"}
+
+    from core import notify
+    rid = notify.begin(f"Offsite backup ({cadence})", source=PLUGIN, key="remembrance-offsite",
+                       go=ROW_GO, body="building the encrypted blob")
+
+    def _fail(msg):
+        _set_last_result(False, msg)
+        notify.finish(rid, failed=True, body=msg, title=f"Offsite backup ({cadence}) failed")
+        return {"ok": False, "error": msg}
 
     # Build the blob in a temp dir UNDER the backup folder (a disk sibling of
     # user/, never itself backed up) — never inside user/ (would loop) and never
@@ -109,23 +122,26 @@ def perform_offsite_backup(cadence="daily", comment=""):
                 backup_type="offsite", dest_dir=tmp, extra_patterns=_extra_patterns(),
                 cap_mb=int(get_prefs().get("offsite_max_mb", 2048) or 0))
         except BackupRefused as e:
-            _set_last_result(False, str(e))
-            return {"ok": False, "error": str(e)}
+            return _fail(str(e))
+        size = enc_path.stat().st_size
+        mb = size // (1024 * 1024)
+        notify.tick(rid, done=0, total=size, text=f"uploading {mb} MB to the vault")
         try:
-            res = client.upload(acct, enc_path, cadence, comment=comment)
+            res = client.upload(acct, enc_path, cadence, comment=comment,
+                                progress=lambda done, total: notify.tick(rid, done=done, total=total))
         except requests.HTTPError as e:
-            msg = _err_from_http(e)
-            _set_last_result(False, msg)
-            return {"ok": False, "error": msg}
+            return _fail(_err_from_http(e))
         except requests.RequestException as e:
-            msg = f"Network error: {e}"
-            _set_last_result(False, msg)
-            return {"ok": False, "error": msg}
+            return _fail(f"Network error: {e}")
         kb = res.get("size_bytes", 0) // 1024
         _set_last_result(True, f"Uploaded {cadence} backup ({kb} KB)" + (f" — {comment}" if comment else ""))
+        notify.finish(rid, title=f"Offsite backup uploaded ({cadence}, {mb} MB)")
         return {"ok": True, **res}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        # A row still active here means something above raised past us
+        # (the executor logs it): never leave a bar spinning. No-op otherwise.
+        notify.finish(rid, failed=True, body="ended unexpectedly; see the log")
 
 
 def get_status():

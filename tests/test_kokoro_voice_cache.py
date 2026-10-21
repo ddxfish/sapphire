@@ -110,6 +110,29 @@ def test_stream_voice_failure_is_json_before_any_200(monkeypatch):
     assert b"HTTP/1.0 200" not in h.wfile.getvalue()
 
 
+def test_offline_mode_voice_failure_says_so_in_the_503(monkeypatch):
+    """HF_HUB_OFFLINE in the environment: the hub says "check your Internet
+    connection"; the answer names the variable (user report 2026-10-21).
+    Another computer still gets only the kind."""
+    from huggingface_hub.errors import LocalEntryNotFoundError, OfflineModeIsEnabled
+    ts = import_tts_server()
+    monkeypatch.setenv('HF_HUB_OFFLINE', '1')
+
+    def offline(v, **k):
+        raise LocalEntryNotFoundError('... make sure your Internet connection is on.') from OfflineModeIsEnabled('Cannot reach')
+
+    monkeypatch.setattr(ts, "_voice_pack", offline)
+    h = _fake_handler(ts, "/tts", json.dumps({"text": "hello there", "voice": "af_heart"}).encode())
+    h._handle_tts()
+    status, body = _status_and_json(h)
+    assert status == 503 and 'HF_HUB_OFFLINE' in body["error"] and 'Internet connection' not in body["error"]
+    h = _fake_handler(ts, "/tts", json.dumps({"text": "hello there", "voice": "af_heart"}).encode())
+    h.remote = True
+    h._handle_tts()
+    status, body = _status_and_json(h)
+    assert status == 503 and body["error"].endswith('LocalEntryNotFoundError')
+
+
 def test_another_computer_names_a_voice_never_a_file():
     import pytest
     ts = import_tts_server()

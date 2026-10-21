@@ -84,7 +84,7 @@ def test_happy_path_encrypts_verifies_uploads(env, tmp_path):
     _account(env)
 
     seen = {}
-    def fake_upload(acct, blob, cadence, comment=""):
+    def fake_upload(acct, blob, cadence, comment="", progress=None):
         seen.update(cadence=cadence, comment=comment, blob_exists=blob.exists(),
                     blob_name=blob.name,
                     plaintext_gone=not list(blob.parent.glob("*.tar.gz")),
@@ -154,3 +154,61 @@ def test_cron_fires_at_configured_hour(monkeypatch):
     hits = _no_real_backup(monkeypatch)
     schedule.run({"config": None})
     assert len(hits) == 1
+
+
+# --- the run as ONE row in the notification center (2026-10-21) -----------------
+
+def _row():
+    from core import notify
+    rows = [r for r in notify.rows() if r.get("key") == "remembrance-offsite"]
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_counted_reader_reports_bytes_and_keeps_length():
+    import io
+    from plugins.remembrance import client
+    seen = []
+    body = client._Counted(io.BytesIO(b"x" * 20000), 20000, lambda d, t: seen.append((d, t)))
+    assert len(body) == 20000                       # requests' super_len → Content-Length
+    while body.read(8192):
+        pass
+    assert seen == [(8192, 20000), (16384, 20000), (20000, 20000)]
+
+
+def test_run_is_one_row_that_ends_uploaded(env):
+    _account(env)
+
+    def fake_upload(acct, blob, cadence, comment="", progress=None):
+        progress(2, 4)
+        progress(4, 4)
+        return {"id": "abc123", "size_bytes": 4, "usage_bytes": 4, "quota_bytes": 1000}
+    env.setattr(ops.client, "upload", fake_upload)
+    assert ops.perform_offsite_backup("daily")["ok"]
+    r = _row()
+    assert r["state"] == "done" and r["level"] == "success" and "uploaded" in r["title"]
+    assert r["progress"]["percent"] == 100 and r["source"] == "remembrance" and r["go"]["tab"] == "plugins"
+
+
+def test_refused_run_ends_a_failed_row(env):
+    _account(env, password="")
+    assert not ops.perform_offsite_backup("daily")["ok"]
+    r = _row()
+    assert r["state"] == "failed" and r["level"] == "error" and "password" in r["body"].lower()
+
+
+def test_network_error_ends_a_failed_row(env):
+    import requests
+    _account(env)
+    env.setattr(ops.client, "upload", lambda *a, **k: (_ for _ in ()).throw(requests.ConnectionError("vault down")))
+    r = ops.perform_offsite_backup("daily")
+    assert not r["ok"] and "Network error" in r["error"]
+    assert _row()["state"] == "failed" and "vault down" in _row()["body"]
+
+
+def test_unexpected_error_never_leaves_the_bar_spinning(env):
+    _account(env)
+    env.setattr(ops.client, "upload", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        ops.perform_offsite_backup("daily")
+    assert _row()["state"] == "failed" and "unexpectedly" in _row()["body"]

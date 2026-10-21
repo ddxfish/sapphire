@@ -51,6 +51,7 @@ except Exception as e:
     HOST = '127.0.0.1'
     PORT = 5012
 from core.tts.kokoro_files import REPO_ID, DEFAULT_VOICE   # shared with the parent's pre-fetch (core/tts/kokoro_files.py)
+from core.hf_words import why as _why                        # a hub failure in words a person can act on
 
 
 # --- Cross-platform temp directory ---
@@ -255,7 +256,7 @@ try:
     _voice_pack(DEFAULT_VOICE)
 except Exception as _e:
     logger.warning(f"Default voice '{DEFAULT_VOICE}' is not cached and could not be downloaded "
-                   f"({_e}); uncached voices will fail until Hugging Face is reachable")
+                   f"({_why(_e)}); uncached voices will fail until it can be")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -678,9 +679,10 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 def _said(handler, e):
-    """An error as the caller may read it: in full here, only its kind for
-    another computer (the text can hold this computer's paths)."""
-    return type(e).__name__ if getattr(handler, 'remote', False) else str(e)
+    """An error as the caller may read it: its cause in words here
+    (core/hf_words.py), only its kind for another computer (the text can
+    hold this computer's paths)."""
+    return type(e).__name__ if getattr(handler, 'remote', False) else _why(e)
 
 
 def _open_shared_door():

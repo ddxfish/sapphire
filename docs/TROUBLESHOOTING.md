@@ -322,6 +322,17 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 **Conversation mode connects but she is silent**
 - Conversation audio requires streaming TTS: Settings > TTS > streaming enabled AND a streaming-capable provider (Kokoro or Piper). Cloud TTS providers render on screen only.
 
+**No voice, and the notification center says "Hugging Face offline mode is on"**
+- `HF_HUB_OFFLINE` (or `TRANSFORMERS_OFFLINE`) is set in your environment. Hugging Face then refuses every download, so a voice or model Sapphire has not fetched yet cannot arrive. Guides for other AI tools often say to set it for a faster start; Sapphire never sets it.
+- Sapphire already loads cached models with no network and never phones home (see NETWORK.md). The variable only blocks the first download: clear it, let the download land, put it back if you want it.
+- Windows (PowerShell), then close Sapphire fully and start it again:
+  ```
+  [Environment]::SetEnvironmentVariable("HF_HUB_OFFLINE", $null, "User")
+  [Environment]::SetEnvironmentVariable("TRANSFORMERS_OFFLINE", $null, "User")
+  ```
+- Linux / macOS: look for `export HF_HUB_OFFLINE=1` in `~/.bashrc`, `~/.profile`, `~/.zshrc` or the service unit that starts Sapphire; remove it and restart.
+- The same words appear in `user/logs/kokoro.log` and under the TTS tab's Test button. The variable is read once at start, so a restart is needed either way.
+
 **Phone call problems** — see PHONE-CALLS.md's Quick Troubleshooting (403 on register, one-way audio, hangup issues).
 
 ## Prompt issues
