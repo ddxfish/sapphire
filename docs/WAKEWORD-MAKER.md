@@ -20,26 +20,32 @@ One afternoon, start to finish. Each step is a tab on the page, left to right.
    add the microWakeWord set if you have an ESP32. The data folder is already set (see below).
 2. **Wakewords.** New wake word, type the phrase. Two or three syllables with a hard consonant hear best:
    "hey marcus" beats "hi sam".
-3. **Voices.** Standard, Generate all samples. Ten minutes on a GPU. Record meanwhile.
-4. **Record.** About 240 takes of the phrase is the floor; 440 is the target. Eighty per
+3. **Synthetic.** Standard, Generate all samples. Ten minutes on a GPU. Record meanwhile.
+4. **Human.** About 240 takes of the phrase is the floor; 440 is the target. Eighty per
    microphone across three microphones, the list behind the **?** on *Says it*. Then near misses and other
-   words, and thirty minutes of your room with nobody saying the phrase. Details in the next section.
-5. **Check.** Rate. Listen to the lowest few, keep or drop by hand.
-6. **Train.** Leave the preset on Standard, tick both model families, set Repeats to 3 and press Train.
-   Then open *Advanced*, choose model `rnn`, preset Thorough, Repeats 3, Train again. Go do something else.
-   Or press *Grid…*: tick the models, variation stops, source blocks (Piper only, synthetic only, without one
-   microphone, without one tag value...), presets and knobs you want compared, set seeds, and every combination is
-   queued at once. A Grids card folds the finished cells by each axis, so which source block or stop helps is one
-   row each. *Does this data help?…* is the one-question grid: pick a microphone or a tag value, it trains with
-   and without, three seeds each, and the Grids card adds two columns for recall on that tag's own held-out takes.
-7. **Train, the scoreboard.** Every finished run is judged on the held-out slice of your own recordings.
+   words. Details in the next section.
+5. **Background.** *Room day*: every microphone ticked, six hours, go live. Thirty minutes of room is the
+   floor, ninety is good; a day on every mic is what the first clean models had. One take of the room when a
+   whole day is more than you need. Rooms and music, the two small sets both families mix in, download here.
+6. **Check.** Rate. Listen to the lowest few, keep or drop by hand.
+7. **Train.** *Search*, slider on Standard, both families ticked, press Search: nine runs, about an hour. Go do
+   something else. Back, read the Grids card: *Best so far* per family, ☆ to use it. Want more? Slide to Thorough
+   (three variation stops, two source blocks, two nets per family, three seeds) or Deep (Thorough at two sizes,
+   then Optuna around the three best desktop cells, scored by the judge). The line under the slider says how
+   many runs and about how long, from this wake word's own runs. *Choose the space* shows what a stop ticks;
+   change anything and it is Custom. *Does this data help?…* is the one-question search: pick a microphone or a
+   tag value, it trains with and without, three seeds each, and the Grids card adds two columns for recall on
+   that tag's own held-out takes. *Single* trains one recipe at a time, the knobs of each ticked family under
+   *Advanced*.
+8. **Train, the scoreboard.** Every finished run is judged on the held-out slice of your own recordings.
    Read *Hears you* (of your held-out takes, how many it caught), *Sound-alikes* (how many near misses
    fooled it), *Stressed* (the same takes under four rough draws each, with the held-out room behind them:
    the bench that does not saturate) and *Gap* (the lowest take's score minus the highest negative's; under
-   zero they overlap). Several runs may still tie near the top; the room watch decides between them.
-8. **Test.** Tick two or three of the best on Train, start a *Room watch* with the TV on for an evening.
-   Zero fires wins. Sort any fire it kept into "false alarm" or "that was me".
-9. **Train.** ★ the winner of each family. **Install.** *Listen for it here* puts it on this computer, no
+   zero they overlap). Several runs may still tie near the top; a room day decides between them.
+9. **Test and Background.** Tick two or three of the best on Train. *Try it* on Test says what each heard.
+   A *Room day* on Background with the TV on for an evening keeps them on watch: zero fires wins. Sort any
+   fire it kept into "false alarm" or "that was me".
+10. **Train.** ★ the winner of each family. **Install.** *Listen for it here* puts it on this computer, no
    restart. *Send* puts it on each satellite.
 
 ## Recording yourself, the human way
@@ -101,30 +107,39 @@ you only whispered twice, the judge knows nothing about whispers; record some fo
 - **Wakewords.** A card per wake word with how far along it is and the next step. Each card's **Words** button
   opens the lists: alternate spellings that should match (how the voices read it), similar words that should
   not, and the sound-alikes found for you once a set is made.
-- **Voices.** How big a set (Quick 2,000, Standard 20,000, Thorough 60,000 clips) and which voices say the
+- **Synthetic.** How big a set (Quick 2,000, Standard 20,000, Thorough 60,000 clips) and which voices say the
   phrase. ▶ plays a voice saying your phrase; a voice that cannot say the word is label noise, not diversity.
   Piper's multi-speaker voices carry the variety; Kokoro adds studio voices and blends pairs into new ones.
-- **Record.** Above. The same button records negatives and room sound. Files recorded elsewhere upload into the
-  `uploaded` collections and stay marked as yours.
+- **Human.** Above. The same button records near misses and other words. Files recorded elsewhere upload into
+  the `uploaded` collections and stay marked as yours.
+- **Background.** *Room day*: every microphone at once (satellites through their doors, PC mics from the tab)
+  for the hours you set, every piece into the shared room library at the data folder's root, tagged by
+  microphone; every wake word trains on it and judges false alarms with it. The models ticked on Train (else
+  the ★ ones) stay on watch the whole time; every fire is kept with its audio for you to sort into a negative
+  (a false alarm, now a training clip) or a positive (that was me: the piece is dropped for this wake word
+  only). An ESP32 with the capture door (firmware 0.7.6) pushes its room in pieces from its own task and its
+  own fires are counted beside the models'; *board test mode* makes it count and answer nothing. The library
+  card lists hours per microphone and the days that made them, with delete per day. *One take of the room*
+  records minutes through one mic; uploads go to `ambient/uploaded`; the clip browser shows your takes and the
+  library. *Rooms and music* are the two small datasets both families mix in.
 - **Check.** Every clip is rated 0 to 100: Whisper transcribes it and the transcript is compared with the
   phrase, then length, level, clipping, silence and a cut-off start or end are measured. Below the bar a clip is
   dropped from training; you can overrule any verdict after listening, and your verdict stays yours. *Rate* takes
   new clips only; the select next to it rates your own recordings again, or everything again. A voice that
-  mispronounces the phrase shows up low across the board: untick it on Voices and generate again.
-- **Train.** Which family or both, the preset (Quick, Standard, Thorough), how many repeats with different seeds,
-  which synthetic voices to use (all, Piper only, Kokoro only, none), and *Variations*: how every clip is varied
-  on its way into training (rooms, background sound, distance, pitch, speed, tone). Five stops from Gentle to
-  Rough; Gentle and Natural won most often in the first spread. Jobs queue one at a time per wake word; the
-  strip at the top shows progress. The scoreboard lists every run with the judge's numbers, the threshold it
-  picked (type another to override), ★ for the one Install uses, and a Re-judge button when the held-out slice
-  changed since a verdict was written.
-- **Test.** *Try it*: press, say it, see what each ticked model heard. *Room watch*: a satellite or this
-  browser listens for hours while you live; every fire is kept with its audio for you to sort into a negative
-  (a false alarm, now a training clip) or a positive. *Keep it all as room sound* turns every piece it hears
-  into a room take: a day of your room through the device's own microphone. An ESP32 with the capture door
-  (firmware 0.7.6) pushes its room in pieces from its own task, keeps hearing its wake word, and its own fires
-  are counted beside the models'; *board test mode* makes it count and answer nothing. The breakdown shows
-  which held-out clip each model missed or fired on.
+  mispronounces the phrase shows up low across the board: untick it on Synthetic and generate again.
+- **Train.** *Variations* first: how every clip is varied on its way into training (rooms, background sound,
+  distance, pitch, speed, tone), five stops from Gentle to Rough; Gentle and Natural won most often in the first
+  spread. Then *Single* or *Search*. Single: which family or both, the preset (Quick, Standard, Thorough), how
+  many repeats with different seeds, which synthetic voices (all, Piper only, Kokoro only, none), the knobs of
+  each ticked family under Advanced. Search: a slider over four stops (Look, Standard, Thorough, Deep), each a
+  grid of runs with seeds over the ticked families; Deep ends with the refine, Optuna around the grid's best
+  judged desktop cells, each trial scored by the judge, the winner trained in full. The Grids card shows the
+  best cell per family with ☆, the refine's state and run, and the pivot by each axis. Jobs queue one at a
+  time per wake word; the strip at the top shows progress. The scoreboard lists every run with the judge's
+  numbers, the threshold it picked (type another to override), ★ for the one Install uses, and a Re-judge
+  button when the held-out slice changed since a verdict was written.
+- **Test.** *Try it*: press, say it, see what each ticked model heard. The breakdown shows which held-out
+  clip each model missed or fired on, by microphone and by tag.
 - **Install.** Everything goes through the wake word library (Settings > Wakeword, `user/wakeword/models/`),
   so the ★ models land there; afterwards this computer picks from the wake word dropdown and a board from its
   own Wake word tab in Devices. *This computer*: copies the ★ desktop model into the library

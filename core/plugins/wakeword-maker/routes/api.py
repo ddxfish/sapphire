@@ -239,7 +239,14 @@ def delete_dataset(did, settings=None, **_):
 
 SYNTH_ENOUGH = 2000      # the quick set: past this the Voices step counts as done on its own
 RECORDED_ENOUGH = 240    # your own voice, the floor worth training on: three mics, eighty takes each; a quarter is held back to judge
-STEPS = [('voices', 'Voices'), ('record', 'Record'), ('check', 'Check'), ('train', 'Train'), ('test', 'Test'), ('install', 'Install')]
+STEPS = [('voices', 'Synthetic'), ('record', 'Human'), ('background', 'Background'), ('check', 'Check'), ('train', 'Train'), ('test', 'Test'), ('install', 'Install')]
+
+
+def _room_minutes(root, pdir, slug):
+    """Room sound this wake word trains on: its own ambient takes plus the shared library minus the pieces dropped
+    for this phrase (cached rows)."""
+    rows = [r for c in ('ambient/recorded', 'ambient/uploaded') for r in _rows(pdir / c)] + [r for r in _rows(paths.room_dir(root)) if slug not in (r.get('drop_for') or [])]
+    return sum(float(r.get('seconds') or 0) for r in rows if r.get('verdict') != 'drop') / 60.0
 
 
 def _progress(root, pr):
@@ -256,18 +263,21 @@ def _progress(root, pr):
         listening = _desktop_state(pr['slug'])['ours']          # our file, under our name, and the one core would load
     except Exception:
         listening = False
-    auto = {'voices': synth >= SYNTH_ENOUGH, 'record': rec >= RECORDED_ENOUGH, 'check': rated and synth > 0, 'train': trained, 'install': listening}
+    room = _room_minutes(root, paths.project_dir(root, pr['slug']), pr['slug'])
+    auto = {'voices': synth >= SYNTH_ENOUGH, 'record': rec >= RECORDED_ENOUGH, 'background': room >= TARGETS['ambient_minutes'][0],
+            'check': rated and synth > 0, 'train': trained, 'install': listening}
     done = {k: bool(marked.get(k) or auto.get(k)) for k, _ in STEPS}
     pending = next((k for k, _ in STEPS if not done[k]), None)
     labels = dict(STEPS)
     hints = {'voices': 'Make the set' if not synth else f"Make the set ({synth:,} made)",
-             'record': f"Record yourself ({rec} of {RECORDED_ENOUGH})", 'check': 'Check the clips',
+             'record': f"Record yourself ({rec} of {RECORDED_ENOUGH})", 'background': f"Record the room ({room:.0f} of {TARGETS['ambient_minutes'][0]} min)", 'check': 'Check the clips',
              'train': 'Train a model', 'test': 'Test the models', 'install': 'Install on your devices'}
     n_done = sum(done.values())
     return {'pct': int(round(10 + 90 * n_done / len(STEPS))), 'done': done, 'step': pending,
             'next': hints.get(pending, 'All done') if pending else 'All done', 'tab': pending or 'install',
             'label': labels.get(pending, ''), 'index': ([k for k, _ in STEPS].index(pending) + 1) if pending else len(STEPS),
-            'of': len(STEPS), 'auto': auto, 'synth': synth, 'recorded': rec, 'recorded_floor': RECORDED_ENOUGH, 'rated': rated}
+            'of': len(STEPS), 'auto': auto, 'synth': synth, 'recorded': rec, 'recorded_floor': RECORDED_ENOUGH, 'rated': rated,
+            'room': round(room, 1), 'room_floor': TARGETS['ambient_minutes'][0]}
 
 
 def list_projects(settings=None, **_):
@@ -662,7 +672,7 @@ TARGETS = {'positive': (240, 440), 'negative': (80, 320), 'near': (120, 400), 'a
 
 
 def guide(slug, settings=None, **_):
-    """The Record tab's helper: targets with progress, and quick checks over what has been recorded."""
+    """The Human tab's helper: targets with progress, and quick checks over what has been recorded."""
     root, err = _root(settings)
     if err:
         return err
@@ -875,7 +885,7 @@ def browse(slug, query=None, settings=None, **_):
 # --- satellites as microphones ----------------------------------------------------------------------------
 
 def mics(**_):
-    """Satellites with a microphone, for the Record tab."""
+    """Satellites with a microphone, for the Human, Background and Test tabs."""
     out = []
     try:
         from core.devices import engine
@@ -1062,7 +1072,7 @@ def check_report(slug, settings=None, **_):
     rows = {c: _rows(pdir / c) for c in paths.COLLECTIONS if not c.startswith('previews/')}
     pos = [r for c, rs in rows.items() if c.startswith('positive/') for r in rs]
     neg = [r for c, rs in rows.items() if c.startswith('negative/') for r in rs]
-    amb = [r for c, rs in rows.items() if c.startswith('ambient/') for r in rs]
+    amb = [r for c, rs in rows.items() if c.startswith('ambient/') for r in rs] + store.list_room(root, slug=slug)     # the shared library counts for every wake word
     near = [r for r in neg if r.get('near') or r.get('source') == 'synth']
     own_pos = [r for r in pos if r.get('source') in ('recorded', 'uploaded')]
     own_neg = [r for r in neg if r.get('source') in ('recorded', 'uploaded')]
@@ -1122,7 +1132,7 @@ def check_report(slug, settings=None, **_):
     if bad_mics:
         add('warn', f"Low scores through {', '.join(m['name'] for m in bad_mics)}: listen to the lowest below; a mic too far away or too noisy reads as 'not the phrase'.")
     if flag_counts.get('clipped'):
-        add('bad', f"{flag_counts['clipped']} clipped clip(s). Delete them on the Record tab (filter by flag) before training.")
+        add('bad', f"{flag_counts['clipped']} clipped clip(s). Delete them on the Human tab (filter by flag) before training.")
     if flag_counts.get('says the phrase'):
         pass
     says = [r for r in neg if 'says the phrase' in ' '.join((r.get('qa') or {}).get('reasons', []))]
@@ -1174,7 +1184,7 @@ def _run_rows(pdir, root=None):
             if r['judged'] and r.get('state') == 'done':
                 try:
                     cached = json.loads((sub / 'judge.json').read_text(encoding='utf-8'))
-                    if 'heldout' not in r or 'by_tag' not in r['heldout']:        # a verdict from before recall-by-tag: filled once from the cached rows
+                    if 'heldout' in r and 'by_tag' not in r['heldout']:         # a verdict from before recall-by-tag: filled once from the cached rows (a run mid-grading is the trainer's to write)
                         r['heldout'] = _judge.summary(cached['rows'], r.get('rows'), r.get('trainer') or 'oww')
                         r.setdefault('threshold', r['heldout'].get('threshold'))
                         write_json(rj, r, indent=1)
@@ -1242,7 +1252,7 @@ def delete_run(slug, rid, settings=None, **_):
         return err
     if not _safe(rid):
         return {'error': 'bad run id'}, 400
-    if any(j.get('project') == slug and j['state'] == 'running' and j['kind'] in ('train', 'tune') for j in jobs.running(root)):
+    if any(j.get('project') == slug and j['state'] == 'running' and j['kind'] in ('train', 'train_mww', 'tune') for j in jobs.running(root)):
         return {'error': 'a training job is running on this wake word'}, 409
     rdir = paths.project_dir(root, slug) / 'runs' / rid
     if rdir.is_dir():
@@ -2141,27 +2151,45 @@ def _grid_view(root, pdir, grid):
     """The grid's cells joined to their job state and run verdict, counts, and the pivot."""
     runs = {r['id']: r for r in _run_rows(pdir, root)}
     by_job = {j['id']: j for j in jobs.list_all(root, project=grid.get('project'), limit=10 ** 6)}
+    gid = grid.get('id')
+    # the join that outlives the job folder (jobs.prune keeps the newest hundred): a run carries its grid and its cell label
+    by_cell = {}
+    for r in reversed(list(runs.values())):                      # newest last, so a retried cell reads its newest run
+        if r.get('grid') == gid and r.get('kind') != 'tune':
+            by_cell[(r.get('trainer'), r.get('label'))] = r
+    tune_run = next((r for r in runs.values() if r.get('grid') == gid and r.get('kind') == 'tune'), None)
     cells = []
     focus = grid.get('focus') or {}
     for c in grid.get('cells') or []:
         j = by_job.get(c.get('job'))
         rid = ((j or {}).get('result') or {}).get('run')
-        r = runs.get(rid) or {}
+        r = runs.get(rid) or (by_cell.get((c.get('trainer'), c.get('label'))) if j is None else None) or {}
+        rid = rid or r.get('id')
         h = r.get('heldout') or {}
-        cell = {**c, 'state': (j or {}).get('state') or 'gone', 'run': rid, 'recall': h.get('recall'), 'stress': h.get('stress_recall'),
+        cell = {**c, 'state': (j or {}).get('state') or r.get('state') or 'gone', 'run': rid, 'recall': h.get('recall'), 'stress': h.get('stress_recall'),
                 'near': h.get('near_fires'), 'gap': (h.get('margin') or {}).get('gap'), 'fp': h.get('fp_per_hour'), 'threshold': h.get('threshold'),
-                'stale': bool(h.get('stale')), 'error': (j or {}).get('error')}
+                'stale': bool(h.get('stale')), 'error': (j or {}).get('error'), 'chosen': bool(r.get('chosen'))}
         if focus:                                             # the held-out takes of one tag value: the data the grid asks about
             f = ((h.get('by_tag') or {}).get(focus.get('axis')) or {}).get(focus.get('value')) or {}
             cell['focus'], cell['focus_stress'], cell['focus_n'] = f.get('recall'), f.get('stress'), f.get('n')
         cells.append(cell)
     counts = Counter(c['state'] for c in cells)
-    return {**grid, 'cells': cells, 'counts': dict(counts), 'done': counts.get('done', 0), 'of': len(cells), 'pivot': _pivot(cells)}
+    view = {**grid, 'cells': cells, 'counts': dict(counts), 'done': counts.get('done', 0), 'of': len(cells), 'pivot': _pivot(cells)}
+    if grid.get('refine'):                                    # the Optuna refine queued behind the cells: its job, then its run
+        j = by_job.get(grid['refine'].get('job'))
+        rid = ((j or {}).get('result') or {}).get('run') or ((tune_run or {}).get('id') if j is None else None)
+        r = runs.get(rid) or {}
+        h = r.get('heldout') or {}
+        view['refine'] = {**grid['refine'], 'state': (j or {}).get('state') or r.get('state') or 'gone', 'pct': (j or {}).get('pct'), 'msg': (j or {}).get('msg'), 'run': rid,
+                          'recall': h.get('recall'), 'stress': h.get('stress_recall'), 'near': h.get('near_fires'), 'chosen': bool(r.get('chosen'))}
+    return view
 
 
 def grid_start(slug, body=None, settings=None, **_):
     """Queue a grid: every combination of the ticked axes, `seeds` times each (seed 1 of every cell first, so the
-    first pass covers the whole grid). Refused above GRID_MAX cells. Answers the grid as GET would."""
+    first pass covers the whole grid). Refused above GRID_MAX cells. With `refine` {trials, budget_steps, parallel,
+    top} and the desktop trainer ticked, an Optuna refine is queued behind the cells: it starts from the grid's
+    `top` best judged cells (the grid finds the candidates, the refine masters them). Answers the grid as GET would."""
     root, err = _root(settings)
     if err:
         return err
@@ -2172,7 +2200,7 @@ def grid_start(slug, body=None, settings=None, **_):
     pdir = paths.project_dir(root, slug)
     named = _grid_sources(pdir, root)
     trainers = [t for t in (body.get('trainers') or ['oww']) if t in ('oww', 'mww')]
-    recipes = [r for r in (body.get('recipes') or ['natural']) if r in augment.STOPS]
+    recipes = [r for r in (body.get('recipes') or ['natural']) if r in augment.STOPS or r == 'custom']      # custom = the project's own Fine tune rows
     srcs = [s for s in (body.get('sources') or ['all']) if s in named]
     presets = [p for p in (body.get('presets') or ['standard']) if p in ('quick', 'standard', 'thorough')]
     knobs = body.get('knobs') if isinstance(body.get('knobs'), dict) else {}
@@ -2196,7 +2224,16 @@ def grid_start(slug, body=None, settings=None, **_):
     py, err = _python_for('train')
     if err:
         return err
-    gid = time.strftime('%Y%m%d-%H%M%S')
+    _grids_dir(pdir).mkdir(parents=True, exist_ok=True)
+    stamp = gid = time.strftime('%Y%m%d-%H%M%S')
+    n = 2
+    while True:                                               # two searches in one second: each claims its own file, at once
+        try:
+            os.close(os.open(_grids_dir(pdir) / f"{gid}.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            gid = f"{stamp}-{n}"
+            n += 1
     label = str(body.get('label') or '')[:40].strip()
     holdout_on = body.get('holdout', True) not in (False, 'false', 0, '0')
     try:
@@ -2211,12 +2248,23 @@ def grid_start(slug, body=None, settings=None, **_):
                 'label': c['label'], 'grid': gid, 'device': (settings or {}).get('device', 'auto'), 'whisper': (settings or {}).get('qa_whisper_model', 'base.en')}
         j = jobs.enqueue(root, 'train' if c['trainer'] == 'oww' else 'train_mww', args, py, PLUGIN_DIR, project=slug, publish=_publish)
         c['job'] = j['id']
+    refine = None
+    if isinstance(body.get('refine'), dict) and 'oww' in trainers:
+        rq = body['refine']
+        try:
+            refine = {'trials': max(2, min(60, int(rq.get('trials') or 16))), 'budget_steps': max(1000, min(50000, int(rq.get('budget_steps') or 8000))),
+                      'parallel': max(1, min(4, int(rq.get('parallel') or 1))), 'top': max(1, min(10, int(rq.get('top') or 3)))}
+        except (TypeError, ValueError):
+            return {'error': 'refine: trials, budget_steps, parallel and top are numbers'}, 400
+        rargs = {**refine, 'from_grid': gid, 'preset': 'thorough' if 'thorough' in presets else presets[-1], 'holdout': holdout_on, 'rounds': rounds,
+                 'label': ' · '.join(x for x in (label, 'refine') if x), 'grid': gid, 'device': (settings or {}).get('device', 'auto'), 'whisper': (settings or {}).get('qa_whisper_model', 'base.en')}
+        refine['job'] = jobs.enqueue(root, 'tune', rargs, py, PLUGIN_DIR, project=slug, publish=_publish)['id']
     focus = body.get('focus') if isinstance(body.get('focus'), dict) else None
     if focus and (focus.get('axis') not in ('device',) + tuple(tags.DEFAULT) or not focus.get('value')):
         focus = None
     grid = {'id': gid, 'project': slug, 'label': label, 'when': time.time(), 'seeds': seeds, 'rounds': rounds, 'holdout': holdout_on,
             'axes': {'trainers': trainers, 'recipes': recipes, 'sources': srcs, 'presets': presets, 'knobs': {t: [k for k in (knobs.get(t) or ['default'])] for t in trainers}},
-            'cells': cells, **({'focus': {'axis': str(focus['axis']), 'value': str(focus['value'])[:60]}} if focus else {})}
+            'cells': cells, **({'focus': {'axis': str(focus['axis']), 'value': str(focus['value'])[:60]}} if focus else {}), **({'refine': refine} if refine else {})}
     _grids_dir(pdir).mkdir(parents=True, exist_ok=True)
     write_json(_grids_dir(pdir) / f"{gid}.json", grid, indent=1)
     return {'grid': _grid_view(root, pdir, grid)}
@@ -2236,7 +2284,7 @@ def grids_list(slug, settings=None, **_):
         g = read_json(f)
         if g:
             v = _grid_view(root, pdir, g)
-            out.append({k: v[k] for k in ('id', 'label', 'when', 'seeds', 'axes', 'counts', 'done', 'of')})
+            out.append({k: v.get(k) for k in ('id', 'label', 'when', 'seeds', 'axes', 'counts', 'done', 'of')} | ({'refine': v['refine']} if v.get('refine') else {}))
     return {'grids': out}
 
 
@@ -2272,7 +2320,7 @@ def grid_delete(slug, gid, settings=None, **_):
     if not g:
         return {'error': 'no such grid'}, 404
     stopped = 0
-    for c in g.get('cells') or []:
+    for c in list(g.get('cells') or []) + [g.get('refine') or {}]:
         if c.get('job') and _safe(c['job']) and jobs.cancel(paths.jobs_dir(root) / c['job']):
             stopped += 1
     f.unlink()
@@ -2311,9 +2359,10 @@ def room_delete(query=None, body=None, settings=None, **_):
 
 
 def room_day(slug, body=None, settings=None, **_):
-    """Start a keeping watch on every satellite microphone named (or every online one): the room for `minutes`,
-    every piece into the library, the wake word's chosen models on watch so a phrase said in the room is flagged.
-    PC microphones are the page's: it starts them itself. Answers what started and what refused."""
+    """Start a keeping watch on every satellite microphone named (every online one when `devices` is absent; none
+    when it is empty): the room for `minutes`, every piece into the library, the models on watch (`runs`, else the
+    wake word's chosen and built-in ones) so a phrase said in the room is flagged. PC microphones are the page's:
+    it starts them itself with the `runs` this answers. Answers what started and what refused."""
     root, err = _root(settings)
     if err:
         return err
@@ -2326,11 +2375,17 @@ def room_day(slug, body=None, settings=None, **_):
     except ValueError:
         minutes = 360
     test = body.get('test', True) not in (False, 'false', 0, '0')
-    want = [str(d)[:60] for d in (body.get('devices') or []) if str(d).strip()]
-    sats = [m for m in mics()['mics'] if m.get('online') and (not want or m['id'] in want)]
+    if body.get('devices') is not None and not isinstance(body['devices'], list):
+        return {'error': 'devices: a list of microphone ids, or nothing for every online satellite'}, 400
+    want = None if body.get('devices') is None else [str(d)[:60] for d in body['devices'] if str(d).strip()]
+    sats = [m for m in mics()['mics'] if m.get('online') and (want is None or m['id'] in want)]
     pdir = paths.project_dir(root, slug)
-    picks = _chosen(pdir)
-    runs = ','.join(dict.fromkeys([r['id'] for r in picks.values() if r] + [d.name for d in (pdir / 'runs').iterdir() if d.name.startswith('builtin-') and (d / 'run.json').is_file()] if (pdir / 'runs').is_dir() else [r['id'] for r in picks.values() if r]))
+    runs = str(body.get('runs') or '')
+    if runs and not _safe(*runs.split(',')):
+        return {'error': 'bad run id'}, 400
+    if not runs:
+        picks = _chosen(pdir)
+        runs = ','.join(dict.fromkeys([r['id'] for r in picks.values() if r] + [d.name for d in (pdir / 'runs').iterdir() if d.name.startswith('builtin-') and (d / 'run.json').is_file()] if (pdir / 'runs').is_dir() else [r['id'] for r in picks.values() if r]))
     started, refused = [], []
     for m in sats:
         if _watch.running(slug, m['id']):

@@ -127,6 +127,8 @@ class VoiceChatSystem:
 
         # Initialize TTS via provider system
         self.tts_server_manager = None
+        self._kokoro_gen = 0                  # bumped by every Kokoro start/stop: a fetch thread spawns only for its own generation
+        self._kokoro_lock = threading.Lock()
         tts_provider = getattr(config, 'TTS_PROVIDER', 'none')
         # Legacy compat: if TTS_PROVIDER missing but TTS_ENABLED is true, assume kokoro
         if tts_provider == 'none' and getattr(config, 'TTS_ENABLED', False):
@@ -1001,19 +1003,49 @@ class VoiceChatSystem:
                     logger.debug(f"CPU thread auto-tune skipped: {e}")
             return env
 
-        self.tts_server_manager = ProcessManager(
-            script_path=tts_script, log_name="kokoro", base_dir=base_dir,
-            env_callback=_env_callback,
-        )
-        self.tts_server_manager.start()
-        self.tts_server_manager.monitor_and_restart(check_interval=10)
-        # Don't block startup — Kokoro server loads model in subprocess.
-        # KokoroTTSProvider.generate() handles connection errors gracefully
-        # if the server isn't ready yet. Brief sleep to let the process bind the port.
-        time.sleep(1)
+        def _spawn():
+            self.tts_server_manager = ProcessManager(
+                script_path=tts_script, log_name="kokoro", base_dir=base_dir,
+                env_callback=_env_callback,
+            )
+            self.tts_server_manager.start()
+            self.tts_server_manager.monitor_and_restart(check_interval=10)
+            # Don't block startup — Kokoro server loads model in subprocess.
+            # KokoroTTSProvider.generate() handles connection errors gracefully
+            # if the server isn't ready yet. Brief sleep to let the process bind the port.
+            time.sleep(1)
+
+        # The model (330 MB), its config and the default voice are fetched HERE,
+        # in the parent, under a progress row in the notification center: the
+        # worker is a subprocess with no line to it, and a first boot on a slow
+        # line looked like Kokoro never coming up (user report 2026-10-20). Off
+        # the boot thread so the web UI comes up meanwhile; a stop or a provider
+        # switch during the download wins (the generation moved on). Everything
+        # cached, the usual boot: spawn at once, as before.
+        from core.tts import kokoro_files
+        need = kokoro_files.missing()
+        if not need:
+            _spawn()
+            return
+        with self._kokoro_lock:
+            self._kokoro_gen += 1
+            gen = self._kokoro_gen
+
+        def _fetch_then_spawn():
+            kokoro_files.fetch(need)
+            with self._kokoro_lock:
+                if gen != self._kokoro_gen:
+                    logger.info("Kokoro start abandoned: the provider changed during the model download")
+                    return
+                _spawn()
+
+        logger.info(f"Kokoro files to fetch before the worker starts: {', '.join(need)}")
+        threading.Thread(target=_fetch_then_spawn, name='kokoro-fetch', daemon=True).start()
 
     def _stop_kokoro_server(self):
-        """Stop Kokoro subprocess if running."""
+        """Stop Kokoro subprocess if running, and void a model fetch still in flight."""
+        with self._kokoro_lock:
+            self._kokoro_gen += 1
         if self.tts_server_manager:
             self.tts_server_manager.stop()
             self.tts_server_manager = None

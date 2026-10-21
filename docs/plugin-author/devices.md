@@ -326,20 +326,36 @@ Anything outside those limits is dropped. Name the capability `camera` and the
 action `look` so every camera reads the same to her. Warn the room before you
 capture: a light, a sound, or both.
 
-## Moving pictures on a board's glass
+## A stream on a board's glass
 
-A plugin that paints frames on a satellite's screen (FlashHead puts her talking
-face there) uses two in-process calls in `core.devices.glass`, never the
-driver's private ones. There is no door for it: each board is reached with its
-own secrets, as every call is.
+A plugin that paints moving frames on a satellite's screen (a talking face, a
+game's stage, a camera) uses three in-process calls in `core.devices.glass`,
+never the driver's private ones. Each board is reached with its own secrets,
+as every call is. The board paints frames on a beat of its own (`screen.fps` in
+its `/health`, 3 on the speaker board), the newest decoded frame each beat, so
+frames that arrive unevenly reach the glass evenly. Core keeps one sender per
+board, paced to that beat; the newest frame wins and nothing queues, so the
+call never waits on the board.
 
-- `face_boards()` returns `[(device_id, side)]`: every enabled satellite whose
-  glass is on and takes a JPEG frame (firmware 0.7.7+, `screen.jpeg` in its
-  `/health`). `side` is the largest square it paints, a multiple of 16.
-- `face_frame(device_id, jpeg, seconds=3)` paints one JPEG of that size straight
-  to the panel. The board's own page comes back `seconds` after the last frame.
-  It raises when the board did not take it. Send the newest frame only: a small
-  board paints about 8 a second.
+- `stream_boards()` returns `[(device_id, w, h, fps)]`: every enabled satellite
+  whose glass is on and takes a JPEG frame (firmware 0.7.7+, `screen.jpeg` in
+  its `/health`), the whole glass and its beat. Fit your frame inside `w` x `h`
+  with both sides multiples of 16 (a 320x240 glass takes 320x240; a square is
+  not needed).
+- `stream_frame(device_id, jpeg)` hands one JPEG to that board's sender and
+  returns at once with its counts (`sent`, `replaced`, `failed`, `last_error`).
+  `replaced` climbing means you send faster than the beat: that is fine, the
+  newest frame goes. Raises `LookupError` for a board with no such glass.
+- `stream_end(device_id)` stops the sender and brings the board's own page back;
+  left alone, the page comes back 3 s after the last frame.
+
+A browser can cast too: `GET /api/devices/{id}/screen/stream` says what the
+glass takes (`w`, `h`, `fps`), `POST /api/devices/{id}/screen/frame` takes one
+JPEG as the body, `DELETE .../screen/stream` ends it. The Game Room's stage grab
+rides this to cast a game onto a board.
+
+`face_boards()` and `face_frame()` remain one release for the first sender
+(FlashHead): the same stream, a square frame.
 
 ## Voice: a device with a microphone or a speaker
 

@@ -182,3 +182,56 @@ def test_a_board_is_shown_only_what_it_says_it_takes():
     shown = {k for k, f in fields.items() if engine.taken(f, {'takes': sat._takes(cyd)})}
     assert {'rotation', 'invert', 'mirror'} <= shown and 'flip' not in shown   # a CYD: the glass knobs, not the stick's flip
     assert 'picture' in sat.describe({'id': 'x', 'takes': sat._takes(glass_board)}, {})['screen']['actions']
+
+
+# --- a stream on the glass (2026-10-20) ---------------------------------------
+
+def _known_board(fps):
+    """A board the stream knows without asking it: config, secrets, w, h, fps."""
+    return ({'url': 'http://board'}, {'token': 'k'}, 320, 240, fps)
+
+
+def test_stream_paces_to_the_board_and_the_newest_frame_wins():
+    import time
+    sent = []
+    calls = lambda m, path, c, s, **kw: sent.append((path, kw.get('data')))
+    with patch.object(glass, '_known', {'b': _known_board(10)}), patch.object(glass, '_streams', {}), \
+         patch('core.devices.drivers.satellite._call', side_effect=calls):
+        glass.stream_frame('b', b'f1')               # the first goes at once
+        time.sleep(0.05)
+        glass.stream_frame('b', b'f2')               # waits for the beat...
+        status = glass.stream_frame('b', b'f3')      # ...and is replaced by this one
+        time.sleep(0.35)
+        assert [d for _, d in sent] == [b'f1', b'f3']
+        assert status['replaced'] == 1 and status['fps'] == 10
+        assert all(path.startswith('/screen/picture?format=jpeg') for path, _ in sent)
+        glass.stream_end('b')
+        assert sent[-1][0] == '/screen/picture'      # the board's own page comes back
+
+
+def test_stream_refuses_a_frame_too_big_and_a_board_without_a_glass():
+    import pytest
+    with patch.object(glass, '_known', {'b': _known_board(3)}), patch.object(glass, '_streams', {}):
+        with pytest.raises(ValueError):
+            glass.stream_frame('b', b'x' * (glass.FRAME_MAX + 1))
+    with patch.object(glass, '_known', {}), patch.object(glass, '_streams', {}), \
+         patch('core.devices.engine.rows', return_value={}):
+        with pytest.raises(LookupError):
+            glass.stream_frame('nobody', b'f')
+
+
+def test_stream_counts_a_board_that_does_not_answer_and_keeps_going():
+    import time
+    from core.devices.drivers.satellite import Problem
+    with patch.object(glass, '_known', {'b': _known_board(20)}), patch.object(glass, '_streams', {}), \
+         patch('core.devices.drivers.satellite._call', side_effect=Problem("No answer from board within 5s.")):
+        glass.stream_frame('b', b'f1')
+        time.sleep(0.2)
+        status = glass.stream_status('b')
+        assert status['failed'] == 1 and 'No answer' in status['last_error'] and status['sent'] == 0
+        glass.stream_end('b')
+
+
+def test_face_boards_is_the_stream_as_a_square():
+    with patch.object(glass, 'stream_boards', return_value=[('b', 320, 240, 3), ('c', 240, 240, 3)]):
+        assert glass.face_boards() == [('b', 240), ('c', 240)]

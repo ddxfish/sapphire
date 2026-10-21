@@ -524,6 +524,7 @@ function skeleton(me) {
                 <span class="gr-stage-info" id="gr-stage-info"></span>
                 <button type="button" id="gr-attn" class="gr-attn" style="display:none" title="Her attention (voice, wake word) moved to another chat — bring it back to this table">&#x1F3A4; retake</button>
                 ${spec.cadence ? '<span class="gr-cad" id="gr-cad" style="display:none"><span id="gr-cad-text"></span><button type="button" id="gr-cad-pause" class="sb-icon-btn" title="Pause her unprompted turns in this session">&#x23F8;</button></span>' : ''}
+                ${railMode ? '' : '<select id="gr-cast" title="Cast the stage to a board\'s screen (a satellite with a glass)" style="display:none;max-width:10em"><option value="">cast: off</option></select><select id="gr-cast-fit" title="How the stage fills the glass" style="display:none"><option value="fit">fit</option><option value="stretch">stretch</option><option value="cover">cover</option></select>'}
                 ${railMode ? '' : `<button type="button" id="gr-rail-toggle" class="sb-icon-btn" title="Show / hide the chat">&#x1F4AC;</button>`}
             </div>
             <div class="gr-room gr-mode-${esc(mode)}" id="gr-room">
@@ -609,6 +610,7 @@ function skeleton(me) {
 
     const goBack = () => bounce(me);
     $('#gr-stage-back').onclick = goBack;
+    setupCast(me);
     $('#gr-back').onclick = goBack;
     $('#gr-attn').onclick = () => activateSession(me.session).then(() => paintAttention(me)).catch(e => showError(e.message));
     $('#gr-new-session').onclick = () => newSessionPrompt(me);
@@ -1076,6 +1078,7 @@ function stopCadence(me) {
     if (me.cadKeep) { clearInterval(me.cadKeep); me.cadKeep = null; }
     if (me.cadPaint) { clearInterval(me.cadPaint); me.cadPaint = null; }
     stopFrames(me);
+    stopCast(me);
     if (me.cad && me.cad.armed) {
         // the session is ending: disarm + her summary (server-side, after us)
         fetch(PLUGIN_API + 'room/session-end', {
@@ -1167,6 +1170,109 @@ function captureFrame(me, n) {
     if (!f) return;
     me.frames = [...(me.frames || []), f].slice(-n);
     deposit(me, { frames: me.frames });
+}
+
+// ── cast: the stage on a board's glass ──
+// A satellite with a screen that takes JPEG frames (core/devices/glass.py:
+// GET /api/devices/{id}/screen/stream says its size and beat). The stage
+// canvas is grabbed on that beat, fitted inside the glass (sides multiples of
+// 16, as the board wants), and posted one frame at a time; core paces it and
+// keeps the newest. Leaving the room ends the cast. The pick lives for the
+// visit only. Nothing here knows what game is on the stage.
+async function setupCast(me) {
+    const sel = me.root?.querySelector('#gr-cast');
+    if (!sel) return;
+    let boards = [];
+    try {
+        const r = await fetch('/api/devices', { headers: { 'X-CSRF-Token': csrf() } });
+        const list = r.ok ? await r.json() : null;
+        boards = (list?.devices || list || []).filter(d => d && d.enabled !== false
+            && (d.capabilities || []).some(c => (c.capability || c) === 'screen'));
+    } catch (e) { boards = []; }
+    if (R !== me || !boards.length) return;
+    for (const b of boards) {
+        const o = document.createElement('option');
+        o.value = b.id; o.textContent = `cast: ${b.label || b.id}`;
+        sel.appendChild(o);
+    }
+    sel.style.display = '';
+    sel.onchange = () => { stopCast(me); if (sel.value) startCast(me, sel.value); };
+    const fit = me.root?.querySelector('#gr-cast-fit');
+    if (fit) {
+        try { fit.value = localStorage.getItem(CAST_FIT_KEY) || 'fit'; } catch (e) { /* no storage: fit */ }
+        fit.onchange = () => { try { localStorage.setItem(CAST_FIT_KEY, fit.value); } catch (e) { /* fine */ } };
+    }
+}
+
+const CAST_FIT_KEY = 'gr-cast-fit';
+
+function castFit(me) {
+    const fit = me.root?.querySelector('#gr-cast-fit');
+    return fit?.value || 'fit';
+}
+
+async function startCast(me, deviceId) {
+    let takes;
+    try {
+        const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/screen/stream`, { headers: { 'X-CSRF-Token': csrf() } });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+        takes = await r.json();
+    } catch (e) { showError(`That board takes no frames: ${e.message}`); const sel = me.root?.querySelector('#gr-cast'); if (sel) sel.value = ''; return; }
+    if (R !== me) return;
+    me.cast = { device: deviceId, w: takes.w, h: takes.h, busy: false };
+    const every = Math.round(1000 / Math.max(1, Math.min(30, takes.fps || 3)));
+    me.cast.timer = setInterval(() => castFrame(me), every);
+    const fit = me.root?.querySelector('#gr-cast-fit');
+    if (fit) fit.style.display = '';
+    castFrame(me);
+}
+
+function stopCast(me) {
+    const c = me.cast;
+    const fit = me.root?.querySelector('#gr-cast-fit');
+    if (fit) fit.style.display = 'none';
+    if (!c) return;
+    me.cast = null;
+    if (c.timer) clearInterval(c.timer);
+    fetch(`/api/devices/${encodeURIComponent(c.device)}/screen/stream`, {
+        method: 'DELETE', keepalive: true, headers: { 'X-CSRF-Token': csrf() },
+    }).catch(() => {});
+}
+
+function castFrame(me) {
+    const c = me.cast;
+    if (!c || c.busy || R !== me || document.hidden) return;
+    const cv = me.root?.querySelector('#gr-stage canvas');
+    if (!cv || !cv.width || !cv.height) return;
+    // The scaling is this browser's work; the board only paints the pixels. fit: the whole
+    // stage inside the glass, its shape kept (the board darkens the rest); stretch: the whole
+    // stage over the whole glass; cover: the glass filled, the stage's edges cropped.
+    const mode = castFit(me);
+    let w = c.w, h = c.h, sx = 0, sy = 0, sw = cv.width, sh = cv.height;
+    if (mode === 'fit') {
+        const scale = Math.min(c.w / cv.width, c.h / cv.height);
+        w = Math.max(16, Math.floor(cv.width * scale / 16) * 16);
+        h = Math.max(16, Math.floor(cv.height * scale / 16) * 16);
+    } else if (mode === 'cover') {
+        const scale = Math.max(c.w / cv.width, c.h / cv.height);
+        sw = Math.round(c.w / scale); sh = Math.round(c.h / scale);
+        sx = Math.round((cv.width - sw) / 2); sy = Math.round((cv.height - sh) / 2);
+    }
+    let off;
+    try {
+        off = c.off || (c.off = document.createElement('canvas'));   // one canvas for the cast, not one a frame
+        if (off.width !== w || off.height !== h) { off.width = w; off.height = h; }
+        off.getContext('2d').drawImage(cv, sx, sy, sw, sh, 0, 0, w, h);
+    } catch (e) { return; }                                  // a tainted canvas or a dead stage
+    c.busy = true;
+    off.toBlob(blob => {
+        if (!blob || me.cast !== c) { c.busy = false; return; }
+        fetch(`/api/devices/${encodeURIComponent(c.device)}/screen/frame`, {
+            method: 'POST', headers: { 'Content-Type': 'image/jpeg', 'X-CSRF-Token': csrf() }, body: blob,
+        }).then(r => { if (!r.ok && r.status !== 429) { showError('The cast stopped: the board did not take a frame'); stopCast(me); const sel = me.root?.querySelector('#gr-cast'); if (sel) sel.value = ''; } })
+          .catch(() => {})
+          .finally(() => { c.busy = false; });
+    }, 'image/jpeg', 0.8);
 }
 
 function deposit(me, { frames, text } = {}) {

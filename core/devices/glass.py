@@ -198,20 +198,123 @@ def start():
         get_event_bus().on(_EVENTS, lambda event: _dirty.set())
 
 
-# --- a face on the glass ------------------------------------------------------
-# For a plugin that paints moving frames (FlashHead): in-process only, no door
-# of its own; each board is reached with its own secrets, as every call is.
+# --- a stream on the glass ----------------------------------------------------
+# JPEG frames from any sender: a plugin in process (stream_frame) or a browser
+# through POST /api/devices/{id}/screen/frame (a game casting its stage). The
+# board paints frames on a beat of its own (screen.fps in /health, 0.7.8); here
+# each board has one sender thread paced to that beat, and the newest frame
+# wins: one that arrives while the last is in flight replaces the one waiting,
+# nothing queues, and whoever made the frame never waits on the board. Each
+# board is reached with its own secrets, as every call is. Nothing here knows
+# what the frames show.
 
-_faces = {}                   # device id -> (config, secrets): face_boards() keeps them for face_frame()
+STREAM_SECONDS = 3            # the board's own page comes back this long after the last frame
+STREAM_IDLE_S = 15            # a sender with nothing to send for this long ends; the next frame starts one again
+STREAM_FPS = 3                # the beat when a board states none
+FRAME_MAX = 256 * 1024        # a frame larger than this is refused (the board's own limit)
+
+_known = {}                   # device id -> (config, secrets, w, h, fps)
+_streams = {}                 # device id -> _Stream
 
 
-def face_boards():
-    """Every enabled satellite whose glass is on and takes a JPEG frame
-    (firmware 0.7.7+): [(device id, side)], side the largest square it paints,
-    a multiple of 16. Each board's /health is asked at most once a minute."""
+class _Stream:
+    def __init__(self, device_id, known):
+        self.device_id = device_id
+        self.known = known[:2]
+        self.fps = max(1, min(30, int(known[4] or STREAM_FPS)))
+        self.next = None
+        self.sent = self.replaced = self.failed = 0
+        self.last_error = ''
+        self.alive = True
+        self.cv = threading.Condition()
+        self.thread = threading.Thread(target=self._run, daemon=True, name=f'glass-stream-{device_id}')
+        self.thread.start()
+
+    def offer(self, jpeg):
+        with self.cv:
+            if self.next is not None:
+                self.replaced += 1
+            self.next = jpeg
+            self.cv.notify()
+
+    def stop(self):
+        with self.cv:
+            self.alive = False
+            self.next = None
+            self.cv.notify()
+
+    def status(self):
+        return {'fps': self.fps, 'sent': self.sent, 'replaced': self.replaced, 'failed': self.failed,
+                'last_error': self.last_error}
+
+    def _run(self):
+        from core.devices.drivers import satellite
+        period = 1.0 / self.fps
+        due = time.monotonic()
+        while True:
+            with self.cv:
+                while self.next is None and self.alive:
+                    if not self.cv.wait(timeout=STREAM_IDLE_S):
+                        self.alive = False             # idle: this sender is done
+                if not self.alive:
+                    break
+            wait = due - time.monotonic()               # the beat: never faster than the board paints
+            if wait > 0:
+                time.sleep(wait)                        # a frame arriving meanwhile replaces the one waiting
+            with self.cv:
+                jpeg, self.next = self.next, None
+            due = time.monotonic() + period
+            try:
+                satellite._call('POST', f'/screen/picture?format=jpeg&seconds={STREAM_SECONDS}', *self.known,
+                                timeout=5, data=jpeg, headers={'Content-Type': 'image/jpeg'})
+                self.sent += 1
+            except Exception as e:
+                self.failed += 1
+                self.last_error = str(e)[:160]
+        with _lock:
+            if _streams.get(self.device_id) is self:
+                del _streams[self.device_id]
+
+
+def _learn(row, config, secrets, screen):
+    w, h = int(screen.get('w') or 0), int(screen.get('h') or 0)
+    if not (screen.get('jpeg') and screen.get('on', True) and min(w, h) >= 64):
+        return None
+    known = (config, secrets, w, h, int(screen.get('fps') or STREAM_FPS))
+    with _lock:
+        _known[row['id']] = known
+    return known
+
+
+def _lookup(device_id):
+    """What that board's glass takes, asked of it at most once a minute."""
     from core.devices import engine
     from core.devices.drivers import satellite
-    out, keep = [], {}
+    with _lock:
+        known = _known.get(device_id)
+    if known:
+        return known
+    row = engine.rows().get(device_id)
+    part = engine._part(row, 'satellite') if row else None
+    if not part or not row.get('enabled', True):
+        raise LookupError(f"{device_id} is not a satellite with a screen")
+    config, secrets = part.get('config') or {}, engine._part_secrets(row['id'], 'satellite')
+    known = _learn(row, config, secrets, satellite._health(row, config, secrets).get('screen') or {})
+    if not known:
+        raise LookupError(f"{device_id} has no glass that takes frames (firmware 0.7.7+, its screen on)")
+    return known
+
+
+def stream_boards():
+    """Every enabled satellite whose glass is on and takes a JPEG frame
+    (firmware 0.7.7+, `screen.jpeg` in its /health): [(device id, w, h, fps)],
+    the whole glass and the beat it paints on. Each board's /health is asked at
+    most once a minute."""
+    from core.devices import engine
+    from core.devices.drivers import satellite
+    out = []
+    with _lock:
+        _known.clear()
     for row in engine.rows().values():
         part = engine._part(row, 'satellite')
         if not part or not row.get('enabled', True):
@@ -221,24 +324,60 @@ def face_boards():
             screen = satellite._health(row, config, secrets).get('screen') or {}
         except Exception:
             continue
-        side = min(int(screen.get('w') or 0), int(screen.get('h') or 0)) // 16 * 16
-        if screen.get('jpeg') and screen.get('on', True) and side >= 64:
-            out.append((row['id'], side))
-            keep[row['id']] = (config, secrets)
-    with _lock:
-        _faces.clear()
-        _faces.update(keep)
+        known = _learn(row, config, secrets, screen)
+        if known:
+            out.append((row['id'], known[2], known[3], known[4]))
     return out
 
 
-def face_frame(device_id, jpeg, seconds=3):
-    """One JPEG frame (the size face_boards() said) painted straight onto that
-    board's glass; the board's own page comes back `seconds` after the last.
-    Raises when the board did not take it."""
+def stream_frame(device_id, jpeg):
+    """One JPEG frame for that board's glass (up to its w x h, sides multiples
+    of 16): handed to the board's sender, which paces frames to the board's beat
+    and keeps only the newest. Returns at once with the sender's counts. Raises
+    LookupError when the board has no glass that takes frames, ValueError on a
+    frame too big."""
+    if not jpeg or len(jpeg) > FRAME_MAX:
+        raise ValueError(f"a frame is up to {FRAME_MAX // 1024} KB")
+    known = _lookup(device_id)
+    with _lock:
+        stream = _streams.get(device_id)
+        if stream is None or not stream.alive:
+            stream = _streams[device_id] = _Stream(device_id, known)
+    stream.offer(jpeg)
+    return stream.status()
+
+
+def stream_end(device_id):
+    """The sender stops and the board's own page comes back now."""
     from core.devices.drivers import satellite
     with _lock:
-        known = _faces.get(device_id)
-    if known is None:
-        raise LookupError(f"{device_id} is not a face board (face_boards() first)")
-    satellite._call('POST', f'/screen/picture?format=jpeg&seconds={int(seconds)}', *known,
-                    timeout=5, data=jpeg, headers={'Content-Type': 'image/jpeg'})
+        stream = _streams.pop(device_id, None)
+        known = _known.get(device_id)
+    if stream:
+        stream.stop()
+    if known:
+        try:
+            satellite._call('POST', '/screen/picture', *known[:2], timeout=5, json={'clear': True})
+        except Exception:
+            pass
+
+
+def stream_status(device_id=None):
+    """The senders' counts: one board's, or every board's."""
+    with _lock:
+        if device_id is not None:
+            s = _streams.get(device_id)
+            return s.status() if s else None
+        return {d: s.status() for d, s in _streams.items()}
+
+
+# The first senders (FlashHead) asked for a square and painted a face. Kept as
+# the stream, one release: the frames ride the same sender and beat.
+def face_boards():
+    """[(device id, side)], side the largest square the glass paints, a multiple of 16."""
+    return [(d, min(w, h) // 16 * 16) for d, w, h, fps in stream_boards()]
+
+
+def face_frame(device_id, jpeg, seconds=3):
+    """stream_frame(). The board's page comes back STREAM_SECONDS after the last frame."""
+    stream_frame(device_id, jpeg)

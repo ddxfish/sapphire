@@ -19,7 +19,7 @@ PLUGIN = Path(__file__).resolve().parents[1]
 if str(PLUGIN) not in sys.path:
     sys.path.insert(0, str(PLUGIN))
 
-from wakeword_maker import catalog, jobs, paths, store   # noqa: E402
+from wakeword_maker import catalog, jobs, paths, store, tune   # noqa: E402
 import importlib.util   # noqa: E402
 import threading   # noqa: E402
 
@@ -331,10 +331,11 @@ def test_project_routes(settings, root):
     r = api.get_project('hey_sapphire', settings=settings)
     assert r['project']['jobs'] == []
     pg = r['project']['progress']
-    assert pg['pct'] == 10 and pg['step'] == 'voices' and pg['next'] == 'Make the set' and pg['index'] == 1 and pg['of'] == 6
+    assert pg['pct'] == 10 and pg['step'] == 'voices' and pg['next'] == 'Make the set' and pg['index'] == 1 and pg['of'] == 7
+    assert pg['room'] == 0 and pg['room_floor'] == 30
     assert api.list_projects(settings=settings)['projects'][0]['progress']['pct'] == 10
     r = api.update_project('hey_sapphire', body={'steps': {'voices': True, 'bogus': True}}, settings=settings)
-    assert r['project']['progress']['step'] == 'record' and r['project']['progress']['pct'] == 25 and 'bogus' not in r['project']['steps']
+    assert r['project']['progress']['step'] == 'record' and r['project']['progress']['pct'] == 23 and 'bogus' not in r['project']['steps']
     r = api.update_project('hey_sapphire', body={'steps': {'voices': False}}, settings=settings)
     assert r['project']['progress']['step'] == 'voices'
     assert api.status(settings=settings)['root_ok'] is True
@@ -895,6 +896,168 @@ def test_room_day_starts_a_keeping_watch_on_every_online_satellite(settings, roo
     assert api.room_library(query={'project': 'hey_day'}, settings=settings)['minutes'] == 0
     r3 = api.room_day_stop('hey_day', settings=settings)
     assert not any(w['running'] for w in r3['watches'])
+    # the page's PC microphones: an empty device list starts no satellite and answers the models on watch
+    r4 = api.room_day('hey_day', body={'devices': [], 'runs': 'r1,r2'}, settings=settings)
+    assert r4['started'] == [] and r4['refused'] == [] and r4['runs'] == 'r1,r2'
+    assert api.room_day('hey_day', body={'devices': [], 'runs': '../x'}, settings=settings)[1] == 400
+
+
+def test_a_deep_search_queues_the_grid_then_a_refine_of_its_best_cells(settings, root, monkeypatch):
+    api.create_project(body={'phrase': 'hey deep'}, settings=settings)
+    monkeypatch.setattr(api, '_python_for', lambda kind: (sys.executable, None))
+    queued = []
+    monkeypatch.setattr(api.jobs, 'enqueue', lambda root, kind, args, py, pdir, project=None, publish=None: queued.append((kind, args)) or {'id': f"j{len(queued)}"})
+    body = {'trainers': ['oww'], 'recipes': ['natural'], 'sources': ['all'], 'presets': ['standard'], 'seeds': 1, 'label': 'deep',
+            'refine': {'trials': 4, 'budget_steps': 2000, 'parallel': 1, 'top': 2}}
+    g = api.grid_start('hey_deep', body=body, settings=settings)['grid']
+    assert g['of'] == 1 and [k for k, _ in queued] == ['train', 'tune']                 # the refine waits behind every cell
+    r = queued[-1][1]
+    assert r['from_grid'] == g['id'] and r['top'] == 2 and r['trials'] == 4 and r['budget_steps'] == 2000 and r['label'] == 'deep · refine' and r['preset'] == 'standard'
+    assert g['refine']['job'] == 'j2' and g['refine']['state'] == 'gone' and g['cells'][0]['chosen'] is False
+    assert api.grids_list('hey_deep', settings=settings)['grids'][0]['refine']['trials'] == 4
+    assert api.grid_start('hey_deep', body={**body, 'trainers': ['mww']}, settings=settings)['grid'].get('refine') is None     # desktop only
+    assert api.grid_start('hey_deep', body={**body, 'refine': {'trials': 'lots'}}, settings=settings)[1] == 400
+    cancelled = []
+    monkeypatch.setattr(api.jobs, 'cancel', lambda d: cancelled.append(d.name) or True)
+    assert api.grid_delete('hey_deep', g['id'], settings=settings)['cancelled'] == 2 and 'j2' in cancelled
+
+
+def test_the_refine_starts_from_the_judged_cells_and_searches_around_them(settings, root):
+    api.create_project(body={'phrase': 'hey refine'}, settings=settings)
+    rd = paths.project_dir(root, 'hey_refine') / 'runs'
+
+    def run(rid, grid, cfg, heldout, **extra):
+        (rd / rid).mkdir(parents=True)
+        paths.write_json(rd / rid / 'run.json', {'id': rid, 'trainer': 'oww', 'state': 'done', 'grid': grid, 'cfg': cfg, 'heldout': heldout, **extra})
+    run('a', 'g1', {'model_type': 'dnn', 'layer_size': 32, 'n_blocks': 1, 'lr': 1e-4, 'max_negative_weight': 1500}, {'recall': 1.0, 'stress_recall': 0.9, 'near_fires': 0, 'neg_fires': 0})
+    run('b', 'g1', {'model_type': 'rnn', 'layer_size': 32, 'n_blocks': 1, 'lr': 3e-4, 'max_negative_weight': 3000}, {'recall': 1.0, 'stress_recall': 0.95, 'near_fires': 2, 'neg_fires': 0})
+    run('c', 'g1', {'model_type': 'dnn', 'layer_size': 64, 'n_blocks': 2, 'lr': 1e-4, 'max_negative_weight': 500}, None)           # never judged
+    run('d', 'g2', {'model_type': 'dnn', 'layer_size': 128, 'n_blocks': 3, 'lr': 1e-4, 'max_negative_weight': 500}, {'recall': 1.0, 'stress_recall': 1.0, 'near_fires': 0, 'neg_fires': 0})
+    run('e', 'g1', {'model_type': 'dnn', 'layer_size': 32, 'n_blocks': 1, 'lr': 1e-4, 'max_negative_weight': 500}, {'recall': 1.0, 'stress_recall': 1.0}, trainer='mww')
+    run('f', 'g1', {'model_type': 'dnn', 'layer_size': 32, 'n_blocks': 1, 'lr': 1e-4, 'max_negative_weight': 500}, {'recall': 1.0, 'stress_recall': 1.0}, kind='tune')
+    assert tune.judge_score({'recall': 1.0, 'stress_recall': 0.9, 'near_fires': 0}) == 0.93
+    assert tune.judge_score({'recall': 1.0, 'stress_recall': 0.95, 'near_fires': 2, 'neg_fires': 1}) == 0.465 and tune.judge_score(None) is None
+    cands = tune.candidates(root, 'hey_refine', grid='g1', top=2)
+    assert [c['id'] for c in cands] == ['a', 'b']                                          # judged desktop cells of this grid, best first
+    assert [c['id'] for c in tune.candidates(root, 'hey_refine', top=1)] == ['d']          # no grid: every judged desktop run
+    sp = tune.space_around(cands, ['layer_size', 'n_blocks', 'lr', 'max_negative_weight', 'model_type'])
+    assert sp['layer_size'] == [32, 64] and sp['n_blocks'] == [1, 2] and sp['model_type'] == ['dnn', 'rnn'] and sp['max_negative_weight'] == [1000, 1500, 3000]
+    assert sp['lr'] == pytest.approx((1e-4 / 3, 3e-4))                                      # a third below the lowest, capped at the top of the range
+
+
+def test_a_grid_keeps_its_cells_when_their_job_folders_are_pruned(settings, root):
+    api.create_project(body={'phrase': 'hey keep'}, settings=settings)
+    pdir = paths.project_dir(root, 'hey_keep')
+    gid = '20261020-000000'
+
+    def run(rid, label, trainer='oww', kind=None, heldout=None, chosen=False):
+        (pdir / 'runs' / rid).mkdir(parents=True)
+        paths.write_json(pdir / 'runs' / rid / 'run.json', {'id': rid, 'trainer': trainer, 'state': 'done', 'grid': gid, 'label': label, 'cfg': {},
+                                                           **({'kind': kind} if kind else {}), **({'heldout': heldout} if heldout else {}), **({'chosen': True} if chosen else {})})
+    run('r1', 'g · natural · all · standard · s1', heldout={'recall': 0.9, 'stress_recall': 0.8, 'near_fires': 0, 'margin': {'gap': 0.2}}, chosen=True)
+    run('r2', 'g · natural · all · standard · s1', trainer='mww', heldout={'recall': 1.0, 'stress_recall': 0.7, 'near_fires': 1, 'margin': {'gap': 0.1}})
+    run('r3', 'g · refine', kind='tune', heldout={'recall': 0.95, 'stress_recall': 0.9, 'near_fires': 0})
+    cell = lambda tr, seed, job: {'trainer': tr, 'recipe': 'natural', 'sources': 'all', 'preset': 'standard', 'knob': 'default', 'seed': seed, 'label': f"g · natural · all · standard · s{seed}", 'job': job}
+    grid = {'id': gid, 'project': 'hey_keep', 'label': 'g', 'when': 0, 'seeds': 1, 'rounds': 2, 'holdout': True, 'axes': {}, 'refine': {'job': 'gone-too', 'trials': 4, 'top': 2},
+            'cells': [cell('oww', 1, 'gone1'), cell('mww', 1, 'gone2'), cell('oww', 2, 'gone3')]}      # every job folder pruned away
+    (pdir / 'grids').mkdir()
+    paths.write_json(pdir / 'grids' / f"{gid}.json", grid)
+    g = api.grid_get('hey_keep', gid, settings=settings)['grid']
+    by = {(c['trainer'], c['seed']): c for c in g['cells']}
+    assert by[('oww', 1)]['run'] == 'r1' and by[('oww', 1)]['state'] == 'done' and by[('oww', 1)]['recall'] == 0.9 and by[('oww', 1)]['chosen'] is True
+    assert by[('mww', 1)]['run'] == 'r2' and by[('mww', 1)]['stress'] == 0.7
+    assert by[('oww', 2)]['run'] is None and by[('oww', 2)]['state'] == 'gone'            # never ran: still honest
+    assert g['refine']['run'] == 'r3' and g['refine']['state'] == 'done' and g['refine']['recall'] == 0.95
+    assert g['pivot']['trainer']['oww']['recall'] == 0.9
+    assert api.grids_list('hey_keep', settings=settings)['grids'][0]['refine']['state'] == 'done'
+
+
+def test_stop_ends_a_satellite_watch_at_once_and_a_piece_survives_a_broken_scorer(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey end')
+    pdir = paths.project_dir(root, p['slug'])
+    a = watch.start(pdir, p['slug'], 'slowboard', 5, 'r1', lambda wav: {}, capture_fn=lambda s: watch.take('slowboard', timeout=s), chunk_seconds=30, keep=True,
+                    arm=lambda s: None, disarm=lambda: None, root=root)
+    watch.stop(pdir, p['slug'], device='slowboard')
+    assert watch.read(pdir, a['id'])['ended']                                             # at once, while the loop still waits on its pull
+    watch._live[(p['slug'], 'slowboard')]['thread'].join(10)
+    b = watch.start(pdir, p['slug'], 'browser:Mic', 5, '', None, keep=True, root=root)
+
+    def boom(wav):
+        raise RuntimeError('sampler away')
+    st = watch.chunk(pdir, watch.read(pdir, b['id']), tone(3.0), 'browser:Mic', boom, root=root)
+    assert st['kept'] == 1 and st['chunks'] == 1 and 'sampler away' in st['errors'][-1] and len(store.list_room(root)) == 1   # the room piece is kept, the fires are not
+    watch.stop(pdir, p['slug'])
+
+
+def test_a_browser_watch_whose_page_went_away_is_over(root):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey gone')
+    pdir = paths.project_dir(root, p['slug'])
+    a = watch.start(pdir, p['slug'], 'browser:Mic', 60, '', None, keep=True, root=root)
+    assert watch.running(p['slug'], 'browser:Mic')
+    watch._live[(p['slug'], 'browser:Mic')]['last'] -= watch.BROWSER_QUIET + 1            # no piece for five minutes: the tab closed
+    assert not watch.running(p['slug'], 'browser:Mic') and watch.live_for(pdir, p['slug'], 'browser:Mic') is None
+    b = watch.start(pdir, p['slug'], 'browser:Mic', 60, '', None, keep=True, root=root)    # the next Room day is not refused
+    assert b['id'] != a['id'] and watch.read(pdir, a['id'])['ended'] and watch.running(p['slug'], 'browser:Mic')
+    watch.stop(pdir, p['slug'])
+
+
+def test_a_watch_id_stays_a_safe_path_for_an_odd_mic_name(root, monkeypatch):
+    from wakeword_maker import watch
+    root.mkdir()
+    p = store.create_project(root, 'hey safe')
+    pdir = paths.project_dir(root, p['slug'])
+    monkeypatch.setattr(watch.time, 'strftime', lambda fmt: '20261020-120000')          # three starts in one second
+    ids = [watch.start(pdir, p['slug'], d, 5, '', None, keep=True)['id'] for d in ('browser:A', 'browser:B', 'browser:My Mic/3')]
+    assert len(set(ids)) == 3 and all(api._safe(i) for i in ids)
+    watch.stop(pdir, p['slug'])
+
+
+def test_the_refine_prefers_verdicts_from_the_current_held_out_slice(settings, root):
+    from wakeword_maker import holdout, judge
+    api.create_project(body={'phrase': 'hey fresh'}, settings=settings)
+    pdir = paths.project_dir(root, 'hey_fresh')
+    hk, hw = holdout.key(pdir), (holdout.read(pdir) or {}).get('when')
+
+    def run(rid, stress, held_key):
+        (pdir / 'runs' / rid).mkdir(parents=True)
+        paths.write_json(pdir / 'runs' / rid / 'run.json', {'id': rid, 'trainer': 'oww', 'state': 'done', 'cfg': {'lr': 1e-4}, 'heldout': {'recall': 1.0, 'stress_recall': stress, 'near_fires': 0}})
+        paths.write_json(pdir / 'runs' / rid / 'judge.json', {'rows': [], 'held_key': held_key, 'holdout_when': hw, 'stress_key': judge.STRESS_KEY})
+    run('old', 1.0, 'some-older-slice')
+    run('new', 0.8, hk)
+    assert [c['id'] for c in tune.candidates(root, 'hey_fresh', top=2)] == ['new', 'old']      # fresh first, however it scored
+
+
+def test_a_wake_word_cannot_nest_in_another_wake_words_folder(settings, root, tmp_path):
+    outer = tmp_path / 'own' / 'ww'
+    assert 'error' not in api.create_project(body={'phrase': 'hey outer', 'folder': str(outer)}, settings=settings)
+    r = api.create_project(body={'phrase': 'hey inner', 'folder': str(outer / 'inner')}, settings=settings)
+    assert r[1] == 400 and 'another wake word' in r[0]['error']
+    r = api.create_project(body={'phrase': 'hey around', 'folder': str(tmp_path / 'own')}, settings=settings)
+    assert r[1] == 400
+
+
+def test_small_doors_hold_a_bad_shape_and_a_judge_take(settings, root):
+    from wakeword_maker import qa
+    api.create_project(body={'phrase': 'hey shape'}, settings=settings)
+    assert api.room_day('hey_shape', body={'devices': 'espA'}, settings=settings)[1] == 400
+    assert qa.verdict_of(30, 60, {'judge': True}) == 'keep' and qa.verdict_of(30, 60, {}) == 'drop' and qa.verdict_of(80, 60, {}) == 'keep'
+
+
+def test_the_background_step_counts_the_room_library(settings, root):
+    api.create_project(body={'phrase': 'hey room'}, settings=settings)
+    pg = api.get_project('hey_room', settings=settings)['project']['progress']
+    assert pg['done']['background'] is False and 'background' in dict(api.STEPS)
+    for _ in range(11):
+        store.add_room(root, tone(170.0), {'device': 'esp', 'watch': 'w1', 'project': 'hey_other'})
+    api._index.clear()
+    pg = api.get_project('hey_room', settings=settings)['project']['progress']
+    assert pg['room'] >= 30 and pg['done']['background'] is True
+    r = api.update_project('hey_room', body={'steps': {'background': True}}, settings=settings)
+    assert 'background' in r['project']['steps']
 
 
 def test_install_satellite_goes_through_the_library(root, monkeypatch):

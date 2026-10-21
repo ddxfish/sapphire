@@ -1,13 +1,18 @@
 // recorder.js - the browser microphone as a sample source. Press, say the phrase, press again: one sample.
 // Captures float32 at the context's own rate with the browser's processing OFF (a wake word model should
 // meet the raw mic), encodes a WAV at that rate; the server makes it 16 kHz mono and trims the silence.
-let ctx = null, stream = null, source = null, proc = null, chunks = [], recording = false, level = 0;
+let ctx = null, stream = null, source = null, proc = null, chunks = [], recording = false, level = 0, starting = false;
 
 export function isRecording() { return recording; }
 export function peak() { return level; }
 
 export async function start(deviceId) {
-    if (recording) return;
+    if (recording || starting) return;                 // two presses while the mic opens: one stream, never a leaked one
+    starting = true;
+    try { await _start(deviceId); } finally { starting = false; }
+}
+
+async function _start(deviceId) {
     const audio = { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     if (deviceId) audio.deviceId = { exact: deviceId };
     stream = await navigator.mediaDevices.getUserMedia({ audio });
@@ -76,4 +81,11 @@ export function encodeWAV(samples, rate) {
         v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
     }
     return new Blob([buf], { type: 'audio/wav' });
+}
+
+/** The mic tag a browser gets until the user types one: the OS it runs on. */
+export function defaultDevice() {
+    const ua = navigator.userAgent;
+    const os = /Android/.test(ua) ? 'android' : /iPhone|iPad/.test(ua) ? 'iphone' : /Windows/.test(ua) ? 'windows' : /Mac/.test(ua) ? 'mac' : /Linux/.test(ua) ? 'linux' : 'browser';
+    return os + '-browser';
 }

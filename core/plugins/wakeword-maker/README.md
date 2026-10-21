@@ -6,11 +6,11 @@ recorded in your own, rated, then trained two ways: **openWakeWord** for the des
 winner installs from the page. User guide, with the short road and how to record: `docs/WAKEWORD-MAKER.md`.
 
 ## Easy training, in one paragraph
-Settings: build the environment, download the datasets. Wakewords: new phrase. Voices: Standard, generate.
-Record: about 240 takes of the phrase over three microphones (the list is behind the **?** on *Says it*),
-near misses, other words, thirty minutes of room. Check: rate. Train: Standard with Repeats 3, then
-`rnn` + Thorough with Repeats 3. Read the scoreboard, run a Room watch on Test for an evening, ★ the winner,
-Install. The first clean models came from 223 takes over four microphones and ten ways of speaking, 219 near
+Settings: build the environment, download the trainer sets. Wakewords: new phrase. Synthetic: Standard, generate.
+Human: about 240 takes of the phrase over three microphones (the list is behind the **?** on *Says it*),
+near misses, other words. Background: a Room day on every microphone. Check: rate. Train: Search, the slider
+on Standard (nine runs, an hour) or Deep (a day, then Optuna around the best). Read the Grids card, run a Room
+day with the ticked models on watch for an evening, ★ the winner, Install. The first clean models came from 223 takes over four microphones and ten ways of speaking, 219 near
 misses, 175 other words and 48 minutes of room: 100% of the held-out takes heard, zero sound-alikes, zero
 fires in 4.4 hours of television.
 
@@ -30,12 +30,13 @@ wakeword_maker/
   augment.py         variations: rooms, background, distance, pitch, speed, tone; five stops
   holdout.py         the held-out slice of your recordings and its key
   features.py features_mww.py   feature sets per family (cached by content key, pruned to the newest three)
-  train_oww.py train_mww.py tune.py   the two trainers and the sweep
+  train_oww.py train_mww.py tune.py   the two trainers and the refine (Optuna around the best cells, judge-scored)
   judge.py           the streaming judge: every run scored on the held-out slice, the threshold pick
   watch.py           room watch: hours of listening, every fire kept with its audio
   sampler.py sampler_client.py   a warm helper process for previews, Try it and the judge
   negatives.py compat.py   sound-alike texts; shims for known rot in the stack
-app/                 the page: index.js (shell, status strip, job events), api.js, recorder.js, help.js, tabs/*.js
+app/                 the page: index.js (shell, status strip, job events), api.js, recorder.js, clips.js (the clip
+                     browser), datasets.js (the download table), help.js, tabs/*.js (Synthetic · Human · Background ...)
 tests/               hermetic tests: engine, store, routes, judge, install (no torch or tensorflow needed)
 ```
 

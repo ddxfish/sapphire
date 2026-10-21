@@ -28,6 +28,7 @@ from core.backup import backup_manager, select_doomed, tier_of, BackupRefused, T
 logger = logging.getLogger(__name__)
 
 SHIP_WAIT = 30 * 60     # a 70 MB blob at 0.5 MB/s is ~2.5 min; cards vary
+PUT_RETRY_S = 15        # a second try after a put that failed, this long later
 KEEP_DEFAULT = {"daily": 7, "weekly": 4, "monthly": 3, "manual": 3}
 
 
@@ -152,7 +153,17 @@ def _ship_one(t: Target, plain: Path, sealed):
         if name in have:
             verb = "already there"
         else:
-            t.put(path, name)
+            # Once more after a miss: a card on WiFi stumbles (a night's copy was
+            # lost 2 s in, 2026-10-20, and the next try landed). The second miss is the error.
+            for attempt in (1, 2):
+                try:
+                    t.put(path, name)
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    logger.warning(f"[BACKUP->{t.label}] did not land ({e}); once more in {PUT_RETRY_S} s")
+                    time.sleep(PUT_RETRY_S)
             verb = f"shipped ({sent // (1024 * 1024)} MB)"
         # The plain check after every ship: what the target says it holds
         # must be exactly what was sent (the drivers' sha256 runs underneath).

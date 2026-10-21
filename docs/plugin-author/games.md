@@ -230,3 +230,14 @@ GAME PLUGINS (Game Room host):
 - Actions prefixed `_` are silent system verbs (checkpoints, state sync): no talk line, no AI turn. Real-time games checkpoint at natural boundaries; keep snapshots small.
 - Streamed files (video, ROM, thumbnails): a route with `media: true` (GETs unmetered) returning a `FileResponse` (HTTP Range). A `<video>` stage has no canvas, so the board deposits its own frames + text (`ctx.deposit`); the room's grabber deposits frames only and would wipe the text.
 - Ship: sign (`python tools/sign_plugin.py <plugin>`), restart, expect log `[GAMES] Game registered: '<id>' from '<plugin>'`.
+
+## Cast: the stage on a board's glass
+
+A room whose stage is a canvas can be cast to a satellite with a screen that
+takes JPEG frames (the speaker board's glass): the stage bar's **cast** select
+lists such boards, and the host grabs the canvas on the board's own beat
+(`screen.fps`, 3 a second), fits it inside the glass and posts each frame to
+`POST /api/devices/{id}/screen/frame`; core paces the frames and keeps the
+newest (see devices.md, "A stream on a board's glass"). Leaving the room ends
+the cast. Your game does nothing for it: whatever it draws on `#gr-stage
+canvas` is what the board shows.

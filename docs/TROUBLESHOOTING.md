@@ -526,6 +526,7 @@ settings tab says why. The card is almost never the problem:
 - **Windows:** the default `torch` from PyPI has no CUDA at all, for any card. The TTS and STT settings
   tabs offer **Install GPU torch and restart**, which picks the right wheel for your card (a 2-3 GB download;
   it runs on the restart, before Sapphire boots, and the console or launcher pane shows pip's progress).
+  A notification says the card is idle, once per torch build, and opens that tab.
   By hand, inside the sapphire env:
   ```
   pip install torch --index-url https://download.pytorch.org/whl/cu128

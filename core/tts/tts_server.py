@@ -50,6 +50,7 @@ except Exception as e:
     logger.warning(f"Could not load config, using defaults: {e}")
     HOST = '127.0.0.1'
     PORT = 5012
+from core.tts.kokoro_files import REPO_ID, DEFAULT_VOICE   # shared with the parent's pre-fetch (core/tts/kokoro_files.py)
 
 
 # --- Cross-platform temp directory ---
@@ -71,7 +72,6 @@ def _private_error(what, e):
 
 # --- Constants ---
 TEMP_DIR = get_temp_dir()
-DEFAULT_VOICE = 'af_heart'
 DEFAULT_SPEED = 1.0
 AUDIO_SAMPLE_RATE = 24000
 
@@ -157,8 +157,6 @@ if _kokoro_device == 'cuda':
 
 logger.info(f"Loading Kokoro model on device='{_kokoro_device}'...")
 
-
-REPO_ID = 'hexgrad/Kokoro-82M'
 
 
 def _hf_file(filename):

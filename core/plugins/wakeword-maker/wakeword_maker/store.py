@@ -537,6 +537,10 @@ def _claimable(root, pdir):
         raise ValueError('that is the data folder itself (or above it); pick a folder of its own')
     if root in pdir.parents and projects_dir(root).absolute() not in pdir.parents:
         raise ValueError(f"inside the data folder a wake word lives under {projects_dir(root)}")
+    for pr in list_projects(root):                        # never inside another wake word's folder, never around one: delete would eat both
+        f = Path(pr.get('folder') or project_dir(root, pr['slug'])).absolute()
+        if f == pdir or f in pdir.parents or pdir in f.parents:
+            raise ValueError(f"that is inside (or around) another wake word's folder: {pr['slug']}")
     if pdir.exists():
         if not pdir.is_dir():
             raise ValueError(f"{pdir} is a file, not a folder")

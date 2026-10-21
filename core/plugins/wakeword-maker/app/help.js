@@ -36,15 +36,16 @@ AGC: the device adjusts its own gain. Off is better for training. The device res
     check: ['Checking the clips', `Every clip gets a score from 0 to 100.
 Does it say the phrase? Is it too quiet, too loud, too short? 
 Below the bar it is dropped from training. Listen to the lowest and keep or drop by hand.
-A voice with low scores is saying the word wrong: untick it under Voices.`],
+A voice with low scores is saying the word wrong: untick it under Synthetic.`],
     folder: ['The data folder', `Everything lives here: your recordings, the synthetic clips, the downloads, the trained models. Budget 30 GB for both model families.
 The default is wakeword/ inside the Sapphire folder. It is kept out of git and out of the nightly backup on purpose (it is big): if your recordings matter to you, copy projects/<name>/positive/recorded and negative/recorded somewhere safe now and then.
 Change it to put all of it on a bigger drive. Nothing goes in your home folder.`],
     env: ['The environment', `The training software, installed once in its own box so it can't break anything else. About 7 GB.
 A graphics card makes training fast. Without one it still works, slowly.`],
-    datasets: ['The datasets', `Big files other people made: hours of speech and noise she must learn to ignore, and room echoes.
+    datasets: ['The trainer sets', `Big files other people made: hours of speech and noise she must learn to ignore, in the form each trainer eats.
 Nothing downloads until you click. Delete removes it again.
-Needed for the desktop and Pi model: all three openWakeWord sets. For the ESP32: the microWakeWord set.`],
+Needed for the desktop and Pi model: all three openWakeWord sets. For the ESP32: the microWakeWord set.
+The two small sets both families mix in, rooms and music, are on Background.`],
     variations: ['Variations', `When training, every clip is played through rooms, noise and distance so she learns the phrase anywhere.
 Five stops: Gentle (a quiet home), Mild, Natural (a living room with the TV on), Firm, Rough (a loud house). The spread of runs so far put every good model between Gentle and Rough; Gentle and Natural won most often.
 Nothing is written to disk; change it and train again anytime. A saved "harsh" from before now means Rough.`],
@@ -63,19 +64,21 @@ Takes recorded "for the judge" are always in the slice, on top of the draw. Resh
     v_notch: ['Notch', `A slice of sound missing, like a cheap speaker or a phone line.`],
     v_distortion: ['Distortion', `A little fuzz, like a speaker turned up too far. "Up to" is how much.`],
     v_level: ['Level', `Random loudness, from a whisper to a call across the room.`],
-    train: ['Training', `Builds the model from your clips.
-Quick: a first look, minutes. Standard: a real model. Thorough: bigger and longer, for when Standard is stuck.
-The curves below update as it goes. When it's done, the model is saved and judged on your held-out clips: how many of you it heard, how many sound-alikes fooled it. That table is the scoreboard.
-Thorough is a bigger net for dnn only; the rnn is one fixed LSTM and Thorough just trains it longer.
-Train, then change Variations and train again to compare.`],
+    train: ['Training', `Single builds one model per ticked family from your clips, with the recipe above and how hard you say. Quick: a first look, minutes. Standard: a real model. Thorough: bigger and longer, for when Standard is stuck. Advanced shows each ticked family's knobs.
+Search queues many at once: a slider from Look to Deep, each stop a space of runs with seeds, and Deep ends with Optuna around the best. The Grids card reads the result.
+Every finished model is judged on your held-out clips: how many of you it heard, how many sound-alikes fooled it, how it holds up under stress. That table is the scoreboard.
+Thorough is a bigger net for dnn only; the rnn is one fixed LSTM and Thorough just trains it longer.`],
+    search: ['Search', `Four stops. Look: one quick run per model, is the data any good. Standard: the two desktop nets and the ESP32 net, three seeds each. Thorough: three variation stops, two source blocks, two nets per family, three seeds. Deep: Thorough at two sizes, then the refine.
+The line under the slider says how many runs and about how long, from this wake word's own runs so far. Choose the space shows what a stop ticks; change anything and it is Custom. Seeds matter: the same cell three times tells noise from signal.
+Everything lands as ordinary runs on the scoreboard, and the Grids card folds them by each axis with the best cell per family and a ★ to use it.`],
+    refine: ['The refine', `Desktop and Pi only. After the grid, Optuna starts from the best judged cells (their recipe, data and knobs) and walks the knobs around them: each trial a short run, scored by the same judge as the scoreboard (0.3 × hears you + 0.7 × stressed, a tenth off per sound-alike that fires, a third off when another word fires). The best trial then trains in full and is judged like any run.
+The grid finds the candidates, the refine masters them. On its own, with nothing judged yet, it is a plain sweep over the whole space.`],
     validate: ['Validate on the held-out slice', `Withholds the held-out slice of your recordings to measure if it worked.
 On: the slice stays out of training and you get a real Hears you % at the end.
 Off: trains on all your data, but then there is nothing honest to judge it on.`],
     rounds: ['Variations per clip', `How many different versions of each clip go into training. 2 is normal. More = more variety, longer build.`],
-    sweep: ['The sweep', `Tries a dozen different settings for you, each for a short run, and keeps the best.
-Then trains the best one properly. About an hour on a gaming PC.`],
-    test: ['Testing', `The models ticked in the Train table. Try it and Room watch run all of them side by side.
-Each one's threshold and ★ live in that table too; this page is for listening.`],
+    test: ['Testing', `The models ticked in the Train table. Try it runs all of them side by side; the breakdown shows where each one is weak.
+Each one's threshold and ★ live in that table too; this page is for listening. The room, for hours, is Background's Room day: the same ticked models stay on watch there.`],
     synth: ['Synthetic voices', `Which made voices train this run. All, one engine, or none (only what you recorded).
 Piper brings hundreds of plain readers; Kokoro brings a few dozen polished ones. Train the same run both ways and the judge says which your room prefers.`],
     install: ['Install', `Puts the ★ models where they listen, through the wake word library (Settings > Wakeword): the models land there; afterwards this computer picks from the wake word dropdown and a board from its own Wake word tab in Devices. This computer swaps live, no restart.
@@ -87,11 +90,19 @@ Each kind of device wants its own kind of model: openWakeWord for desktop and Pi
 Pi and ESP32 bodies older than that door answer "no door": copy the files instead.`],
     sources: ['Sources', `What this run trains on. Synthetic voices: all, one engine, or none. Your takes: all, or none (then the model learns the phrase from made voices alone and is judged on you). Own weight: how many extra times each of your takes is varied into training, 8 by default against thousands of synthetic clips.
 The held-out slice is never touched by any of this: every run is judged on every microphone. Your own near misses always train.`],
-    grid: ['The grid', `Many runs from one click. Tick what you want compared: models, variation stops, source blocks (without one microphone, without one tag value, synthetic only, Piper only...), how hard, named knobs; set seeds. Every combination is queued as an ordinary run, seed 1 of everything first, one at a time.
-The pivot folds the finished cells by each axis: the mean of Hears you, Stressed, Sound-alikes and Gap over everything else. One row per value, so "does leaving the ESP32 takes out hurt it on the ESP32" is a glance, not a scroll. Seeds matter: the same cell three times tells noise from signal. Forgetting a grid cancels what is still queued; finished runs stay.`],
-    roomday: ['Room day', `Every microphone at once, for the hours you set, everything kept. The pieces go to the shared room library at the data folder's root, tagged by microphone, and every wake word trains on them and judges false alarms with them: room sound belongs to no phrase.
-If a phrase is said in the room, the models on watch flag it; "That was me" drops that piece for that wake word only. More positions beat more mics in one spot: a second ESP32 by the TV, the other Pi in another room.
-PC microphones record from this tab, one stream each; keep the tab open. Satellites run on their own and survive a restart.`],
+    grid: ['The grids', `Every search is a grid: every combination of what the space ticks (models, variation stops, source blocks, how hard, named knobs), seeds times, queued as ordinary runs, seed 1 of everything first.
+Best so far: the best judged cell per family (clean first, then stressed recall), with ☆ to make it the one Install uses. The refine line follows the Optuna job and its final run.
+The pivot folds the finished cells by each axis: the mean of Hears you, Stressed, Sound-alikes and Gap over everything else. One row per value, so "does leaving the ESP32 takes out hurt it on the ESP32" is a glance, not a scroll. Forgetting a grid cancels what is still queued, the refine too; finished runs stay.`],
+    roomday: ['Room day', `Every microphone at once, for the hours you set, everything kept. The pieces go to the shared room library, tagged by microphone, and every wake word trains on them and judges false alarms with them: room sound belongs to no phrase.
+The models on watch (the ones ticked on Train, else the ★ ones) listen the whole time. Every time one would have answered, the moment is kept below for you to sort: False alarm keeps it as a negative for the next training; That was me keeps it as a phrase sample and drops that piece for this wake word only. Hours of quiet with no fires is the best news a wake word can get.
+An ESP32 that pushes its room keeps answering its wake word and its own fires are counted beside the models'; board test mode makes it count and answer nothing. A Pi won't answer while it records.
+More positions beat more mics in one spot: a second ESP32 by the TV, the other Pi in another room. PC microphones record from this tab, one stream each; keep the tab open. Satellites run on their own and survive a restart.`],
+    library: ['The room library', `Every piece of room sound, shared by every wake word, tagged by microphone and by the day that kept it. The held-out slice is drawn from it per microphone, so each model is judged for false alarms on its own ears, and training draws its backgrounds from the rest.
+Delete a day to drop every piece it kept (an empty house with the TV off teaches little). A piece the phrase was said in is dropped for that wake word only, from That was me.`],
+    room_take: ['One take of the room', `Minutes of your room as it really is, when a whole day is more than you need: TV, dishes, music, typing, quiet. Press, let it run, press again. A satellite records for the length you pick, an ESP32 one minute at a time.
+Never say the phrase during a take, leave the mic where it lives, and don't make the room louder than it really is. These takes belong to this wake word; a Room day's pieces belong to every wake word.`],
+    bg_datasets: ['Rooms and music', `Two small sets both model families mix in while training: how 270 real rooms echo, and short music tracks played under your samples. One click each; your own room sound does the music's job too.
+The trainer sets, the hours of negatives each family needs, are on Settings.`],
     repeats: ['Repeats', `Queue the same run two to five times, differing only by seed.
 Two runs of one recipe can land a few clips apart by luck alone; three repeats and the middle one is what the recipe really does.`],
     breakdown: ['By microphone and tag', `The held-out clips, scored by this model, grouped by which mic, how you said it, where from, what was on and who.
@@ -102,12 +113,6 @@ The Grids card then shows two extra columns: recall and stress recall on the hel
 The judge needs takes of that tag to say anything: record ten for the judge first.`],
     try: ['Try it', `Say the phrase into a mic, and every ticked model tells you what score it gave and whether it would have answered.
 Try near misses and other words too. Pick a satellite to test through its own microphone.`],
-    watch: ['Room watch', `Your room, for as long as you like, through a mic or a satellite. Every time a ticked model would have answered, that moment is kept with its sound.
-Sort the fires: False alarm keeps it as a negative (the next training learns from it). That was me keeps it as a phrase sample.
-Hours of quiet with no fires is the best news a wake word can get.
-Keep it all as room sound: every piece it hears becomes a room take. A day of your room through the device's own microphone is the honest judge of false alarms, and the next training draws its background from it.
-An ESP32 that pushes its room keeps hearing its wake word, and its own fires are counted beside the models'. Board test mode: it counts and answers nothing, so a candidate can be judged on a day of the room without her talking to the TV.
-Several microphones at once: one watch per mic, each its own record. A whole day on every satellite and every PC mic gives each model an honest false-alarm number on its own ears and a background pool that matches it. A PC mic is one browser tab each: open the page twice for two.`],
 };
 
 export function qbtn(topic) {

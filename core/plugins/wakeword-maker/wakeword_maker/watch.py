@@ -10,6 +10,7 @@
 # once is four watches on one wake word, each its own thread, each its own record.
 import json
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ _inbox = {}          # device id -> Queue of (audio, meta): pieces a board pushe
 _halts = {}          # device id -> Event: a take() in progress returns when the watch stops or pauses
 INBOX = 4            # pieces held while nobody drains (a plugin reload): a couple of minutes, then the oldest go
 RECENT = 3           # ended watches shown beside the live ones
+BROWSER_QUIET = 300  # seconds without a piece before a browser watch counts as gone (its page closed or died)
 
 
 def wdir(pdir, wid=None):
@@ -49,12 +51,13 @@ def read(pdir, wid):
 
 
 def _alive(w):
-    """A satellite watch lives while its thread does and nobody has told it to stop; a browser watch until it is
-    stopped. A loop winding down after a stop is not running: its mic may be taken again, its pieces are over."""
+    """A satellite watch lives while its thread does and nobody has told it to stop; a browser watch while its page
+    keeps posting pieces (BROWSER_QUIET seconds without one and the page is gone). A loop winding down after a
+    stop is not running: its mic may be taken again, its pieces are over."""
     if not w or w['stop'].is_set():
         return False
     if w.get('browser'):
-        return True
+        return time.time() - float(w.get('last') or 0) < BROWSER_QUIET
     return w['thread'].is_alive()
 
 
@@ -157,12 +160,36 @@ def chunk(pdir, st, audio, device, listen_fn, meta=None, root=None):
     if n < 1.0:
         return st
     meta = meta or {}
+    w = _live.get(_key(st.get('project'), device))
+    if w is not None:
+        w['last'] = time.time()                                   # a browser watch lives by its pieces
+    t0 = st['seconds']
+    piece_clip, piece_in = None, None
+    if st.get('keep'):                         # the piece first: an hour of room must never hang on the scorer
+        side_meta = {'device': device, 'via': 'capture', 'watch': st['id'], 'piece': meta.get('chunk'), 'project': st.get('project'),
+                     'note': f"room watch {st['id']}" + (', board test mode' if meta.get('test') else ''),
+                     'board_fires': len([f for f in (meta.get('fires') or []) if isinstance(f, (list, tuple)) and len(f) == 2]) or None}
+        if root is not None:
+            side = store.add_room(root, audio, side_meta)
+            piece_in = 'room'
+        else:
+            side = store.add_clip(pdir, 'ambient/recorded', audio, side_meta)
+            piece_in = 'ambient'
+        piece_clip = side['id']
+        st['kept'] = int(st.get('kept') or 0) + 1
+        st['kept_seconds'] = round(float(st.get('kept_seconds') or 0) + float(side.get('seconds') or n), 1)
     import io
     import soundfile as sf
     buf = io.BytesIO()
     sf.write(buf, (np.clip(audio, -1, 1) * 32767).astype(np.int16), 16000, format='WAV', subtype='PCM_16')
-    rep = listen_fn(buf.getvalue())
-    t0 = st['seconds']
+    try:
+        rep = listen_fn(buf.getvalue())
+    except Exception as e:                     # the scorer is away: the piece is kept, this chunk just has no fires
+        st['errors'] = (st.get('errors') or [])[-4:] + [f"scoring: {e}"]
+        st['seconds'] = round(t0 + n, 1)
+        st['chunks'] += 1
+        _write(pdir, st)
+        return st
     events = {}          # peak time -> {run: score}
     for rid, r in (rep or {}).items():
         if r.get('error'):
@@ -190,19 +217,6 @@ def chunk(pdir, st, audio, device, listen_fn, meta=None, root=None):
             slot = t
         events[slot][board] = {'score': v, 'fires': True}
     st['board_fires'] = int(st.get('board_fires') or 0) + max(len(listed), int(meta.get('fire_count') or 0))
-    piece_clip, piece_in = None, None
-    if st.get('keep'):                         # every piece is a room take: hours of this room, through this microphone
-        side_meta = {'device': device, 'via': 'capture', 'watch': st['id'], 'piece': meta.get('chunk'), 'project': st.get('project'),
-                     'note': f"room watch {st['id']}" + (', board test mode' if meta.get('test') else ''), 'board_fires': len(listed) or None}
-        if root is not None:
-            side = store.add_room(root, audio, side_meta)
-            piece_in = 'room'
-        else:
-            side = store.add_clip(pdir, 'ambient/recorded', audio, side_meta)
-            piece_in = 'ambient'
-        piece_clip = side['id']
-        st['kept'] = int(st.get('kept') or 0) + 1
-        st['kept_seconds'] = round(float(st.get('kept_seconds') or 0) + float(side.get('seconds') or n), 1)
     for t, by in sorted(events.items()):
         if not any(x['fires'] for x in by.values()):
             continue
@@ -235,18 +249,25 @@ def start(pdir, slug, device, minutes, runs, listen_fn, capture_fn=None, chunk_s
     with _lock:
         if running(slug, device):
             raise RuntimeError(f"a watch is already running on {device} for this wake word")
+        old = _live.get(_key(slug, device))
+        if old and old.get('browser'):                            # its page went away: that watch is over, this one takes the mic
+            prev = read(pdir, old['id'])
+            if prev and not prev.get('ended'):
+                prev['ended'] = time.time()
+                prev['errors'] = (prev.get('errors') or [])[-4:] + ['the page stopped sending pieces']
+                _write(pdir, prev)
         wid = time.strftime('%Y%m%d-%H%M%S')
         while (wdir(pdir, wid) / 'watch.json').exists():          # two mics started in the same second
             wid = f"{wid[:15]}{(int(wid[-1]) + 1) % 10}"
-            if (wdir(pdir, wid) / 'watch.json').exists():
-                wid = time.strftime('%Y%m%d-%H%M%S') + f"-{device[:12]}"
+            if (wdir(pdir, wid) / 'watch.json').exists():         # a third: the mic's name, made safe for a folder and a route
+                wid = time.strftime('%Y%m%d-%H%M%S') + '-' + re.sub(r'[^A-Za-z0-9_-]+', '-', str(device))[:12]
         st = {'id': wid, 'device': device, 'minutes': minutes, 'runs': runs, 'started': time.time(), 'seconds': 0.0, 'chunks': 0,
               'fires': [], 'ended': None, 'error': None, 'browser': capture_fn is None, 'keep': bool(keep), 'test': bool(test),
               'pushed': arm is not None, 'kept': 0, 'kept_seconds': 0.0, 'board_fires': 0, 'board': None, 'project': slug,
               'library': root is not None}
         _write(pdir, st)
         if capture_fn is None:
-            _live[_key(slug, device)] = {'browser': True, 'stop': threading.Event(), 'id': wid, 'device': device}
+            _live[_key(slug, device)] = {'browser': True, 'stop': threading.Event(), 'id': wid, 'device': device, 'last': time.time()}
             return st
         if arm is not None:
             _halts.setdefault(device, threading.Event()).clear()
@@ -382,7 +403,7 @@ def stop(pdir, slug, device=None, wid=None):
             except Exception:
                 pass
         st = read(pdir, w['id'])
-        if st and st.get('browser') and not st.get('ended'):
+        if st and not st.get('ended'):                   # at once, every kind: a restart inside the wind-down resumes nothing
             st['ended'] = time.time()
             _write(pdir, st)
         last = st

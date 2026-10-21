@@ -42,7 +42,7 @@ Pick a provider in **Settings → TTS**:
 | Provider | Runs | Streaming | Notes |
 |----------|------|-----------|-------|
 | **Disabled** | — | — | Silent |
-| **Local (Kokoro)** | Your machine (GPU or CPU) | Yes | 28 built-in voices: American/British, male/female. Runs as a local server subprocess |
+| **Local (Kokoro)** | Your machine (GPU or CPU) | Yes | 28 built-in voices: American/British, male/female. Runs as a local server subprocess. First run downloads the model (about 330 MB) under a progress row in the notification center |
 | **Sapphire Router (Managed)** | Cloud | No | Managed/hosted installs |
 | **Piper** (plugin) | Your machine, CPU | Yes | Fast on weak hardware; voices download on first use |
 | **ElevenLabs** (plugin) | Cloud | No | Needs an API key |

@@ -130,6 +130,20 @@ def _managed():
         return False
 
 
+def _tell(state, message, verdict):
+    """One warning row per torch build when the card is idle for voice; the
+    body names the TTS tab's button where the installer is offered."""
+    try:
+        from core import gpu_install, notify
+        card = (verdict.get('gpu') or {}).get('name') or 'NVIDIA GPU'
+        button = gpu_install.plan(verdict, managed=_managed())
+        body = message + (" Settings > TTS has the button: Install GPU torch and restart." if button else "")
+        notify.notify(f"{card} is idle for voice", 'warning', body, go={'view': 'settings', 'tab': 'tts'},
+                      key=f"gpu:{state}:{verdict.get('torch')}", once=True)
+    except Exception as e:
+        logger.debug(f"[GPU] row not posted: {e}")
+
+
 def status(refresh=False):
     """The verdict, probing once (again on refresh). Blocks for the probe."""
     global _cached
@@ -144,6 +158,7 @@ def status(refresh=False):
         _done.set()
         if message:
             logger.warning(f"[GPU] {message}")
+            _tell(state, message, _cached)
         elif gpu and t.get('torch'):
             logger.info(f"[GPU] {state}: {gpu['name']}, torch {t['torch']}, CUDA {t.get('cuda')}")
         else:

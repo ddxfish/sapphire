@@ -5,6 +5,7 @@
 # is recorded: the way to make a thin tag (ten takes from the next room) a judge instead of a tenth of one.
 import json
 import random
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -52,7 +53,20 @@ def _stratified(rows, key, frac, rng):
     return sorted(picked)
 
 
+_lock = threading.Lock()      # make and earmark both rewrite holdout.json: one at a time in this process
+
+
 def make(pdir, frac=FRACTION, seed=None, root=None):
+    with _lock:
+        return _make(pdir, frac=frac, seed=seed, root=root)
+
+
+def earmark(pdir, part, cid, on=True):
+    with _lock:
+        return _earmark(pdir, part, cid, on=on)
+
+
+def _make(pdir, frac=FRACTION, seed=None, root=None):
     """With `root`, the shared room library's pieces (minus those dropped for this wake word) are in the draw too;
     room takes are held out whole, about `frac` of the minutes of EVERY microphone, so each mic has a judge."""
     rng = random.Random(seed)
@@ -99,7 +113,7 @@ def make(pdir, frac=FRACTION, seed=None, root=None):
     return out
 
 
-def earmark(pdir, part, cid, on=True):
+def _earmark(pdir, part, cid, on=True):
     """A clip recorded for the judge joins the frozen slice now (or leaves it); without a slice yet, make() will
     take it. Returns whether the slice changed."""
     h = read(pdir)

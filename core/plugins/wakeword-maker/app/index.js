@@ -8,14 +8,15 @@ import * as settingsTab from './tabs/settings.js';
 import * as wakewordsTab from './tabs/wakewords.js';
 import * as recordTab from './tabs/record.js';
 import * as voicesTab from './tabs/voices.js';
+import * as backgroundTab from './tabs/background.js';
 import * as checkTab from './tabs/check.js';
 import * as variationsTab from './tabs/variations.js';
 import * as trainTab from './tabs/train.js';
 import * as testTab from './tabs/test.js';
 import * as installTab from './tabs/install.js';
 
-const TABS = [
-    ['wakewords', 'Wakewords', wakewordsTab], ['voices', 'Voices', voicesTab], ['record', 'Record', recordTab],
+const TABS = [     // three kinds of sound: made voices, you, the room; then the work on them
+    ['wakewords', 'Wakewords', wakewordsTab], ['voices', 'Synthetic', voicesTab], ['record', 'Human', recordTab], ['background', 'Background', backgroundTab],
     ['check', 'Check', checkTab], ['train', 'Train', trainTab],
     ['test', 'Test', testTab], ['install', 'Install', installTab], ['settings', 'Settings', settingsTab],
 ];
@@ -141,14 +142,15 @@ function draw() {
     }
 }
 
-const STEP_TABS = ['voices', 'record', 'check', 'train', 'test', 'install'];
-const LIVE_TABS = ['record', 'test'];      // tabs that may hold a microphone: a finished job never redraws them
+const STEP_TABS = ['voices', 'record', 'background', 'check', 'train', 'test', 'install'];
+const LIVE_TABS = ['record', 'background', 'test'];      // tabs that may hold a microphone: a finished job never redraws them
 const STEP_DESC = {
     voices: 'Generate the phrase in many synthetic voices',
-    record: 'Record positive, negative, and ambient samples from your mic(s)',
+    record: 'Record yourself: the phrase, near misses and other words, through every mic',
+    background: 'Record your room through every microphone, for hours: the sound she must ignore',
     check: 'Rate every clip; drop the ones that do not say it',
     train: 'Train the desktop/Pi model and the ESP32 model',
-    test: 'Measure hits and false alarms; try it live',
+    test: 'Try the ticked models live; read where each one is weak',
     install: 'Put the finished model on your devices',
 };
 
@@ -215,6 +217,9 @@ async function markDone(tab) {
     if (tab === 'record' && (pg.recorded || 0) < (pg.recorded_floor || 120)) {
         return showConfirm(`Only ${pg.recorded || 0} recordings of your own voice so far; ${pg.recorded_floor || 120} is the floor for a model that knows you (three mics, forty takes each). Move on anyway? You can come back and record more at any time.`, finish, { title: 'Few recordings', saveLabel: 'Move on' });
     }
+    if (tab === 'background' && (pg.room || 0) < (pg.room_floor || 30)) {
+        return showConfirm(`Only ${pg.room || 0} minutes of room sound so far; ${pg.room_floor || 30} is the floor and 90 is good. A Room day through every microphone fills it while you live. Move on anyway?`, finish, { title: 'Little room sound', saveLabel: 'Move on' });
+    }
     if (tab === 'check' && !pg.rated) {
         return showModal('Clips not rated', [
             { type: 'html', value: '<p style="margin:0 0 8px;color:var(--text-secondary)">Nothing has been rated yet, so clips that do not say the phrase would go into training as if they did.</p>' },
@@ -230,7 +235,7 @@ async function markDone(tab) {
 }
 
 function jobLabel(j) {
-    const k = { download: 'Download', delete_dataset: 'Delete', synth: 'Make the set', qa: 'Check', voices: 'Fetch voices', features: 'Features', train: 'Train desktop/Pi', tune: 'Sweep', features_mww: 'ESP32 features', train_mww: 'Train ESP32', judge: 'Judge the models' }[j.kind] || j.kind;
+    const k = { download: 'Download', delete_dataset: 'Delete', synth: 'Make the set', qa: 'Check', voices: 'Fetch voices', features: 'Features', train: 'Train desktop/Pi', tune: 'Refine', features_mww: 'ESP32 features', train_mww: 'Train ESP32', judge: 'Judge the models' }[j.kind] || j.kind;
     const what = j.args?.dataset || j.project || '';
     return what ? `${k} · ${what}` : k;
 }

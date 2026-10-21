@@ -151,3 +151,30 @@ def test_route_returns_the_cached_verdict(client, monkeypatch):
     assert kicked == []
     assert c.get('/api/system/gpu?refresh=1').status_code == 200
     assert kicked == [True]
+
+
+def test_idle_card_posts_one_warning_row_per_torch_build(monkeypatch):
+    from core import notify, gpu_install
+    monkeypatch.setattr(g, '_nvidia_smi', lambda: CARD)
+    monkeypatch.setattr(g, '_torch_probe', lambda: CPU)
+    monkeypatch.setattr(g, '_managed', lambda: False)
+    monkeypatch.setattr(g, '_done', threading.Event())
+    monkeypatch.setattr(gpu_install.sys, 'platform', 'win32')
+    monkeypatch.delenv('SAPPHIRE_GPU_INDEX', raising=False)
+    gpu_rows = lambda: [r for r in notify.rows() if (r.get('key') or '').startswith('gpu:')]
+    g.status(refresh=True)
+    g.status(refresh=True)
+    rows = gpu_rows()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r['level'] == 'warning' and r['go']['tab'] == 'tts' and CARD['name'] in r['title']
+    assert 'no CUDA' in r['body'] and 'Install GPU torch and restart' in r['body']
+    monkeypatch.setattr(gpu_install.sys, 'platform', 'linux')
+    monkeypatch.setattr(g, '_torch_probe', lambda: dict(CU128, available=False))
+    g.status(refresh=True)                      # a driver case: its own row, no button line
+    rows = gpu_rows()
+    assert len(rows) == 2
+    assert 'Install GPU torch' not in next(x for x in rows if 'driver' in x['body'])['body']
+    monkeypatch.setattr(g, '_torch_probe', lambda: CU128)
+    g.status(refresh=True)                      # all well: nothing new
+    assert len(gpu_rows()) == 2

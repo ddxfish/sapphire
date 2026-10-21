@@ -419,6 +419,56 @@ async def devices_run(device_id: str, request: Request, _=Depends(require_login)
     return await _do(run_action, device_id, await _body(request))
 
 
+# --- a stream on a board's glass (core/devices/glass.py) ----------------------
+# A browser casts frames here: a game's stage, anything drawn on a canvas. GET
+# says what the board's glass takes; POST hands it one JPEG frame (the body),
+# paced to the board's beat by the sender in glass.py, the newest frame wins.
+
+FRAMES_PER_MIN = 1200      # frames from a browser: a few boards at a few a second
+
+def _screen_stream(device_id):
+    from core.devices import glass
+    config, secrets, w, h, fps = glass._lookup(device_id)
+    return {"device": device_id, "w": w, "h": h, "fps": fps, "max_bytes": glass.FRAME_MAX,
+            "stream": glass.stream_status(device_id)}
+
+
+@router.get("/api/devices/{device_id}/screen/stream")
+async def devices_screen_stream(device_id: str, request: Request, _=Depends(require_login)):
+    _open(request)
+    try:
+        return await asyncio.to_thread(_screen_stream, device_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/api/devices/{device_id}/screen/frame")
+async def devices_screen_frame(device_id: str, request: Request, _=Depends(require_login)):
+    why = _engine().refusal()
+    if why:
+        raise HTTPException(status_code=404, detail=why)
+    check_endpoint_rate(request, "devices:frame", max_calls=FRAMES_PER_MIN)
+    from core.devices import glass
+    jpeg = await request.body()
+    if not jpeg or len(jpeg) > glass.FRAME_MAX:
+        raise HTTPException(status_code=413 if jpeg else 400, detail=f"one JPEG frame, up to {glass.FRAME_MAX // 1024} KB")
+    try:
+        status = await asyncio.to_thread(glass.stream_frame, device_id, jpeg)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+    return {"ok": True, "device": device_id, "stream": status}
+
+
+@router.delete("/api/devices/{device_id}/screen/stream")
+async def devices_screen_stream_end(device_id: str, request: Request, _=Depends(require_login)):
+    _open(request, write=True)
+    from core.devices import glass
+    await asyncio.to_thread(glass.stream_end, device_id)
+    return {"ok": True, "device": device_id}
+
+
 # --- the device doors: a DEVICE calls these, not a browser --------------------
 
 async def _device_key(device_id, request, door, per_min=VOICE_PER_MIN):

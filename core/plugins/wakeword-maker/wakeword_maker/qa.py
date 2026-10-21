@@ -69,6 +69,12 @@ def _voiced_span(audio):
     return hot[0] * 0.01, (hot[-1] + 1) * 0.01
 
 
+def verdict_of(score, bar, side):
+    """Below the bar a clip is dropped from training. A take recorded for the judge is never dropped by a rating
+    (the judge must hear the hard ones: far, whispered, the TV on), only by hand or when it cannot be read."""
+    return 'keep' if side.get('judge') else ('drop' if score < bar else 'keep')
+
+
 def _audio_quality(side, audio, phrase=None):
     """0..40 and the reasons. Length, clipping, silence, how far the voice stands above the mic's noise, and for a
     phrase take: whether the voice starts at the very first sample (a cut word) or is too brief to hold the phrase.
@@ -203,8 +209,10 @@ def run(root, args, progress):
             if _says_phrase(said, wanted):
                 score = min(score, 10); why.append('says the phrase (a negative must not)')
         score = int(max(0, min(100, score)))
+        if score < bar and side.get('judge'):
+            why.append('for the judge: kept whatever the score')
         settle(sp, side, {'score': score, 'transcript': said[:120], 'similarity': round(sim, 3), 'no_speech': round(nsp, 3),
-                          'reasons': why, 'when': time.time()}, 'drop' if score < bar else 'keep')
+                          'reasons': why, 'when': time.time()}, verdict_of(score, bar, side))
         if i % 10 == 0:
             rate = (i + 1) / max(1e-6, time.time() - t0)
             progress.update(100.0 * (i + 1) / len(todo), f"{i + 1:,} of {len(todo):,} rated · {rate * 60:,.0f}/min")
