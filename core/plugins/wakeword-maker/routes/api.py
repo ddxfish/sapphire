@@ -2204,6 +2204,7 @@ def grid_start(slug, body=None, settings=None, **_):
     srcs = [s for s in (body.get('sources') or ['all']) if s in named]
     presets = [p for p in (body.get('presets') or ['standard']) if p in ('quick', 'standard', 'thorough')]
     knobs = body.get('knobs') if isinstance(body.get('knobs'), dict) else {}
+    over = body.get('cfg') if isinstance(body.get('cfg'), dict) else {}      # a budget laid over every cell and the refine's final (steps, layer_size...): the road's surrogate net
     try:
         seeds = max(1, min(5, int(body.get('seeds') or 1)))
     except ValueError:
@@ -2240,8 +2241,11 @@ def grid_start(slug, body=None, settings=None, **_):
         rounds = max(1, min(6, int(body.get('rounds') or 2)))
     except ValueError:
         rounds = 2
+    from wakeword_maker import train_oww as _to, train_mww as _tm
+    keys = {'oww': _to.DEFAULTS, 'mww': _tm.DEFAULTS}
+    over = {k: v for k, v in over.items() if k in keys['oww'] or k in keys['mww']}
     for c in cells:
-        cfg = dict(GRID_KNOBS[c['trainer']].get(c['knob'], {}))
+        cfg = {**GRID_KNOBS[c['trainer']].get(c['knob'], {}), **{k: v for k, v in over.items() if k in keys[c['trainer']]}}
         cfg['seed'] = c['seed']
         c['label'] = ' · '.join(x for x in (label, c['recipe'], c['sources'], c['preset'], c['knob'] if c['knob'] != 'default' else '', f"s{c['seed']}") if x)
         args = {'preset': c['preset'], 'recipe': c['recipe'], 'sources': named[c['sources']], 'cfg': cfg, 'holdout': holdout_on, 'rounds': rounds,
@@ -2257,12 +2261,12 @@ def grid_start(slug, body=None, settings=None, **_):
         except (TypeError, ValueError):
             return {'error': 'refine: trials, budget_steps, parallel and top are numbers'}, 400
         rargs = {**refine, 'from_grid': gid, 'preset': 'thorough' if 'thorough' in presets else presets[-1], 'holdout': holdout_on, 'rounds': rounds,
-                 'label': ' · '.join(x for x in (label, 'refine') if x), 'grid': gid, 'device': (settings or {}).get('device', 'auto'), 'whisper': (settings or {}).get('qa_whisper_model', 'base.en')}
+                 'cfg': {k: v for k, v in over.items() if k in keys['oww']}, 'label': ' · '.join(x for x in (label, 'refine') if x), 'grid': gid, 'device': (settings or {}).get('device', 'auto'), 'whisper': (settings or {}).get('qa_whisper_model', 'base.en')}
         refine['job'] = jobs.enqueue(root, 'tune', rargs, py, PLUGIN_DIR, project=slug, publish=_publish)['id']
     focus = body.get('focus') if isinstance(body.get('focus'), dict) else None
     if focus and (focus.get('axis') not in ('device',) + tuple(tags.DEFAULT) or not focus.get('value')):
         focus = None
-    grid = {'id': gid, 'project': slug, 'label': label, 'when': time.time(), 'seeds': seeds, 'rounds': rounds, 'holdout': holdout_on,
+    grid = {'id': gid, 'project': slug, 'label': label, 'when': time.time(), 'seeds': seeds, 'rounds': rounds, 'holdout': holdout_on, **({'cfg': over} if over else {}),
             'axes': {'trainers': trainers, 'recipes': recipes, 'sources': srcs, 'presets': presets, 'knobs': {t: [k for k in (knobs.get(t) or ['default'])] for t in trainers}},
             'cells': cells, **({'focus': {'axis': str(focus['axis']), 'value': str(focus['value'])[:60]}} if focus else {}), **({'refine': refine} if refine else {})}
     _grids_dir(pdir).mkdir(parents=True, exist_ok=True)

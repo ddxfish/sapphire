@@ -177,3 +177,6 @@ python -m wakeword_maker.cli --root /path/to/wakeword run synth --project hey_sa
 python -m wakeword_maker.cli --root /path/to/wakeword run qa --project hey_sapphire --arg bar=60
 python -m wakeword_maker.cli --root /path/to/wakeword run train --project hey_sapphire --arg preset=thorough
 ```
+A coding assistant helping you (or checking the plugin after a change) starts at `core/plugins/wakeword-maker/HARNESS.md`:
+every door in the order the page uses them, and `python -m wakeword_maker.cli road`, which walks the whole road on a
+scratch wake word against the running Sapphire in a few minutes and reports each step.

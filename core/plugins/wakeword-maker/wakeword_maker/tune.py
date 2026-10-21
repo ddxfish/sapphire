@@ -115,6 +115,7 @@ def run_job(root, args, progress):
                 args[k] = best0[k]
         base = {**train_oww.DEFAULTS, **train_oww.PRESETS.get(final_preset, {}),
                 **{k: v for k, v in (best0.get('cfg') or {}).items() if k in train_oww.DEFAULTS and k not in ('steps', 'seed', 'device')}, 'device': args.get('device', 'auto')}
+        base.update({k: v for k, v in (args.get('cfg') or {}).items() if k in train_oww.DEFAULTS and k not in ('seed', 'device')})   # the grid's budget holds for the final too
         space = space_around(cands, which)
         progress.step('candidates', f"refining around {len(cands)} judged cell(s): " + ', '.join(f"{c.get('label') or c['id']} ({judge_score(c.get('heldout')):.2f})" for c in cands))
     else:

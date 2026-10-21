@@ -35,9 +35,12 @@ wakeword_maker/
   watch.py           room watch: hours of listening, every fire kept with its audio
   sampler.py sampler_client.py   a warm helper process for previews, Try it and the judge
   negatives.py compat.py   sound-alike texts; shims for known rot in the stack
+  road.py            the road start to finish on a scratch wake word: in process for the tests, over HTTP for `cli road`
 app/                 the page: index.js (shell, status strip, job events), api.js, recorder.js, clips.js (the clip
                      browser), datasets.js (the download table), help.js, tabs/*.js (Synthetic · Human · Background ...)
-tests/               hermetic tests: engine, store, routes, judge, install (no torch or tensorflow needed)
+tests/               hermetic tests: engine, store, routes, judge, install (no torch or tensorflow needed); test_road.py walks
+                     every door start to finish (WWM_ROAD=1: the real jobs in a scratch folder)
+HARNESS.md           for an assistant at the keyboard: the road's doors in order, the three walks, the rules
 ```
 
 ## Jobs are processes
@@ -54,6 +57,7 @@ python -m wakeword_maker.cli --root /path/to/wakeword new "hey sapphire"
 python -m wakeword_maker.cli --root /path/to/wakeword run synth --project hey_sapphire
 python -m wakeword_maker.cli --root /path/to/wakeword run qa --project hey_sapphire --arg bar=60
 python -m wakeword_maker.cli --root /path/to/wakeword run train --project hey_sapphire --arg preset=thorough
+conda run -n sapphire python -m wakeword_maker.cli road      # every door of the running Sapphire, start to finish (HARNESS.md)
 ```
 
 ## Data on disk

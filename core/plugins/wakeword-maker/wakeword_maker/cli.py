@@ -3,8 +3,11 @@
 #   python -m wakeword_maker.cli --root <data dir> projects
 #   python -m wakeword_maker.cli --root <data dir> new "hey sapphire"
 #   python -m wakeword_maker.cli --root <data dir> run <kind> [--project slug] [--arg key=value ...]
+#   python -m wakeword_maker.cli road [--live https://localhost:8073] [--esp32] [--keep] [--only step,step] [--json]
 # `run` does the same work as a job started from the page, with progress printed, so a box without the UI
-# can download, synthesize, rate and train. Run it under the plugin's conda env.
+# can download, synthesize, rate and train. Run it under the plugin's conda env. `road` walks every door of the
+# running Sapphire start to finish on a scratch wake word (wakeword_maker/road.py); under the sapphire env it
+# also grabs the PC microphone for the level check.
 import argparse
 import json
 import os
@@ -123,6 +126,31 @@ def run_job(job_dir):
         return 1
 
 
+def _road(a, ap):
+    from . import road
+    base = a.live
+    if not base:
+        s = {}
+        try:
+            s = json.loads((paths.SAPPHIRE_ROOT / 'user' / 'settings.json').read_text(encoding='utf-8'))
+        except Exception:
+            pass
+        base = f"{'https' if s.get('WEB_UI_SSL_ADHOC', True) else 'http'}://localhost:{int(s.get('WEB_UI_PORT') or 8073)}"
+    token = a.token or os.environ.get('SAPPHIRE_API_TOKEN') or ''
+    tf = Path(token).expanduser() if token else paths.SAPPHIRE_ROOT / 'user' / 'sapphire-health.token'
+    if tf.is_file():
+        token = tf.read_text(encoding='utf-8').strip()
+    if not token:
+        ap.error('an API token is needed: Settings > System > API keys, or `bash user/sapphire-health.sh --init`; pass --token or set SAPPHIRE_API_TOKEN')
+    say = (lambda s: None) if a.json else (lambda s: print(s, flush=True))
+    say(f"the road on {base} · phrase '{a.phrase}'" + (' · esp32' if a.esp32 else ''))
+    r = road.Road(road.Live(base, token), phrase=a.phrase, esp32=a.esp32, install=not a.no_install, mic=not a.no_mic,
+                  satellites=not a.no_satellites, keep=a.keep, sampler='live', slow=a.slow, say=say)
+    rep = r.walk(only=[x.strip() for x in a.only.split(',') if x.strip()] if a.only else None)
+    print(json.dumps(rep.rows, indent=1) if a.json else '\n' + rep.table(), flush=True)
+    return len(rep.failed)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='wakeword_maker')
     ap.add_argument('--root', help='the data folder (or WWM_DATA_DIR)')
@@ -137,10 +165,24 @@ def main(argv=None):
     r.add_argument('--project')
     r.add_argument('--arg', action='append', default=[], help='key=value (value parsed as JSON when it is JSON)')
     sub.add_parser('datasets')
+    rd = sub.add_parser('road', help='every door start to finish on a scratch wake word, against the running Sapphire')
+    rd.add_argument('--live', metavar='BASE', help='Sapphire, default https://localhost:<WEB_UI_PORT> from user/settings.json')
+    rd.add_argument('--token', help='an API token or a file holding one; default $SAPPHIRE_API_TOKEN, else user/sapphire-health.token')
+    rd.add_argument('--phrase', default='hey road test', help='the scratch wake word (made, walked, deleted)')
+    rd.add_argument('--esp32', action='store_true', help='train the ESP32 family too (minutes more)')
+    rd.add_argument('--no-install', action='store_true', help='leave this computer\'s wake word alone')
+    rd.add_argument('--no-mic', action='store_true', help='no level check through the PC microphone')
+    rd.add_argument('--no-satellites', action='store_true', help='no satellite listens, no satellite room day')
+    rd.add_argument('--keep', action='store_true', help='leave the scratch wake word and its pieces for a look')
+    rd.add_argument('--only', help='comma-separated steps to walk on an existing scratch wake word')
+    rd.add_argument('--slow', type=float, default=1.0, help='timeout multiplier (a CPU box: 4)')
+    rd.add_argument('--json', action='store_true', help='the report as JSON rows')
     a = ap.parse_args(argv)
 
     if a.cmd == 'job':
         return run_job(a.job_dir)
+    if a.cmd == 'road':
+        return _road(a, ap)
     root = paths.data_root({'data_dir': a.root}) if a.root else paths.data_root()
     if not root:
         ap.error('--root (or WWM_DATA_DIR) is needed')
