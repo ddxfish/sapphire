@@ -46,33 +46,6 @@ def put_account(body=None, **_):
     return {"ok": bool(ok)}
 
 
-def put_config(body=None, **_):
-    from plugins.remembrance import ops
-    body = body or {}
-    st = ops._state()
-    cfg = dict(st.get("config", {}) or {})
-    if "offsite_extra_patterns" in body:
-        raw = body.get("offsite_extra_patterns") or []
-        if isinstance(raw, str):
-            raw = [p.strip() for p in raw.splitlines() if p.strip()]
-        cfg["offsite_extra_patterns"] = [str(p).strip() for p in raw if str(p).strip()]
-    if "offsite_max_mb" in body:
-        try:
-            cfg["offsite_max_mb"] = max(0, int(body.get("offsite_max_mb")))
-        except (TypeError, ValueError):
-            pass
-    if "offsite_cron_hour" in body:
-        h = body.get("offsite_cron_hour")
-        try:
-            cfg["offsite_cron_hour"] = None if h in (None, "") else max(0, min(23, int(h)))
-        except (TypeError, ValueError):
-            pass
-    if "auto_enabled" in body:
-        cfg["auto_enabled"] = bool(body.get("auto_enabled"))
-    st.save("config", cfg)
-    return {"ok": True, **cfg}
-
-
 def status(**_):
     from plugins.remembrance import ops
     return ops.get_status()

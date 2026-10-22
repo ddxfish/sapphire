@@ -135,25 +135,46 @@ def _no_real_backup(mp):
     return hits
 
 
-def test_cron_skips_when_auto_disabled(monkeypatch):
-    monkeypatch.setattr(ops, "get_prefs", lambda: {"auto_enabled": False, "offsite_cron_hour": 4})
+def test_scheduled_run_backs_up_at_the_calendar_cadence(monkeypatch):
+    """1.2: the scheduler entry is bound to the settings hour and switch, so
+    run() never gates: it backs up, with the cadence by calendar position."""
     hits = _no_real_backup(monkeypatch)
-    assert schedule.run({"config": None}) is None and hits == []
+    assert schedule.run({"config": None}) is None
+    assert len(hits) == 1 and hits[0]["cadence"] == schedule.cadence()
 
 
-def test_cron_skips_wrong_hour(monkeypatch):
-    monkeypatch.setattr(ops, "get_prefs", lambda: {"auto_enabled": True,
-                                                   "offsite_cron_hour": (datetime.now().hour + 1) % 24})
-    hits = _no_real_backup(monkeypatch)
-    assert schedule.run({"config": None}) is None and hits == []
+def test_scheduled_run_failure_surfaces_to_the_user(monkeypatch):
+    monkeypatch.setattr(ops, "perform_offsite_backup", lambda **k: {"ok": False, "error": "vault full"})
+    assert "vault full" in schedule.run({"config": None})
 
 
-def test_cron_fires_at_configured_hour(monkeypatch):
-    monkeypatch.setattr(ops, "get_prefs", lambda: {"auto_enabled": True,
-                                                   "offsite_cron_hour": datetime.now().hour})
-    hits = _no_real_backup(monkeypatch)
-    schedule.run({"config": None})
-    assert len(hits) == 1
+def test_cadence_by_calendar():
+    assert schedule.cadence(datetime(2026, 10, 1)) == "monthly"
+    assert schedule.cadence(datetime(2026, 10, 4)) == "weekly"      # a Sunday
+    assert schedule.cadence(datetime(2026, 10, 22)) == "daily"
+
+
+def test_prefs_move_to_the_settings_store_once(monkeypatch, tmp_path):
+    """1.1 kept the hour and switch in PluginState; the schedule binding reads
+    the plugin-settings store, so the old values move there at plugins_ready."""
+    import json
+    store = {"config": {"offsite_cron_hour": 11, "auto_enabled": True, "offsite_max_mb": 2048, "other": 1}}
+
+    class State:
+        def get(self, k, d=None): return store.get(k, d)
+        def save(self, k, v): store[k] = v
+
+    path = tmp_path / "remembrance.json"
+    # the loader seeds the manifest defaults here at load, before plugins_ready: the old values must win
+    path.write_text(json.dumps({"offsite_cron_hour": 4, "auto_enabled": False, "offsite_max_mb": 2048, "offsite_extra_patterns": []}))
+    resynced = []
+    monkeypatch.setattr(ops, "_state", lambda: State())
+    monkeypatch.setattr(ops, "_settings_path", lambda: path)
+    monkeypatch.setattr(ops.plugin_loader, "resync_plugin_schedules", lambda name: resynced.append(name))
+    assert ops.migrate_prefs() == 3
+    assert json.loads(path.read_text()) == {"offsite_cron_hour": 11, "auto_enabled": True, "offsite_max_mb": 2048, "offsite_extra_patterns": []}
+    assert store["config"] == {"other": 1} and resynced == ["remembrance"]
+    assert ops.migrate_prefs() == 0 and resynced == ["remembrance"]       # nothing left to move
 
 
 # --- the run as ONE row in the notification center (2026-10-21) -----------------

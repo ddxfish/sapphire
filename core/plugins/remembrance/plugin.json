@@ -1,7 +1,7 @@
 {
   "name": "remembrance",
   "short_display_name": "Remembrance",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Offsite encrypted backups to the zero-knowledge Remembrance vault. The app encrypts before upload; the server never sees your data or password.",
   "author": "Trinity (Krem, Claude, Sapphire)",
   "url": "https://remembrance.sapphireblue.dev",
@@ -10,20 +10,28 @@
   "default_enabled": false,
   "capabilities": {
     "tools": ["tools/remembrance.py"],
+    "hooks": {"plugins_ready": "hooks/ready.py"},
+    "settings": [
+      {"key": "auto_enabled", "type": "boolean", "default": false, "label": "Automatic daily backup"},
+      {"key": "offsite_cron_hour", "type": "number", "default": 4, "label": "Backup hour (0-23)"},
+      {"key": "offsite_max_mb", "type": "number", "default": 2048, "label": "Max size (MB)"},
+      {"key": "offsite_extra_patterns", "type": "list", "default": [], "label": "Extra excludes (offsite only)"}
+    ],
     "schedule": [
       {
         "name": "Remembrance offsite backup",
-        "cron": "0 * * * *",
+        "cron": "0 4 * * *",
+        "time_setting": "offsite_cron_hour",
+        "enabled_setting": "auto_enabled",
+        "enabled": false,
         "handler": "schedule.py",
-        "enabled": true,
-        "description": "Hourly check — uploads an offsite backup at the configured hour when auto-backup is on."
+        "description": "Daily offsite backup at the configured hour, while automatic backup is on."
       }
     ],
     "routes": [
       {"method": "GET", "path": "config", "handler": "routes/manage.py:get_config"},
       {"method": "PUT", "path": "account", "handler": "routes/manage.py:put_account"},
       {"method": "PUT", "path": "password", "handler": "routes/manage.py:put_password"},
-      {"method": "PUT", "path": "config", "handler": "routes/manage.py:put_config"},
       {"method": "GET", "path": "status", "handler": "routes/manage.py:status"},
       {"method": "GET", "path": "download/{backup_id}", "handler": "routes/manage.py:download_blob"},
       {"method": "POST", "path": "backup", "handler": "routes/manage.py:do_backup"},

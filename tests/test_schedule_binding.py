@@ -100,6 +100,18 @@ def test_fixture_manifest_schedules_are_bound():
         assert _time_to_cron(settings[key]["default"], "BAD") == s["cron"], name
 
 
+def test_remembrance_schedule_is_bound_to_its_settings():
+    """1.1 ticked hourly and guarded the hour in the handler: 23 silent
+    'complete' rows a day in the notification center (2026-10-22)."""
+    caps = json.loads((ROOT / "core" / "plugins" / "remembrance" / "plugin.json").read_text(encoding="utf-8"))["capabilities"]
+    (s,) = caps["schedule"]
+    settings = {f["key"]: f for f in caps["settings"]}
+    assert s["time_setting"] == "offsite_cron_hour" and s["enabled_setting"] == "auto_enabled"
+    assert s["enabled"] is False and settings["auto_enabled"]["default"] is False
+    assert _time_to_cron(settings["offsite_cron_hour"]["default"], "BAD") == s["cron"]
+    assert "*" not in s["cron"].split()[1]          # one run a day, never an hourly poll
+
+
 def test_discord_manifest_has_no_proactive_legs_left():
     caps = json.loads(MANIFEST.read_text(encoding="utf-8"))["capabilities"]
     names = {s["name"] for s in caps["schedule"]}

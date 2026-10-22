@@ -493,10 +493,15 @@ def _on_webhook(event):
 
 def _on_task_done(event):
     """The log: a scheduled task ended (complete, cancelled, skipped). Never
-    its words: `details` may carry what it said."""
+    its words: `details` may carry what it said. A run that said and did
+    nothing (a plugin handler returning None: a tick, not an event) makes no
+    row: 23 'Remembrance offsite backup complete' a day read as 23 backups
+    (2026-10-22)."""
     d = event.get('data') or {}
-    notify(f'Task "{d.get("task_name") or "Unknown"}" {d.get("status") or "complete"}', 'info',
-           go={'view': 'scheduled'})
+    status = d.get('status') or 'complete'
+    if status == 'complete' and not (d.get('details') or {}).get('responses'):
+        return
+    notify(f'Task "{d.get("task_name") or "Unknown"}" {status}', 'info', go={'view': 'scheduled'})
 
 
 def _on_stt_error(event):

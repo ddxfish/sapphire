@@ -1,6 +1,7 @@
 // Remembrance — offsite encrypted backup vault settings panel.
 // The app encrypts before upload; the server is blind to your data + password.
 import { registerPluginSettings } from '/static/shared/plugin-registry.js';
+import pluginsAPI from '/static/shared/plugins-api.js';
 
 const P = '/api/plugin/remembrance';
 
@@ -106,8 +107,8 @@ function render(c) {
             <textarea id="rmb-extra" rows="3" style="width:100%;margin:4px 0 8px;padding:7px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;font-family:monospace;font-size:var(--font-xs)"></textarea>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
                 <label style="font-size:var(--font-xs)">Max size (MB) <input type="number" id="rmb-cap" style="width:80px;padding:5px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright)"></label>
-                <label style="font-size:var(--font-xs)">Cron hour (0–23, blank=off) <input type="number" id="rmb-hour" min="0" max="23" style="width:64px;padding:5px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright)"></label>
-                <label style="font-size:var(--font-xs);display:flex;align-items:center;gap:5px"><input type="checkbox" id="rmb-auto"> Auto-backup on cron</label>
+                <label style="font-size:var(--font-xs)">Backup hour (0–23) <input type="number" id="rmb-hour" min="0" max="23" step="1" style="width:64px;padding:5px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright)"></label>
+                <label style="font-size:var(--font-xs);display:flex;align-items:center;gap:5px"><input type="checkbox" id="rmb-auto"> Automatic daily backup</label>
                 <button class="btn-sm" id="rmb-save-cfg">Save settings</button>
                 <span id="rmb-cmsg" style="font-size:var(--font-xs);color:var(--text-secondary)"></span>
             </div>`)}
@@ -130,13 +131,17 @@ function render(c) {
     $('rmb-refresh').addEventListener('click', () => refresh(c));
     $('rmb-save-cfg').addEventListener('click', async () => {
         try {
-            const r = await api('PUT', 'config', {
-                offsite_extra_patterns: $('rmb-extra').value,
+            // The standard plugin-settings route: it also resyncs the daily
+            // schedule to this hour and switch (plugin.json time_setting / enabled_setting).
+            const hour = Math.max(0, Math.min(23, parseInt($('rmb-hour').value || '4', 10) || 0));
+            const r = await pluginsAPI.saveSettings('remembrance', {
+                offsite_extra_patterns: $('rmb-extra').value.split('\n').map(s => s.trim()).filter(Boolean),
                 offsite_max_mb: parseInt($('rmb-cap').value || '2048', 10),
-                offsite_cron_hour: $('rmb-hour').value === '' ? null : parseInt($('rmb-hour').value, 10),
+                offsite_cron_hour: hour,
                 auto_enabled: $('rmb-auto').checked,
             });
-            $('rmb-cmsg').textContent = r.ok ? '✓ saved' : '✗ failed';
+            $('rmb-hour').value = hour;
+            $('rmb-cmsg').textContent = r.status === 'success' ? '✓ saved' : '✗ failed';
         } catch (e) { $('rmb-cmsg').textContent = '✗ ' + e.message; }
     });
     $('rmb-backup').addEventListener('click', async () => {
@@ -161,7 +166,7 @@ async function refresh(c) {
         $('rmb-key').placeholder = cfg.has_api_key ? 'API key saved — blank to keep' : 'API key';
         $('rmb-extra').value = (cfg.offsite_extra_patterns || []).join('\n');
         $('rmb-cap').value = cfg.offsite_max_mb ?? 2048;
-        $('rmb-hour').value = (cfg.offsite_cron_hour ?? '') === null ? '' : (cfg.offsite_cron_hour ?? '');
+        $('rmb-hour').value = cfg.offsite_cron_hour ?? 4;
         $('rmb-auto').checked = !!cfg.auto_enabled;
         // password warning
         const pw = cfg.backup_password_status;

@@ -1057,7 +1057,8 @@ class ContinuityExecutor:
             }
 
             output = run_func(event)
-            result["responses"].append({"output": str(output) if output else None})
+            if output:                      # none: a tick, not an event (the notification center logs no row)
+                result["responses"].append({"output": str(output)})
             result["success"] = True
             # The handler's one-line receipt used to live only in activity.json
             # (a count) and tasks.json (purged per boot) — three days of dev
@@ -1105,7 +1106,8 @@ class ContinuityExecutor:
         except Exception as e:
             logger.error(f"[Continuity] Device task '{task.get('name')}' crashed: {e}", exc_info=True)
             text, ok = f"{where} failed: {type(e).__name__}", False
-        result["responses"].append({"output": text or None})
+        if text:                            # responses are what was said; an empty answer is not one
+            result["responses"].append({"output": text})
         result["success"] = bool(ok)
         logger.info(f"[Continuity] Device task '{task.get('name')}' {where} -> "
                     f"{'ok' if ok else 'FAILED'}: {text[:200] if text else '(no answer)'}")

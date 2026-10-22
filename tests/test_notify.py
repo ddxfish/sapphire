@@ -186,6 +186,16 @@ class TestRouting:
         bus.publish('plugin_reloaded', {'plugin': 'clock'})
         assert len(n.rows()) == 1 and n.rows()[0]['level'] == 'success'
 
+    def test_a_silent_task_run_makes_no_row(self, n, bus):
+        """A plugin handler that returned nothing ticked, it did not act."""
+        n.init()
+        bus.publish('continuity_task_complete', {'task_name': 'nightly', 'status': 'complete', 'details': {'responses': 0}})
+        assert n.rows() == []
+        bus.publish('continuity_task_complete', {'task_name': 'nightly', 'status': 'complete', 'details': {'responses': 1}})
+        assert n.rows()[0]['title'] == 'Task "nightly" complete'
+        bus.publish('continuity_task_skipped', {'task_name': 'nightly', 'status': 'skipped', 'details': {}})
+        assert n.rows()[0]['title'] == 'Task "nightly" skipped'
+
 
 class TestProgressMore:
     def test_lazy_row_only_on_first_tick(self, n):
@@ -239,7 +249,7 @@ class TestLogRows:
         n.init()
         bus.publish('webhook_fired', {'path': 'ping', 'method': 'POST', 'task_id': 't1'})
         bus.publish('continuity_task_complete', {'task_id': 't2', 'task_name': 'morning', 'status': 'complete',
-                                                 'details': {'response': 'private words'}})
+                                                 'details': {'responses': 1, 'response': 'private words'}})
         rows = n.rows()
         assert [r['level'] for r in rows] == ['info', 'info']
         assert rows[0]['title'] == 'Task "morning" complete' and 'private words' not in rows[0]['body']

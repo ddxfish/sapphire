@@ -16,7 +16,7 @@ loudly, in the log.
 ## Three ways to back up
 - **Manual:** the "Back up now (offsite)" button on the settings page.
 - **AI tool:** `remembrance_backup` — no comment → vault status; with a comment → a labeled backup (kept long-term).
-- **Cron:** auto-backup at a configurable hour (default just after the local backup run).
+- **Schedule:** one daily run at the hour you set (default 04:00, an hour after the local backup's default); off until **Automatic daily backup** is on. One scheduler entry, no hourly polling.
 
 ## Restore
 The backups list has a ↻ per row — enter your encryption password, confirm, and Sapphire

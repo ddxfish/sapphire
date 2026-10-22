@@ -4,9 +4,12 @@
 # `backup_manager.export_encrypted` since 2026-10-06 — one copy for every
 # shipper. This file owns only what is Remembrance's: the vault account, the
 # cadence, the upload, and the restore download.
+import json
 import logging
+import os
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -29,17 +32,61 @@ def _state():
     return plugin_loader.get_plugin_state(PLUGIN)
 
 
-PREF_DEFAULTS = {"offsite_extra_patterns": [], "offsite_max_mb": 2048,
-                 "offsite_cron_hour": None, "auto_enabled": False}
+PREF_KEYS = ("offsite_extra_patterns", "offsite_max_mb", "offsite_cron_hour", "auto_enabled")
+_settings_lock = threading.Lock()
 
 
 def get_prefs():
-    """Plugin prefs (stored in PluginState, written by the settings panel)."""
+    """Plugin prefs: the manifest's settings (defaults) under what the panel
+    saved through the standard plugin-settings route. One store, so the
+    loader's schedule binding (time_setting / enabled_setting) reads the
+    same hour and switch the panel shows (1.2.0, 2026-10-22)."""
     try:
-        cfg = _state().get("config", {}) or {}
+        return plugin_loader.get_plugin_settings(PLUGIN)
     except Exception:
-        cfg = {}
-    return {**PREF_DEFAULTS, **cfg}
+        return {}
+
+
+def _settings_path():
+    from core.paths import PROJECT_ROOT
+    return PROJECT_ROOT / "user" / "webui" / "plugins" / f"{PLUGIN}.json"
+
+
+def migrate_prefs():
+    """1.1 kept the prefs in PluginState 'config'; 1.2 reads the standard
+    plugin-settings store so the schedule binds to them. The old values are
+    the user's and WIN over the new store, which the loader seeds with the
+    manifest defaults at load, before plugins_ready (the first live run
+    moved nothing and cleared the old store, 2026-10-22). Moved once: the
+    keys leave the old store, so a second call finds nothing. Returns the
+    count moved."""
+    try:
+        old = dict(_state().get("config", {}) or {})
+    except Exception:
+        return 0
+    moving = {k: old[k] for k in PREF_KEYS if old.get(k) is not None}
+    if not moving:
+        return 0
+    from core.fs_utils import replace_with_retry
+    path = _settings_path()
+    with _settings_lock:
+        try:
+            cur = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception:
+            cur = {}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps({**cur, **moving}, indent=2), encoding="utf-8")
+        replace_with_retry(tmp, path)
+    for k in moving:
+        old.pop(k, None)
+    _state().save("config", old)
+    try:
+        plugin_loader.resync_plugin_schedules(PLUGIN)
+    except Exception as e:
+        logger.warning(f"[remembrance] schedule resync after the prefs move failed: {e}")
+    logger.info(f"[remembrance] prefs moved to the plugin-settings store: {', '.join(sorted(moving))}")
+    return len(moving)
 
 
 def _set_last_result(ok, message):
