@@ -554,7 +554,8 @@ async function _persistOrder(el) {
 }
 
 async function _deletePanel(instance_id) {
-    const el = _editEl || document.querySelector('[data-view="settings"]') || document;
+    // `[data-view="settings"]` matched the NAV RAIL item, never the view (found 2026-10-22)
+    const el = _editEl || document.getElementById('view-settings') || document;
     const panels = await _fetchUserPanels();
     const next = panels.filter(p => p.instance_id !== instance_id);
     if (next.length === panels.length) return;
@@ -743,7 +744,7 @@ async function openWidgetSettings(el, instance_id) {
 
 
 async function _resizePanel(instance_id, size) {
-    const el = _editEl || document.querySelector('[data-view="settings"]') || document;
+    const el = _editEl || document.getElementById('view-settings') || document;
     const panels = await _fetchUserPanels();
     const target = panels.find(p => p.instance_id === instance_id);
     if (!target || target.size === size) return;
@@ -782,11 +783,10 @@ async function mountPanels(el) {
         toast: (msg, kind) => ui.showToast(msg, kind),
         listStorePlugins,
         pollForRestart: () => setTimeout(() => pollForRestart(), 2000),
+        // Bubbles to whichever shell holds the tab (the Settings page's root, or the
+        // setup view); the old lookup by `.settings-view` class found nothing elsewhere.
         navigateSettingsTab: (tab) => {
-            const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
-            if (settingsView) {
-                settingsView.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab }, bubbles: true }));
-            }
+            el.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab }, bubbles: true }));
         },
         openWidgetSettings: (instance_id) => openWidgetSettings(el, instance_id),
     };
@@ -1271,10 +1271,7 @@ async function loadMissingDeps(el, ctx) {
         `).join('');
         list.querySelectorAll('.dash-deps-fix').forEach(btn => {
             btn.addEventListener('click', () => {
-                const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
-                if (settingsView) {
-                    settingsView.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: 'plugins' }, bubbles: true }));
-                }
+                el.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: 'plugins' }, bubbles: true }));
             });
         });
     } catch { card.style.display = 'none'; }

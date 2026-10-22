@@ -208,19 +208,18 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
         await _guard_embedding_swap(settings, settings_dict['EMBEDDING_PROVIDER'],
                                     bool(data.get('confirm_embedding_swap')))
     results = []
-    # Defer provider switches until after all settings are applied
-    # (e.g. API key must be in config before provider init reads it)
-    deferred_actions = []
-    deferred_keys = set()
     persisted_keys = {}  # Collect keys for single disk write
-    # Provider-switch keys that must only persist AFTER their deferred switch
-    # succeeds. Previously all keys persisted eagerly and the switch ran
-    # afterward — if the switch raised (e.g. re-embed running blocked the
-    # swap), settings.json had the new provider but `_embedder` singleton was
-    # still old. Next process restart would boot with the wrong provider
-    # silently. These get added to persisted_keys in the deferred-action loop
-    # only on successful switch. Scout race #4 — 2026-04-21.
-    _PROVIDER_SWITCH_KEYS = {'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER'}
+    # Provider switches are JOBS (core/provider_switch.py, 2026-10-22): the request
+    # returns at once, each switch runs in a thread under a notification row, the
+    # provider key lands in config only when the switch succeeded, and
+    # settings_changed fires on finish. STT_ENABLED / TTS_ENABLED are the legacy
+    # toggles: the same job, by provider key (and skipped when the provider key is
+    # in the same save). Both wake word keys in one save: the toggle's cold start
+    # reads WAKEWORD_MODEL from config, so the model lands as a plain key here and
+    # the toggle job does the rest.
+    from core import provider_switch
+    switch_items, switch_key_of = [], {}
+    plain_wakeword_model = 'WAKE_WORD_ENABLED' in settings_dict and 'WAKEWORD_MODEL' in settings_dict
     for key, value in settings_dict.items():
         try:
             # Route service API keys to credentials, not settings.json (one
@@ -229,46 +228,20 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                 results.append({"key": key, "status": "success", "tier": "hot"})
                 continue
             tier = settings.validate_tier(key)
-            # Skip reload callback for provider-switch keys — the deferred
-            # action below runs the switch explicitly. Without skip, callback
-            # + explicit switch double-fire (see voice-prep review #J).
-            settings.set(
-                key, value,
-                persist=False,
-                _skip_callbacks=(key in _PROVIDER_SWITCH_KEYS),
-            )
-            # Provider-switch keys defer their persist until post-switch success.
-            if persist and key not in _PROVIDER_SWITCH_KEYS:
+            if (key == 'STT_ENABLED' and 'STT_PROVIDER' in settings_dict) or \
+                    (key == 'TTS_ENABLED' and 'TTS_PROVIDER' in settings_dict):
+                results.append({"key": key, "status": "skipped", "tier": tier})
+                continue
+            item = None if (key == 'WAKEWORD_MODEL' and plain_wakeword_model) else provider_switch.item_for(key, value)
+            if item:
+                switch_items.append(item)
+                switch_key_of[key] = item[0]
+                results.append({"key": key, "status": "started", "tier": tier})
+                continue
+            settings.set(key, value, persist=False)
+            if persist:
                 persisted_keys[key] = value
             results.append({"key": key, "status": "success", "tier": tier})
-            if key == 'WAKE_WORD_ENABLED':
-                deferred_actions.append(('toggle_wakeword', value, key, tier))
-                deferred_keys.add(key)
-            if key == 'WAKEWORD_MODEL':
-                # Skip if WAKE_WORD_ENABLED is in the same batch — the
-                # toggle_wakeword cold-start already reads WAKEWORD_MODEL
-                # from settings. Avoids a double-init.
-                if 'WAKE_WORD_ENABLED' not in settings_dict:
-                    deferred_actions.append(('reload_wakeword_model', value, key, tier))
-                deferred_keys.add(key)
-            if key == 'STT_PROVIDER':
-                deferred_actions.append(('switch_stt_provider', value, key, tier))
-                deferred_keys.add(key)
-            if key == 'STT_ENABLED':
-                if 'STT_PROVIDER' not in settings_dict:
-                    deferred_actions.append(('toggle_stt', value, key, tier))
-                deferred_keys.add(key)
-            if key == 'TTS_PROVIDER':
-                deferred_actions.append(('switch_tts_provider', value, key, tier))
-                deferred_keys.add(key)
-            if key == 'TTS_ENABLED':
-                # Skip if TTS_PROVIDER is in the same batch (it already handles the switch)
-                if 'TTS_PROVIDER' not in settings_dict:
-                    deferred_actions.append(('toggle_tts', value, key, tier))
-                deferred_keys.add(key)
-            if key == 'EMBEDDING_PROVIDER':
-                deferred_actions.append(('switch_embedding', value, key, tier))
-                deferred_keys.add(key)
             if key == 'ALLOW_UNSIGNED_PLUGINS' and not value:
                 try:
                     from core.plugin_loader import plugin_loader
@@ -277,14 +250,12 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                         logger.info(f"Unsigned policy enforced, disabled: {disabled}")
                 except Exception as e:
                     logger.warning(f"Failed to enforce unsigned policy: {e}")
-            # Defer SETTINGS_CHANGED for provider keys until after switch completes
-            if key not in deferred_keys:
-                # origin lets the writing tab skip its own SSE echo (event-bus
-                # self-skip, same as CHAT_SETTINGS_CHANGED) -- without it a
-                # favorites drag repainted the strip it had just reordered
-                # (S2 #4). Deferred provider keys stay unstamped.
-                publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier,
-                                                  "origin": request.headers.get('X-Session-ID')})
+            # origin lets the writing tab skip its own SSE echo (event-bus
+            # self-skip, same as CHAT_SETTINGS_CHANGED) -- without it a
+            # favorites drag repainted the strip it had just reordered
+            # (S2 #4). The switch jobs publish their own, unstamped, on finish.
+            publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier,
+                                              "origin": request.headers.get('X-Session-ID')})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
     # SOCKS session cache: the single-key PUT clears it, but this batch route
@@ -295,78 +266,24 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA')):
         from core.socks_proxy import clear_session_cache
         clear_session_cache()
-    # Execute deferred provider switches (runtime values are already set via
-    # settings.set above; persistence for provider-switch keys is held until
-    # we confirm the switch succeeded, then written to persisted_keys below.
-    # Scout race #4 — persist-before-switch caused settings.json / singleton
-    # divergence on switch failure).
-    #
-    # Sequence wake word init LAST. 2026-04-25 user report: heap corruption
-    # SIGABRT when wake word starts during a multi-component boot batch
-    # (TTS/STT/embedding loading from worker threads in the same window).
-    # Manual single-toggle works fine because nothing else competes — proves
-    # the issue is concurrency-with-other-C-extension-init, not wake word
-    # itself. Stable sort: non-wakeword actions keep their original order;
-    # wakeword(s) drop to the end so they init on a fully-settled environment.
-    deferred_actions.sort(key=lambda a: a[0] in ('toggle_wakeword', 'reload_wakeword_model'))
-    system = get_system()
-    for action, value, key, tier in deferred_actions:
-        switch_ok = False
-        try:
-            if action == 'switch_embedding':
-                from core.embeddings import switch_embedding_provider
-                switch_embedding_provider(value)
-            else:
-                result = await asyncio.to_thread(getattr(system, action), value)
-                # switch_*/toggle_* report failure by RETURNING False, not
-                # raising (HDF scout, 2026-07-19) — without this, a failed
-                # provider switch persisted as success and the UI toasted OK
-                # while the runtime sat on the fallback.
-                if result is False:
-                    raise RuntimeError(f"{action} reported failure "
-                                       f"(returned False)")
-            switch_ok = True
-        except Exception as e:
-            logger.error(f"Deferred action {action} failed: {e}")
-            # Switch failed — undo the runtime set so the runtime layer stays
-            # aligned with what's actually persisted (the old value).
-            if key in _PROVIDER_SWITCH_KEYS:
-                try:
-                    # set() wrote _config directly and get() READS _config —
-                    # popping the runtime layer alone left the failed value
-                    # live for every later reader (S4; the old comment here
-                    # claiming a fallback was wrong). Restore from the
-                    # persisted layers, which we did NOT touch.
-                    with settings._lock:
-                        settings._runtime.pop(key, None)
-                        _old = settings._user.get(key, settings._defaults.get(key))
-                        if _old is not None:
-                            settings._config[key] = _old
-                except Exception as rollback_err:
-                    logger.warning(f"Runtime rollback for {key} failed: {rollback_err}")
-            # Record the failure in results so the UI can surface it.
-            results.append({"key": key, "status": "error", "error": f"{action}: {e}"})
-        if switch_ok and persist and key in _PROVIDER_SWITCH_KEYS:
-            # Only now does this provider key earn its seat in persisted_keys.
-            persisted_keys[key] = value
-    # Persist all settings in ONE disk write, now that provider switches have
-    # had a chance to succeed/fail and update persisted_keys accordingly.
+    # Persist the plain keys in ONE disk write, before the switch jobs start: an
+    # API key or a model size saved alongside its provider must be in config when
+    # the provider's init reads it.
     if persist and persisted_keys:
         with settings._lock:
             settings._user.update(persisted_keys)
             for key in persisted_keys:
                 settings._runtime.pop(key, None)
             settings.save()
-    # Re-apply chat settings so voice gets validated for new provider
-    if any(a[0].startswith('switch_tts') or a[0] == 'toggle_tts' for a in deferred_actions):
+    jobs = {}
+    if switch_items:
         try:
-            chat_settings = system.llm_chat.session_manager.get_chat_settings()
-            _apply_chat_settings(system, chat_settings)
-        except Exception as e:
-            logger.warning(f"Failed to re-apply chat settings after TTS switch: {e}")
-    # Now publish SETTINGS_CHANGED for deferred keys (provider is ready)
-    for _, value, key, tier in deferred_actions:
-        publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
+            jobs = provider_switch.start(switch_items, persist=persist)
+        except provider_switch.SwitchInProgress as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        for r in results:
+            if r.get("status") == "started":
+                r["job"] = jobs.get(switch_key_of.get(r["key"]))
     # Vault idle-timeout hot-apply: re-arm the running timer with the new
     # value (a SHRUNK timeout would otherwise apply up to one old-timeout
     # late). No-op while locked or with no vault.
@@ -376,7 +293,7 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             prompt_vault.rearm()
         except Exception:
             pass
-    return {"status": "success", "results": results}
+    return {"status": "success", "results": results, "jobs": jobs}
 
 
 @router.get("/api/settings/help")
@@ -582,162 +499,26 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         await _guard_embedding_swap(settings, value, bool(data.get('confirm_embedding_swap')))
     persist = data.get('persist', True)
     tier = settings.validate_tier(key)
-    # Provider-switch keys: defer persist until after switch verifies. Pre-fix,
-    # persist happened FIRST then switch ran — if switch raised (bad API key,
-    # provider plugin missing), settings.json had the new value, runtime had
-    # the new value, but the live singleton stayed on the old provider. Next
-    # restart booted with the wrong provider silently. Voice mode hammers
-    # this endpoint per provider/voice swap so the failure rate compounds.
-    # Mirrors the batch endpoint's deferred-persist pattern (race #4 fix).
-    # Day-ruiner scout 2026-05-07 #3.
-    _PROVIDER_SWITCH_KEYS = {'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER'}
-    is_provider_switch = key in _PROVIDER_SWITCH_KEYS
-    # Skip the reload callback — this route runs the switch explicitly below.
-    # Without _skip_callbacks=True, the callback fires here AND the explicit
-    # _do_*_switch fires later, double-running the switch (Kokoro restart
-    # twice, STT recorder flap risk). Voice-prep review 2026-05-07 #J.
-    # Captured for honest rollback: toggle/switch failures below must be
-    # able to restore what the user actually had.
-    _prev_value = settings.get(key)
-    settings.set(
-        key, value,
-        persist=(persist and not is_provider_switch),
-        _skip_callbacks=is_provider_switch,
-    )
+    # A provider switch (STT/TTS/EMBEDDING_PROVIDER, the wake word keys, and the
+    # legacy STT_/TTS_ENABLED toggles) is a JOB with a notification row
+    # (core/provider_switch.py, 2026-10-22): this returns at once, the provider
+    # key lands in config only when the switch succeeded, settings_changed fires
+    # on finish. The old `?async=true` lane (persist first, fire and forget, no
+    # failure report) is gone with it.
+    from core import provider_switch
+    item = provider_switch.item_for(key, value)
+    if item:
+        try:
+            jobs = provider_switch.start([item], persist=persist)
+        except provider_switch.SwitchInProgress as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"status": "started", "key": key, "value": value, "tier": tier,
+                "persisted": False, "job": jobs.get(item[0])}
+    settings.set(key, value, persist=persist)
     if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA'}:
         clear_session_cache()
-    # Tracks switch outcome so we know whether to persist + rollback.
-    # Defined BEFORE the first toggle site that can set it.
-    switch_ok = {'value': True}  # default True; set False on switch failure
-    if key == 'WAKE_WORD_ENABLED':
-        system = get_system()
-        ok = await asyncio.to_thread(system.toggle_wakeword, value)
-        if ok is False:
-            # toggle_* report failure by RETURN, not raise (scout,
-            # 2026-07-20 — same class as the batch-route fix).
-            switch_ok['value'] = False
-    # Provider switches: fire-and-forget when ?async=true (setup wizard uses this)
-    run_async = request.query_params.get('async') == 'true'
-
-    async def _do_stt_switch(val):
-        try:
-            ok = await asyncio.to_thread(get_system().switch_stt_provider, val)
-            if ok is False:
-                # switch_* reports failure by RETURN, not raise (HDF scout,
-                # 2026-07-19) — without this a failed switch persisted as OK.
-                raise RuntimeError("switch_stt_provider returned False")
-        except Exception as e:
-            logger.error(f"Background STT switch failed: {e}")
-            switch_ok['value'] = False
-
-    async def _do_tts_switch(val):
-        try:
-            ok = await asyncio.to_thread(get_system().switch_tts_provider, val)
-            if ok is False:
-                raise RuntimeError("switch_tts_provider returned False")
-            try:
-                system = get_system()
-                chat_settings = system.llm_chat.session_manager.get_chat_settings()
-                _apply_chat_settings(system, chat_settings)
-            except Exception as e:
-                logger.warning(f"Failed to re-apply chat settings after TTS switch: {e}")
-        except Exception as e:
-            logger.error(f"Background TTS switch failed: {e}")
-            switch_ok['value'] = False
-
-    async def _do_embedding_switch(val):
-        try:
-            from core.embeddings import switch_embedding_provider
-            await asyncio.to_thread(switch_embedding_provider, val)
-        except Exception as e:
-            logger.error(f"Background embedding switch failed: {e}")
-            switch_ok['value'] = False
-
-    if key == 'STT_PROVIDER':
-        if run_async:
-            # async path: persist optimistically since we can't await the result.
-            # Worse than sync but matches prior behavior and is opt-in via ?async=true.
-            if persist:
-                with settings._lock:
-                    settings._user[key] = value
-                    settings._runtime.pop(key, None)
-                    settings.save()
-            asyncio.create_task(_do_stt_switch(value))
-        else:
-            await _do_stt_switch(value)
-    if key == 'STT_ENABLED':
-        ok = await asyncio.to_thread(get_system().toggle_stt, value)
-        if ok is False:
-            switch_ok['value'] = False
-    if key == 'TTS_PROVIDER':
-        if run_async:
-            if persist:
-                with settings._lock:
-                    settings._user[key] = value
-                    settings._runtime.pop(key, None)
-                    settings.save()
-            asyncio.create_task(_do_tts_switch(value))
-        else:
-            await _do_tts_switch(value)
-    if key == 'EMBEDDING_PROVIDER':
-        if run_async:
-            if persist:
-                with settings._lock:
-                    settings._user[key] = value
-                    settings._runtime.pop(key, None)
-                    settings.save()
-            asyncio.create_task(_do_embedding_switch(value))
-        else:
-            await _do_embedding_switch(value)
-    if key == 'TTS_ENABLED':
-        ok = await asyncio.to_thread(get_system().toggle_tts, value)
-        if ok is False:
-            switch_ok['value'] = False
-        if value:
-            try:
-                system = get_system()
-                chat_settings = system.llm_chat.session_manager.get_chat_settings()
-                _apply_chat_settings(system, chat_settings)
-            except Exception as e:
-                logger.warning(f"Failed to re-apply chat settings after TTS toggle: {e}")
-    # Audio toggles: switch_ok was SET here for two hunts but consumed by
-    # nobody — the value persisted at the top, HTTP said 200, and the
-    # checkbox stayed green on a dead feature (hunt 2026-08-17 S3).
-    if key in {'WAKE_WORD_ENABLED', 'STT_ENABLED', 'TTS_ENABLED'} and not switch_ok['value']:
-        try:
-            with settings._lock:
-                settings._config[key] = _prev_value
-                settings._runtime.pop(key, None)
-                if persist:
-                    settings._user[key] = _prev_value
-                    settings.save()
-        except Exception as e:
-            logger.error(f"Rollback after failed {key} toggle also failed: {e}")
-        raise HTTPException(status_code=500,
-                            detail=f"Toggle failed for {key} — setting reverted")
-    # Provider keys: persist now (on success) or rollback runtime (on failure).
-    # Async paths persisted optimistically above and skip this block.
-    persisted = persist
-    if is_provider_switch and persist and not run_async:
-        if switch_ok['value']:
-            with settings._lock:
-                settings._user[key] = value
-                settings._runtime.pop(key, None)
-                settings.save()
-        else:
-            # Switch failed — drop the runtime override AND restore _config
-            # (set() wrote it directly; get() reads _config, so popping the
-            # runtime layer alone left the failed value live — S4).
-            try:
-                with settings._lock:
-                    settings._runtime.pop(key, None)
-                    settings._config[key] = _prev_value
-            except Exception:
-                pass
-            persisted = False
-            raise HTTPException(status_code=500, detail=f"Provider switch failed for {key} — value not persisted")
     publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
-    return {"status": "success", "key": key, "value": value, "tier": tier, "persisted": persisted}
+    return {"status": "success", "key": key, "value": value, "tier": tier, "persisted": persist}
 
 
 @router.delete("/api/settings/{key}")
@@ -1315,26 +1096,60 @@ async def discover_models(provider_key: str, request: Request, _=Depends(require
 # PROVIDER REGISTRY ENDPOINTS (TTS, STT, Embedding)
 # =============================================================================
 
-@router.get("/api/tts/providers")
-async def get_tts_providers(request: Request, _=Depends(require_login)):
-    """List available TTS providers (core + plugin)."""
-    from core.tts.providers import tts_registry
-    active = tts_registry.get_active_key()
-    providers = tts_registry.get_all()
+def _dormant_providers(system_name, registered):
+    """Providers a plugin declares while that plugin is OFF: the provider card can
+    turn the plugin on (and install its packages first). The loader keeps every
+    scanned manifest, enabled or not. A plugin that is on but failed to load is
+    the plugin manager's problem, not a card's (its toggle would turn it off)."""
+    out = []
+    try:
+        from core.plugin_loader import plugin_loader
+        for info in plugin_loader.get_all_plugin_info():
+            if info.get('enabled'):
+                continue
+            manifest = info.get('manifest') or {}
+            decl = ((manifest.get('capabilities') or {}).get('providers') or {}).get(system_name)
+            if not isinstance(decl, dict) or not decl.get('key') or decl['key'] in registered:
+                continue
+            out.append({
+                'key': decl['key'],
+                'display_name': decl.get('display_name') or decl['key'],
+                'is_core': False,
+                'plugin_name': info['name'],
+                'plugin_enabled': False,
+                'requires_api_key': bool(decl.get('requires_api_key', False)),
+                'api_key_env': decl.get('api_key_env', ''),
+                'is_local': bool(decl.get('is_local', False)),
+                'description': decl.get('description', ''),
+                'missing_deps': list(plugin_loader._check_dependencies(manifest) or []),
+            })
+    except Exception as e:
+        logger.debug(f"dormant {system_name} providers not listed: {e}")
+    return out
+
+
+def _providers_payload(registry, system_name):
+    active = registry.get_active_key()
+    providers = registry.get_all()
     for p in providers:
         p['is_active'] = p['key'] == active
+    providers += _dormant_providers(system_name, {p['key'] for p in providers})
     return {"providers": providers, "active": active}
+
+
+@router.get("/api/tts/providers")
+async def get_tts_providers(request: Request, _=Depends(require_login)):
+    """List TTS providers: core + plugin, and the ones a disabled plugin declares
+    (`plugin_enabled: false`, with `missing_deps`), so a card can offer them."""
+    from core.tts.providers import tts_registry
+    return _providers_payload(tts_registry, 'tts')
 
 
 @router.get("/api/stt/providers")
 async def get_stt_providers(request: Request, _=Depends(require_login)):
-    """List available STT providers (core + plugin)."""
+    """List STT providers (core + plugin + dormant, see get_tts_providers)."""
     from core.stt.providers import stt_registry
-    active = stt_registry.get_active_key()
-    providers = stt_registry.get_all()
-    for p in providers:
-        p['is_active'] = p['key'] == active
-    return {"providers": providers, "active": active}
+    return _providers_payload(stt_registry, 'stt')
 
 
 @router.get("/api/embedding/providers")
@@ -1347,8 +1162,4 @@ async def get_embedding_providers(request: Request, _=Depends(require_login)):
     'Disabled' because the current value doesn't match any hardcoded option.
     2026-04-21."""
     from core.embeddings import embedding_registry
-    active = embedding_registry.get_active_key()
-    providers = embedding_registry.get_all()
-    for p in providers:
-        p['is_active'] = p['key'] == active
-    return {"providers": providers, "active": active}
+    return _providers_payload(embedding_registry, 'embedding')

@@ -118,10 +118,11 @@ def test_settings_save_warns_before_embedding_provider_swap():
     """[REGRESSION_GUARD] settings.js saveChanges must invoke the integrity
     endpoint before committing an EMBEDDING_PROVIDER change, and must let
     the user back out via confirm()."""
-    src = (Path(__file__).parent.parent / 'interfaces/web/static/views/settings.js').read_text()
+    # The batch save moved to the HOST, shared/settings-host.js (2026-10-22).
+    src = (Path(__file__).parent.parent / 'interfaces/web/static/shared/settings-host.js').read_text()
     # Must fetch the integrity endpoint
     assert "/api/embedding/integrity" in src, \
-        "settings.js must call /api/embedding/integrity before committing a swap"
+        "settings-host.js must call /api/embedding/integrity before committing a swap"
     # Must gate on EMBEDDING_PROVIDER
     assert "'EMBEDDING_PROVIDER'" in src
     # Must confirm() and respect cancel

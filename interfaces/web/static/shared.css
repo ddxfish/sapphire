@@ -816,6 +816,48 @@ html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1));
     margin-bottom: var(--space-lg);
 }
 
+/* Provider cards (shared/provider-selector.js, 2026-10-22): one radio card per
+   provider on the TTS / STT / Embedding tabs and in the setup wizard. A dormant
+   card is a provider a disabled plugin declares; clicking it turns the plugin on. */
+.prov-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: var(--space-sm);
+    width: 100%;
+}
+.prov-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-md, 10px);
+    background: var(--bg-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.prov-card:hover { border-color: var(--border-hover); }
+.prov-card.selected { border-color: var(--trim); background: var(--trim-light, var(--bg-tertiary)); }
+.prov-card.dormant { border-style: dashed; }
+.prov-card.busy { cursor: progress; }
+.prov-card input[type="radio"] { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.prov-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.prov-card-name { font-weight: 600; font-size: var(--font-sm); color: var(--text); }
+.prov-card-badge { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; }
+.prov-card-blurb { font-size: var(--font-xs); color: var(--text-muted); line-height: 1.35; }
+.prov-card-note { font-size: var(--font-xs); color: var(--trim); min-height: 1em; }
+.prov-card.failed .prov-card-note { color: var(--error, #d9534f); }
+/* the row the cards sit in: label line on top, the grid under it, full width */
+.setting-row.prov-row {
+    grid-column: 1 / -1;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-sm);
+}
+.setting-row.prov-row .setting-input { width: 100%; }
+.setting-row.prov-row .setting-label-row .reset-btn { margin-left: auto; }
+
 /* Setting rows */
 .setting-row {
     display: flex;

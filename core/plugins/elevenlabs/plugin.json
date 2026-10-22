@@ -2,12 +2,14 @@
   "name": "elevenlabs",
   "short_display_name": "ElevenLabs",
   "version": "1.0.0",
-  "description": "ElevenLabs \u2014 cloud text-to-speech with premium voices",
+  "description": "ElevenLabs — cloud text-to-speech with premium voices",
   "author": "sapphire",
-  "icon": "\ud83c\udf99\ufe0f",
+  "icon": "🎙️",
   "priority": 50,
   "default_enabled": false,
-  "pip_dependencies": ["httpx"],
+  "pip_dependencies": [
+    "httpx"
+  ],
   "settingsUI": null,
   "capabilities": {
     "providers": {
@@ -18,7 +20,8 @@
         "class_name": "ElevenLabsTTSProvider",
         "is_local": false,
         "requires_api_key": true,
-        "api_key_env": "TTS_ELEVENLABS_API_KEY"
+        "api_key_env": "TTS_ELEVENLABS_API_KEY",
+        "description": "Premium voices. Needs an API key, paid per character, sends your text to ElevenLabs."
       }
     },
     "settings": [
@@ -27,7 +30,7 @@
         "type": "password",
         "label": "API Key",
         "default": "",
-        "help": "From elevenlabs.io \u2014 Settings \u2192 API Keys"
+        "help": "From elevenlabs.io — Settings → API Keys"
       },
       {
         "key": "model",
@@ -35,9 +38,18 @@
         "label": "Model",
         "default": "eleven_turbo_v2_5",
         "options": [
-          {"value": "eleven_turbo_v2_5", "label": "Turbo v2.5 (fast)"},
-          {"value": "eleven_multilingual_v2", "label": "Multilingual v2 (quality)"},
-          {"value": "eleven_monolingual_v1", "label": "Monolingual v1 (legacy)"}
+          {
+            "value": "eleven_turbo_v2_5",
+            "label": "Turbo v2.5 (fast)"
+          },
+          {
+            "value": "eleven_multilingual_v2",
+            "label": "Multilingual v2 (quality)"
+          },
+          {
+            "value": "eleven_monolingual_v1",
+            "label": "Monolingual v1 (legacy)"
+          }
         ]
       },
       {

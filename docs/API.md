@@ -135,6 +135,8 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | PUT | `/api/settings/{key}` | Update a single setting |
 | DELETE | `/api/settings/{key}` | Reset a setting to default |
 | PUT | `/api/settings/batch` | Batch update multiple settings |
+
+Provider switches are jobs. `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`, `WAKE_WORD_ENABLED`, `WAKEWORD_MODEL` (and the legacy `STT_ENABLED` / `TTS_ENABLED` toggles, which map onto their provider key) come back as `"status": "started"` with a notification row id per key (`job`, and `jobs` on the batch). The switch runs in the background under that row; the key lands in config and on disk only when the provider is really ready; `settings_changed` fires on finish with the live value and `ok: true|false`. A request for a key already switching to a different value is refused with `409`. Save an API key or model size in the same batch as its provider and it is written first.
 | POST | `/api/settings/reload` | Force reload from disk |
 | POST | `/api/settings/reset` | Reset all settings to defaults |
 | GET | `/api/settings/help` | Get setting descriptions |

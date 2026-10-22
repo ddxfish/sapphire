@@ -446,13 +446,17 @@ class EmbeddingRegistry(BaseProviderRegistry):
 
     def __init__(self):
         super().__init__('embedding', 'EMBEDDING_PROVIDER')
-        self.register_core('local', LocalEmbedder, 'Local (Nomic)', is_local=True)
-        self.register_core('api', RemoteEmbedder, 'Remote (Nomic API)', is_local=False)
+        self.register_core('local', LocalEmbedder, 'Local (Nomic)', is_local=True,
+                           description='Nomic on your CPU, free. One model download, then memory search works offline.')
+        self.register_core('api', RemoteEmbedder, 'Remote (Nomic API)', is_local=False,
+                           description='A Nomic server you point at. Sends the text of memories there.')
         # sapphire_router is surfaced in the Settings UI — must be registered here
         # too or selecting it silently falls through to NullEmbedder and every
         # save lands with embedding=NULL. Scout finding, active bug pre-fix.
-        self.register_core('sapphire_router', SapphireRouterEmbedder, 'Sapphire Router', is_local=False)
-        self.register_core('none', NullEmbedder, 'None (disabled)', is_local=True)
+        self.register_core('sapphire_router', SapphireRouterEmbedder, 'Sapphire Router', is_local=False,
+                           description='The managed cloud embedder.')
+        self.register_core('none', NullEmbedder, 'None (disabled)', is_local=True,
+                           description='Text search only; memories still save.')
 
     def register_plugin(self, key, provider_class, display_name, plugin_name, **metadata):
         """Plugin registers a custom provider. Runs static contract validation

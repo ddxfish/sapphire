@@ -316,11 +316,14 @@ class VoiceChatSystem:
         # the disabled plugin's provider — user sees "voice was working,
         # I disabled an unrelated plugin, now silent" with no log line.
         # subsystem-integrity scout 2026-05-07 #1.
+        # The callbacks ENQUEUE a switch job (core/provider_switch.py,
+        # 2026-10-22): they fire inside settings._lock, where a switch that
+        # persists would deadlock, and a job gets a notification row.
         try:
             from core.settings_manager import settings as _settings
-            _settings.register_reload_callback('TTS_PROVIDER', self.switch_tts_provider)
-            _settings.register_reload_callback('STT_PROVIDER', self.switch_stt_provider)
-            _settings.register_reload_callback('EMBEDDING_PROVIDER', self.switch_embedding_provider)
+            from core import provider_switch
+            for _key in ('TTS_PROVIDER', 'STT_PROVIDER', 'EMBEDDING_PROVIDER'):
+                _settings.register_reload_callback(_key, provider_switch.enqueue(_key))
             logger.info("Provider reload callbacks registered (TTS/STT/EMBEDDING)")
         except Exception as _e:
             logger.warning(f"Failed to register provider reload callbacks: {_e}")

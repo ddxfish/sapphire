@@ -126,14 +126,15 @@ function _trustClass(p, locked) {
 // The toggle handler at the bottom of attachListeners calls these instead
 // of refreshTab(). 2026-04-30 (tiles), 2026-08-06 (rows).
 
+// Asks whichever shell holds this tab to show another one. The event bubbles
+// to the shell's root (#view-settings, or the setup view): the old lookup by
+// `.settings-view` class found nothing outside the Settings page (2026-10-22).
+function _navigate(el, tab) {
+    el.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab }, bubbles: true }));
+}
+
 function _bindGearClick(el, gearBtn, name) {
-    gearBtn.addEventListener('click', () => {
-        const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
-        if (settingsView) {
-            settingsView.dispatchEvent(new CustomEvent('settings-navigate',
-                { detail: { tab: name }, bubbles: true }));
-        }
-    });
+    gearBtn.addEventListener('click', () => _navigate(el, name));
 }
 
 function _bindReloadClick(el, ctx, reloadBtn, name) {
@@ -576,8 +577,7 @@ async function _chooseClient(el, cached, name, client) {
         await pluginsAPI.saveSettings(name, { [client.setting]: true });
         if (cached?.env) cached.env.state = 'client';
         _syncEnvStrip(el, cached);
-        el.closest('.settings-view, [data-view="settings"]')
-            ?.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: name }, bubbles: true }));
+        _navigate(el, name);
     } catch (err) {
         ui.showToast(`Could not set client mode: ${err.message}`, 'error', 5000);
     }
@@ -881,13 +881,7 @@ export default {
 
         // Gear → navigate to plugin settings tab via custom event
         el.querySelectorAll('.pm-gear[data-settings-tab]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const tabName = btn.dataset.settingsTab;
-                const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
-                if (settingsView) {
-                    settingsView.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: tabName }, bubbles: true }));
-                }
-            });
+            btn.addEventListener('click', () => _navigate(el, btn.dataset.settingsTab));
         });
 
         // Kebab open/close. Click the dots → toggle the menu. Click anywhere

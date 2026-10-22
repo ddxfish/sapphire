@@ -100,6 +100,9 @@ class BaseProviderRegistry:
                 'requires_api_key': entry.get('requires_api_key', False),
                 'api_key_env': entry.get('api_key_env', ''),
                 'is_local': entry.get('is_local', False),
+                # one line under the name on the provider card (register_core's
+                # description=, or a plugin manifest's providers.<system>.description)
+                'description': entry.get('description', ''),
             })
         return result
 

@@ -61,6 +61,12 @@ def settings_client(client, mock_system, monkeypatch):
                  'switch_tts_provider', 'toggle_tts', 'switch_embedding_provider'):
         setattr(mock_system, attr, MagicMock(return_value=None))
 
+    # The switch job (core/provider_switch.py, 2026-10-22) warms Silero on STT
+    # none→X and warms the embedder on an embedding switch: never in tests.
+    from core import provider_switch as _ps
+    monkeypatch.setattr(_ps, '_warm_vad', lambda: None)
+    monkeypatch.setattr(_ps, '_embedding_ready', lambda system, value: (True, ''))
+
     mock_system.llm_chat.session_manager.get_chat_settings.return_value = {}
 
     try:
@@ -189,7 +195,8 @@ def test_put_single_setting_non_socks_key_does_not_clear_session_cache(settings_
 
 def test_put_single_setting_wake_word_enabled_triggers_toggle(settings_client):
     """WAKE_WORD_ENABLED must invoke system.toggle_wakeword (not just
-    persist the value)."""
+    persist the value). A job since 2026-10-22: the PUT returns 'started'."""
+    from core import provider_switch
     c, csrf, settings, cred, sys_mock = settings_client
 
     r = c.put(
@@ -198,11 +205,14 @@ def test_put_single_setting_wake_word_enabled_triggers_toggle(settings_client):
         json={'value': True},
     )
     assert r.status_code == 200
+    assert r.json()['status'] == 'started' and r.json()['job']
+    provider_switch.wait(timeout=10)
     sys_mock.toggle_wakeword.assert_called_once_with(True)
 
 
 def test_put_single_setting_tts_provider_triggers_switch(settings_client):
-    """TTS_PROVIDER must call switch_tts_provider (synchronously when async=false)."""
+    """TTS_PROVIDER must call switch_tts_provider, in its job."""
+    from core import provider_switch
     c, csrf, settings, cred, sys_mock = settings_client
 
     r = c.put(
@@ -211,6 +221,7 @@ def test_put_single_setting_tts_provider_triggers_switch(settings_client):
         json={'value': 'kokoro'},
     )
     assert r.status_code == 200
+    provider_switch.wait(timeout=10)
     sys_mock.switch_tts_provider.assert_called_once_with('kokoro')
 
 

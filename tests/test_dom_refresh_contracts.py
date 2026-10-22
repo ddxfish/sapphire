@@ -92,12 +92,15 @@ def test_provider_tabs_gate_their_second_paint():
 
 
 def test_settings_shell_refresh_flushes_carries_and_binds_nav_once():
-    src = _src("views/settings.js")
-    rt = _between(src, "async refreshTab() {", "// For async completions")
+    # 2026-10-22: refreshTab lives on the HOST (shared/settings-host.js), the nav
+    # door and refreshSidebar on the SHELL (views/settings.js).
+    host = _src("shared/settings-host.js")
+    rt = _between(host, "async refreshTab() {", "// For async completions")
     assert "flushCurrentInputs();" in rt and "snapScroll(" in rt and "restoreScroll();" in rt
+    src = _src("views/settings.js")
     assert "let _shellNavBound = false;" in src
     assert "if (!_shellNavBound) container.addEventListener('settings-navigate'" in src
-    rs = _between(src, "refreshSidebar() {", "// ── Generic Field Renderer")
+    rs = _between(src, "refreshSidebar() {", "// ── Save ──")
     assert "renderSidebarItems(tabs)" in rs and "renderMobileItems(tabs)" in rs
     assert "render();" not in rs, "refreshSidebar went back to a whole-view render"
 
@@ -233,8 +236,9 @@ def test_provider_tabs_pass_the_module_and_repaint_only_on_change():
     for tab in ("stt", "tts", "embedding"):
         s = _src(f"views/settings-tabs/{tab}.js")
         assert "attachProviderListeners(cfg, ctx, el, this);" in s, tab
-        assert "const painted = Object.keys((_mergedConfig || tabConfig).providers).join();" in s, tab
-        assert "Object.keys(_mergedConfig.providers).join() !== painted" in s, tab
+        # keys AND dormancy: a woken plugin's card stayed dashed and toggled `undefined` (2026-10-22)
+        assert "const painted = providerSignature(_mergedConfig || tabConfig);" in s, tab
+        assert "if (providerSignature(_mergedConfig) !== painted" in s, tab
 
 
 def test_dictated_turns_do_not_refocus_the_composer():

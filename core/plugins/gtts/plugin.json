@@ -2,12 +2,14 @@
   "name": "gtts",
   "short_display_name": "Google TTS",
   "version": "1.0.0",
-  "description": "Google Translate TTS \u2014 free, zero-config text-to-speech",
+  "description": "Google Translate TTS — free, zero-config text-to-speech",
   "author": "sapphire",
-  "icon": "\ud83d\udde3\ufe0f",
+  "icon": "🗣️",
   "priority": 50,
   "default_enabled": false,
-  "pip_dependencies": ["gTTS"],
+  "pip_dependencies": [
+    "gTTS"
+  ],
   "settingsUI": null,
   "capabilities": {
     "providers": {
@@ -16,7 +18,8 @@
         "display_name": "Google Translate (Free)",
         "entry": "provider.py",
         "class_name": "GoogleTranslateTTSProvider",
-        "is_local": false
+        "is_local": false,
+        "description": "Google Translate's voice. Free, needs internet, sends your text to Google."
       }
     }
   }

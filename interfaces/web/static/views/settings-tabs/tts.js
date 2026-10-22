@@ -1,5 +1,5 @@
 // settings-tabs/tts.js - Text-to-speech provider settings
-import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
+import { renderProviderTab, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
 import { mountWorkerDoor } from '../../shared/worker-door.js';
@@ -91,7 +91,7 @@ export default {
     async attachListeners(ctx, el) {
         // Always re-fetch plugin providers (plugins may have been toggled)
         {
-            const painted = Object.keys((_mergedConfig || tabConfig).providers).join();
+            const painted = providerSignature(_mergedConfig || tabConfig);
             _mergedConfig = await mergeRegistryProviders(tabConfig);
             // Re-render dropdown only if the merge CHANGED the provider set the
             // first paint showed (a dropdown-change re-entry repainted an
@@ -100,7 +100,7 @@ export default {
             // #settings-content) or is typing in the first paint
             // (DOM-refresh hunt 2026-09-08).
             if (ctx.isTabActive?.(this.id) === false) return;
-            if (Object.keys(_mergedConfig.providers).join() !== painted
+            if (providerSignature(_mergedConfig) !== painted
                 && !editableFocused(el)) {
                 const body = el.querySelector('.settings-tab-body') || el;
                 body.innerHTML = this.render(ctx);

@@ -7,7 +7,9 @@
   "icon": "🗣️",
   "priority": 50,
   "default_enabled": false,
-  "pip_dependencies": ["piper-tts"],
+  "pip_dependencies": [
+    "piper-tts"
+  ],
   "settingsUI": null,
   "capabilities": {
     "providers": {
@@ -16,7 +18,8 @@
         "display_name": "Piper (Local, fast-CPU)",
         "entry": "provider.py",
         "class_name": "PiperTTSProvider",
-        "is_local": true
+        "is_local": true,
+        "description": "Fast on a CPU, runs here, free. Lighter voices than Kokoro."
       }
     },
     "settings": [
@@ -27,14 +30,38 @@
         "default": "en_US-hfc_female-medium",
         "help": "Downloaded on first use into user/piper-voices/. Medium = better quality; low = 16kHz, faster, smaller data.",
         "options": [
-          {"value": "en_US-hfc_female-medium", "label": "HFC Female — medium (default)"},
-          {"value": "en_US-kristin-medium", "label": "Kristin — medium"},
-          {"value": "en_US-lessac-medium", "label": "Lessac — medium"},
-          {"value": "en_US-ljspeech-medium", "label": "LJSpeech — medium"},
-          {"value": "en_US-amy-medium", "label": "Amy — medium"},
-          {"value": "en_US-amy-low", "label": "Amy — low (fast, 16kHz)"},
-          {"value": "en_US-kathleen-low", "label": "Kathleen — low (fast, 16kHz)"},
-          {"value": "en_US-lessac-low", "label": "Lessac — low (fast, 16kHz)"}
+          {
+            "value": "en_US-hfc_female-medium",
+            "label": "HFC Female — medium (default)"
+          },
+          {
+            "value": "en_US-kristin-medium",
+            "label": "Kristin — medium"
+          },
+          {
+            "value": "en_US-lessac-medium",
+            "label": "Lessac — medium"
+          },
+          {
+            "value": "en_US-ljspeech-medium",
+            "label": "LJSpeech — medium"
+          },
+          {
+            "value": "en_US-amy-medium",
+            "label": "Amy — medium"
+          },
+          {
+            "value": "en_US-amy-low",
+            "label": "Amy — low (fast, 16kHz)"
+          },
+          {
+            "value": "en_US-kathleen-low",
+            "label": "Kathleen — low (fast, 16kHz)"
+          },
+          {
+            "value": "en_US-lessac-low",
+            "label": "Lessac — low (fast, 16kHz)"
+          }
         ]
       },
       {

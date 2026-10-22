@@ -20,7 +20,8 @@ class TTSProviderRegistry(BaseProviderRegistry):
         # a boot chokepoint). Null stays unguarded — it IS the fallback.
         try:
             from .kokoro import KokoroTTSProvider
-            self.register_core('kokoro', KokoroTTSProvider, 'Kokoro (Local)', is_local=True)
+            self.register_core('kokoro', KokoroTTSProvider, 'Kokoro (Local)', is_local=True,
+                               description='Good quality, runs here, free. A GPU is recommended.')
         except Exception as e:
             logger.error(f"[tts] core provider 'kokoro' unavailable — continuing without it: {e}")
         # Sapphire Router — managed-mode cloud TTS. sapphire_router.py existed
@@ -30,10 +31,12 @@ class TTSProviderRegistry(BaseProviderRegistry):
         try:
             from .sapphire_router import SapphireRouterTTSProvider
             self.register_core('sapphire_router', SapphireRouterTTSProvider,
-                               'Sapphire Router (Managed)', is_local=False)
+                               'Sapphire Router (Managed)', is_local=False,
+                               description='The managed cloud voice.')
         except Exception as e:
             logger.error(f"[tts] core provider 'sapphire_router' unavailable: {e}")
-        self.register_core('none', NullTTSProvider, 'None (disabled)', is_local=True)
+        self.register_core('none', NullTTSProvider, 'None (disabled)', is_local=True,
+                           description='No spoken replies.')
 
     def create(self, key, **kwargs):
         """Create TTS provider — no constructor args needed."""

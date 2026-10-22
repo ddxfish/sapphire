@@ -270,6 +270,6 @@ def test_picking_a_model_line_forces_vision_on_for_the_describe_call(monkeypatch
 
 
 def test_the_picker_lists_every_enabled_model_line():
-    src = (ROOT / 'interfaces/web/static/views/settings.js').read_text(encoding='utf-8')
+    src = (ROOT / 'interfaces/web/static/shared/settings-host.js').read_text(encoding='utf-8')   # the host, since 2026-10-22
     assert "(d.providers || []).filter(p => p.enabled)\n" in src
     assert 'p.enabled && p.supports_images' not in src

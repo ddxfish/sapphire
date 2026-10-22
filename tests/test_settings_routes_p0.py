@@ -52,6 +52,12 @@ def settings_client(client, mock_system, monkeypatch):
 
     mock_system.llm_chat.session_manager.get_chat_settings.return_value = {}
 
+    # The switch job (core/provider_switch.py, 2026-10-22) warms Silero on STT
+    # none→X and warms the embedder on an embedding switch: never in tests.
+    from core import provider_switch as _ps
+    monkeypatch.setattr(_ps, '_warm_vad', lambda: None)
+    monkeypatch.setattr(_ps, '_embedding_ready', lambda system, value: (True, ''))
+
     try:
         yield c, csrf, sm_mod.settings, fresh_cred, mock_system
     finally:
@@ -172,8 +178,10 @@ def test_batch_service_api_keys_route_to_credentials_not_settings(settings_clien
 def test_batch_stt_enabled_skipped_when_stt_provider_in_same_batch(settings_client):
     """[REGRESSION_GUARD] If a batch contains both STT_PROVIDER and STT_ENABLED,
     the STT_PROVIDER switch handles the runtime state — STT_ENABLED should NOT
-    also fire toggle_stt (would double-init, cause provider-in-progress race).
+    also fire a second switch (would double-init, cause provider-in-progress race).
+    The switch is a job since 2026-10-22 (core/provider_switch.py): wait for it.
     """
+    from core import provider_switch
     c, csrf, settings, cred, sys_mock = settings_client
 
     r = c.put(
@@ -185,15 +193,20 @@ def test_batch_stt_enabled_skipped_when_stt_provider_in_same_batch(settings_clie
         }},
     )
     assert r.status_code == 200
+    provider_switch.wait(timeout=10)
 
-    # switch_stt_provider called once (via deferred action for STT_PROVIDER)
+    # switch_stt_provider called once (the STT_PROVIDER job)
     assert sys_mock.switch_stt_provider.call_count == 1
-    # toggle_stt NOT called — STT_ENABLED in same batch as STT_PROVIDER
+    # the legacy toggle never runs — STT_ENABLED in same batch as STT_PROVIDER
     assert sys_mock.toggle_stt.call_count == 0
+    statuses = {x['key']: x['status'] for x in r.json()['results']}
+    assert statuses == {'STT_PROVIDER': 'started', 'STT_ENABLED': 'skipped'}
 
 
 def test_batch_stt_enabled_alone_fires_toggle_stt(settings_client):
-    """Inverse: STT_ENABLED without STT_PROVIDER → toggle_stt IS called."""
+    """Inverse: STT_ENABLED without STT_PROVIDER → the provider job runs (the legacy
+    toggle_stt mapped onto its provider key, the local default when none)."""
+    from core import provider_switch
     c, csrf, settings, cred, sys_mock = settings_client
 
     r = c.put(
@@ -202,8 +215,10 @@ def test_batch_stt_enabled_alone_fires_toggle_stt(settings_client):
         json={'settings': {'STT_ENABLED': True}},
     )
     assert r.status_code == 200
-    assert sys_mock.toggle_stt.call_count == 1
-    assert sys_mock.switch_stt_provider.call_count == 0
+    provider_switch.wait(timeout=10)
+    assert sys_mock.toggle_stt.call_count == 0
+    assert sys_mock.switch_stt_provider.call_count == 1
+    assert sys_mock.switch_stt_provider.call_args[0][0] != 'none'
 
 
 # ─── 2.9 Managed mode filters locked keys ────────────────────────────────────
@@ -244,6 +259,7 @@ def test_batch_tts_provider_switch_reapplies_chat_settings(settings_client):
     """[REGRESSION_GUARD] After TTS_PROVIDER switch, voice/pitch/speed need to
     be re-validated for the new provider — _apply_chat_settings is invoked on
     the active chat. Guards that the re-apply path isn't silently dropped."""
+    from core import provider_switch
     c, csrf, settings, cred, sys_mock = settings_client
 
     called = {'count': 0}
@@ -256,6 +272,7 @@ def test_batch_tts_provider_switch_reapplies_chat_settings(settings_client):
         json={'settings': {'TTS_PROVIDER': 'kokoro'}},
     )
     assert r.status_code == 200
+    provider_switch.wait(timeout=10)
     # Chat settings re-read at least once for the TTS re-apply
     assert called['count'] >= 1, "re-apply of chat settings didn't fire on TTS switch"
     assert sys_mock.switch_tts_provider.call_count == 1
