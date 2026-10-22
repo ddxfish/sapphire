@@ -251,6 +251,20 @@ def status():
 
 # --- the board's console ----------------------------------------------------------
 
+def _is_native_usb(port):
+    """A native USB-serial-JTAG board (VID 0x303A) IS the chip's own USB, so a
+    reset re-enumerates it and kills the serial handle. A UART-bridge board keeps
+    its USB across a reset, so the run-mode reset is safe (and wanted) there."""
+    try:
+        from serial.tools import list_ports
+        for p in list_ports.comports():
+            if p.device == port:
+                return p.vid == 0x303A
+    except Exception:
+        pass
+    return False
+
+
 class _Console:
     """The firmware's console over its serial line, kept open. One line in;
     log lines out until one `>> {json}` answers (the same protocol the
@@ -263,10 +277,15 @@ class _Console:
         s.port, s.baudrate, s.timeout = port, CONSOLE_BAUD, 0.25
         s.dtr = s.rts = False                  # never lower only one: that is the bootloader dance
         s.open()
-        # the classic run-mode reset, so the board boots its program, not its ROM loader
-        s.rts = True
-        time.sleep(0.1)
-        s.rts = False
+        # the classic run-mode reset (UART-bridge boards). A native-USB board
+        # (VID 0x303A) IS the chip's own USB: a reset here re-enumerates it and
+        # kills this handle, and it is already running its program after the
+        # flash's hard-reset — so it gets none. (Same class as the browser lane,
+        # device-flash.js Console.open.)
+        if not _is_native_usb(port):
+            s.rts = True
+            time.sleep(0.1)
+            s.rts = False
         time.sleep(BOOT_WAIT)
         s.reset_input_buffer()
         self.s = s

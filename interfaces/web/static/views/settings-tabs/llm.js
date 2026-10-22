@@ -436,6 +436,20 @@ function _readAdvancedFields(root, prefix) {
 // (prefix pf-<key>); the Add form lives under + Add Provider (prefix pf-new).
 // The only true divergence left is the save call: POST create vs PUT update.
 
+// Show only the inputs a template asks for. `required` null = core template
+// (show base_url/api_key/model as always); an array = a plugin template, show
+// only the listed fields (claude-in-sapphire asks for none).
+function _applyRequiredFields(root, prefix, required) {
+    const map = { url: 'base_url', key: 'api_key', model: 'model' };
+    Object.entries(map).forEach(([sub, field]) => {
+        const input = root.querySelector(`#${prefix}-${sub}`);
+        const row = input && input.closest('.field-row');
+        if (!row) return;
+        const show = (required === null) || required.includes(field);
+        row.style.display = show ? '' : 'none';
+    });
+}
+
 function _providerFormHtml(prefix, config = {}, opts = {}) {
     const isAdd = opts.mode === 'add';
     const gen = config.generation_params || {};
@@ -502,6 +516,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
                 <select id="${prefix}-preset" style="width:100%">
                     <option value="">-- Select a preset or choose manual --</option>
                     ${opts.presetOptions || ''}
+                    ${opts.pluginOptions ? `<optgroup label="Plugins">${opts.pluginOptions}</optgroup>` : ''}
                     <option value="__manual_openai__">Manual: OpenAI Compatible</option>
                     <option value="__manual_anthropic__">Manual: Anthropic Compatible</option>
                     <option value="__manual_openai_responses__">Manual: Responses API</option>
@@ -518,7 +533,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
     `;
 }
 
-function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config = {}) {
+function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config = {}, pluginTemplates = []) {
     const g = id => root.querySelector(`#${prefix}-${id}`);
     const status = g('status');
     const setStatus = (msg, color = 'var(--text-muted)') => {
@@ -528,6 +543,7 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
     // ── Add mode: preset picker drives template + prefills ──
     let selectedTemplate = 'openai';
     let selectedPreset = null;
+    let selectedRequired = null;   // null = core template (all fields); array = plugin template
 
     g('preset')?.addEventListener('change', e => {
         const val = e.target.value;
@@ -551,16 +567,35 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         if (val.startsWith('__manual_')) {
             selectedTemplate = val.replace('__manual_', '').replace('__', '');
             selectedPreset = null;
+            selectedRequired = null;
             g('name').value = '';
             g('url').value = '';
             g('model').value = '';
             g('suggested').innerHTML = '';
             g('local').checked = false;
+            _applyRequiredFields(root, prefix, null);
+        } else if (val.startsWith('tpl:')) {
+            // Plugin-provided brain (e.g. Claude in Sapphire): picked by template
+            // key; show only the inputs its required_fields asks for (none here).
+            const tplKey = val.slice(4);
+            const tpl = (pluginTemplates || []).find(t => t.key === tplKey);
+            selectedTemplate = tplKey;
+            selectedPreset = null;
+            selectedRequired = (tpl && tpl.required_fields) || [];
+            g('name').value = (tpl && tpl.name) || tplKey;
+            g('url').value = '';
+            g('model').value = '';
+            g('suggested').innerHTML = '';
+            g('local').checked = false;
+            g('fallback').checked = false;   // a plugin brain is opt-in per chat, not an Auto fallback
+            _applyRequiredFields(root, prefix, selectedRequired);
         } else {
             const preset = presets[val];
             if (!preset) return;
             selectedTemplate = preset.template || 'openai';
             selectedPreset = val;
+            selectedRequired = null;
+            _applyRequiredFields(root, prefix, null);
             // Pre-fill Name with the friendly display_name (editable) — this IS the
             // friendly name; the backend derives the key by sanitizing it.
             g('name').value = preset.display_name || val;
@@ -683,10 +718,11 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         // Add → POST
         const name = g('name')?.value?.trim();
         if (!name) { setStatus('Name required', 'var(--error)'); return; }
-        // No anthropic exception: the backend requires base_url for ALL custom
-        // providers (anthropic_compat genuinely raises without one) — skipping
-        // the check here just moved the failure server-side after key storage.
-        if (!common.base_url) { setStatus('URL required', 'var(--error)'); return; }
+        // base_url is required for core templates (anthropic_compat genuinely
+        // raises without one); a plugin template declares via required_fields
+        // whether it needs one at all (a plugin brain typically does not).
+        const needsUrl = (selectedRequired === null) || selectedRequired.includes('base_url');
+        if (needsUrl && !common.base_url) { setStatus('URL required', 'var(--error)'); return; }
 
         const body = { ...common, name, display_name: name, template: selectedTemplate };
         if (Object.keys(adv.generation_params).length) body.generation_params = adv.generation_params;
@@ -730,21 +766,28 @@ async function _showAddWizard(el, ctx) {
     wizard.style.display = 'block';
 
     let presets = {};
+    let templates = [];
     try {
         const res = await fetch('/api/llm/presets');
         const data = await res.json();
         presets = data.presets || {};
+        templates = data.templates || [];
     } catch (e) { console.warn('Failed to fetch presets:', e); }
 
     const presetOptions = Object.entries(presets).map(([k, p]) =>
         `<option value="${k}">${_esc(p.display_name)}</option>`
     ).join('');
+    // Plugin-registered brains (e.g. Claude in Sapphire) — picked by template key.
+    const pluginTemplates = (templates || []).filter(t => t.is_plugin);
+    const pluginOptions = pluginTemplates.map(t =>
+        `<option value="tpl:${_esc(t.key)}">${_esc(t.name)}</option>`
+    ).join('');
 
     wizard.innerHTML = `
         <div style="padding:14px;background:var(--bg-secondary);border-radius:var(--radius-sm);border:1px solid var(--border);margin-top:12px">
             <h5 style="margin:0 0 12px">Add Provider</h5>
-            ${_providerFormHtml('pf-new', {}, { mode: 'add', presetOptions })}
+            ${_providerFormHtml('pf-new', {}, { mode: 'add', presetOptions, pluginOptions })}
         </div>
     `;
-    _bindProviderForm(wizard, 'pf-new', ctx, null, presets);
+    _bindProviderForm(wizard, 'pf-new', ctx, null, presets, {}, pluginTemplates);
 }

@@ -67,20 +67,31 @@ class Console {
     async open() {
         await this.port.open({ baudRate: 115200 });
         // A UART-bridge board boots into its program or its ROM loader by how
-        // DTR and RTS sit when the port opens, and the browser picks them. So:
-        // the classic run-mode reset (EN low with IO0 high, then let go), the
-        // one esptool uses. A board with no such circuit ignores it.
+        // DTR and RTS sit when the port opens, so we do the classic run-mode
+        // reset (EN low with IO0 high, then let go), the one esptool uses.
         // Both lines are let go first. A browser can open a port with DTR raised,
         // and a chip with USB of its own (an ESP32-S3) that is reset straight
         // from there starts in its ROM loader ("waiting for download").
         // Measured on a T-Dongle-S3, 2026-10-10: DTR up, then the reset = the
         // loader, every time; DTR let go first, even 5 ms before = the program.
+        //
+        // But a NATIVE-USB board (VID 0x303A) has no bridge chip: its serial
+        // line IS the chip's own USB, so a reset here RE-ENUMERATES the USB and
+        // drops the reader we are about to take. The board had just re-enumerated
+        // once from the flash's own hard-reset (reopen reconnected to it); a
+        // second reset here left scan/setup talking to a dead port — the whole
+        // flow failed 100% on the t-dongle and Cardputer. It is already running
+        // its program after that hard-reset, so it needs no reset: just release
+        // the lines low (a raised DTR is the only thing that would boot the loader).
+        const native = this.port.getInfo?.().usbVendorId === 0x303A;
         try {
             await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
-            await sleep(100);
-            await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
-            await sleep(100);
-            await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+            if (!native) {
+                await sleep(100);
+                await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
+                await sleep(100);
+                await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+            }
         } catch { /* not every driver has the lines */ }
         this.reader = this.port.readable.getReader();
         this.writer = this.port.writable.getWriter();

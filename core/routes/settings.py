@@ -1175,7 +1175,7 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
     if template not in provider_registry._classes:
         raise HTTPException(status_code=400, detail=f"Unknown provider template '{template}'")
     base_url = (data.get('base_url') or '').strip()
-    if not base_url:
+    if not base_url and 'base_url' in provider_registry.template_required_fields(template):
         raise HTTPException(status_code=400, detail="A base URL is required for a custom provider")
 
     # Route API key to credentials

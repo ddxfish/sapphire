@@ -160,7 +160,11 @@ class ProviderRegistry(_BaseRegistry):
             'class': provider_class,
             'display_name': display_name,
             'plugin_name': plugin_name,
-            'required_fields': required_fields or ['base_url', 'api_key', 'model'],
+            # None = unset (use the compat default); an explicit [] means the
+            # provider genuinely needs no inputs (a plugin brain like
+            # claude-in-sapphire) — `or` would wrongly swallow that empty list.
+            'required_fields': (['base_url', 'api_key', 'model']
+                                if required_fields is None else required_fields),
             'model_options': model_options,
         }
         logger.info(f"Plugin provider registered: {type_key} ({display_name}) from {plugin_name}")
@@ -565,15 +569,28 @@ class ProviderRegistry(_BaseRegistry):
         return TEMPLATE_ALIASES.get(key, key)
 
     def get_templates(self) -> list:
-        """Return available template types for '+ Add Provider' UI."""
+        """Return available template types for '+ Add Provider' UI. Plugin
+        templates carry is_plugin + their required_fields so the wizard knows
+        which inputs to ask for (a plugin brain like claude-in-sapphire needs
+        none — it talks to its own backend, not a base_url)."""
         templates = [
             {'key': 'openai', 'name': 'OpenAI Compatible'},
             {'key': 'anthropic', 'name': 'Anthropic Compatible'},
             {'key': 'openai_responses', 'name': 'Responses API'},
         ]
         for key, info in self._plugin_classes.items():
-            templates.append({'key': key, 'name': info['display_name']})
+            templates.append({'key': key, 'name': info['display_name'],
+                              'is_plugin': True,
+                              'required_fields': info.get('required_fields') or []})
         return templates
+
+    def template_required_fields(self, template: str) -> list:
+        """Which inputs a template needs in the Add-Provider form. A plugin
+        template declares its own; a core template implicitly needs a base URL."""
+        info = self._plugin_classes.get(template)
+        if info is not None:
+            return info.get('required_fields') or []
+        return ['base_url']
 
     # =========================================================================
     # MODEL DISCOVERY
