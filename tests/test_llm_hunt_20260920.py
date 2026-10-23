@@ -25,6 +25,7 @@ def _compat(model='m', base_url='https://x.invalid/v1'):
     p.base_url, p.model, p.config, p.api_key = base_url, model, {}, 'k'
     p.request_timeout, p.health_check_timeout = 5.0, 1.0
     p._client = MagicMock()
+    p._client.with_options.return_value = p._client     # the probe runs on a no-retry view of the same client
     return p
 
 

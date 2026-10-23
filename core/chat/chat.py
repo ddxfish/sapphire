@@ -115,7 +115,12 @@ def friendly_llm_error(e):
     error_str = str(e).lower()
     type_name = type(e).__name__
 
-    # Privacy/private chat blocks — pass through the specific message
+    # The resolver's refusals ARE the user-facing reason (privacy, LLM off,
+    # a pin not answering, Auto's per-provider why) — never flattened into
+    # "lost connection" or API-key advice for a local LM Studio user.
+    from core.chat.llm_providers.resolve import ProviderRefused
+    if isinstance(e, ProviderRefused):
+        return str(e)
     if isinstance(e, ConnectionError) and ('privacy' in error_str or 'private' in error_str):
         return str(e)
 

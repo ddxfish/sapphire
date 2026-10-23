@@ -167,7 +167,8 @@ def wanted(plays):
         return None
     if not RATES[0] <= rate <= RATES[1] or channels not in (1, 2):
         return None
-    return {'type': 'audio/wav', 'rate': rate, 'channels': channels}
+    from core.devices.audio_codecs import normalize
+    return {'type': 'audio/wav', 'rate': rate, 'channels': channels, 'codec': normalize(plays.get('codec'))}
 
 
 def _resample(sound, was, to):
@@ -206,6 +207,7 @@ def fit(audio, kind, plays):
     already fits is handed on untouched."""
     import numpy as np
     import soundfile as sf
+    from core.devices.audio_codecs import encode
     want = wanted(plays)
     if want is None:
         return None, "This device stated a sound format I cannot make."
@@ -213,19 +215,28 @@ def fit(audio, kind, plays):
         with sf.SoundFile(io.BytesIO(audio)) as f:
             fits = (f.format == 'WAV' and f.subtype == 'PCM_16'
                     and f.samplerate == want['rate'] and f.channels == want['channels'])
-            if fits:
-                return audio, want['type']
+            if fits and want['codec'] == 'pcm':
+                return audio, want['type']       # already the exact PCM this board wants
             rate = f.samplerate
             sound = _trim(f.read(dtype='float32', always_2d=True), rate)
         one = sound.mean(axis=1)
         one = np.clip(_resample(one, rate, want['rate']), -1.0, 1.0)
-        out = io.BytesIO()
-        sf.write(out, np.column_stack([one] * want['channels']), want['rate'],
-                 format='WAV', subtype='PCM_16')
-        return out.getvalue(), want['type']
+        samples = np.column_stack([one] * want['channels'])
+        return encode(samples, want['rate'], want['channels'], want['codec'])
     except Exception as e:
         logger.error(f"[DEVICES] could not convert {kind} speech: {e}", exc_info=True)
         return None, f"Her voice could not be converted for this device ({type(e).__name__})."
+
+
+def duration(audio):
+    """Seconds of sound in a WAV body, from its header (any codec, no decode).
+    0 when it cannot be read. For a log line, not a decision."""
+    import soundfile as sf
+    try:
+        info = sf.info(io.BytesIO(audio))
+        return round(info.frames / info.samplerate, 2) if info.samplerate else 0
+    except Exception:
+        return 0
 
 
 def stt_refusal(chat_settings=None):

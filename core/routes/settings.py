@@ -688,6 +688,12 @@ async def update_llm_provider(provider_key: str, request: Request, _=Depends(req
                 prov.pop('api_key', None)
             settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
+    # An edited provider (new port, new model) is judged fresh, not on a
+    # verdict or a found model from before the edit.
+    from core.chat.llm_providers.resolve import clear_health_cache
+    from core.chat.llm_providers import openai_compat
+    clear_health_cache(provider_key)
+    openai_compat._FOUND_MODEL.clear()
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_PROVIDERS", "value": provider_key})
     return {"status": "success", "provider": provider_key}
 
@@ -779,6 +785,8 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
             # alone passed boxes that couldn't complete and failed boxes that
             # could (0.3s models.list vs working completions). 2026-08-06.
             model = str(test_config.get('model') or getattr(provider, 'model', '') or '').strip()
+            if not model and probe_ok and getattr(provider, 'ensure_model', None) and provider.ensure_model():
+                model = provider.model           # what a reply would send: the model its server names
             if model:
                 try:
                     from core.chat.llm_providers import get_generation_params

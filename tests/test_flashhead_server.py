@@ -75,10 +75,46 @@ def test_speak_is_refused_without_a_face_or_with_a_stalled_loop(server):
     s.face, s.want = "f@1", None                           # its face failed to load: nothing will render
     server._state["status"] = "ready"
     server.BEAT[0] = server.time.monotonic()
-    assert _speak(server) == {"taken": False}
+    assert _speak(server) == {"taken": False, "why": "no face"}
     s.want = "face.png"
     server.BEAT[0] = server.time.monotonic() - 60          # the loop is stuck
-    assert _speak(server) == {"taken": False}
+    assert _speak(server) == {"taken": False, "why": "stalled"}
+
+
+def test_a_face_still_coming_takes_her_words(server, tmp_path, monkeypatch):
+    """Teri 2026-10-23: the first reply after Watch was split between the panel
+    and her speakers while the render loop had not applied the face yet."""
+    s = server._session("local")
+    s.viewers[queue.Queue()] = True
+    face = tmp_path / "face.png"
+    face.write_bytes(b"x")
+    s.face, s.want = None, str(face)
+    server._state["status"] = "ready"
+    server.BEAT[0] = server.time.monotonic()
+    monkeypatch.setattr(server, "_queue_speech", lambda s, data: None)
+    assert _speak(server) == {"taken": True, "why": ""}
+    assert s.open
+
+
+def test_a_gap_mid_reply_holds_her_face_and_the_end_lets_it_go(server):
+    np = server.np
+    server.P.update(n16=15360, n24=23040, chunk_s=0.96, render_s=0.2)
+    s = server._session("local")
+    s.viewers[queue.Queue()] = True
+    s.want = "face.png"
+    s.open, s.heard = True, server.time.monotonic()
+    s.pending["a16"] = np.ones(100, np.float32)            # half a chunk: the next sentence is late
+    assert s.held() and server._pick() is None             # no padded tail, no calm loop, no reset
+    s.open = False                                         # /end
+    assert server._pick() is s
+    s.open, s.heard = True, server.time.monotonic() - server.HOLD_S - 1
+    assert not s.held()                                    # /end never came: she idles after HOLD_S
+
+
+def test_a_tail_is_exactly_one_chunk_long(server):
+    np = server.np
+    assert len(server._fit(np.ones(23041, np.int16), 23040)) == 23040   # a24 one sample long: np.pad threw
+    assert len(server._fit(np.ones(10, np.int16), 23040)) == 23040
 
 
 def test_another_computer_never_reads_this_computers_folders(server):

@@ -390,7 +390,8 @@ class ProviderRegistry(_BaseRegistry):
                                       health_cache: Optional[dict] = None,
                                       health_ttl: float = 60.0,
                                       probe: bool = True,
-                                      require_images: bool = False) -> Optional[tuple]:
+                                      require_images: bool = False,
+                                      trail: Optional[list] = None) -> Optional[tuple]:
         """Get first available provider following fallback order.
 
         probe=False returns the first candidate that constructs without a
@@ -402,8 +403,13 @@ class ProviderRegistry(_BaseRegistry):
         health_ttl seconds — the pinned path got this in 2026-07-15, the Auto
         path kept probing every candidate every turn (a BILLED call on Claude /
         anthropic-compat, plus a stall on a slow cloud box) (scout F7,
-        2026-09-20). Fails are never cached: the next turn re-probes."""
+        2026-09-20). Fails are never cached: the next turn re-probes.
+
+        trail: a list the caller hands in gets (key, why) for every candidate
+        passed over, so Auto finding nothing (or picking the third choice)
+        can say why in ONE line instead of a DEBUG trickle (2026-10-23)."""
         exclude = exclude or []
+        trail = trail if trail is not None else []
         import time as _time
 
         for provider_key in fallback_order:
@@ -411,51 +417,59 @@ class ProviderRegistry(_BaseRegistry):
                 continue
 
             if provider_key not in providers_config:
+                trail.append((provider_key, 'not configured'))
                 continue
 
             config = providers_config[provider_key]
             if not isinstance(config, dict):
                 logger.warning(f"Provider '{provider_key}' config is not a dict; skipping in fallback")
+                trail.append((provider_key, 'broken config'))
                 continue
 
             if not config.get('enabled', False):
+                trail.append((provider_key, 'off'))
                 continue
 
             if not config.get('use_as_fallback', True):
-                logger.debug(f"Provider '{provider_key}' excluded from Auto mode (use_as_fallback=False)")
+                trail.append((provider_key, 'left out of Auto'))
                 continue
 
             # Private chat (auto mode passes force_privacy from private_chat)
             if force_privacy:
                 is_local = config.get('is_local', self._core_providers.get(provider_key, {}).get('is_local', False))
                 if not is_local:
-                    logger.debug(f"Provider '{provider_key}' excluded in private chat (not marked local)")
+                    trail.append((provider_key, 'not local (private chat)'))
                     continue
 
             provider = self.get_provider_by_key(provider_key, providers_config, request_timeout)
-            if provider:
-                if require_images:
-                    from core.chat.llm_providers.resolve import provider_sees
-                    if not provider_sees(provider):
-                        logger.debug(f"Provider '{provider_key}' skipped: does not support images")
-                        continue
-                if not probe:
-                    logger.info(f"Selected provider '{provider_key}' (unprobed)")
-                    return (provider_key, provider)
-                now = _time.time()
-                if health_cache is not None and now < health_cache.get(provider_key, 0):
-                    logger.info(f"Selected provider '{provider_key}' (health cached)")
-                    return (provider_key, provider)
+            if not provider:
+                trail.append((provider_key, 'could not be built'))
+                continue
+            if require_images:
+                from core.chat.llm_providers.resolve import provider_sees
+                if not provider_sees(provider):
+                    trail.append((provider_key, 'cannot see images'))
+                    continue
+            now = _time.time()
+            if probe and not (health_cache is not None and now < health_cache.get(provider_key, 0)):
                 try:
-                    if provider.health_check():
-                        if health_cache is not None:
-                            health_cache[provider_key] = now + health_ttl
-                        logger.info(f"Selected provider '{provider_key}' (healthy)")
-                        return (provider_key, provider)
-                    else:
-                        logger.debug(f"Provider '{provider_key}' failed health check")
+                    healthy = provider.health_check()
                 except Exception as e:
-                    logger.debug(f"Provider '{provider_key}' health check error: {e}")
+                    healthy = False
+                    provider.last_health_error = type(e).__name__
+                if not healthy:
+                    why = getattr(provider, 'last_health_error', '') or 'no answer'
+                    trail.append((provider_key, f"not answering ({why}, {getattr(provider, 'health_check_timeout', '?')}s)"))
+                    continue
+                if health_cache is not None:
+                    health_cache[provider_key] = now + health_ttl
+            # Auto works harder than a pin: a provider with no model set asks
+            # its server what it serves (unprobed lanes use only what is known).
+            ensure = getattr(provider, 'ensure_model', None)      # a plugin's provider may not subclass BaseProvider
+            if ensure and not ensure(fetch=probe):
+                trail.append((provider_key, 'no model set and none found on its server'))
+                continue
+            return (provider_key, provider)
 
         return None
 
@@ -739,12 +753,13 @@ def get_first_available_provider(providers_config: Dict[str, Dict[str, Any]],
                                   health_cache: Optional[dict] = None,
                                   health_ttl: float = 60.0,
                                   probe: bool = True,
-                                  require_images: bool = False) -> Optional[tuple]:
+                                  require_images: bool = False,
+                                  trail: Optional[list] = None) -> Optional[tuple]:
     """Legacy — delegates to registry."""
     return provider_registry.get_first_available_provider(
         providers_config, fallback_order, request_timeout, exclude, force_privacy,
         health_cache=health_cache, health_ttl=health_ttl, probe=probe,
-        require_images=require_images)
+        require_images=require_images, trail=trail)
 
 
 def get_available_providers(providers_config: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:

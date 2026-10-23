@@ -261,9 +261,14 @@ def _pinned(key, model, cfg, private, timeout, health, require_images, conversat
             if healthy:
                 _HEALTH_CACHE[key] = now + HEALTH_TTL
         if not healthy:
+            why = getattr(provider, 'last_health_error', '') or 'no answer'
+            logger.warning(f"Pinned '{key}' for '{conversation or '?'}' not answering ({why}, {getattr(provider, 'health_check_timeout', '?')}s)")
             raise ProviderUnavailable(
-                f"Provider '{name}' failed health check - no fallback for specific provider selection")
-    logger.info(f"Using chat-specific provider '{key}'" + (f" with model '{model}'" if model else ""))
+                f"Provider '{name}' is not answering ({why}) - this chat is pinned to it, so nothing else was tried")
+    ensure = getattr(provider, 'ensure_model', None)
+    if ensure and not ensure(fetch=health != 'skip'):
+        logger.warning(f"Pinned '{key}' has no model set and its server named none: sending without one")
+    logger.info(f"Using chat-specific provider '{key}' ({getattr(provider, 'model', '') or 'no model'}) for '{conversation or '?'}'")
     return Selection(key, provider, model)
 
 
@@ -271,19 +276,29 @@ def _auto(cfg, order, private, timeout, health, require_images, conversation=Non
     import config
     if order is None:
         order = getattr(config, 'LLM_FALLBACK_ORDER', None) or list(cfg.keys())
+        # A provider missing from the saved order (a deleted default the
+        # settings merge brought back, an order saved before it existed) is
+        # still tried, last: Auto is the mode meant to work most.
+        order = list(order) + [k for k in cfg if k not in order]
+    trail = []
     result = _lp().get_first_available_provider(
         cfg, order, timeout,
         force_privacy=bool(private),
         health_cache=_HEALTH_CACHE if health == 'cached' else None,
         probe=(health != 'skip'),
-        require_images=bool(require_images))
+        require_images=bool(require_images),
+        trail=trail)
+    why = ' · '.join(f"{display_name(k)}: {w}" for k, w in trail)
     if not result:
+        logger.warning(f"Auto found no LLM for '{conversation or '?'}' (private={bool(private)}): {why or 'nothing configured'}")
         raise NoProvidersAvailable(
             "No LLM providers available"
-            + (" — this turn is private, only providers marked local qualify" if private else ""))
+            + (" — this turn is private, only providers marked local qualify" if private else "")
+            + (f" ({why})" if why else ""))
     key, provider = result
     provider.conversation = conversation or None
-    logger.info(f"Auto mode: using '{key}' ({getattr(provider, 'model', '')})")
+    logger.info(f"Auto mode: using '{key}' ({getattr(provider, 'model', '') or 'no model'}) for '{conversation or '?'}'"
+                + (f", passed over: {why}" if why else ""))
     return Selection(key, provider, '')
 
 

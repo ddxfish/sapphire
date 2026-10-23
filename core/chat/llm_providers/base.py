@@ -241,6 +241,7 @@ class BaseProvider(ABC):
         self.api_key = llm_config.get('api_key', '')
         self.model = llm_config.get('model', '')
         self.health_check_timeout = llm_config.get('timeout', 3.0)
+        self.last_health_error = ''      # why the last health_check said no, for Auto's trail
         self.request_timeout = request_timeout
         self._client = None
         # Which conversation this (per-turn) instance serves — stamped by the
@@ -311,6 +312,11 @@ class BaseProvider(ABC):
             True if healthy, False otherwise
         """
         pass
+
+    def ensure_model(self, fetch: bool = True) -> bool:
+        """True when a model will go out on the wire. Providers that can ask
+        their server (openai_compat) fill a blank one; others send their own."""
+        return True
 
     def test_connection(self) -> dict:
         """

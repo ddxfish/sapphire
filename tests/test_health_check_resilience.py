@@ -57,6 +57,7 @@ def test_server_answered_false_on_plain_exception():
 def _compat(base_url="https://api.fireworks.ai/inference/v1"):
     p = OpenAICompatProvider({"base_url": base_url, "api_key": "k", "model": "glm"}, 30.0)
     p._client = MagicMock()
+    p._client.with_options.return_value = p._client     # the probe runs on a no-retry view of the same client
     return p
 
 

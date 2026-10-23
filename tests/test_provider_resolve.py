@@ -169,7 +169,7 @@ def test_pinned_health_verdict_is_cached_and_shared(monkeypatch):
 
 def test_pinned_failed_probe_raises_and_is_never_cached(monkeypatch):
     p = _prov(healthy=False); monkeypatch.setattr(lp, 'get_provider_by_key', MagicMock(return_value=p))
-    with pytest.raises(ProviderUnavailable, match='failed health check'):
+    with pytest.raises(ProviderUnavailable, match='not answering'):
         resolve('claude')
     assert 'claude' not in rz._HEALTH_CACHE
 
@@ -365,3 +365,78 @@ def test_game_seat_never_reads_the_operators_web_chat(monkeypatch):
     first.reset_mock()
     assert gameroom_core._get_provider('claude') is None
     assert not first.called and not system.llm_chat._select_provider.called
+
+
+# ── Auto works hardest (Teri's report, 2026-10-23) ──────────────────────────
+
+def test_auto_tries_a_provider_missing_from_the_saved_order(monkeypatch):
+    import config
+    monkeypatch.setattr(config, 'LLM_FALLBACK_ORDER', ['claude'], raising=False)
+    first = MagicMock(return_value=('lanbox', _prov()))
+    monkeypatch.setattr(lp, 'get_first_available_provider', first)
+    resolve('auto')
+    assert first.call_args.args[1] == ['claude', 'lanbox']
+
+
+def test_auto_finding_nothing_says_why_per_provider(monkeypatch):
+    sick = _prov(healthy=False)
+    sick.last_health_error = 'APITimeoutError'
+    sick.health_check_timeout = 0.3
+    monkeypatch.setattr(lp.provider_registry, 'get_provider_by_key', lambda k, *a, **kw: sick)
+    import config
+    monkeypatch.setattr(config, 'LLM_PROVIDERS', {'claude': {'enabled': False}}, raising=False)
+    with pytest.raises(NoProvidersAvailable) as e:
+        resolve('auto')
+    msg = str(e.value)
+    assert 'Claude: off' in msg or 'claude: off' in msg
+    assert 'LAN Box: not answering (APITimeoutError, 0.3s)' in msg
+
+
+def test_auto_skips_a_provider_that_cannot_name_a_model(monkeypatch):
+    blank = _prov(model='')
+    blank.ensure_model.return_value = False
+    monkeypatch.setattr(lp.provider_registry, 'get_provider_by_key', lambda k, *a, **kw: blank)
+    with pytest.raises(NoProvidersAvailable, match='no model set'):
+        resolve('auto')
+
+
+def _blank_compat(base='http://127.0.0.1:1235/v1'):
+    from core.chat.llm_providers import openai_compat as oc
+    with patch.object(oc.OpenAICompatProvider, '__init__', lambda self, *a, **kw: None):
+        p = oc.OpenAICompatProvider()
+    p.base_url, p.model, p.config, p.api_key = base, '', {}, ''
+    p.health_check_timeout = 0.3
+    p._client = MagicMock()
+    oc._FOUND_MODEL.clear()
+    return oc, p
+
+
+def test_blank_model_takes_the_one_lm_studio_has_loaded():
+    oc, p = _blank_compat()
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {'data': [
+        {'id': 'big-70b', 'type': 'llm', 'state': 'not-loaded'},
+        {'id': 'nomic-embed', 'type': 'embeddings', 'state': 'loaded'},
+        {'id': 'qwen-8b', 'type': 'llm', 'state': 'loaded'}]}
+    with patch.object(oc, '_shared_http_client', return_value=MagicMock(get=MagicMock(return_value=resp))):
+        assert p.ensure_model() is True
+    assert p.model == 'qwen-8b'
+
+
+def test_blank_model_falls_back_to_the_first_chat_model_listed():
+    oc, p = _blank_compat('http://box:11434/v1')
+    with patch.object(oc, '_shared_http_client', side_effect=RuntimeError('no native list')), \
+         patch.object(oc.OpenAICompatProvider, 'list_models',
+                      return_value=[{'id': 'all-minilm-embed', 'name': 'a'}, {'id': 'llama3', 'name': 'l'}]):
+        assert p.ensure_model() is True
+    assert p.model == 'llama3'
+    p.model = ''
+    assert p.ensure_model(fetch=False) is True and p.model == 'llama3'     # remembered: no second ask
+
+
+def test_blank_model_with_nothing_served_is_refused_and_not_remembered():
+    oc, p = _blank_compat()
+    with patch.object(oc, '_shared_http_client', side_effect=RuntimeError('down')), \
+         patch.object(oc.OpenAICompatProvider, 'list_models', return_value=None):
+        assert p.ensure_model() is False
+    assert not oc._FOUND_MODEL

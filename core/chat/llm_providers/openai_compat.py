@@ -14,7 +14,9 @@ This is the default provider and your 99% use case.
 
 import json
 import logging
+import re
 import threading
+import time
 from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
@@ -86,6 +88,12 @@ PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'to
 # endpoint|model → optional params that endpoint refused (learn-once, lives
 # until restart — the toast says so). See OpenAICompatProvider.__init__.
 _REJECTED_PARAMS: Dict[str, set] = {}
+
+# endpoint → (model its server named, trusted_until): a provider with no model
+# set asks once a minute, never per turn. Misses are never kept.
+_FOUND_MODEL: Dict[str, tuple] = {}
+_FOUND_TTL = 60.0
+_NOT_CHAT = re.compile(r'embed|rerank|whisper|tts|moderation', re.I)
 
 
 def _notify(message: str, severity: str = 'warning') -> None:
@@ -271,12 +279,16 @@ class OpenAICompatProvider(BaseProvider):
         - any other status (500, 429, …) → reachable; the completion is the
           judge (Fireworks' /models 500 must not mark a working box dead).
         - connection/DNS/timeout → /v1 auto-correct, else dead.
+        One try, no SDK retries: a probe that waits 3x its budget plus backoff
+        is a stall, not a verdict.
         """
         try:
-            self._client.models.list(timeout=self.health_check_timeout, **self._hdr_kwargs())
+            self._client.with_options(max_retries=0).models.list(
+                timeout=self.health_check_timeout, **self._hdr_kwargs())
             return True
         except Exception as e:
             status = http_status(e)
+            self.last_health_error = type(e).__name__ + (f" HTTP {status}" if status else "")
             if status in AUTH_DEAD_STATUSES:
                 logger.info(f"Health check: {self.base_url} /models answered {status} — key refused, provider skipped")
                 return False
@@ -288,10 +300,54 @@ class OpenAICompatProvider(BaseProvider):
             logger.debug(f"Health check failed for {self.base_url}: {e}")
             return self._try_v1_autocorrect()
 
-    def list_models(self) -> Optional[list]:
-        """Discover available models via /v1/models endpoint."""
+    def ensure_model(self, fetch: bool = True) -> bool:
+        """A provider with no model set (the stock LM Studio entry, any box
+        with auto_discover_models) names the model its server serves, so a
+        blank model never goes out on the wire (Teri, 2026-10-23: Auto sent
+        model "" to LM Studio while her pinned chat sent a real one). LM
+        Studio's own list says which model is LOADED — its /v1/models lists
+        every download under JIT, and loading the wrong one is a stall or an
+        OOM — else the first chat model /v1/models offers. fetch=False only
+        uses what was found in the last minute."""
+        if self.model:
+            return True
+        key, now = self.base_url.rstrip('/'), time.time()
+        hit = _FOUND_MODEL.get(key)
+        model = hit[0] if hit and now < hit[1] else ''
+        if not model and fetch:
+            model = self._loaded_model() or next(
+                (m['id'] for m in (self.list_models() or []) if not _NOT_CHAT.search(m['id'])), '')
+            if model:
+                _FOUND_MODEL[key] = (model, now + _FOUND_TTL)
+                logger.info(f"{self.base_url} has no model set: using '{model}', the one its server serves")
+        if not model:
+            return False
+        self.model = model
+        self._rejected_params = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{model}", set())
+        return True
+
+    def _loaded_model(self) -> str:
+        """LM Studio's native list (/api/v0/models: type + state per model):
+        the first chat model that is loaded. '' from any other server."""
+        root = re.sub(r'/v1/?$', '', self.base_url.rstrip('/'))
         try:
-            response = self._client.models.list(timeout=self.health_check_timeout, **self._hdr_kwargs())
+            hdrs = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
+            r = _shared_http_client(self.base_url).get(
+                f"{root}/api/v0/models", headers=hdrs, timeout=max(self.health_check_timeout, 1.0))
+            data = r.json().get('data') if r.status_code == 200 else None
+            for m in data or []:
+                if m.get('state') == 'loaded' and m.get('type') in ('llm', 'vlm'):
+                    return str(m.get('id') or '')
+        except Exception:
+            pass
+        return ''
+
+    def list_models(self) -> Optional[list]:
+        """Discover available models via /v1/models endpoint (one try: a
+        dead box answers 'none' now, not after the SDK's retries)."""
+        try:
+            response = self._client.with_options(max_retries=0).models.list(
+                timeout=self.health_check_timeout, **self._hdr_kwargs())
             models = []
             for m in response.data:
                 models.append({

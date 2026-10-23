@@ -1041,8 +1041,7 @@ def play(audio, kind, device, config, secrets):
         audio, kind = voice.fit(audio, kind, plays)
         if audio is None:
             raise Unfit(kind)
-        want = voice.wanted(plays)            # the format fit() made: as stated, checked (a rate may arrive as text)
-        seconds = round(max(0, len(audio) - 44) / (want['rate'] * want['channels'] * 2), 2)
+        seconds = voice.duration(audio)       # of sound, as fitted (any codec): what a log can time against
         r = _call('POST', '/audio/speak', config, secrets, timeout=SPEAK_WAIT, data=audio,
                   headers={'Content-Type': kind})
     else:
